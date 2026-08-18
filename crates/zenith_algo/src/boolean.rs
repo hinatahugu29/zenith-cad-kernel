@@ -1,6 +1,6 @@
 use zenith_math::{Point3, RobustPredicates, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
-use zenith_topo::Solid;
+use zenith_topo::{FaceGeometry, Solid};
 
 /// ブーリアン演算の種類
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +76,9 @@ impl BooleanEngine {
         if !Self::has_face_pair_candidates(solid_a, solid_b, tol) {
             return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol);
         }
+        if let Some(solid) = Self::boolean_axis_aligned_boxes_exact(solid_a, solid_b, op, tol)? {
+            return Ok(solid);
+        }
 
         let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
             solid_a, solid_b, op, tol,
@@ -122,6 +125,142 @@ impl BooleanEngine {
             tol,
         )
         .is_empty()
+    }
+
+    fn boolean_axis_aligned_boxes_exact(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<Option<Solid>, String> {
+        if op != BooleanOpType::Intersection {
+            return Ok(None);
+        }
+        let Some((min_a, max_a)) = Self::axis_aligned_box_bounds(solid_a, tol) else {
+            return Ok(None);
+        };
+        let Some((min_b, max_b)) = Self::axis_aligned_box_bounds(solid_b, tol) else {
+            return Ok(None);
+        };
+
+        let min = Point3::new(
+            min_a.x.max(min_b.x),
+            min_a.y.max(min_b.y),
+            min_a.z.max(min_b.z),
+        );
+        let max = Point3::new(
+            max_a.x.min(max_b.x),
+            max_a.y.min(max_b.y),
+            max_a.z.min(max_b.z),
+        );
+        let size = max - min;
+        if size.x <= tol.linear || size.y <= tol.linear || size.z <= tol.linear {
+            return Err(
+                "Exact B-Rep boolean intersection has no positive volume overlap".to_string(),
+            );
+        }
+
+        let overlap = crate::PrimitiveBuilder::make_box(size.x, size.y, size.z)?;
+        Ok(Some(crate::BrepTransform::translate_solid(
+            &overlap, min.coords,
+        )))
+    }
+
+    fn axis_aligned_box_bounds(solid: &Solid, tol: &Tolerance) -> Option<(Point3, Point3)> {
+        if !solid.inner_shells.is_empty() || solid.outer_shell.faces.len() != 6 {
+            return None;
+        }
+        if solid.outer_shell.faces.iter().any(|face| {
+            !face.inner_wires.is_empty() || !matches!(face.geometry, FaceGeometry::Plane(_))
+        }) {
+            return None;
+        }
+
+        let points = Self::solid_outer_wire_points(solid);
+        if points.len() < 8
+            || points
+                .iter()
+                .any(|point| !point.coords.iter().all(|v| v.is_finite()))
+        {
+            return None;
+        }
+
+        let mut min = points[0];
+        let mut max = points[0];
+        for point in points.iter().skip(1) {
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            min.z = min.z.min(point.z);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+            max.z = max.z.max(point.z);
+        }
+
+        if max.x - min.x <= tol.linear || max.y - min.y <= tol.linear || max.z - min.z <= tol.linear
+        {
+            return None;
+        }
+
+        let expected_corners = [
+            Point3::new(min.x, min.y, min.z),
+            Point3::new(max.x, min.y, min.z),
+            Point3::new(max.x, max.y, min.z),
+            Point3::new(min.x, max.y, min.z),
+            Point3::new(min.x, min.y, max.z),
+            Point3::new(max.x, min.y, max.z),
+            Point3::new(max.x, max.y, max.z),
+            Point3::new(min.x, max.y, max.z),
+        ];
+        if !expected_corners.iter().all(|corner| {
+            points
+                .iter()
+                .any(|point| (*point - *corner).norm() <= tol.linear)
+        }) {
+            return None;
+        }
+
+        for face in &solid.outer_shell.faces {
+            let face_points = face.outer_wire.sample_points(1);
+            if face_points.len() < 4 {
+                return None;
+            }
+            let on_box_side = [
+                face_points
+                    .iter()
+                    .all(|point| (point.x - min.x).abs() <= tol.linear),
+                face_points
+                    .iter()
+                    .all(|point| (point.x - max.x).abs() <= tol.linear),
+                face_points
+                    .iter()
+                    .all(|point| (point.y - min.y).abs() <= tol.linear),
+                face_points
+                    .iter()
+                    .all(|point| (point.y - max.y).abs() <= tol.linear),
+                face_points
+                    .iter()
+                    .all(|point| (point.z - min.z).abs() <= tol.linear),
+                face_points
+                    .iter()
+                    .all(|point| (point.z - max.z).abs() <= tol.linear),
+            ];
+            if !on_box_side.iter().any(|side| *side) {
+                return None;
+            }
+        }
+
+        Some((min, max))
+    }
+
+    fn solid_outer_wire_points(solid: &Solid) -> Vec<Point3> {
+        let mut points = Vec::new();
+        for face in &solid.outer_shell.faces {
+            for edge in &face.outer_wire.edges {
+                points.push(edge.start_vertex().point);
+                points.push(edge.end_vertex().point);
+            }
+        }
+        points
     }
 
     fn boolean_solids_exact_without_intersections(

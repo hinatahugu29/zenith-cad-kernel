@@ -350,6 +350,38 @@ fn test_exact_brep_boolean_returns_inner_solid_for_contained_intersection() {
 }
 
 #[test]
+fn test_exact_brep_boolean_returns_overlap_box_for_partial_box_intersection() {
+    let tol = Tolerance::default();
+    let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let solid_b = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(8.0, 8.0, 8.0).unwrap(),
+        Vec3::new(4.0, 5.0, 6.0),
+    );
+
+    let intersection = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &solid_a,
+        &solid_b,
+        zenith_algo::BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("partially overlapping boxes should return their overlap B-Rep box");
+
+    assert_eq!(intersection.outer_shell.faces.len(), 6);
+    assert!(intersection.inner_shells.is_empty());
+    assert!(intersection.is_topologically_valid(&tol));
+
+    let mesh = tessellate_solid(
+        &intersection,
+        &TessellationParams {
+            u_divisions: 4,
+            v_divisions: 4,
+        },
+    );
+    let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    assert!((mass.volume - (6.0 * 5.0 * 4.0)).abs() < 1.0);
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_outer_solid_for_contained_union() {
     let tol = Tolerance::default();
     let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();

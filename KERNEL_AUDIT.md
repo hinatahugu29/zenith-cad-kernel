@@ -83,6 +83,7 @@ Current hardening:
 - Added a B-Rep translation utility for solids/shells/faces/curves/surfaces and covered exact contained intersections, so non-intersecting face-pair cases can still return a validated B-Rep result when the boolean selection is closed.
 - Exact boolean now handles no-intersection containment/disjoint cases explicitly: contained union/intersection and disjoint difference return existing B-Rep solids, contained subtraction returns an `inner_shells` cavity solid, and empty intersections or disjoint multi-body unions report dedicated unsupported-result errors.
 - Solid tessellation now flips `inner_shells` while merging meshes so cavity mass properties subtract from the outer shell; STEP export still serializes only the outer shell and needs a void-capable representation pass.
+- Added a guarded exact intersection path for axis-aligned rectangular boxes that returns the overlapping volume as a validated B-Rep box, covering the first partial-overlap solid-producing boolean case.
 
 ### 2. Planar trimming is still mesh-only
 
