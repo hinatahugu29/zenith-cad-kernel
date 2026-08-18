@@ -148,7 +148,9 @@ pub struct SelectedFaceStitchReport {
 
 impl SelectedFaceStitchReport {
     pub fn is_closed_manifold(&self) -> bool {
-        self.unmatched_edge_use_count == 0
+        self.face_piece_count > 0
+            && self.edge_use_count > 0
+            && self.unmatched_edge_use_count == 0
             && self.non_manifold_edge_use_count == 0
             && self.same_direction_edge_use_count == 0
             && self.edge_use_count == self.matched_edge_pair_count * 2

@@ -80,6 +80,7 @@ Current hardening:
 - Added extraction of multiple closed intersection edge loops from unordered edge sets, then generation of planar cutting cap faces for each valid loop.
 - Added a shell-assembly integration pass that appends generated planar cap faces to selected boolean face pieces and reports stitching diagnostics both before and after cap insertion.
 - Exact boolean now attempts to build a validated B-Rep solid from cap-augmented selected face assemblies when the stitched result is closed, and cap insertion chooses the orientation that minimizes stitching errors.
+- Added a B-Rep translation utility for solids/shells/faces/curves/surfaces and covered exact contained intersections, so non-intersecting face-pair cases can still return a validated B-Rep result when the boolean selection is closed.
 
 ### 2. Planar trimming is still mesh-only
 

@@ -284,6 +284,68 @@ fn test_exact_brep_boolean_returns_solid_for_identical_union_and_intersection() 
 }
 
 #[test]
+fn test_brep_transform_translates_solid_without_breaking_topology() {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
+    let moved = zenith_algo::BrepTransform::translate_solid(&solid, Vec3::new(3.0, -4.0, 5.0));
+
+    assert!(moved.is_topologically_valid(&tol));
+    assert_eq!(moved.outer_shell.faces.len(), solid.outer_shell.faces.len());
+
+    let original_start = solid.outer_shell.faces[0].outer_wire.edges[0]
+        .start_vertex()
+        .point;
+    let moved_start = moved.outer_shell.faces[0].outer_wire.edges[0]
+        .start_vertex()
+        .point;
+    assert!((moved_start - original_start - Vec3::new(3.0, -4.0, 5.0)).norm() <= tol.linear);
+}
+
+#[test]
+fn test_exact_brep_boolean_returns_inner_solid_for_contained_intersection() {
+    let tol = Tolerance::default();
+    let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let inner = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(3.0, 3.0, 3.0).unwrap(),
+        Vec3::new(2.0, 2.0, 2.0),
+    );
+
+    let intersection = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &outer,
+        &inner,
+        zenith_algo::BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("contained exact intersection should return the inner B-Rep solid");
+
+    assert_eq!(
+        intersection.outer_shell.faces.len(),
+        inner.outer_shell.faces.len()
+    );
+    assert!(intersection.is_topologically_valid(&tol));
+}
+
+#[test]
+fn test_exact_brep_boolean_rejects_empty_disjoint_intersection() {
+    let tol = Tolerance::default();
+    let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let solid_b = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(2.0, 2.0, 2.0).unwrap(),
+        Vec3::new(20.0, 20.0, 20.0),
+    );
+
+    let err = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &solid_a,
+        &solid_b,
+        zenith_algo::BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect_err("disjoint exact intersection should not build an empty solid");
+
+    assert!(err.contains("no face-pair intersection candidates"));
+}
+
+#[test]
 fn test_brep_intersection_collects_plane_plane_candidates() {
     let tol = Tolerance::default();
     let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();

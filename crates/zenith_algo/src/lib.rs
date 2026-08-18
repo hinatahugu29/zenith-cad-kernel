@@ -2,6 +2,7 @@
 
 pub mod boolean;
 pub mod brep_intersection;
+pub mod brep_transform;
 pub mod cap;
 pub mod chamfer;
 pub mod direct_edit;
@@ -31,6 +32,7 @@ pub use brep_intersection::{
     PlanarFaceBatchSplit, PlanarFaceMultiSplitResult, PlanarFaceSplitCandidate,
     PlanarOperandBatchSplits, SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };
+pub use brep_transform::BrepTransform;
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;
 pub use direct_edit::{DirectModeling, EdgeInspection, EdgeKind, FaceInspection};
