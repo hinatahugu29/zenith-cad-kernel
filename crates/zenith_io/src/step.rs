@@ -48,7 +48,22 @@ impl StepExporter {
         path: P,
         product_name: &str,
     ) -> std::io::Result<()> {
-        let content = Self::export_solid_to_string(solid, product_name);
+        let content = Self::export_solids_to_string(std::slice::from_ref(solid), product_name);
+        if let Some(parent) = path.as_ref().parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = File::create(path)?;
+        file.write_all(content.as_bytes())?;
+        Ok(())
+    }
+
+    /// 複数Solidを1つのSTEPファイルとして出力
+    pub fn export_solids_to_file<P: AsRef<Path>>(
+        solids: &[Solid],
+        path: P,
+        product_name: &str,
+    ) -> std::io::Result<()> {
+        let content = Self::export_solids_to_string(solids, product_name);
         if let Some(parent) = path.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -59,6 +74,11 @@ impl StepExporter {
 
     /// SolidをSTEP形式の文字列として生成
     pub fn export_solid_to_string(solid: &Solid, product_name: &str) -> String {
+        Self::export_solids_to_string(std::slice::from_ref(solid), product_name)
+    }
+
+    /// 複数SolidをSTEP形式の文字列として生成
+    pub fn export_solids_to_string(solids: &[Solid], product_name: &str) -> String {
         let mut ctx = StepContext::new();
 
         // 1. プロダクト・コンテキスト定義（FreeCAD / OCCT 必須構造）
@@ -124,32 +144,21 @@ impl StepExporter {
         ));
 
         // 3. Shell内の各Faceのエンティティ生成（トポロジー共有）
-        let outer_shell_id = Self::write_closed_shell(&mut ctx, &solid.outer_shell);
-        let manifold_solid_id = if solid.inner_shells.is_empty() {
-            ctx.add_entity(&format!(
-                "MANIFOLD_SOLID_BREP('{}',#{})",
-                product_name, outer_shell_id
-            ))
-        } else {
-            let oriented_void_ids = solid
-                .inner_shells
-                .iter()
-                .map(|inner_shell| {
-                    let shell_id = Self::write_closed_shell(&mut ctx, inner_shell);
-                    ctx.add_entity(&format!("ORIENTED_CLOSED_SHELL('',*,#{},.F.)", shell_id))
-                })
-                .map(|id| format!("#{id}"))
-                .collect::<Vec<_>>()
-                .join(",");
-            ctx.add_entity(&format!(
-                "BREP_WITH_VOIDS('{}',#{},({}))",
-                product_name, outer_shell_id, oriented_void_ids
-            ))
-        };
+        let manifold_solid_ids: Vec<u64> = solids
+            .iter()
+            .enumerate()
+            .map(|(index, solid)| Self::write_solid_brep(&mut ctx, solid, product_name, index))
+            .collect();
+        let representation_items = manifold_solid_ids
+            .iter()
+            .map(|id| format!("#{id}"))
+            .chain([format!("#{world_axis_id}")])
+            .collect::<Vec<_>>()
+            .join(",");
 
         let shape_rep_id = ctx.add_entity(&format!(
-            "ADVANCED_BREP_SHAPE_REPRESENTATION('{}',(#{},#{}),#{})",
-            product_name, manifold_solid_id, world_axis_id, geom_context_id
+            "ADVANCED_BREP_SHAPE_REPRESENTATION('{}',({}),#{})",
+            product_name, representation_items, geom_context_id
         ));
 
         let _shape_def_rep_id = ctx.add_entity(&format!(
@@ -172,6 +181,41 @@ impl StepExporter {
 
         out.push_str("ENDSEC;\nEND-ISO-10303-21;\n");
         out
+    }
+
+    fn write_solid_brep(
+        ctx: &mut StepContext,
+        solid: &Solid,
+        product_name: &str,
+        index: usize,
+    ) -> u64 {
+        let brep_name = if index == 0 {
+            product_name.to_string()
+        } else {
+            format!("{product_name}_{index}")
+        };
+        let outer_shell_id = Self::write_closed_shell(ctx, &solid.outer_shell);
+        if solid.inner_shells.is_empty() {
+            ctx.add_entity(&format!(
+                "MANIFOLD_SOLID_BREP('{}',#{})",
+                brep_name, outer_shell_id
+            ))
+        } else {
+            let oriented_void_ids = solid
+                .inner_shells
+                .iter()
+                .map(|inner_shell| {
+                    let shell_id = Self::write_closed_shell(ctx, inner_shell);
+                    ctx.add_entity(&format!("ORIENTED_CLOSED_SHELL('',*,#{},.F.)", shell_id))
+                })
+                .map(|id| format!("#{id}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            ctx.add_entity(&format!(
+                "BREP_WITH_VOIDS('{}',#{},({}))",
+                brep_name, outer_shell_id, oriented_void_ids
+            ))
+        }
     }
 
     fn write_point(ctx: &mut StepContext, p: Point3) -> u64 {

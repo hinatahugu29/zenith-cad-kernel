@@ -98,6 +98,7 @@ Current hardening:
 - Added a guarded exact B-Rep intersection for a Z-axis cylinder fully covered in XY by a horizontal slab, returning a valid shortened cylinder solid with NURBS side faces and STEP-exportable topology.
 - Extended the guarded cylinder-slab exact path to support end-trimming differences when the slab removes the top or bottom of the cylinder, while explicitly rejecting middle cuts that require compound multi-solid results.
 - Added a multi-solid exact boolean result API so middle cylinder-slab differences can return two valid disjoint cylinder solids while the legacy single-solid API reports that callers should use the multi-solid path.
+- STEP export can now write multi-solid exact boolean results as multiple B-Rep representation items in one file, so compound outputs do not have to collapse back to the legacy single-solid API at the first interchange boundary.
 
 ### 2. Planar trimming is still mesh-only
 

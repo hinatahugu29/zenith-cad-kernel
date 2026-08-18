@@ -515,6 +515,31 @@ fn test_exact_brep_boolean_result_returns_two_cylinders_for_middle_slab_differen
 }
 
 #[test]
+fn test_step_export_writes_multi_solid_boolean_result() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let middle_slab = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(24.0, 24.0, 6.0).unwrap(),
+        Vec3::new(-12.0, -12.0, 12.0),
+    );
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+        &cylinder,
+        &middle_slab,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("multi-solid cylinder difference");
+
+    let step =
+        zenith_io::StepExporter::export_solids_to_string(&result.solids, "CYLINDER_MIDDLE_CUT");
+
+    assert_eq!(step.matches("MANIFOLD_SOLID_BREP").count(), 2);
+    assert!(step.contains("ADVANCED_BREP_SHAPE_REPRESENTATION"));
+    assert!(step.contains("CYLINDER_MIDDLE_CUT_1"));
+    assert!(step.contains("B_SPLINE_SURFACE_WITH_KNOTS"));
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_solid_for_identical_union_and_intersection() {
     let tol = Tolerance::default();
     let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
