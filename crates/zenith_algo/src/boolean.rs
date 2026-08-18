@@ -18,6 +18,8 @@ pub struct ExactBooleanPreparationReport {
     pub face_pair_candidate_count: usize,
     pub intersection_edge_candidate_count: usize,
     pub planar_split_candidate_count: usize,
+    pub planar_batch_split_face_count: usize,
+    pub planar_batch_applied_split_count: usize,
     pub classified_split_candidate_count: usize,
     pub selected_face_piece_count: usize,
     pub selected_face_unmatched_edge_use_count: usize,
@@ -53,10 +55,12 @@ impl BooleanEngine {
         let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;
 
         Err(format!(
-            "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} classified split candidates, and {} selected face pieces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
+            "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} classified split candidates, and {} selected face pieces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
             report.face_pair_candidate_count,
             report.intersection_edge_candidate_count,
             report.planar_split_candidate_count,
+            report.planar_batch_split_face_count,
+            report.planar_batch_applied_split_count,
             report.classified_split_candidate_count,
             report.selected_face_piece_count,
             report.selected_face_unmatched_edge_use_count,
@@ -109,26 +113,35 @@ impl BooleanEngine {
             crate::BrepIntersectionBuilder::collect_classified_planar_face_split_candidates(
                 solid_a, solid_b, tol,
             );
-        let selected_face_pieces: Vec<_> = classified_splits
-            .iter()
-            .flat_map(|candidate| {
-                crate::BrepIntersectionBuilder::select_boolean_face_pieces(candidate, op)
-            })
-            .collect();
-        let stitch_report = crate::BrepIntersectionBuilder::diagnose_selected_face_stitching(
-            &selected_face_pieces,
-            tol,
+        let selection = crate::BrepIntersectionBuilder::collect_selected_boolean_face_pieces(
+            solid_a, solid_b, op, tol,
         );
+        let planar_batch_split_face_count =
+            selection.batch_splits.splits_a.len() + selection.batch_splits.splits_b.len();
+        let planar_batch_applied_split_count = selection
+            .batch_splits
+            .splits_a
+            .iter()
+            .chain(selection.batch_splits.splits_b.iter())
+            .map(|split| split.result.applied_split_count)
+            .sum();
 
         Ok(ExactBooleanPreparationReport {
             face_pair_candidate_count,
             intersection_edge_candidate_count,
             planar_split_candidate_count,
+            planar_batch_split_face_count,
+            planar_batch_applied_split_count,
             classified_split_candidate_count: classified_splits.len(),
-            selected_face_piece_count: selected_face_pieces.len(),
-            selected_face_unmatched_edge_use_count: stitch_report.unmatched_edge_use_count,
-            selected_face_non_manifold_edge_use_count: stitch_report.non_manifold_edge_use_count,
-            selected_face_same_direction_edge_use_count: stitch_report
+            selected_face_piece_count: selection.selected_face_pieces.len(),
+            selected_face_unmatched_edge_use_count: selection
+                .stitch_report
+                .unmatched_edge_use_count,
+            selected_face_non_manifold_edge_use_count: selection
+                .stitch_report
+                .non_manifold_edge_use_count,
+            selected_face_same_direction_edge_use_count: selection
+                .stitch_report
                 .same_direction_edge_use_count,
         })
     }

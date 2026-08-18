@@ -74,6 +74,7 @@ Current hardening:
 - Added a guarded reconstruction helper that turns stitchable selected face pieces into a validated `Solid`, giving the exact boolean path a final shell-construction gate for limited closed cases.
 - Added sequential multi-edge splitting for outer-loop-only planar faces, allowing one face to be cut by more than one linear intersection edge before classification.
 - Added face-index grouped batch splitting from collected intersection edges, so multiple intersecting opponent faces can split the same planar source face before boolean classification.
+- Added an integrated selection pass that feeds batch-split face fragments, or original unsplit faces, through classification, boolean-operation selection, and stitching diagnostics.
 
 ### 2. Planar trimming is still mesh-only
 

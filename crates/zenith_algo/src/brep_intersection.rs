@@ -96,6 +96,13 @@ pub struct SelectedBooleanFacePiece {
     pub reverse_orientation: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BooleanFaceSelection {
+    pub batch_splits: PlanarOperandBatchSplits,
+    pub selected_face_pieces: Vec<SelectedBooleanFacePiece>,
+    pub stitch_report: SelectedFaceStitchReport,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedFaceStitchReport {
     pub face_piece_count: usize,
@@ -336,6 +343,46 @@ impl BrepIntersectionBuilder {
         selected
     }
 
+    pub fn collect_selected_boolean_face_pieces(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: crate::BooleanOpType,
+        tol: &Tolerance,
+    ) -> BooleanFaceSelection {
+        let batch_splits = Self::collect_planar_face_batch_splits(
+            &solid_a.outer_shell.faces,
+            &solid_b.outer_shell.faces,
+            tol,
+        );
+        let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
+        let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
+
+        let mut selected_face_pieces = Vec::new();
+        selected_face_pieces.extend(select_operand_faces_after_batch_split(
+            &solid_a.outer_shell.faces,
+            &batch_splits.splits_a,
+            BooleanOperand::A,
+            &mesh_b,
+            op,
+            tol,
+        ));
+        selected_face_pieces.extend(select_operand_faces_after_batch_split(
+            &solid_b.outer_shell.faces,
+            &batch_splits.splits_b,
+            BooleanOperand::B,
+            &mesh_a,
+            op,
+            tol,
+        ));
+        let stitch_report = diagnose_selected_face_stitching(&selected_face_pieces, tol);
+
+        BooleanFaceSelection {
+            batch_splits,
+            selected_face_pieces,
+            stitch_report,
+        }
+    }
+
     pub fn diagnose_selected_face_stitching(
         pieces: &[SelectedBooleanFacePiece],
         tol: &Tolerance,
@@ -554,6 +601,43 @@ fn collect_batch_splits_for_faces(
             })
         })
         .collect()
+}
+
+fn select_operand_faces_after_batch_split(
+    faces: &[Face],
+    batch_splits: &[PlanarFaceBatchSplit],
+    operand: BooleanOperand,
+    other_mesh: &TriangleMesh,
+    op: crate::BooleanOpType,
+    tol: &Tolerance,
+) -> Vec<SelectedBooleanFacePiece> {
+    let split_faces_by_index: BTreeMap<usize, Vec<Face>> = batch_splits
+        .iter()
+        .map(|batch| (batch.face_index, batch.result.faces.clone()))
+        .collect();
+    let mut selected = Vec::new();
+
+    for (face_index, original_face) in faces.iter().enumerate() {
+        let face_pieces = split_faces_by_index
+            .get(&face_index)
+            .map(|faces| faces.as_slice())
+            .unwrap_or_else(|| std::slice::from_ref(original_face));
+
+        for face in face_pieces {
+            let location = classify_face_against_mesh(face, other_mesh, tol);
+            if keep_piece(operand, location, op) {
+                selected.push(SelectedBooleanFacePiece {
+                    operand,
+                    face: face.clone(),
+                    location,
+                    reverse_orientation: operand == BooleanOperand::B
+                        && op == crate::BooleanOpType::Difference,
+                });
+            }
+        }
+    }
+
+    selected
 }
 
 fn boundary_hits_same(a: &BoundaryHit, b: &BoundaryHit, tol: &Tolerance) -> bool {

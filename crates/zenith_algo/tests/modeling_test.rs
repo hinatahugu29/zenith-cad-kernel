@@ -249,7 +249,7 @@ fn test_exact_brep_boolean_preparation_reports_pipeline_counts() {
     assert!(report.intersection_edge_candidate_count <= report.face_pair_candidate_count);
     assert!(report.planar_split_candidate_count <= report.intersection_edge_candidate_count);
     assert!(report.classified_split_candidate_count <= report.planar_split_candidate_count);
-    assert!(report.selected_face_unmatched_edge_use_count >= report.selected_face_piece_count);
+    assert!(report.selected_face_piece_count > 0);
 }
 
 #[test]
@@ -853,6 +853,26 @@ fn test_brep_face_classification_against_solid() {
             &tol
         ),
         zenith_algo::FaceRegionLocation::Boundary
+    );
+}
+
+#[test]
+fn test_brep_collects_selected_boolean_faces_after_batch_splits() {
+    let tol = Tolerance::default();
+    let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let solid_b = zenith_algo::PrimitiveBuilder::make_cylinder(3.0, 10.0).unwrap();
+
+    let selection = zenith_algo::BrepIntersectionBuilder::collect_selected_boolean_face_pieces(
+        &solid_a,
+        &solid_b,
+        zenith_algo::BooleanOpType::Union,
+        &tol,
+    );
+
+    assert!(!selection.selected_face_pieces.is_empty());
+    assert_eq!(
+        selection.stitch_report.face_piece_count,
+        selection.selected_face_pieces.len()
     );
 }
 

@@ -24,7 +24,7 @@ use zenith_topo::{Shell, Solid};
 
 pub use boolean::{BooleanEngine, BooleanOpType, ExactBooleanPreparationReport};
 pub use brep_intersection::{
-    BooleanOperand, BrepIntersectionBuilder, ClassifiedFacePiece,
+    BooleanFaceSelection, BooleanOperand, BrepIntersectionBuilder, ClassifiedFacePiece,
     ClassifiedPlanarFaceSplitCandidate, FaceIntersectionCandidate, FaceIntersectionKind,
     FaceRegionLocation, IntersectionEdgeCandidate, PlanarFaceBatchSplit,
     PlanarFaceMultiSplitResult, PlanarFaceSplitCandidate, PlanarOperandBatchSplits,
