@@ -54,6 +54,12 @@ Replacement target:
 - implement exact B-Rep boolean pipeline: broad phase, curve/surface intersection, edge/face splitting, classification, shell reconstruction, validation
 - keep mesh boolean only as preview/fallback
 
+Current hardening:
+
+- Added `BooleanEngine::boolean_solids_mesh_preview()` to label the current tessellation/ray-cast path as display-only mesh output.
+- Added `BooleanEngine::boolean_solids_exact()` as the future exact B-Rep entry point; it validates inputs and fails explicitly instead of silently returning a mesh.
+- Added a regression test proving exact B-Rep boolean does not fall back to preview mesh output.
+
 ### 2. Planar trimming is still mesh-only
 
 The new sampling fix makes curved planar caps display correctly, but trimming itself is not yet a first-class geometric object. A robust kernel needs 2D p-curves on face parameter space, orientation rules, loop containment, and validation.

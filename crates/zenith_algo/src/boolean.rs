@@ -14,8 +14,11 @@ pub enum BooleanOpType {
 pub struct BooleanEngine;
 
 impl BooleanEngine {
-    /// 2つの Solid に対するブーリアン演算（メッシュ分割・Ray-Casting内外分類・再結合）
-    pub fn boolean_solids(
+    /// 2つの Solid に対する表示用メッシュブーリアン。
+    ///
+    /// これは正確なB-Repを返さない。編集・STEP出力・feature履歴には
+    /// `boolean_solids_exact()` の実装を使う必要がある。
+    pub fn boolean_solids_mesh_preview(
         solid_a: &Solid,
         solid_b: &Solid,
         op: BooleanOpType,
@@ -26,6 +29,34 @@ impl BooleanEngine {
         let mesh_b = tessellate_solid(solid_b, tess_params);
 
         Self::boolean_meshes(&mesh_a, &mesh_b, op)
+    }
+
+    /// 2つの Solid に対する正確なB-Repブーリアン入口。
+    pub fn boolean_solids_exact(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        _op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if !solid_a.is_topologically_valid(tol) {
+            return Err("Exact B-Rep boolean input A is not topologically valid".to_string());
+        }
+        if !solid_b.is_topologically_valid(tol) {
+            return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
+        }
+
+        Err("Exact B-Rep boolean is not implemented yet; use boolean_solids_mesh_preview only for display/preview mesh results".to_string())
+    }
+
+    /// 2つの Solid に対する互換API。現在は表示用メッシュブーリアンを返す。
+    pub fn boolean_solids(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tess_params: &TessellationParams,
+        tol: &Tolerance,
+    ) -> Result<TriangleMesh, String> {
+        Self::boolean_solids_mesh_preview(solid_a, solid_b, op, tess_params, tol)
     }
 
     /// 2つの閉じたTriangleMeshに対するブーリアン演算

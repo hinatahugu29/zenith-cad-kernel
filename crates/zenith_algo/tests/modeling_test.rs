@@ -202,6 +202,36 @@ fn test_boolean_operations() {
 }
 
 #[test]
+fn test_exact_brep_boolean_entry_is_separate_from_mesh_preview() {
+    let tol = Tolerance::default();
+    let tess_params = TessellationParams {
+        u_divisions: 4,
+        v_divisions: 4,
+    };
+    let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let solid_b = zenith_algo::PrimitiveBuilder::make_cylinder(3.0, 10.0).unwrap();
+
+    let preview_mesh = zenith_algo::BooleanEngine::boolean_solids_mesh_preview(
+        &solid_a,
+        &solid_b,
+        zenith_algo::BooleanOpType::Union,
+        &tess_params,
+        &tol,
+    )
+    .expect("mesh preview boolean should remain available");
+    assert!(preview_mesh.num_triangles() > 0);
+
+    let err = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &solid_a,
+        &solid_b,
+        zenith_algo::BooleanOpType::Union,
+        &tol,
+    )
+    .expect_err("exact B-Rep boolean must not silently fall back to mesh output");
+    assert!(err.contains("Exact B-Rep boolean is not implemented yet"));
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(
