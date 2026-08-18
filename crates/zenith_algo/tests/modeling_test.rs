@@ -1133,6 +1133,71 @@ fn test_planar_split_reports_curved_plane_cylinder_edge_as_skipped() {
 }
 
 #[test]
+fn test_planar_split_can_preserve_curved_split_edge() {
+    let tol = Tolerance::default();
+    let radius = 10.0;
+    let z = 15.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    let cut_plane = PlaneSurface3::new(
+        Point3::new(10.0, 0.0, z),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let points = [
+        Point3::new(10.0, 0.0, z),
+        Point3::new(12.0, 12.0, z),
+        Point3::new(0.0, 10.0, z),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let boundary_edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let cut_face = Face::simple(
+        FaceGeometry::Plane(cut_plane),
+        Wire::new(
+            boundary_edges
+                .into_iter()
+                .map(OrientedEdge::forward)
+                .collect(),
+        ),
+    );
+    let curved_edge = zenith_algo::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        &[cut_face.clone()],
+        &[side_face],
+        &tol,
+    )
+    .into_iter()
+    .next()
+    .expect("plane-cylinder curve should become an edge candidate")
+    .edge;
+
+    let split_faces = zenith_algo::BrepIntersectionBuilder::split_planar_face_by_edge(
+        &cut_face,
+        &curved_edge,
+        &tol,
+    )
+    .expect("curved planar face split");
+
+    assert_eq!(split_faces.len(), 2);
+    for face in split_faces {
+        assert!(face.outer_wire.is_closed(&tol));
+        assert!(face.outer_wire.edges.iter().any(|edge| {
+            edge.edge.id == curved_edge.id && edge.edge.curve.degree == curved_edge.curve.degree
+        }));
+        assert!(face.pcurves.is_some());
+        assert!(face.validate_pcurves(&tol, 8).unwrap().is_valid());
+    }
+}
+
+#[test]
 fn test_brep_intersection_edge_splits_planar_face() {
     let tol = Tolerance::default();
     let make_face = |points: [Point3; 4], normal: Vec3| {

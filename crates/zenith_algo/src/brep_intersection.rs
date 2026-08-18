@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec3, Vec3Ext};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
-use zenith_topo::{Edge, Face, FaceGeometry, FacePcurveLoop, OrientedEdge, Vertex, Wire};
+use zenith_topo::{
+    Edge, Face, FaceGeometry, FacePcurveLoop, Orientation, OrientedEdge, Vertex, Wire,
+};
 use zenith_topo::{Shell, Solid};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -596,10 +598,6 @@ impl BrepIntersectionBuilder {
                 "Planar face splitting with inner wires is not implemented yet".to_string(),
             );
         }
-        if split_edge.curve.degree != 1 || split_edge.curve.control_points.len() != 2 {
-            return Err("Only linear split edges are supported".to_string());
-        }
-
         let boundary = face.outer_wire.sample_points(1);
         if boundary.len() < 3 {
             return Err("Cannot split a face with fewer than three boundary points".to_string());
@@ -610,8 +608,8 @@ impl BrepIntersectionBuilder {
         if (end - start).norm() <= tol.linear {
             return Err("Split edge is degenerate".to_string());
         }
-        if !point_lies_on_plane(start, plane, tol) || !point_lies_on_plane(end, plane, tol) {
-            return Err("Split edge endpoints must lie on the planar face".to_string());
+        if !edge_lies_on_plane(split_edge, plane, tol) {
+            return Err("Split edge must lie on the planar face".to_string());
         }
 
         let boundary_uv: Vec<Point2> = boundary
@@ -627,34 +625,34 @@ impl BrepIntersectionBuilder {
         if boundary_hits_same(&start_hit, &end_hit, tol) {
             return Err("Split edge endpoints collapse on the boundary".to_string());
         }
-        let mid_uv = project_to_plane_uv(start + (end - start) * 0.5, plane);
+        let mid_uv = project_to_plane_uv(edge_midpoint(split_edge), plane);
         if !point_in_polygon_2d(mid_uv, &boundary_uv, tol.parametric)
             || point_on_polygon_boundary(mid_uv, &boundary_uv, tol.parametric)
         {
             return Err("Split edge must cross the face interior".to_string());
         }
 
-        let loop_a = clean_loop_points(
-            boundary_path_between(&boundary, &start_hit, &end_hit)
-                .into_iter()
-                .chain([start])
-                .collect(),
-            tol,
-        );
-        let loop_b = clean_loop_points(
-            boundary_path_between(&boundary, &end_hit, &start_hit)
-                .into_iter()
-                .chain([end])
-                .collect(),
-            tol,
-        );
+        let loop_a = clean_loop_points(boundary_path_between(&boundary, &start_hit, &end_hit), tol);
+        let loop_b = clean_loop_points(boundary_path_between(&boundary, &end_hit, &start_hit), tol);
 
-        if loop_a.len() < 3 || loop_b.len() < 3 {
+        if loop_a.len() < 2 || loop_b.len() < 2 {
             return Err("Split edge did not produce two valid face loops".to_string());
         }
 
-        let face_a = face_from_polygon(face, loop_a, tol)?;
-        let face_b = face_from_polygon(face, loop_b, tol)?;
+        let face_a = face_from_boundary_path_and_split_edge(
+            face,
+            loop_a,
+            split_edge,
+            Orientation::Reversed,
+            tol,
+        )?;
+        let face_b = face_from_boundary_path_and_split_edge(
+            face,
+            loop_b,
+            split_edge,
+            Orientation::Forward,
+            tol,
+        )?;
         Ok(vec![face_a, face_b])
     }
 
@@ -901,6 +899,19 @@ fn point_lies_on_plane(point: Point3, plane: &PlaneSurface3, tol: &Tolerance) ->
     (point - plane.origin).dot(&plane.normal).abs() <= tol.linear * 10.0
 }
 
+fn edge_lies_on_plane(edge: &Edge, plane: &PlaneSurface3, tol: &Tolerance) -> bool {
+    let (t_min, t_max) = edge.curve.param_range();
+    (0..=8).all(|i| {
+        let t = t_min + (t_max - t_min) * (i as f64 / 8.0);
+        point_lies_on_plane(edge.curve.evaluate(t), plane, tol)
+    })
+}
+
+fn edge_midpoint(edge: &Edge) -> Point3 {
+    let (t_min, t_max) = edge.curve.param_range();
+    edge.curve.evaluate((t_min + t_max) * 0.5)
+}
+
 fn boundary_path_between(boundary: &[Point3], from: &BoundaryHit, to: &BoundaryHit) -> Vec<Point3> {
     let mut path = vec![from.point];
     let n = boundary.len();
@@ -937,15 +948,21 @@ fn clean_loop_points(points: Vec<Point3>, tol: &Tolerance) -> Vec<Point3> {
     clean
 }
 
-fn face_from_polygon(
+fn face_from_boundary_path_and_split_edge(
     template: &Face,
-    points: Vec<Point3>,
+    boundary_path: Vec<Point3>,
+    split_edge: &Edge,
+    split_orientation: Orientation,
     tol: &Tolerance,
 ) -> Result<Face, String> {
-    let mut oriented_edges = Vec::with_capacity(points.len());
-    for i in 0..points.len() {
-        let start = points[i];
-        let end = points[(i + 1) % points.len()];
+    if boundary_path.len() < 2 {
+        return Err("Split face loop contains too few boundary points".to_string());
+    }
+
+    let mut oriented_edges = Vec::with_capacity(boundary_path.len());
+    for window in boundary_path.windows(2) {
+        let start = window[0];
+        let end = window[1];
         if (end - start).norm() <= tol.linear {
             return Err("Split face loop contains a degenerate edge".to_string());
         }
@@ -956,6 +973,16 @@ fn face_from_polygon(
         let edge = Edge::new(curve, start_vertex, end_vertex, tol.linear);
         oriented_edges.push(OrientedEdge::forward(edge));
     }
+
+    let expected_start = *boundary_path.last().unwrap();
+    let expected_end = boundary_path[0];
+    let oriented_split = OrientedEdge::new(split_edge.clone(), split_orientation);
+    if (oriented_split.start_vertex().point - expected_start).norm() > tol.linear * 10.0
+        || (oriented_split.end_vertex().point - expected_end).norm() > tol.linear * 10.0
+    {
+        return Err("Split edge orientation does not close the split loop".to_string());
+    }
+    oriented_edges.push(oriented_split);
 
     Ok(Face::new(
         template.geometry.clone(),
