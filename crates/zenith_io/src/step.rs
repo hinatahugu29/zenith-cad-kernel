@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::Path;
 use zenith_geom::{NurbsCurve2, NurbsCurve3, NurbsSurface3};
 use zenith_math::{Point2, Point3, Tolerance};
-use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, FacePcurveSegment, Solid, Wire};
+use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, FacePcurveSegment, Shell, Solid, Wire};
 
 /// ISO 10303-21 (STEP AP214 / AP203 / AP242) 完全共有マニホールド B-Rep エクスポーター
 pub struct StepExporter;
@@ -124,24 +124,28 @@ impl StepExporter {
         ));
 
         // 3. Shell内の各Faceのエンティティ生成（トポロジー共有）
-        let mut advanced_face_ids = Vec::new();
-        for face in &solid.outer_shell.faces {
-            if let Some(face_id) = Self::write_face(&mut ctx, face) {
-                advanced_face_ids.push(face_id);
-            }
-        }
-
-        let face_list_str = advanced_face_ids
-            .iter()
-            .map(|id| format!("#{}", id))
-            .collect::<Vec<_>>()
-            .join(",");
-
-        let closed_shell_id = ctx.add_entity(&format!("CLOSED_SHELL('',({}))", face_list_str));
-        let manifold_solid_id = ctx.add_entity(&format!(
-            "MANIFOLD_SOLID_BREP('{}',#{})",
-            product_name, closed_shell_id
-        ));
+        let outer_shell_id = Self::write_closed_shell(&mut ctx, &solid.outer_shell);
+        let manifold_solid_id = if solid.inner_shells.is_empty() {
+            ctx.add_entity(&format!(
+                "MANIFOLD_SOLID_BREP('{}',#{})",
+                product_name, outer_shell_id
+            ))
+        } else {
+            let oriented_void_ids = solid
+                .inner_shells
+                .iter()
+                .map(|inner_shell| {
+                    let shell_id = Self::write_closed_shell(&mut ctx, inner_shell);
+                    ctx.add_entity(&format!("ORIENTED_CLOSED_SHELL('',*,#{},.F.)", shell_id))
+                })
+                .map(|id| format!("#{id}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            ctx.add_entity(&format!(
+                "BREP_WITH_VOIDS('{}',#{},({}))",
+                product_name, outer_shell_id, oriented_void_ids
+            ))
+        };
 
         let shape_rep_id = ctx.add_entity(&format!(
             "ADVANCED_BREP_SHAPE_REPRESENTATION('{}',(#{},#{}),#{})",
@@ -173,6 +177,23 @@ impl StepExporter {
     fn write_point(ctx: &mut StepContext, p: Point3) -> u64 {
         let p_str = format!("CARTESIAN_POINT('',({:.6},{:.6},{:.6}))", p.x, p.y, p.z);
         ctx.add_entity(&p_str)
+    }
+
+    fn write_closed_shell(ctx: &mut StepContext, shell: &Shell) -> u64 {
+        let mut advanced_face_ids = Vec::new();
+        for face in &shell.faces {
+            if let Some(face_id) = Self::write_face(ctx, face) {
+                advanced_face_ids.push(face_id);
+            }
+        }
+
+        let face_list_str = advanced_face_ids
+            .iter()
+            .map(|id| format!("#{}", id))
+            .collect::<Vec<_>>()
+            .join(",");
+
+        ctx.add_entity(&format!("CLOSED_SHELL('',({}))", face_list_str))
     }
 
     fn write_point2(ctx: &mut StepContext, p: Point2) -> u64 {

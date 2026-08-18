@@ -442,6 +442,30 @@ fn test_exact_brep_boolean_returns_cavity_for_contained_difference() {
 }
 
 #[test]
+fn test_step_export_uses_brep_with_voids_for_inner_shells() {
+    let tol = Tolerance::default();
+    let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let inner = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(3.0, 3.0, 3.0).unwrap(),
+        Vec3::new(2.0, 2.0, 2.0),
+    );
+    let difference = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &outer,
+        &inner,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("contained exact difference should return an inner-shell cavity");
+
+    let step = zenith_io::StepExporter::export_solid_to_string(&difference, "BOX_WITH_VOID");
+
+    assert!(step.contains("BREP_WITH_VOIDS"));
+    assert!(step.contains("ORIENTED_CLOSED_SHELL"));
+    assert_eq!(step.matches(" = CLOSED_SHELL").count(), 2);
+    assert!(!step.contains("MANIFOLD_SOLID_BREP('BOX_WITH_VOID'"));
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_left_solid_for_disjoint_difference() {
     let tol = Tolerance::default();
     let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
