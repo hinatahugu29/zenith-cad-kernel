@@ -602,6 +602,60 @@ fn test_brep_intersection_edge_splits_planar_face() {
 }
 
 #[test]
+fn test_brep_intersection_splits_planar_face_by_multiple_edges() {
+    let tol = Tolerance::default();
+    let points = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(4.0, 0.0, 0.0),
+        Point3::new(4.0, 4.0, 0.0),
+        Point3::new(0.0, 4.0, 0.0),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+        Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let wire = Wire::new(edges.into_iter().map(OrientedEdge::forward).collect());
+    let plane = PlaneSurface3::new(
+        points[0],
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let face = Face::simple(FaceGeometry::Plane(plane), wire);
+    let split_edges = vec![
+        Edge::line_between(
+            Vertex::new(Point3::new(1.0, 0.0, 0.0), tol.linear),
+            Vertex::new(Point3::new(1.0, 4.0, 0.0), tol.linear),
+        )
+        .unwrap(),
+        Edge::line_between(
+            Vertex::new(Point3::new(3.0, 0.0, 0.0), tol.linear),
+            Vertex::new(Point3::new(3.0, 4.0, 0.0), tol.linear),
+        )
+        .unwrap(),
+    ];
+
+    let result =
+        zenith_algo::BrepIntersectionBuilder::split_planar_face_by_edges(&face, &split_edges, &tol)
+            .expect("multi split planar face");
+
+    assert_eq!(result.applied_split_count, 2);
+    assert_eq!(result.skipped_split_count, 0);
+    assert_eq!(result.faces.len(), 3);
+    for split_face in result.faces {
+        assert!(split_face.outer_wire.is_closed(&tol));
+        assert!(split_face.pcurves.is_some());
+        assert!(split_face.validate_pcurves(&tol, 4).unwrap().is_valid());
+    }
+}
+
+#[test]
 fn test_brep_intersection_collects_planar_face_split_candidates() {
     let tol = Tolerance::default();
     let make_face = |points: [Point3; 4], normal: Vec3| {

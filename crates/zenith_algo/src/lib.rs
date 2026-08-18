@@ -26,8 +26,8 @@ pub use boolean::{BooleanEngine, BooleanOpType, ExactBooleanPreparationReport};
 pub use brep_intersection::{
     BooleanOperand, BrepIntersectionBuilder, ClassifiedFacePiece,
     ClassifiedPlanarFaceSplitCandidate, FaceIntersectionCandidate, FaceIntersectionKind,
-    FaceRegionLocation, IntersectionEdgeCandidate, PlanarFaceSplitCandidate,
-    SelectedBooleanFacePiece, SelectedFaceStitchReport,
+    FaceRegionLocation, IntersectionEdgeCandidate, PlanarFaceMultiSplitResult,
+    PlanarFaceSplitCandidate, SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;

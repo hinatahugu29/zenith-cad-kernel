@@ -39,6 +39,13 @@ pub struct PlanarFaceSplitCandidate {
     pub split_faces_b: Vec<Face>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanarFaceMultiSplitResult {
+    pub faces: Vec<Face>,
+    pub applied_split_count: usize,
+    pub skipped_split_count: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaceRegionLocation {
     Inside,
@@ -396,6 +403,52 @@ impl BrepIntersectionBuilder {
         let face_a = face_from_polygon(face, loop_a, tol)?;
         let face_b = face_from_polygon(face, loop_b, tol)?;
         Ok(vec![face_a, face_b])
+    }
+
+    pub fn split_planar_face_by_edges(
+        face: &Face,
+        split_edges: &[Edge],
+        tol: &Tolerance,
+    ) -> Result<PlanarFaceMultiSplitResult, String> {
+        let FaceGeometry::Plane(_) = &face.geometry else {
+            return Err("Only planar faces can be split by intersection edges".to_string());
+        };
+        if !face.inner_wires.is_empty() {
+            return Err(
+                "Planar face splitting with inner wires is not implemented yet".to_string(),
+            );
+        }
+
+        let mut faces = vec![face.clone()];
+        let mut applied_split_count = 0;
+        let mut skipped_split_count = 0;
+
+        for split_edge in split_edges {
+            let mut next_faces = Vec::new();
+            let mut applied_this_edge = false;
+
+            for current_face in faces {
+                match Self::split_planar_face_by_edge(&current_face, split_edge, tol) {
+                    Ok(split_faces) => {
+                        applied_split_count += 1;
+                        applied_this_edge = true;
+                        next_faces.extend(split_faces);
+                    }
+                    Err(_) => next_faces.push(current_face),
+                }
+            }
+
+            if !applied_this_edge {
+                skipped_split_count += 1;
+            }
+            faces = next_faces;
+        }
+
+        Ok(PlanarFaceMultiSplitResult {
+            faces,
+            applied_split_count,
+            skipped_split_count,
+        })
     }
 }
 
