@@ -357,6 +357,109 @@ fn test_exact_brep_boolean_cylinder_slab_intersection_is_operand_order_independe
 }
 
 #[test]
+fn test_exact_brep_boolean_trims_cylinder_end_for_slab_difference() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let bottom_slab = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(24.0, 24.0, 6.0).unwrap(),
+        Vec3::new(-12.0, -12.0, 0.0),
+    );
+
+    let trimmed = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &cylinder,
+        &bottom_slab,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("cylinder minus end slab should return a shortened B-Rep cylinder");
+
+    assert_eq!(trimmed.outer_shell.faces.len(), 6);
+    assert!(trimmed.is_topologically_valid(&tol));
+    let sampled: Vec<Point3> = trimmed
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.sample_points(8))
+        .collect();
+    let z_min = sampled
+        .iter()
+        .map(|point| point.z)
+        .fold(f64::INFINITY, f64::min);
+    let z_max = sampled
+        .iter()
+        .map(|point| point.z)
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!((z_min - 6.0).abs() < 1e-6);
+    assert!((z_max - 30.0).abs() < 1e-6);
+
+    let params = TessellationParams {
+        u_divisions: 48,
+        v_divisions: 8,
+    };
+    let mesh = tessellate_solid(&trimmed, &params);
+    let props = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    let expected_volume = std::f64::consts::PI * 10.0 * 10.0 * 24.0;
+    assert!(props.volume > expected_volume * 0.9);
+    assert!(props.volume < expected_volume * 1.05);
+}
+
+#[test]
+fn test_exact_brep_boolean_trims_cylinder_top_for_slab_difference() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let top_slab = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(24.0, 24.0, 6.0).unwrap(),
+        Vec3::new(-12.0, -12.0, 24.0),
+    );
+
+    let trimmed = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &cylinder,
+        &top_slab,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("cylinder minus top slab should return a shortened B-Rep cylinder");
+
+    assert!(trimmed.is_topologically_valid(&tol));
+    let sampled: Vec<Point3> = trimmed
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.sample_points(8))
+        .collect();
+    let z_min = sampled
+        .iter()
+        .map(|point| point.z)
+        .fold(f64::INFINITY, f64::min);
+    let z_max = sampled
+        .iter()
+        .map(|point| point.z)
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!(z_min.abs() < 1e-6);
+    assert!((z_max - 24.0).abs() < 1e-6);
+}
+
+#[test]
+fn test_exact_brep_boolean_rejects_middle_slab_cylinder_difference_as_compound() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let middle_slab = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(24.0, 24.0, 6.0).unwrap(),
+        Vec3::new(-12.0, -12.0, 12.0),
+    );
+
+    let err = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &cylinder,
+        &middle_slab,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect_err("middle slab difference needs compound result support");
+
+    assert!(err.contains("multiple disjoint regions"));
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_solid_for_identical_union_and_intersection() {
     let tol = Tolerance::default();
     let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();

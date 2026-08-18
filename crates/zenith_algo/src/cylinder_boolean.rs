@@ -19,15 +19,21 @@ impl CylinderBoolean {
         op: BooleanOpType,
         tol: &Tolerance,
     ) -> Result<Option<Solid>, String> {
-        if op != BooleanOpType::Intersection {
-            return Ok(None);
-        }
-
-        if let Some(result) = Self::intersect_slab_and_cylinder(solid_a, solid_b, tol)? {
-            return Ok(Some(result));
-        }
-        if let Some(result) = Self::intersect_slab_and_cylinder(solid_b, solid_a, tol)? {
-            return Ok(Some(result));
+        match op {
+            BooleanOpType::Intersection => {
+                if let Some(result) = Self::intersect_slab_and_cylinder(solid_a, solid_b, tol)? {
+                    return Ok(Some(result));
+                }
+                if let Some(result) = Self::intersect_slab_and_cylinder(solid_b, solid_a, tol)? {
+                    return Ok(Some(result));
+                }
+            }
+            BooleanOpType::Difference => {
+                if let Some(result) = Self::subtract_slab_from_cylinder(solid_a, solid_b, tol)? {
+                    return Ok(Some(result));
+                }
+            }
+            BooleanOpType::Union => {}
         }
 
         Ok(None)
@@ -56,6 +62,55 @@ impl CylinderBoolean {
         let z_max = slab.max.z.min(cylinder.z_max);
         if z_max - z_min <= tol.linear {
             return Err("Exact cylinder-slab intersection has no positive volume".to_string());
+        }
+
+        let cylinder = PrimitiveBuilder::make_cylinder(cylinder.radius, z_max - z_min)?;
+        Ok(Some(BrepTransform::translate_solid(
+            &cylinder,
+            Vec3::new(0.0, 0.0, z_min),
+        )))
+    }
+
+    fn subtract_slab_from_cylinder(
+        cylinder_solid: &Solid,
+        slab_solid: &Solid,
+        tol: &Tolerance,
+    ) -> Result<Option<Solid>, String> {
+        let Some(cylinder) = axis_cylinder_bounds(cylinder_solid, tol) else {
+            return Ok(None);
+        };
+        let Some(slab) = OrthogonalBoxBoolean::axis_aligned_box_bounds(slab_solid, tol) else {
+            return Ok(None);
+        };
+        if slab.min.x > -cylinder.radius + tol.linear
+            || slab.max.x < cylinder.radius - tol.linear
+            || slab.min.y > -cylinder.radius + tol.linear
+            || slab.max.y < cylinder.radius - tol.linear
+        {
+            return Ok(None);
+        }
+
+        let overlap_min = slab.min.z.max(cylinder.z_min);
+        let overlap_max = slab.max.z.min(cylinder.z_max);
+        if overlap_max - overlap_min <= tol.linear {
+            return Ok(None);
+        }
+        if overlap_min <= cylinder.z_min + tol.linear && overlap_max >= cylinder.z_max - tol.linear
+        {
+            return Err("Exact cylinder-slab difference produced an empty result".to_string());
+        }
+
+        let (z_min, z_max) = if overlap_min <= cylinder.z_min + tol.linear {
+            (overlap_max, cylinder.z_max)
+        } else if overlap_max >= cylinder.z_max - tol.linear {
+            (cylinder.z_min, overlap_min)
+        } else {
+            return Err(
+                "Exact cylinder-slab difference produced multiple disjoint regions".to_string(),
+            );
+        };
+        if z_max - z_min <= tol.linear {
+            return Err("Exact cylinder-slab difference produced an empty result".to_string());
         }
 
         let cylinder = PrimitiveBuilder::make_cylinder(cylinder.radius, z_max - z_min)?;
