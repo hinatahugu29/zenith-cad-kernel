@@ -1,3 +1,4 @@
+use crate::cap::CapBuilder;
 use std::collections::BTreeMap;
 use zenith_geom::{NurbsCurve3, PlaneSurface3};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec3, Vec3Ext};
@@ -417,6 +418,22 @@ impl BrepIntersectionBuilder {
         Solid::try_simple(Shell::closed(faces), tol).map_err(|err| err.to_string())
     }
 
+    pub fn build_planar_cap_from_edge_loop(
+        edges: &[Edge],
+        tol: &Tolerance,
+    ) -> Result<Face, String> {
+        let wire = order_edges_into_closed_wire(edges, tol)?;
+        let face = CapBuilder::make_planar_cap(wire)?;
+        let pcurve_report = face.validate_pcurves(tol, 4)?;
+        if !pcurve_report.is_valid() {
+            return Err(format!(
+                "Generated cap p-curves are invalid with {} mismatches",
+                pcurve_report.mismatch_count
+            ));
+        }
+        Ok(face)
+    }
+
     pub fn split_planar_face_by_edge(
         face: &Face,
         split_edge: &Edge,
@@ -601,6 +618,48 @@ fn collect_batch_splits_for_faces(
             })
         })
         .collect()
+}
+
+fn order_edges_into_closed_wire(edges: &[Edge], tol: &Tolerance) -> Result<Wire, String> {
+    if edges.len() < 3 {
+        return Err("A cap loop needs at least three edges".to_string());
+    }
+
+    let mut remaining: Vec<Edge> = edges.to_vec();
+    let first = remaining.remove(0);
+    let loop_start = first.start_vertex.point;
+    let mut current_end = first.end_vertex.point;
+    let mut oriented_edges = vec![OrientedEdge::forward(first)];
+
+    while !remaining.is_empty() {
+        let next_index = remaining.iter().position(|edge| {
+            points_same_3d(edge.start_vertex.point, current_end, tol.linear)
+                || points_same_3d(edge.end_vertex.point, current_end, tol.linear)
+        });
+        let Some(next_index) = next_index else {
+            return Err("Cap edges do not form a continuous loop".to_string());
+        };
+
+        let edge = remaining.remove(next_index);
+        if points_same_3d(edge.start_vertex.point, current_end, tol.linear) {
+            current_end = edge.end_vertex.point;
+            oriented_edges.push(OrientedEdge::forward(edge));
+        } else {
+            current_end = edge.start_vertex.point;
+            oriented_edges.push(OrientedEdge::reversed(edge));
+        }
+    }
+
+    if !points_same_3d(current_end, loop_start, tol.linear) {
+        return Err("Cap edges do not close".to_string());
+    }
+
+    let wire = Wire::new(oriented_edges);
+    if !wire.is_closed(tol) {
+        return Err("Ordered cap wire is not closed".to_string());
+    }
+
+    Ok(wire)
 }
 
 fn select_operand_faces_after_batch_split(

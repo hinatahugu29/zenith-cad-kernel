@@ -1061,6 +1061,31 @@ fn test_brep_builds_solid_from_stitched_selected_face_pieces() {
 }
 
 #[test]
+fn test_brep_builds_planar_cap_from_unordered_edge_loop() {
+    let tol = Tolerance::default();
+    let p0 = Point3::new(0.0, 0.0, 0.0);
+    let p1 = Point3::new(2.0, 0.0, 0.0);
+    let p2 = Point3::new(2.0, 3.0, 0.0);
+    let p3 = Point3::new(0.0, 3.0, 0.0);
+    let e0 = Edge::line_between(Vertex::new(p0, tol.linear), Vertex::new(p1, tol.linear)).unwrap();
+    let e1 = Edge::line_between(Vertex::new(p1, tol.linear), Vertex::new(p2, tol.linear)).unwrap();
+    let e2 = Edge::line_between(Vertex::new(p3, tol.linear), Vertex::new(p2, tol.linear)).unwrap();
+    let e3 = Edge::line_between(Vertex::new(p3, tol.linear), Vertex::new(p0, tol.linear)).unwrap();
+
+    let cap = zenith_algo::BrepIntersectionBuilder::build_planar_cap_from_edge_loop(
+        &[e2, e0, e3, e1],
+        &tol,
+    )
+    .expect("unordered cap edge loop should build a planar face");
+
+    assert!(matches!(cap.geometry, FaceGeometry::Plane(_)));
+    assert!(cap.outer_wire.is_closed(&tol));
+    assert!(cap.inner_wires.is_empty());
+    assert!(cap.pcurves.is_some());
+    assert!(cap.validate_pcurves(&tol, 4).unwrap().is_valid());
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(
