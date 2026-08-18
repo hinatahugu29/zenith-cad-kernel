@@ -26,7 +26,8 @@ pub use boolean::{BooleanEngine, BooleanOpType, ExactBooleanPreparationReport};
 pub use brep_intersection::{
     BooleanFaceSelection, BooleanOperand, BrepIntersectionBuilder, ClassifiedFacePiece,
     ClassifiedPlanarFaceSplitCandidate, FaceIntersectionCandidate, FaceIntersectionKind,
-    FaceRegionLocation, IntersectionEdgeCandidate, PlanarFaceBatchSplit,
+    FaceRegionLocation, IntersectionEdgeCandidate, IntersectionEdgeLoop,
+    IntersectionEdgeLoopExtraction, PlanarCapGeneration, PlanarFaceBatchSplit,
     PlanarFaceMultiSplitResult, PlanarFaceSplitCandidate, PlanarOperandBatchSplits,
     SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };

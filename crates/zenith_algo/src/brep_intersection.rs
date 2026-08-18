@@ -61,6 +61,24 @@ pub struct PlanarOperandBatchSplits {
     pub splits_b: Vec<PlanarFaceBatchSplit>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntersectionEdgeLoop {
+    pub edges: Vec<Edge>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntersectionEdgeLoopExtraction {
+    pub loops: Vec<IntersectionEdgeLoop>,
+    pub skipped_edge_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanarCapGeneration {
+    pub edge_loop_extraction: IntersectionEdgeLoopExtraction,
+    pub cap_faces: Vec<Face>,
+    pub failed_loop_count: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaceRegionLocation {
     Inside,
@@ -434,6 +452,46 @@ impl BrepIntersectionBuilder {
         Ok(face)
     }
 
+    pub fn collect_closed_intersection_edge_loops(
+        edges: &[Edge],
+        tol: &Tolerance,
+    ) -> IntersectionEdgeLoopExtraction {
+        collect_closed_intersection_edge_loops(edges, tol)
+    }
+
+    pub fn build_planar_caps_from_intersection_edges(
+        edges: &[Edge],
+        tol: &Tolerance,
+    ) -> PlanarCapGeneration {
+        let edge_loop_extraction = collect_closed_intersection_edge_loops(edges, tol);
+        let mut cap_faces = Vec::new();
+        let mut failed_loop_count = 0;
+
+        for edge_loop in &edge_loop_extraction.loops {
+            match Self::build_planar_cap_from_edge_loop(&edge_loop.edges, tol) {
+                Ok(face) => cap_faces.push(face),
+                Err(_) => failed_loop_count += 1,
+            }
+        }
+
+        PlanarCapGeneration {
+            edge_loop_extraction,
+            cap_faces,
+            failed_loop_count,
+        }
+    }
+
+    pub fn build_planar_caps_from_intersection_edge_candidates(
+        candidates: &[IntersectionEdgeCandidate],
+        tol: &Tolerance,
+    ) -> PlanarCapGeneration {
+        let edges: Vec<Edge> = candidates
+            .iter()
+            .map(|candidate| candidate.edge.clone())
+            .collect();
+        Self::build_planar_caps_from_intersection_edges(&edges, tol)
+    }
+
     pub fn split_planar_face_by_edge(
         face: &Face,
         split_edge: &Edge,
@@ -660,6 +718,51 @@ fn order_edges_into_closed_wire(edges: &[Edge], tol: &Tolerance) -> Result<Wire,
     }
 
     Ok(wire)
+}
+
+fn collect_closed_intersection_edge_loops(
+    edges: &[Edge],
+    tol: &Tolerance,
+) -> IntersectionEdgeLoopExtraction {
+    let mut remaining: Vec<Edge> = edges.to_vec();
+    let mut loops = Vec::new();
+    let mut skipped_edge_count = 0;
+
+    while !remaining.is_empty() {
+        let first = remaining.remove(0);
+        let loop_start = first.start_vertex.point;
+        let mut current_end = first.end_vertex.point;
+        let mut loop_edges = vec![first];
+
+        while !points_same_3d(current_end, loop_start, tol.linear) {
+            let next_index = remaining.iter().position(|edge| {
+                points_same_3d(edge.start_vertex.point, current_end, tol.linear)
+                    || points_same_3d(edge.end_vertex.point, current_end, tol.linear)
+            });
+            let Some(next_index) = next_index else {
+                break;
+            };
+
+            let edge = remaining.remove(next_index);
+            current_end = if points_same_3d(edge.start_vertex.point, current_end, tol.linear) {
+                edge.end_vertex.point
+            } else {
+                edge.start_vertex.point
+            };
+            loop_edges.push(edge);
+        }
+
+        if loop_edges.len() >= 3 && points_same_3d(current_end, loop_start, tol.linear) {
+            loops.push(IntersectionEdgeLoop { edges: loop_edges });
+        } else {
+            skipped_edge_count += loop_edges.len();
+        }
+    }
+
+    IntersectionEdgeLoopExtraction {
+        loops,
+        skipped_edge_count,
+    }
 }
 
 fn select_operand_faces_after_batch_split(

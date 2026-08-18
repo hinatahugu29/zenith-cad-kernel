@@ -1086,6 +1086,53 @@ fn test_brep_builds_planar_cap_from_unordered_edge_loop() {
 }
 
 #[test]
+fn test_brep_extracts_intersection_edge_loops_and_builds_caps() {
+    let tol = Tolerance::default();
+    let make_edge = |a: Point3, b: Point3| {
+        Edge::line_between(Vertex::new(a, tol.linear), Vertex::new(b, tol.linear)).unwrap()
+    };
+    let a0 = Point3::new(0.0, 0.0, 0.0);
+    let a1 = Point3::new(2.0, 0.0, 0.0);
+    let a2 = Point3::new(2.0, 2.0, 0.0);
+    let a3 = Point3::new(0.0, 2.0, 0.0);
+    let b0 = Point3::new(5.0, 0.0, 1.0);
+    let b1 = Point3::new(7.0, 0.0, 1.0);
+    let b2 = Point3::new(7.0, 2.0, 1.0);
+    let b3 = Point3::new(5.0, 2.0, 1.0);
+    let edges = vec![
+        make_edge(a2, a3),
+        make_edge(b0, b1),
+        make_edge(a1, a2),
+        make_edge(b3, b2),
+        make_edge(a0, a1),
+        make_edge(b3, b0),
+        make_edge(a3, a0),
+        make_edge(b1, b2),
+    ];
+
+    let extraction =
+        zenith_algo::BrepIntersectionBuilder::collect_closed_intersection_edge_loops(&edges, &tol);
+    assert_eq!(extraction.loops.len(), 2);
+    assert_eq!(extraction.skipped_edge_count, 0);
+    assert!(extraction
+        .loops
+        .iter()
+        .all(|edge_loop| edge_loop.edges.len() == 4));
+
+    let caps = zenith_algo::BrepIntersectionBuilder::build_planar_caps_from_intersection_edges(
+        &edges, &tol,
+    );
+    assert_eq!(caps.edge_loop_extraction.loops.len(), 2);
+    assert_eq!(caps.cap_faces.len(), 2);
+    assert_eq!(caps.failed_loop_count, 0);
+    for cap in caps.cap_faces {
+        assert!(matches!(cap.geometry, FaceGeometry::Plane(_)));
+        assert!(cap.outer_wire.is_closed(&tol));
+        assert!(cap.validate_pcurves(&tol, 4).unwrap().is_valid());
+    }
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(
