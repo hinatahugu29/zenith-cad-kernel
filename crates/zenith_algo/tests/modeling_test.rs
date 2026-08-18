@@ -1,9 +1,15 @@
 use zenith_algo::{ExtrudeBuilder, LoftBuilder, RevolveBuilder};
-use zenith_geom::{NurbsCurve3, PlaneSurface3, Surface3};
+use zenith_geom::{
+    ControlPoint2, ControlPoint3, KnotVector, NurbsCurve2, NurbsCurve3, NurbsSurface3,
+    PlaneSurface3, Surface3,
+};
 use zenith_io::ObjExporter;
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::{tessellate_face, tessellate_solid, tessellate_surface, TessellationParams};
-use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Vertex, Wire};
+use zenith_topo::{
+    Edge, Face, FaceGeometry, FacePcurveLoop, FacePcurveSegment, FacePcurves, Orientation,
+    OrientedEdge, Shell, Vertex, Wire,
+};
 
 #[test]
 fn test_extrude_polygon_wire() {
@@ -3304,6 +3310,105 @@ fn test_nurbs_projected_pcurve_for_non_boundary_iso_edge() {
         .expect("validate projected p-curve");
     assert!(report.is_valid());
     assert!(report.max_distance < 1e-5);
+}
+
+#[test]
+fn test_nurbs_face_tessellation_respects_inner_pcurve_trim_loop() {
+    let surface = NurbsSurface3::new(
+        1,
+        1,
+        vec![
+            vec![
+                ControlPoint3::unweighted(Point3::new(0.0, 0.0, 0.0)),
+                ControlPoint3::unweighted(Point3::new(0.0, 10.0, 0.0)),
+            ],
+            vec![
+                ControlPoint3::unweighted(Point3::new(10.0, 0.0, 0.0)),
+                ControlPoint3::unweighted(Point3::new(10.0, 10.0, 0.0)),
+            ],
+        ],
+        KnotVector::clamped_uniform(2, 1),
+        KnotVector::clamped_uniform(2, 1),
+    )
+    .expect("NURBS surface");
+
+    let make_segment = |uv0: (f64, f64), uv1: (f64, f64)| {
+        let p0 = surface.evaluate(uv0.0, uv0.1);
+        let p1 = surface.evaluate(uv1.0, uv1.1);
+        let edge =
+            Edge::line_between(Vertex::from_point(p0), Vertex::from_point(p1)).expect("trim edge");
+        let pcurve = NurbsCurve2::new(
+            1,
+            vec![
+                ControlPoint2::unweighted(zenith_math::Point2::new(uv0.0, uv0.1)),
+                ControlPoint2::unweighted(zenith_math::Point2::new(uv1.0, uv1.1)),
+            ],
+            KnotVector::clamped_uniform(2, 1),
+        )
+        .expect("trim p-curve");
+        let oriented_edge = OrientedEdge::forward(edge.clone());
+        let segment = FacePcurveSegment {
+            edge_id: edge.id,
+            orientation: Orientation::Forward,
+            curve: pcurve,
+        };
+        (oriented_edge, segment)
+    };
+
+    let outer_uv = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+    let inner_uv = [(0.4, 0.4), (0.6, 0.4), (0.6, 0.6), (0.4, 0.6)];
+    let mut outer_edges = Vec::new();
+    let mut outer_segments = Vec::new();
+    let mut inner_edges = Vec::new();
+    let mut inner_segments = Vec::new();
+
+    for i in 0..4 {
+        let (edge, segment) = make_segment(outer_uv[i], outer_uv[(i + 1) % 4]);
+        outer_edges.push(edge);
+        outer_segments.push(segment);
+    }
+    for i in 0..4 {
+        let (edge, segment) = make_segment(inner_uv[i], inner_uv[(i + 1) % 4]);
+        inner_edges.push(edge);
+        inner_segments.push(segment);
+    }
+
+    let mut face = Face::new(
+        FaceGeometry::Nurbs(surface),
+        Wire::new(outer_edges),
+        vec![Wire::new(inner_edges)],
+        Orientation::Forward,
+        1e-6,
+    );
+    face.pcurves = Some(FacePcurves {
+        outer_loop: FacePcurveLoop {
+            segments: outer_segments,
+        },
+        inner_loops: vec![FacePcurveLoop {
+            segments: inner_segments,
+        }],
+    });
+
+    let mesh = tessellate_face(
+        &face,
+        &TessellationParams {
+            u_divisions: 8,
+            v_divisions: 8,
+        },
+    );
+
+    assert!(mesh.num_triangles() > 0);
+    for tri in &mesh.indices {
+        let a = mesh.positions[tri[0] as usize];
+        let b = mesh.positions[tri[1] as usize];
+        let c = mesh.positions[tri[2] as usize];
+        let centroid_x = (a.x + b.x + c.x) / 30.0;
+        let centroid_y = (a.y + b.y + c.y) / 30.0;
+        assert!(
+            !(centroid_x > 0.4 && centroid_x < 0.6 && centroid_y > 0.4 && centroid_y < 0.6),
+            "trimmed NURBS tessellation filled the inner p-curve hole"
+        );
+    }
 }
 
 #[test]

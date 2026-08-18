@@ -83,7 +83,13 @@ pub fn tessellate_surface<S: Surface3>(
 /// B-Rep Face のテッセレーション（Earcut による穴あき・非凸多角形の完全三角形分割）
 pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh {
     match &face.geometry {
-        FaceGeometry::Nurbs(nurbs) => tessellate_surface(nurbs, params, face.orientation),
+        FaceGeometry::Nurbs(nurbs) => {
+            if should_tessellate_nurbs_from_pcurves(face, nurbs) {
+                tessellate_nurbs_from_pcurves(face, nurbs, params)
+            } else {
+                tessellate_surface(nurbs, params, face.orientation)
+            }
+        }
         FaceGeometry::Coons(coons) => tessellate_surface(coons, params, face.orientation),
         FaceGeometry::Gordon(gordon) => tessellate_surface(gordon, params, face.orientation),
         FaceGeometry::Triangular(tri) => tessellate_surface(tri, params, face.orientation),
@@ -173,6 +179,79 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
             mesh
         }
     }
+}
+
+fn should_tessellate_nurbs_from_pcurves(face: &Face, _surface: &impl Surface3) -> bool {
+    let Some(pcurves) = &face.pcurves else {
+        return false;
+    };
+    !pcurves.inner_loops.is_empty()
+}
+
+fn tessellate_nurbs_from_pcurves(
+    face: &Face,
+    surface: &impl Surface3,
+    params: &TessellationParams,
+) -> TriangleMesh {
+    let Some(pcurves) = &face.pcurves else {
+        return TriangleMesh::new();
+    };
+    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+    if outer_uvs.len() < 3 {
+        return TriangleMesh::new();
+    }
+
+    let mut flat_coords = Vec::new();
+    let mut all_uvs = Vec::new();
+    let mut hole_indices = Vec::new();
+
+    for uv in &outer_uvs {
+        flat_coords.push(uv.x);
+        flat_coords.push(uv.y);
+        all_uvs.push(*uv);
+    }
+
+    for pcurve_loop in &pcurves.inner_loops {
+        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params);
+        if hole_uvs.len() >= 3 {
+            hole_indices.push(all_uvs.len());
+            for uv in &hole_uvs {
+                flat_coords.push(uv.x);
+                flat_coords.push(uv.y);
+                all_uvs.push(*uv);
+            }
+        }
+    }
+
+    let triangle_indices = earcutr::earcut(&flat_coords, &hole_indices, 2).unwrap_or_default();
+    if triangle_indices.is_empty() {
+        return TriangleMesh::new();
+    }
+
+    let mut mesh = TriangleMesh::new();
+    for uv in &all_uvs {
+        let mut normal = surface
+            .normal(uv.x, uv.y)
+            .unwrap_or_else(|| Vec3::new(0.0, 0.0, 1.0));
+        if !face.orientation.is_forward() {
+            normal = -normal;
+        }
+        mesh.positions.push(surface.evaluate(uv.x, uv.y));
+        mesh.normals.push(normal);
+        mesh.uvs.push(Vec2::new(uv.x, uv.y));
+    }
+
+    for chunk in triangle_indices.chunks_exact(3) {
+        if face.orientation.is_forward() {
+            mesh.indices
+                .push([chunk[0] as u32, chunk[1] as u32, chunk[2] as u32]);
+        } else {
+            mesh.indices
+                .push([chunk[0] as u32, chunk[2] as u32, chunk[1] as u32]);
+        }
+    }
+
+    mesh
 }
 
 fn sample_pcurve_loop_uv(pcurve_loop: &FacePcurveLoop, params: &TessellationParams) -> Vec<Point2> {

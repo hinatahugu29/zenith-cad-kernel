@@ -101,10 +101,11 @@ Current hardening:
 - STEP export can now write multi-solid exact boolean results as multiple B-Rep representation items in one file, so compound outputs do not have to collapse back to the legacy single-solid API at the first interchange boundary.
 - STEP import now exposes multi-solid file/string APIs, resolves ordered B-Rep items from `ADVANCED_BREP_SHAPE_REPRESENTATION`, and round-trips the two-cylinder middle slab difference with NURBS faces, topology validation, z-spans, and volume checks intact.
 - `Shape::Compound` is now connected to exact boolean and STEP boundaries: boolean results can become `Shape`, shape trees can expose/flatten contained solids, and STEP import/export can round-trip compound solids without forcing callers back through the legacy single-solid path.
+- NURBS face tessellation now switches to p-curve trim loops when inner loops are present, preventing trimmed NURBS holes from being filled by the old full-surface grid path while preserving existing cylinder, sphere, torus, and other full-surface grid paths.
 
 ### 2. Planar trimming is still mesh-only
 
-The new sampling fix makes curved planar caps display correctly, but trimming itself is not yet a first-class geometric object. A robust kernel needs 2D p-curves on face parameter space, orientation rules, loop containment, and validation.
+The new sampling fix makes curved planar caps display correctly, and NURBS tessellation now has a first guarded p-curve trim path. Trimming itself is still not yet a complete first-class geometric object: a robust kernel needs stronger 2D p-curve orientation rules, loop containment, adaptive interior refinement, and boolean split integration.
 
 Impact:
 
