@@ -259,6 +259,32 @@ fn test_exact_brep_boolean_preparation_reports_pipeline_counts() {
 }
 
 #[test]
+fn test_exact_boolean_preparation_reaches_cylinder_side_splits_for_slab_cut() {
+    let tol = Tolerance::default();
+    let slab = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(24.0, 24.0, 6.0).unwrap(),
+        Vec3::new(-12.0, -12.0, 12.0),
+    );
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+
+    let report = zenith_algo::BooleanEngine::prepare_exact_boolean(
+        &slab,
+        &cylinder,
+        zenith_algo::BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("slab-cylinder exact boolean preparation report");
+
+    assert!(report.face_pair_candidate_count > 0);
+    assert!(report.intersection_edge_candidate_count > 0);
+    assert!(
+        report.planar_batch_applied_split_count > 0,
+        "horizontal slab faces should drive cylinder-side split preparation"
+    );
+    assert!(report.selected_face_piece_count > 0);
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_solid_for_identical_union_and_intersection() {
     let tol = Tolerance::default();
     let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();

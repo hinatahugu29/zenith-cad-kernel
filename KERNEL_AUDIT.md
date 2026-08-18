@@ -94,6 +94,7 @@ Current hardening:
 - Batch planar splitting now accepts those guarded curved split edges on the planar operand, and tessellation keeps the arc boundary sampled instead of collapsing the fragment into a straight chord.
 - Exact boolean preparation reports now include skipped batch split counts, making curved-intersection gaps visible instead of hiding them behind a generic unsupported result.
 - Recognized cylinder-side NURBS faces can now be split by a horizontal circular arc edge into upper and lower NURBS face fragments with valid p-curves, allowing plane-cylinder split candidates to carry fragments for both operands.
+- Slab-vs-cylinder exact boolean preparation now reaches cylinder-side split counts from real solid operands, proving the curved split path is wired through the public preparation report instead of only isolated helper tests.
 
 ### 2. Planar trimming is still mesh-only
 
