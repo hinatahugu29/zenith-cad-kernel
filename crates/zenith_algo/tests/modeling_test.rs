@@ -253,6 +253,35 @@ fn test_exact_brep_boolean_preparation_reports_pipeline_counts() {
 }
 
 #[test]
+fn test_exact_brep_boolean_returns_solid_for_identical_union_and_intersection() {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+
+    let union = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &solid,
+        &solid,
+        zenith_algo::BooleanOpType::Union,
+        &tol,
+    )
+    .expect("identical exact union should return the same B-Rep solid");
+    assert_eq!(union.outer_shell.faces.len(), solid.outer_shell.faces.len());
+    assert!(union.is_topologically_valid(&tol));
+
+    let intersection = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &solid,
+        &solid,
+        zenith_algo::BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("identical exact intersection should return the same B-Rep solid");
+    assert_eq!(
+        intersection.outer_shell.faces.len(),
+        solid.outer_shell.faces.len()
+    );
+    assert!(intersection.is_topologically_valid(&tol));
+}
+
+#[test]
 fn test_brep_intersection_collects_plane_plane_candidates() {
     let tol = Tolerance::default();
     let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();

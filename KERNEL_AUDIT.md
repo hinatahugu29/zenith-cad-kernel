@@ -75,6 +75,7 @@ Current hardening:
 - Added sequential multi-edge splitting for outer-loop-only planar faces, allowing one face to be cut by more than one linear intersection edge before classification.
 - Added face-index grouped batch splitting from collected intersection edges, so multiple intersecting opponent faces can split the same planar source face before boolean classification.
 - Added an integrated selection pass that feeds batch-split face fragments, or original unsplit faces, through classification, boolean-operation selection, and stitching diagnostics.
+- The exact boolean entry point can now return a validated B-Rep `Solid` for guarded limited cases: identical-object union/intersection, or future selected face pieces that already stitch into a closed manifold.
 
 ### 2. Planar trimming is still mesh-only
 

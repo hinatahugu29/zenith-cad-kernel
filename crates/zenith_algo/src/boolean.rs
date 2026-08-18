@@ -52,7 +52,25 @@ impl BooleanEngine {
         op: BooleanOpType,
         tol: &Tolerance,
     ) -> Result<Solid, String> {
+        if std::ptr::eq(solid_a, solid_b)
+            && matches!(op, BooleanOpType::Union | BooleanOpType::Intersection)
+        {
+            if !solid_a.is_topologically_valid(tol) {
+                return Err("Exact B-Rep boolean input A is not topologically valid".to_string());
+            }
+            return Ok(solid_a.clone());
+        }
+
         let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;
+        let selection = crate::BrepIntersectionBuilder::collect_selected_boolean_face_pieces(
+            solid_a, solid_b, op, tol,
+        );
+        if selection.stitch_report.is_closed_manifold() {
+            return crate::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(
+                &selection.selected_face_pieces,
+                tol,
+            );
+        }
 
         Err(format!(
             "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} classified split candidates, and {} selected face pieces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
