@@ -1198,6 +1198,140 @@ fn test_planar_split_can_preserve_curved_split_edge() {
 }
 
 #[test]
+fn test_batch_split_applies_plane_cylinder_curved_edge_to_planar_operand() {
+    let tol = Tolerance::default();
+    let z = 15.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    let cut_plane = PlaneSurface3::new(
+        Point3::new(10.0, 0.0, z),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let points = [
+        Point3::new(10.0, 0.0, z),
+        Point3::new(12.0, 12.0, z),
+        Point3::new(0.0, 10.0, z),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let boundary_edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let cut_face = Face::simple(
+        FaceGeometry::Plane(cut_plane),
+        Wire::new(
+            boundary_edges
+                .into_iter()
+                .map(OrientedEdge::forward)
+                .collect(),
+        ),
+    );
+
+    let batches = zenith_algo::BrepIntersectionBuilder::collect_planar_face_batch_splits(
+        &[cut_face],
+        &[side_face],
+        &tol,
+    );
+
+    assert_eq!(batches.splits_a.len(), 1);
+    assert!(batches.splits_b.is_empty());
+    assert_eq!(batches.splits_a[0].split_edge_count, 1);
+    assert_eq!(batches.splits_a[0].result.applied_split_count, 1);
+    assert_eq!(batches.splits_a[0].result.skipped_split_count, 0);
+    assert_eq!(batches.splits_a[0].result.faces.len(), 2);
+    for face in &batches.splits_a[0].result.faces {
+        assert!(face.outer_wire.is_closed(&tol));
+        assert!(face
+            .outer_wire
+            .edges
+            .iter()
+            .any(|edge| edge.edge.curve.degree == 2));
+        assert!(face.validate_pcurves(&tol, 8).unwrap().is_valid());
+    }
+}
+
+#[test]
+fn test_curved_planar_split_tessellates_arc_boundary() {
+    let tol = Tolerance::default();
+    let z = 15.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    let cut_plane = PlaneSurface3::new(
+        Point3::new(10.0, 0.0, z),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let points = [
+        Point3::new(10.0, 0.0, z),
+        Point3::new(12.0, 12.0, z),
+        Point3::new(0.0, 10.0, z),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let boundary_edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let cut_face = Face::simple(
+        FaceGeometry::Plane(cut_plane),
+        Wire::new(
+            boundary_edges
+                .into_iter()
+                .map(OrientedEdge::forward)
+                .collect(),
+        ),
+    );
+    let curved_edge = zenith_algo::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        &[cut_face.clone()],
+        &[side_face],
+        &tol,
+    )
+    .into_iter()
+    .next()
+    .expect("plane-cylinder curve should become an edge candidate")
+    .edge;
+    let split_faces = zenith_algo::BrepIntersectionBuilder::split_planar_face_by_edge(
+        &cut_face,
+        &curved_edge,
+        &tol,
+    )
+    .expect("curved planar face split");
+
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 8,
+    };
+    let arc_bounded_face = split_faces
+        .iter()
+        .find(|face| face.outer_wire.edges.len() == 2)
+        .expect("arc plus chord split face");
+    let mesh = tessellate_face(arc_bounded_face, &params);
+
+    assert!(mesh.positions.len() > 4);
+    assert!(mesh.num_triangles() > 1);
+    assert!(mesh.positions.iter().any(|point| {
+        let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
+        (radial_distance - 10.0).abs() < 1e-5
+            && point.x > 1.0
+            && point.y > 1.0
+            && point.z > z - 1e-6
+            && point.z < z + 1e-6
+    }));
+}
+
+#[test]
 fn test_brep_intersection_edge_splits_planar_face() {
     let tol = Tolerance::default();
     let make_face = |points: [Point3; 4], normal: Vec3| {

@@ -91,6 +91,7 @@ Current hardening:
 - Moved guarded axis-aligned and orthogonal box boolean assembly into a dedicated module, keeping the main exact boolean engine focused on orchestration and general B-Rep preparation.
 - Added a first guarded curved-surface intersection case: horizontal planes can now intersect recognized cylinder-side NURBS patches and produce circular arc edge candidates for future curved-face splitting.
 - Planar face splitting can now preserve a curved split edge when its endpoints lie on the face boundary, enabling arc-bounded planar fragments instead of forcing every split loop back into straight polygon edges.
+- Batch planar splitting now accepts those guarded curved split edges on the planar operand, and tessellation keeps the arc boundary sampled instead of collapsing the fragment into a straight chord.
 
 ### 2. Planar trimming is still mesh-only
 
