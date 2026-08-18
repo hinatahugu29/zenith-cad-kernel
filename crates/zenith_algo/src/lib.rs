@@ -12,6 +12,7 @@ pub mod fillet;
 pub mod hole;
 pub mod loft;
 pub mod mass_properties;
+mod orthogonal_boolean;
 pub mod patch_builder;
 pub mod primitive;
 pub mod revolve;

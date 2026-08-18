@@ -87,6 +87,7 @@ Current hardening:
 - Added a guarded exact intersection path for axis-aligned rectangular boxes that returns the overlapping volume as a validated B-Rep box, covering the first partial-overlap solid-producing boolean case.
 - Extended the guarded axis-aligned box path to return exact B-Rep boxes for single-box unions and edge-trimming differences when the result can be represented without general face graph assembly.
 - Added connected-cell orthogonal B-Rep assembly for axis-aligned box booleans, allowing L-shaped unions and corner-notch differences to return validated planar solids with checked volumes.
+- Moved guarded axis-aligned and orthogonal box boolean assembly into a dedicated module, keeping the main exact boolean engine focused on orchestration and general B-Rep preparation.
 
 ### 2. Planar trimming is still mesh-only
 
