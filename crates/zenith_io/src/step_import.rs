@@ -52,33 +52,40 @@ impl StepImporter {
         Self::import_solid_from_str(&content)
     }
 
+    /// STEPファイルから複数の Solid（B-Repソリッド）をインポート
+    pub fn import_solids_from_file<P: AsRef<Path>>(path: P) -> Result<Vec<Solid>, String> {
+        let content =
+            fs::read_to_string(path).map_err(|e| format!("Failed to read STEP file: {}", e))?;
+        Self::import_solids_from_str(&content)
+    }
+
     /// STEPテキストから Solid（B-Repソリッド）をインポート
     pub fn import_solid_from_str(content: &str) -> Result<Solid, String> {
+        Self::import_solids_from_str(content)?
+            .into_iter()
+            .next()
+            .ok_or("MANIFOLD_SOLID_BREP or BREP_WITH_VOIDS not found in STEP data".to_string())
+    }
+
+    /// STEPテキストから複数の Solid（B-Repソリッド）をインポート
+    pub fn import_solids_from_str(content: &str) -> Result<Vec<Solid>, String> {
         let mut ctx = ImportContext::new();
 
         // 1. DATAセクションのエンティティ辞書を構築
         Self::parse_data_section(content, &mut ctx)?;
 
         // 2. Solid B-Rep を探索
-        let mut solid_brep_id = None;
-        for (&id, ent) in &ctx.raw_entities {
-            if ent.name == "BREP_WITH_VOIDS" {
-                solid_brep_id = Some(id);
-                break;
-            }
-        }
-        if solid_brep_id.is_none() {
-            for (&id, ent) in &ctx.raw_entities {
-                if ent.name == "MANIFOLD_SOLID_BREP" {
-                    solid_brep_id = Some(id);
-                    break;
-                }
-            }
+        let solid_ids = Self::solid_brep_ids(&ctx);
+        if solid_ids.is_empty() {
+            return Err(
+                "MANIFOLD_SOLID_BREP or BREP_WITH_VOIDS not found in STEP data".to_string(),
+            );
         }
 
-        let solid_id =
-            solid_brep_id.ok_or("MANIFOLD_SOLID_BREP or BREP_WITH_VOIDS not found in STEP data")?;
-        Self::resolve_solid(&mut ctx, solid_id)
+        solid_ids
+            .into_iter()
+            .map(|solid_id| Self::resolve_solid(&mut ctx, solid_id))
+            .collect()
     }
 
     fn parse_data_section(content: &str, ctx: &mut ImportContext) -> Result<(), String> {
@@ -166,6 +173,48 @@ impl StepImporter {
             .into_iter()
             .filter_map(Self::parse_entity_ref)
             .collect()
+    }
+
+    fn solid_brep_ids(ctx: &ImportContext) -> Vec<u64> {
+        let mut ids = Vec::new();
+        let mut shape_reps: Vec<(u64, &RawEntity)> = ctx
+            .raw_entities
+            .iter()
+            .filter_map(|(&id, ent)| {
+                (ent.name == "ADVANCED_BREP_SHAPE_REPRESENTATION").then_some((id, ent))
+            })
+            .collect();
+        shape_reps.sort_by_key(|(id, _)| *id);
+
+        for (_, shape_rep) in shape_reps {
+            let parts = Self::split_top_level_args(&shape_rep.args);
+            if parts.len() < 2 {
+                continue;
+            }
+            for item_id in Self::parse_ref_list(parts[1]) {
+                if Self::is_solid_brep_entity(ctx, item_id) && !ids.contains(&item_id) {
+                    ids.push(item_id);
+                }
+            }
+        }
+
+        if ids.is_empty() {
+            ids = ctx
+                .raw_entities
+                .iter()
+                .filter_map(|(&id, _)| Self::is_solid_brep_entity(ctx, id).then_some(id))
+                .collect();
+            ids.sort_unstable();
+        }
+
+        ids
+    }
+
+    fn is_solid_brep_entity(ctx: &ImportContext, id: u64) -> bool {
+        ctx.raw_entities
+            .get(&id)
+            .map(|ent| ent.name == "MANIFOLD_SOLID_BREP" || ent.name == "BREP_WITH_VOIDS")
+            .unwrap_or(false)
     }
 
     fn get_point(ctx: &mut ImportContext, id: u64) -> Result<Point3, String> {
@@ -1164,6 +1213,41 @@ mod tests {
             super::extract_entity_args(text, "B_SPLINE_CURVE"),
             Some("2,(#1,#2,#3),.UNSPECIFIED.,.F.,.F.")
         );
+    }
+
+    #[test]
+    fn solid_brep_ids_preserve_shape_representation_order() {
+        let mut ctx = ImportContext::new();
+        ctx.raw_entities.insert(
+            10,
+            RawEntity {
+                name: "MANIFOLD_SOLID_BREP".to_string(),
+                args: "'SECOND',#2".to_string(),
+            },
+        );
+        ctx.raw_entities.insert(
+            20,
+            RawEntity {
+                name: "BREP_WITH_VOIDS".to_string(),
+                args: "'FIRST',#3,(#4)".to_string(),
+            },
+        );
+        ctx.raw_entities.insert(
+            30,
+            RawEntity {
+                name: "AXIS2_PLACEMENT_3D".to_string(),
+                args: "'',#1,#2,#3".to_string(),
+            },
+        );
+        ctx.raw_entities.insert(
+            40,
+            RawEntity {
+                name: "ADVANCED_BREP_SHAPE_REPRESENTATION".to_string(),
+                args: "'BODY',(#20,#30,#10),#50".to_string(),
+            },
+        );
+
+        assert_eq!(StepImporter::solid_brep_ids(&ctx), vec![20, 10]);
     }
 
     #[test]
