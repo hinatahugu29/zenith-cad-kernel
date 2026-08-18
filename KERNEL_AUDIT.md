@@ -157,6 +157,8 @@ Current hardening:
 - STEP import now reconstructs direct and complex `B_SPLINE_SURFACE_WITH_KNOTS` entities, including rational surface weights from `RATIONAL_B_SPLINE_SURFACE`.
 - STEP complex entity parsing now matches exact entity names instead of prefix substrings, avoiding confusion between `B_SPLINE_CURVE` and `B_SPLINE_CURVE_WITH_KNOTS` when entity order varies.
 - Added a cylinder STEP round-trip regression proving imported cylinder side faces remain NURBS, the imported solid passes topology validation, and tessellated volume remains in range.
+- STEP export now emits face-local `PCURVE` / `SURFACE_CURVE` entities when p-curves are available, keeping 3D edge curves and surface trim curves paired in the file.
+- STEP import now resolves `SURFACE_CURVE` through its 3D curve component so p-curve-enriched exports still round-trip through the current importer.
 - Planar face tessellation now samples curved p-curve loop segments adaptively using an internal chordal-deflection-like target derived from `TessellationParams`.
 - Added a regression test proving cylinder cap tessellation keeps curved boundaries with coarse settings and refines them when tessellation divisions increase.
 - Full `modeling_test` currently passes with strict generation enabled for normal `zenith_algo` solid builders and STEP round-trip import.

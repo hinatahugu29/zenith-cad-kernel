@@ -1182,6 +1182,9 @@ fn test_step_import_roundtrip() {
 fn test_cylinder_step_import_roundtrip_preserves_curved_faces() {
     let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
     let step = zenith_io::StepExporter::export_solid_to_string(&cylinder, "ROUNDTRIP_CYLINDER");
+    assert!(step.contains("PCURVE"));
+    assert!(step.contains("SURFACE_CURVE"));
+
     let imported_solid =
         zenith_io::StepImporter::import_solid_from_str(&step).expect("Import failed");
 

@@ -342,6 +342,17 @@ impl StepImporter {
             }
         }
 
+        if raw.name == "SURFACE_CURVE" {
+            let parts = Self::split_top_level_args(&raw.args);
+            if parts.len() >= 2 {
+                if let Some(curve_3d_id) = Self::parse_entity_ref(parts[1]) {
+                    let c = Self::get_curve(ctx, curve_3d_id, p_start, p_end)?;
+                    ctx.curves.insert(id, c.clone());
+                    return Ok(c);
+                }
+            }
+        }
+
         if raw.name == "B_SPLINE_CURVE_WITH_KNOTS" || raw.args.contains("B_SPLINE_CURVE_WITH_KNOTS")
         {
             if let Some(c) = Self::parse_nurbs_curve(ctx, &raw)? {

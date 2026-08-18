@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use zenith_geom::{NurbsCurve3, NurbsSurface3};
-use zenith_math::Point3;
-use zenith_topo::{Face, FaceGeometry, Solid, Wire};
+use zenith_geom::{NurbsCurve2, NurbsCurve3, NurbsSurface3};
+use zenith_math::{Point2, Point3, Tolerance};
+use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, FacePcurveSegment, Solid, Wire};
 
 /// ISO 10303-21 (STEP AP214 / AP203 / AP242) 完全共有マニホールド B-Rep エクスポーター
 pub struct StepExporter;
@@ -14,6 +14,7 @@ struct StepContext {
     lines: Vec<String>,
     vertex_map: HashMap<u64, u64>, // Vertex ID -> STEP Vertex ID
     edge_map: HashMap<u64, u64>,   // Edge ID -> STEP EdgeCurve ID
+    pcurve_context_id: Option<u64>,
 }
 
 impl StepContext {
@@ -23,6 +24,7 @@ impl StepContext {
             lines: Vec::new(),
             vertex_map: HashMap::new(),
             edge_map: HashMap::new(),
+            pcurve_context_id: None,
         }
     }
 
@@ -108,6 +110,9 @@ impl StepExporter {
             "GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{})) GLOBAL_UNIT_ASSIGNED_CONTEXT((#{},#{},#{})) REPRESENTATION_CONTEXT('Context #1','3D Context with UNIT and UNCERTAINTY')",
             uncertainty_id, length_unit_id, plane_angle_unit_id, solid_angle_unit_id
         ));
+        ctx.pcurve_context_id = Some(ctx.add_entity(
+            "GEOMETRIC_REPRESENTATION_CONTEXT(2) REPRESENTATION_CONTEXT('Parametric Context','2D p-curve Context')",
+        ));
 
         // 原点と座標軸
         let origin_pt_id = Self::write_point(&mut ctx, Point3::new(0.0, 0.0, 0.0));
@@ -167,6 +172,11 @@ impl StepExporter {
 
     fn write_point(ctx: &mut StepContext, p: Point3) -> u64 {
         let p_str = format!("CARTESIAN_POINT('',({:.6},{:.6},{:.6}))", p.x, p.y, p.z);
+        ctx.add_entity(&p_str)
+    }
+
+    fn write_point2(ctx: &mut StepContext, p: Point2) -> u64 {
+        let p_str = format!("CARTESIAN_POINT('',({:.6},{:.6}))", p.x, p.y);
         ctx.add_entity(&p_str)
     }
 
@@ -311,26 +321,137 @@ impl StepExporter {
         }
     }
 
-    fn write_edge_loop(ctx: &mut StepContext, wire: &Wire) -> u64 {
+    fn write_nurbs_curve2(ctx: &mut StepContext, nurbs: &NurbsCurve2) -> u64 {
+        let mut is_rational = false;
+        let mut pt_ids = Vec::with_capacity(nurbs.control_points.len());
+        let mut weights = Vec::with_capacity(nurbs.control_points.len());
+
+        for cp in &nurbs.control_points {
+            if (cp.weight - 1.0).abs() > 1e-6 {
+                is_rational = true;
+            }
+            pt_ids.push(format!("#{}", Self::write_point2(ctx, cp.point)));
+            weights.push(format!("{:.6}", cp.weight));
+        }
+
+        let pts_str = format!("({})", pt_ids.join(","));
+        let weights_str = format!("({})", weights.join(","));
+
+        let (mults, knots) = Self::compress_knots(&nurbs.knots.knots);
+        let mult_str = format!(
+            "({})",
+            mults
+                .iter()
+                .map(|m| m.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let knot_str = format!(
+            "({})",
+            knots
+                .iter()
+                .map(|k| format!("{:.6}", k))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+
+        if is_rational {
+            ctx.add_entity(&format!(
+                "( BOUNDED_CURVE() B_SPLINE_CURVE({},{},.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS({},{},.UNSPECIFIED.) GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE({}) REPRESENTATION_ITEM('') )",
+                nurbs.degree, pts_str, mult_str, knot_str, weights_str
+            ))
+        } else {
+            ctx.add_entity(&format!(
+                "B_SPLINE_CURVE_WITH_KNOTS('',{},{},.UNSPECIFIED.,.F.,.F.,{},{},.UNSPECIFIED.)",
+                nurbs.degree, pts_str, mult_str, knot_str
+            ))
+        }
+    }
+
+    fn write_pcurve(
+        ctx: &mut StepContext,
+        surface_id: u64,
+        segment: &FacePcurveSegment,
+    ) -> Option<u64> {
+        let pcurve_context_id = ctx.pcurve_context_id?;
+        let curve2d_id = Self::write_nurbs_curve2(ctx, &segment.curve);
+        let rep_id = ctx.add_entity(&format!(
+            "DEFINITIONAL_REPRESENTATION('',(#{}),#{})",
+            curve2d_id, pcurve_context_id
+        ));
+        Some(ctx.add_entity(&format!("PCURVE('',#{},#{})", surface_id, rep_id)))
+    }
+
+    fn write_edge_loop_on_surface(
+        ctx: &mut StepContext,
+        wire: &Wire,
+        pcurve_loop: Option<&FacePcurveLoop>,
+        surface_id: u64,
+    ) -> u64 {
         let mut oriented_edge_ids = Vec::new();
+        let pcurve_segments =
+            pcurve_loop.filter(|loop_data| loop_data.segments.len() == wire.edges.len());
 
-        for oe in &wire.edges {
-            let edge_curve_id = Self::get_or_create_edge_curve(ctx, &oe.edge);
-
-            let same_sense = if oe.orientation.is_forward() {
-                ".T."
+        for (edge_index, oe) in wire.edges.iter().enumerate() {
+            let oriented_id = if let Some(loop_data) = pcurve_segments {
+                Self::write_oriented_edge_on_surface(
+                    ctx,
+                    oe,
+                    &loop_data.segments[edge_index],
+                    surface_id,
+                )
             } else {
-                ".F."
+                let edge_curve_id = Self::get_or_create_edge_curve(ctx, &oe.edge);
+                let same_sense = if oe.orientation.is_forward() {
+                    ".T."
+                } else {
+                    ".F."
+                };
+                ctx.add_entity(&format!(
+                    "ORIENTED_EDGE('',*,*,#{},{})",
+                    edge_curve_id, same_sense
+                ))
             };
-            let oriented_id = ctx.add_entity(&format!(
-                "ORIENTED_EDGE('',*,*,#{},{})",
-                edge_curve_id, same_sense
-            ));
             oriented_edge_ids.push(format!("#{}", oriented_id));
         }
 
         let edge_list_str = oriented_edge_ids.join(",");
         ctx.add_entity(&format!("EDGE_LOOP('',({}))", edge_list_str))
+    }
+
+    fn write_oriented_edge_on_surface(
+        ctx: &mut StepContext,
+        oe: &zenith_topo::OrientedEdge,
+        pcurve_segment: &FacePcurveSegment,
+        surface_id: u64,
+    ) -> u64 {
+        let start_v_id = Self::get_or_create_vertex(ctx, oe.start_vertex());
+        let end_v_id = Self::get_or_create_vertex(ctx, oe.end_vertex());
+        let curve = if oe.orientation.is_forward() {
+            oe.edge.curve.clone()
+        } else {
+            oe.edge.curve.reversed()
+        };
+        let curve_3d_id = Self::write_edge_curve_geometry(
+            ctx,
+            &curve,
+            oe.start_vertex().point,
+            oe.end_vertex().point,
+        );
+        let surface_curve_id =
+            if let Some(pcurve_id) = Self::write_pcurve(ctx, surface_id, pcurve_segment) {
+                ctx.add_entity(&format!(
+                    "SURFACE_CURVE('',#{},(#{}),.PCURVE_S1.)",
+                    curve_3d_id, pcurve_id
+                ))
+            } else {
+                curve_3d_id
+            };
+        let edge_curve_id = ctx.add_entity(&format!(
+            "EDGE_CURVE('',#{},#{},#{},.T.)",
+            start_v_id, end_v_id, surface_curve_id
+        ));
+        ctx.add_entity(&format!("ORIENTED_EDGE('',*,*,#{},.T.)", edge_curve_id))
     }
 
     fn write_face(ctx: &mut StepContext, face: &Face) -> Option<u64> {
@@ -355,16 +476,29 @@ impl StepExporter {
 
         // B-Rep EDGE_LOOP トポロジーの構築
         let mut bound_ids = Vec::new();
+        let pcurves = face.pcurves(&Tolerance::default()).ok();
 
         // 1. 外側境界 (FACE_OUTER_BOUND)
-        let outer_loop_id = Self::write_edge_loop(ctx, &face.outer_wire);
+        let outer_loop_id = Self::write_edge_loop_on_surface(
+            ctx,
+            &face.outer_wire,
+            pcurves.as_ref().map(|p| &p.outer_loop),
+            surface_id,
+        );
         let outer_bound_id =
             ctx.add_entity(&format!("FACE_OUTER_BOUND('',#{},.T.)", outer_loop_id));
         bound_ids.push(format!("#{}", outer_bound_id));
 
         // 2. 内側穴境界群 (FACE_BOUND)
-        for inner_wire in &face.inner_wires {
-            let inner_loop_id = Self::write_edge_loop(ctx, inner_wire);
+        for (inner_index, inner_wire) in face.inner_wires.iter().enumerate() {
+            let inner_loop_id = Self::write_edge_loop_on_surface(
+                ctx,
+                inner_wire,
+                pcurves
+                    .as_ref()
+                    .and_then(|p| p.inner_loops.get(inner_index)),
+                surface_id,
+            );
             let inner_bound_id = ctx.add_entity(&format!("FACE_BOUND('',#{},.T.)", inner_loop_id));
             bound_ids.push(format!("#{}", inner_bound_id));
         }
