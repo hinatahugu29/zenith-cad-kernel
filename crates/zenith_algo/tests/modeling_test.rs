@@ -1078,6 +1078,61 @@ fn test_brep_intersection_promotes_plane_cylinder_curve_to_edge_candidate() {
 }
 
 #[test]
+fn test_planar_split_reports_curved_plane_cylinder_edge_as_skipped() {
+    let tol = Tolerance::default();
+    let z = 15.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    let cut_plane = PlaneSurface3::new(
+        Point3::new(-12.0, -12.0, z),
+        Vec3::new(24.0, 0.0, 0.0),
+        Vec3::new(0.0, 24.0, 0.0),
+    )
+    .unwrap();
+    let points = [
+        Point3::new(-12.0, -12.0, z),
+        Point3::new(12.0, -12.0, z),
+        Point3::new(12.0, 12.0, z),
+        Point3::new(-12.0, 12.0, z),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let cut_edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+        Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let cut_face = Face::simple(
+        FaceGeometry::Plane(cut_plane),
+        Wire::new(cut_edges.into_iter().map(OrientedEdge::forward).collect()),
+    );
+    let edge_candidate =
+        zenith_algo::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+            &[cut_face.clone()],
+            &[side_face],
+            &tol,
+        )
+        .into_iter()
+        .next()
+        .expect("plane-cylinder curve should become an edge candidate");
+
+    let result = zenith_algo::BrepIntersectionBuilder::split_planar_face_by_edges(
+        &cut_face,
+        &[edge_candidate.edge],
+        &tol,
+    )
+    .expect("planar multi-split report");
+
+    assert_eq!(result.applied_split_count, 0);
+    assert_eq!(result.skipped_split_count, 1);
+    assert_eq!(result.faces.len(), 1);
+}
+
+#[test]
 fn test_brep_intersection_edge_splits_planar_face() {
     let tol = Tolerance::default();
     let make_face = |points: [Point3; 4], normal: Vec3| {
