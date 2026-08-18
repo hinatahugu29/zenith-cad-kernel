@@ -75,6 +75,25 @@ pub struct SelectedBooleanFacePiece {
     pub reverse_orientation: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedFaceStitchReport {
+    pub face_piece_count: usize,
+    pub edge_use_count: usize,
+    pub matched_edge_pair_count: usize,
+    pub unmatched_edge_use_count: usize,
+    pub non_manifold_edge_use_count: usize,
+    pub same_direction_edge_use_count: usize,
+}
+
+impl SelectedFaceStitchReport {
+    pub fn is_closed_manifold(&self) -> bool {
+        self.unmatched_edge_use_count == 0
+            && self.non_manifold_edge_use_count == 0
+            && self.same_direction_edge_use_count == 0
+            && self.edge_use_count == self.matched_edge_pair_count * 2
+    }
+}
+
 pub struct BrepIntersectionBuilder;
 
 impl BrepIntersectionBuilder {
@@ -270,6 +289,13 @@ impl BrepIntersectionBuilder {
         selected
     }
 
+    pub fn diagnose_selected_face_stitching(
+        pieces: &[SelectedBooleanFacePiece],
+        tol: &Tolerance,
+    ) -> SelectedFaceStitchReport {
+        diagnose_selected_face_stitching(pieces, tol)
+    }
+
     pub fn split_planar_face_by_edge(
         face: &Face,
         split_edge: &Edge,
@@ -350,6 +376,12 @@ impl BrepIntersectionBuilder {
 struct BoundaryHit {
     segment_index: usize,
     point: Point3,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StitchEdgeUse {
+    start: Point3,
+    end: Point3,
 }
 
 fn boundary_hit(
@@ -503,6 +535,99 @@ fn keep_piece(
         ) => true,
         (crate::BooleanOpType::Difference, BooleanOperand::B, FaceRegionLocation::Outside) => false,
     }
+}
+
+fn diagnose_selected_face_stitching(
+    pieces: &[SelectedBooleanFacePiece],
+    tol: &Tolerance,
+) -> SelectedFaceStitchReport {
+    let edge_uses = collect_stitch_edge_uses(pieces);
+    let mut matched_edge_pair_count = 0;
+    let mut unmatched_edge_use_count = 0;
+    let mut non_manifold_edge_use_count = 0;
+    let mut same_direction_edge_use_count = 0;
+
+    for i in 0..edge_uses.len() {
+        let mates: Vec<usize> = edge_uses
+            .iter()
+            .enumerate()
+            .filter_map(|(j, candidate)| {
+                (i != j && same_undirected_stitch_edge(&edge_uses[i], candidate, tol.linear))
+                    .then_some(j)
+            })
+            .collect();
+
+        match mates.len() {
+            0 => unmatched_edge_use_count += 1,
+            1 => {
+                let mate = mates[0];
+                if i < mate {
+                    matched_edge_pair_count += 1;
+                }
+                if !opposite_stitch_edge_direction(&edge_uses[i], &edge_uses[mate], tol.linear) {
+                    same_direction_edge_use_count += 1;
+                }
+            }
+            _ => non_manifold_edge_use_count += 1,
+        }
+    }
+
+    SelectedFaceStitchReport {
+        face_piece_count: pieces.len(),
+        edge_use_count: edge_uses.len(),
+        matched_edge_pair_count,
+        unmatched_edge_use_count,
+        non_manifold_edge_use_count,
+        same_direction_edge_use_count,
+    }
+}
+
+fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEdgeUse> {
+    let mut edge_uses = Vec::new();
+    for piece in pieces {
+        collect_wire_stitch_edge_uses(
+            &piece.face.outer_wire,
+            piece.reverse_orientation,
+            &mut edge_uses,
+        );
+        for wire in &piece.face.inner_wires {
+            collect_wire_stitch_edge_uses(wire, piece.reverse_orientation, &mut edge_uses);
+        }
+    }
+
+    edge_uses
+}
+
+fn collect_wire_stitch_edge_uses(
+    wire: &Wire,
+    reverse_orientation: bool,
+    edge_uses: &mut Vec<StitchEdgeUse>,
+) {
+    for edge in &wire.edges {
+        let start = edge.start_vertex().point;
+        let end = edge.end_vertex().point;
+        if reverse_orientation {
+            edge_uses.push(StitchEdgeUse {
+                start: end,
+                end: start,
+            });
+        } else {
+            edge_uses.push(StitchEdgeUse { start, end });
+        }
+    }
+}
+
+fn same_undirected_stitch_edge(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -> bool {
+    (points_same_3d(a.start, b.start, tol) && points_same_3d(a.end, b.end, tol))
+        || (points_same_3d(a.start, b.end, tol) && points_same_3d(a.end, b.start, tol))
+}
+
+fn opposite_stitch_edge_direction(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -> bool {
+    points_same_3d(a.start, b.end, tol) && points_same_3d(a.end, b.start, tol)
+}
+
+fn points_same_3d(a: Point3, b: Point3, tol: f64) -> bool {
+    (a - b).norm() <= tol
 }
 
 fn representative_face_point(face: &Face) -> Point3 {

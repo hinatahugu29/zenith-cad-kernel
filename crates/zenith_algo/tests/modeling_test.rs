@@ -249,6 +249,7 @@ fn test_exact_brep_boolean_preparation_reports_pipeline_counts() {
     assert!(report.intersection_edge_candidate_count <= report.face_pair_candidate_count);
     assert!(report.planar_split_candidate_count <= report.intersection_edge_candidate_count);
     assert!(report.classified_split_candidate_count <= report.planar_split_candidate_count);
+    assert!(report.selected_face_unmatched_edge_use_count >= report.selected_face_piece_count);
 }
 
 #[test]
@@ -822,6 +823,47 @@ fn test_brep_boolean_face_piece_selection_from_classification() {
     assert!(difference.iter().any(|piece| {
         piece.operand == zenith_algo::BooleanOperand::B && piece.reverse_orientation
     }));
+}
+
+#[test]
+fn test_brep_selected_face_stitching_diagnostics() {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let pieces: Vec<_> = solid
+        .outer_shell
+        .faces
+        .iter()
+        .cloned()
+        .map(|face| zenith_algo::SelectedBooleanFacePiece {
+            operand: zenith_algo::BooleanOperand::A,
+            face,
+            location: zenith_algo::FaceRegionLocation::Outside,
+            reverse_orientation: false,
+        })
+        .collect();
+
+    let report =
+        zenith_algo::BrepIntersectionBuilder::diagnose_selected_face_stitching(&pieces, &tol);
+    assert_eq!(report.face_piece_count, 6);
+    assert_eq!(report.edge_use_count, 24);
+    assert_eq!(report.matched_edge_pair_count, 12);
+    assert_eq!(report.unmatched_edge_use_count, 0);
+    assert_eq!(report.non_manifold_edge_use_count, 0);
+    assert_eq!(report.same_direction_edge_use_count, 0);
+    assert!(report.is_closed_manifold());
+
+    let open_report =
+        zenith_algo::BrepIntersectionBuilder::diagnose_selected_face_stitching(&pieces[0..1], &tol);
+    assert_eq!(open_report.edge_use_count, 4);
+    assert_eq!(open_report.unmatched_edge_use_count, 4);
+    assert!(!open_report.is_closed_manifold());
+
+    let duplicate_report = zenith_algo::BrepIntersectionBuilder::diagnose_selected_face_stitching(
+        &[pieces[0].clone(), pieces[0].clone()],
+        &tol,
+    );
+    assert!(duplicate_report.same_direction_edge_use_count > 0);
+    assert!(!duplicate_report.is_closed_manifold());
 }
 
 #[test]

@@ -27,7 +27,7 @@ pub use brep_intersection::{
     BooleanOperand, BrepIntersectionBuilder, ClassifiedFacePiece,
     ClassifiedPlanarFaceSplitCandidate, FaceIntersectionCandidate, FaceIntersectionKind,
     FaceRegionLocation, IntersectionEdgeCandidate, PlanarFaceSplitCandidate,
-    SelectedBooleanFacePiece,
+    SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;

@@ -20,6 +20,9 @@ pub struct ExactBooleanPreparationReport {
     pub planar_split_candidate_count: usize,
     pub classified_split_candidate_count: usize,
     pub selected_face_piece_count: usize,
+    pub selected_face_unmatched_edge_use_count: usize,
+    pub selected_face_non_manifold_edge_use_count: usize,
+    pub selected_face_same_direction_edge_use_count: usize,
 }
 
 impl BooleanEngine {
@@ -50,12 +53,15 @@ impl BooleanEngine {
         let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;
 
         Err(format!(
-            "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} classified split candidates, and {} selected face pieces. Use boolean_solids_mesh_preview only for display/preview mesh results",
+            "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} classified split candidates, and {} selected face pieces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
             report.face_pair_candidate_count,
             report.intersection_edge_candidate_count,
             report.planar_split_candidate_count,
             report.classified_split_candidate_count,
-            report.selected_face_piece_count
+            report.selected_face_piece_count,
+            report.selected_face_unmatched_edge_use_count,
+            report.selected_face_non_manifold_edge_use_count,
+            report.selected_face_same_direction_edge_use_count
         ))
     }
 
@@ -103,19 +109,27 @@ impl BooleanEngine {
             crate::BrepIntersectionBuilder::collect_classified_planar_face_split_candidates(
                 solid_a, solid_b, tol,
             );
-        let selected_face_piece_count = classified_splits
+        let selected_face_pieces: Vec<_> = classified_splits
             .iter()
-            .map(|candidate| {
-                crate::BrepIntersectionBuilder::select_boolean_face_pieces(candidate, op).len()
+            .flat_map(|candidate| {
+                crate::BrepIntersectionBuilder::select_boolean_face_pieces(candidate, op)
             })
-            .sum();
+            .collect();
+        let stitch_report = crate::BrepIntersectionBuilder::diagnose_selected_face_stitching(
+            &selected_face_pieces,
+            tol,
+        );
 
         Ok(ExactBooleanPreparationReport {
             face_pair_candidate_count,
             intersection_edge_candidate_count,
             planar_split_candidate_count,
             classified_split_candidate_count: classified_splits.len(),
-            selected_face_piece_count,
+            selected_face_piece_count: selected_face_pieces.len(),
+            selected_face_unmatched_edge_use_count: stitch_report.unmatched_edge_use_count,
+            selected_face_non_manifold_edge_use_count: stitch_report.non_manifold_edge_use_count,
+            selected_face_same_direction_edge_use_count: stitch_report
+                .same_direction_edge_use_count,
         })
     }
 
