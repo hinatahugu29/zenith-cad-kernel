@@ -656,6 +656,72 @@ fn test_brep_intersection_splits_planar_face_by_multiple_edges() {
 }
 
 #[test]
+fn test_brep_intersection_collects_batch_splits_by_face() {
+    let tol = Tolerance::default();
+    let make_face = |points: [Point3; 4], normal: Vec3| {
+        let vertices: Vec<Vertex> = points
+            .iter()
+            .map(|point| Vertex::from_point(*point))
+            .collect();
+        let edges = vec![
+            Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+            Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+            Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+            Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+        ];
+        let wire = Wire::new(edges.into_iter().map(OrientedEdge::forward).collect());
+        let u_axis = (points[1] - points[0]).normalize();
+        let v_axis = normal.cross(&u_axis).normalize();
+        let plane = PlaneSurface3::new(points[0], u_axis, v_axis).unwrap();
+        Face::simple(FaceGeometry::Plane(plane), wire)
+    };
+    let face_a = make_face(
+        [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(4.0, 4.0, 0.0),
+            Point3::new(0.0, 4.0, 0.0),
+        ],
+        Vec3::new(0.0, 0.0, 1.0),
+    );
+    let face_b1 = make_face(
+        [
+            Point3::new(1.0, 0.0, -1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(1.0, 4.0, 1.0),
+            Point3::new(1.0, 4.0, -1.0),
+        ],
+        Vec3::new(-1.0, 0.0, 0.0),
+    );
+    let face_b2 = make_face(
+        [
+            Point3::new(3.0, 0.0, -1.0),
+            Point3::new(3.0, 0.0, 1.0),
+            Point3::new(3.0, 4.0, 1.0),
+            Point3::new(3.0, 4.0, -1.0),
+        ],
+        Vec3::new(-1.0, 0.0, 0.0),
+    );
+
+    let batches = zenith_algo::BrepIntersectionBuilder::collect_planar_face_batch_splits(
+        &[face_a],
+        &[face_b1, face_b2],
+        &tol,
+    );
+
+    assert_eq!(batches.splits_a.len(), 1);
+    assert_eq!(batches.splits_a[0].face_index, 0);
+    assert_eq!(batches.splits_a[0].split_edge_count, 2);
+    assert_eq!(batches.splits_a[0].result.applied_split_count, 2);
+    assert_eq!(batches.splits_a[0].result.faces.len(), 3);
+    assert_eq!(batches.splits_b.len(), 2);
+    assert!(batches
+        .splits_b
+        .iter()
+        .all(|split| split.result.faces.len() == 2));
+}
+
+#[test]
 fn test_brep_intersection_collects_planar_face_split_candidates() {
     let tol = Tolerance::default();
     let make_face = |points: [Point3; 4], normal: Vec3| {

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use zenith_geom::{NurbsCurve3, PlaneSurface3};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec3, Vec3Ext};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
@@ -44,6 +45,19 @@ pub struct PlanarFaceMultiSplitResult {
     pub faces: Vec<Face>,
     pub applied_split_count: usize,
     pub skipped_split_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanarFaceBatchSplit {
+    pub face_index: usize,
+    pub split_edge_count: usize,
+    pub result: PlanarFaceMultiSplitResult,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanarOperandBatchSplits {
+    pub splits_a: Vec<PlanarFaceBatchSplit>,
+    pub splits_b: Vec<PlanarFaceBatchSplit>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -211,6 +225,32 @@ impl BrepIntersectionBuilder {
                 })
             })
             .collect()
+    }
+
+    pub fn collect_planar_face_batch_splits(
+        faces_a: &[Face],
+        faces_b: &[Face],
+        tol: &Tolerance,
+    ) -> PlanarOperandBatchSplits {
+        let edge_candidates = Self::collect_intersection_edge_candidates(faces_a, faces_b, tol);
+        let mut edges_by_face_a: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
+        let mut edges_by_face_b: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
+
+        for candidate in edge_candidates {
+            edges_by_face_a
+                .entry(candidate.face_a_index)
+                .or_default()
+                .push(candidate.edge.clone());
+            edges_by_face_b
+                .entry(candidate.face_b_index)
+                .or_default()
+                .push(candidate.edge);
+        }
+
+        PlanarOperandBatchSplits {
+            splits_a: collect_batch_splits_for_faces(faces_a, edges_by_face_a, tol),
+            splits_b: collect_batch_splits_for_faces(faces_b, edges_by_face_b, tol),
+        }
     }
 
     pub fn collect_classified_planar_face_split_candidates(
@@ -493,6 +533,27 @@ fn boundary_hit(
     }
 
     best
+}
+
+fn collect_batch_splits_for_faces(
+    faces: &[Face],
+    edges_by_face: BTreeMap<usize, Vec<Edge>>,
+    tol: &Tolerance,
+) -> Vec<PlanarFaceBatchSplit> {
+    edges_by_face
+        .into_iter()
+        .filter_map(|(face_index, split_edges)| {
+            let face = faces.get(face_index)?;
+            let result =
+                BrepIntersectionBuilder::split_planar_face_by_edges(face, &split_edges, tol)
+                    .ok()?;
+            (result.applied_split_count > 0).then_some(PlanarFaceBatchSplit {
+                face_index,
+                split_edge_count: split_edges.len(),
+                result,
+            })
+        })
+        .collect()
 }
 
 fn boundary_hits_same(a: &BoundaryHit, b: &BoundaryHit, tol: &Tolerance) -> bool {
