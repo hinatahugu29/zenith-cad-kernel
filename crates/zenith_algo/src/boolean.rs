@@ -1,6 +1,6 @@
 use zenith_math::{Point3, RobustPredicates, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
-use zenith_topo::Solid;
+use zenith_topo::{Shape, Solid};
 
 /// ブーリアン演算の種類
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,10 +19,22 @@ pub struct ExactBooleanResult {
 }
 
 impl ExactBooleanResult {
+    pub fn from_solids(solids: Vec<Solid>) -> Self {
+        Self { solids }
+    }
+
     pub fn single(solid: Solid) -> Self {
         Self {
             solids: vec![solid],
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.solids.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.solids.is_empty()
     }
 
     pub fn try_single(self) -> Result<Solid, String> {
@@ -41,6 +53,14 @@ impl ExactBooleanResult {
             mesh.merge(&tessellate_solid(solid, params));
         }
         mesh
+    }
+
+    pub fn to_shape(&self) -> Shape {
+        Shape::compound_solids(self.solids.clone())
+    }
+
+    pub fn into_shape(self) -> Shape {
+        Shape::compound_solids(self.solids)
     }
 }
 

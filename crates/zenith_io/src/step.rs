@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
 use zenith_geom::{NurbsCurve2, NurbsCurve3, NurbsSurface3};
 use zenith_math::{Point2, Point3, Tolerance};
-use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, FacePcurveSegment, Shell, Solid, Wire};
+use zenith_topo::{
+    Face, FaceGeometry, FacePcurveLoop, FacePcurveSegment, Shape, Shell, Solid, Wire,
+};
 
 /// ISO 10303-21 (STEP AP214 / AP203 / AP242) 完全共有マニホールド B-Rep エクスポーター
 pub struct StepExporter;
@@ -64,6 +66,22 @@ impl StepExporter {
         product_name: &str,
     ) -> std::io::Result<()> {
         let content = Self::export_solids_to_string(solids, product_name);
+        if let Some(parent) = path.as_ref().parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut file = File::create(path)?;
+        file.write_all(content.as_bytes())?;
+        Ok(())
+    }
+
+    /// Shape 内の Solid 群を1つのSTEPファイルとして出力
+    pub fn export_shape_to_file<P: AsRef<Path>>(
+        shape: &Shape,
+        path: P,
+        product_name: &str,
+    ) -> std::io::Result<()> {
+        let content = Self::export_shape_to_string(shape, product_name)
+            .map_err(|err| Error::new(ErrorKind::InvalidInput, err))?;
         if let Some(parent) = path.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -181,6 +199,15 @@ impl StepExporter {
 
         out.push_str("ENDSEC;\nEND-ISO-10303-21;\n");
         out
+    }
+
+    /// Shape 内の Solid 群をSTEP形式の文字列として生成
+    pub fn export_shape_to_string(shape: &Shape, product_name: &str) -> Result<String, String> {
+        let solids = shape.clone().into_solids();
+        if solids.is_empty() {
+            return Err("STEP export requires at least one Solid in the Shape".to_string());
+        }
+        Ok(Self::export_solids_to_string(&solids, product_name))
     }
 
     fn write_solid_brep(

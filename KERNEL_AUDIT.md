@@ -100,6 +100,7 @@ Current hardening:
 - Added a multi-solid exact boolean result API so middle cylinder-slab differences can return two valid disjoint cylinder solids while the legacy single-solid API reports that callers should use the multi-solid path.
 - STEP export can now write multi-solid exact boolean results as multiple B-Rep representation items in one file, so compound outputs do not have to collapse back to the legacy single-solid API at the first interchange boundary.
 - STEP import now exposes multi-solid file/string APIs, resolves ordered B-Rep items from `ADVANCED_BREP_SHAPE_REPRESENTATION`, and round-trips the two-cylinder middle slab difference with NURBS faces, topology validation, z-spans, and volume checks intact.
+- `Shape::Compound` is now connected to exact boolean and STEP boundaries: boolean results can become `Shape`, shape trees can expose/flatten contained solids, and STEP import/export can round-trip compound solids without forcing callers back through the legacy single-solid path.
 
 ### 2. Planar trimming is still mesh-only
 

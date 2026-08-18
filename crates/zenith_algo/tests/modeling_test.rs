@@ -605,6 +605,39 @@ fn test_step_import_roundtrips_multi_solid_boolean_result() {
 }
 
 #[test]
+fn test_exact_boolean_result_shape_step_roundtrip_preserves_compound_solids() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let middle_slab = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(24.0, 24.0, 6.0).unwrap(),
+        Vec3::new(-12.0, -12.0, 12.0),
+    );
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+        &cylinder,
+        &middle_slab,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("multi-solid cylinder difference");
+
+    let shape = result.to_shape();
+    assert_eq!(shape.solid_count(), 2);
+    assert!(matches!(shape, zenith_topo::Shape::Compound(_)));
+
+    let step = zenith_io::StepExporter::export_shape_to_string(&shape, "BOOLEAN_COMPOUND")
+        .expect("compound shape STEP export");
+    let imported_shape =
+        zenith_io::StepImporter::import_shape_from_str(&step).expect("compound shape STEP import");
+
+    assert_eq!(imported_shape.solid_count(), 2);
+    assert!(matches!(imported_shape, zenith_topo::Shape::Compound(_)));
+    assert!(imported_shape
+        .solids()
+        .iter()
+        .all(|solid| solid.is_topologically_valid(&tol)));
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_solid_for_identical_union_and_intersection() {
     let tol = Tolerance::default();
     let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();

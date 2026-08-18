@@ -4,7 +4,7 @@ use std::path::Path;
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3};
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_topo::{
-    Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Vertex, Wire,
+    Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shape, Shell, Solid, Vertex, Wire,
 };
 
 /// STEP (ISO 10303-21) インポーター
@@ -59,6 +59,12 @@ impl StepImporter {
         Self::import_solids_from_str(&content)
     }
 
+    /// STEPファイルから Shape（単一 Solid または Compound）をインポート
+    pub fn import_shape_from_file<P: AsRef<Path>>(path: P) -> Result<Shape, String> {
+        let solids = Self::import_solids_from_file(path)?;
+        Ok(Shape::compound_solids(solids))
+    }
+
     /// STEPテキストから Solid（B-Repソリッド）をインポート
     pub fn import_solid_from_str(content: &str) -> Result<Solid, String> {
         Self::import_solids_from_str(content)?
@@ -86,6 +92,12 @@ impl StepImporter {
             .into_iter()
             .map(|solid_id| Self::resolve_solid(&mut ctx, solid_id))
             .collect()
+    }
+
+    /// STEPテキストから Shape（単一 Solid または Compound）をインポート
+    pub fn import_shape_from_str(content: &str) -> Result<Shape, String> {
+        let solids = Self::import_solids_from_str(content)?;
+        Ok(Shape::compound_solids(solids))
     }
 
     fn parse_data_section(content: &str, ctx: &mut ImportContext) -> Result<(), String> {
