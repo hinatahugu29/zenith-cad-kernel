@@ -86,6 +86,7 @@ Current hardening:
 - STEP import now recognizes `BREP_WITH_VOIDS`, resolves outer and oriented inner closed shells, and round-trips contained-difference cavity solids with valid topology and subtractive mass properties.
 - Added a guarded exact intersection path for axis-aligned rectangular boxes that returns the overlapping volume as a validated B-Rep box, covering the first partial-overlap solid-producing boolean case.
 - Extended the guarded axis-aligned box path to return exact B-Rep boxes for single-box unions and edge-trimming differences when the result can be represented without general face graph assembly.
+- Added connected-cell orthogonal B-Rep assembly for axis-aligned box booleans, allowing L-shaped unions and corner-notch differences to return validated planar solids with checked volumes.
 
 ### 2. Planar trimming is still mesh-only
 

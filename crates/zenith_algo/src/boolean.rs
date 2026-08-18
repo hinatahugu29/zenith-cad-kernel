@@ -1,6 +1,7 @@
+use zenith_geom::PlaneSurface3;
 use zenith_math::{Point3, RobustPredicates, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
-use zenith_topo::{FaceGeometry, Solid};
+use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Shell, Solid, Vertex, Wire};
 
 /// ブーリアン演算の種類
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +18,13 @@ pub struct BooleanEngine;
 struct AxisAlignedBoxBounds {
     min: Point3,
     max: Point3,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct GridCell {
+    i: usize,
+    j: usize,
+    k: usize,
 }
 
 impl AxisAlignedBoxBounds {
@@ -136,6 +144,15 @@ impl AxisAlignedBoxBounds {
     fn axis_max(self, axis: usize) -> f64 {
         axis_value(self.max, axis)
     }
+
+    fn contains_point(self, point: Point3, tol: &Tolerance) -> bool {
+        point.x >= self.min.x - tol.linear
+            && point.x <= self.max.x + tol.linear
+            && point.y >= self.min.y - tol.linear
+            && point.y <= self.max.y + tol.linear
+            && point.z >= self.min.z - tol.linear
+            && point.z <= self.max.z + tol.linear
+    }
 }
 
 fn intervals_overlap_or_touch(
@@ -164,6 +181,171 @@ fn set_axis_value(point: &mut Point3, axis: usize, value: f64) {
         2 => point.z = value,
         _ => unreachable!("axis must be 0, 1, or 2"),
     }
+}
+
+fn sorted_unique_coords(values: &[f64], tol: &Tolerance) -> Vec<f64> {
+    let mut coords = values.to_vec();
+    coords.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    coords.dedup_by(|a, b| (*a - *b).abs() <= tol.linear);
+    coords
+}
+
+fn cell_index(i: usize, j: usize, k: usize, ny: usize, nz: usize) -> usize {
+    (i * ny + j) * nz + k
+}
+
+fn occupied_cells_are_connected(occupied: &[bool], nx: usize, ny: usize, nz: usize) -> bool {
+    let Some(start_index) = occupied.iter().position(|is_occupied| *is_occupied) else {
+        return false;
+    };
+
+    let mut visited = vec![false; occupied.len()];
+    let mut stack = vec![index_to_cell(start_index, ny, nz)];
+    visited[start_index] = true;
+    let mut visited_count = 0;
+
+    while let Some(cell) = stack.pop() {
+        visited_count += 1;
+        for side in 0..6 {
+            let Some(neighbor) = neighbor_cell(cell.i, cell.j, cell.k, nx, ny, nz, side) else {
+                continue;
+            };
+            let index = cell_index(neighbor.i, neighbor.j, neighbor.k, ny, nz);
+            if occupied[index] && !visited[index] {
+                visited[index] = true;
+                stack.push(neighbor);
+            }
+        }
+    }
+
+    visited_count == occupied.iter().filter(|is_occupied| **is_occupied).count()
+}
+
+fn index_to_cell(index: usize, ny: usize, nz: usize) -> GridCell {
+    GridCell {
+        i: index / (ny * nz),
+        j: (index / nz) % ny,
+        k: index % nz,
+    }
+}
+
+fn neighbor_is_occupied(
+    occupied: &[bool],
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    i: usize,
+    j: usize,
+    k: usize,
+    side: usize,
+) -> bool {
+    neighbor_cell(i, j, k, nx, ny, nz, side)
+        .map(|cell| occupied[cell_index(cell.i, cell.j, cell.k, ny, nz)])
+        .unwrap_or(false)
+}
+
+fn neighbor_cell(
+    i: usize,
+    j: usize,
+    k: usize,
+    nx: usize,
+    ny: usize,
+    nz: usize,
+    side: usize,
+) -> Option<GridCell> {
+    match side {
+        0 => (i > 0).then(|| GridCell { i: i - 1, j, k }),
+        1 => (i + 1 < nx).then(|| GridCell { i: i + 1, j, k }),
+        2 => (j > 0).then(|| GridCell { i, j: j - 1, k }),
+        3 => (j + 1 < ny).then(|| GridCell { i, j: j + 1, k }),
+        4 => (k > 0).then(|| GridCell { i, j, k: k - 1 }),
+        5 => (k + 1 < nz).then(|| GridCell { i, j, k: k + 1 }),
+        _ => unreachable!("side must be 0 through 5"),
+    }
+}
+
+fn make_grid_boundary_face(
+    xs: &[f64],
+    ys: &[f64],
+    zs: &[f64],
+    i: usize,
+    j: usize,
+    k: usize,
+    side: usize,
+    tol: &Tolerance,
+) -> Result<Face, String> {
+    let x0 = xs[i];
+    let x1 = xs[i + 1];
+    let y0 = ys[j];
+    let y1 = ys[j + 1];
+    let z0 = zs[k];
+    let z1 = zs[k + 1];
+
+    let points = match side {
+        0 => vec![
+            Point3::new(x0, y0, z0),
+            Point3::new(x0, y0, z1),
+            Point3::new(x0, y1, z1),
+            Point3::new(x0, y1, z0),
+        ],
+        1 => vec![
+            Point3::new(x1, y0, z0),
+            Point3::new(x1, y1, z0),
+            Point3::new(x1, y1, z1),
+            Point3::new(x1, y0, z1),
+        ],
+        2 => vec![
+            Point3::new(x0, y0, z0),
+            Point3::new(x1, y0, z0),
+            Point3::new(x1, y0, z1),
+            Point3::new(x0, y0, z1),
+        ],
+        3 => vec![
+            Point3::new(x0, y1, z0),
+            Point3::new(x0, y1, z1),
+            Point3::new(x1, y1, z1),
+            Point3::new(x1, y1, z0),
+        ],
+        4 => vec![
+            Point3::new(x0, y0, z0),
+            Point3::new(x0, y1, z0),
+            Point3::new(x1, y1, z0),
+            Point3::new(x1, y0, z0),
+        ],
+        5 => vec![
+            Point3::new(x0, y0, z1),
+            Point3::new(x1, y0, z1),
+            Point3::new(x1, y1, z1),
+            Point3::new(x0, y1, z1),
+        ],
+        _ => unreachable!("side must be 0 through 5"),
+    };
+
+    make_quad_face(points, tol)
+}
+
+fn make_quad_face(points: Vec<Point3>, tol: &Tolerance) -> Result<Face, String> {
+    let plane = PlaneSurface3::new(points[0], points[1] - points[0], points[3] - points[0])
+        .ok_or("Failed to create grid boundary plane")?;
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::new(*point, tol.linear))
+        .collect();
+    let mut edges = Vec::with_capacity(4);
+    for i in 0..4 {
+        edges.push(OrientedEdge::forward(Edge::line_between(
+            vertices[i].clone(),
+            vertices[(i + 1) % 4].clone(),
+        )?));
+    }
+
+    Ok(Face::new(
+        FaceGeometry::Plane(plane),
+        Wire::new(edges),
+        Vec::new(),
+        zenith_topo::Orientation::Forward,
+        tol.linear,
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,6 +488,8 @@ impl BooleanEngine {
             BooleanOpType::Union => {
                 if let Some(union) = bounds_a.union_if_single_box(bounds_b, tol) {
                     Self::make_box_from_bounds(union).map(Some)
+                } else if bounds_a.intersection(bounds_b, tol).is_some() {
+                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol).map(Some)
                 } else {
                     Ok(None)
                 }
@@ -313,11 +497,102 @@ impl BooleanEngine {
             BooleanOpType::Difference => {
                 if let Some(difference) = bounds_a.difference_if_single_box(bounds_b, tol) {
                     Self::make_box_from_bounds(difference).map(Some)
+                } else if bounds_a.intersection(bounds_b, tol).is_some() {
+                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol).map(Some)
                 } else {
                     Ok(None)
                 }
             }
         }
+    }
+
+    fn build_orthogonal_box_boolean(
+        bounds_a: AxisAlignedBoxBounds,
+        bounds_b: AxisAlignedBoxBounds,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        let xs = sorted_unique_coords(
+            &[
+                bounds_a.min.x,
+                bounds_a.max.x,
+                bounds_b.min.x,
+                bounds_b.max.x,
+            ],
+            tol,
+        );
+        let ys = sorted_unique_coords(
+            &[
+                bounds_a.min.y,
+                bounds_a.max.y,
+                bounds_b.min.y,
+                bounds_b.max.y,
+            ],
+            tol,
+        );
+        let zs = sorted_unique_coords(
+            &[
+                bounds_a.min.z,
+                bounds_a.max.z,
+                bounds_b.min.z,
+                bounds_b.max.z,
+            ],
+            tol,
+        );
+        if xs.len() < 2 || ys.len() < 2 || zs.len() < 2 {
+            return Err("Exact axis-aligned box boolean has degenerate grid".to_string());
+        }
+
+        let nx = xs.len() - 1;
+        let ny = ys.len() - 1;
+        let nz = zs.len() - 1;
+        let mut occupied = vec![false; nx * ny * nz];
+        for i in 0..nx {
+            for j in 0..ny {
+                for k in 0..nz {
+                    let center = Point3::new(
+                        (xs[i] + xs[i + 1]) * 0.5,
+                        (ys[j] + ys[j + 1]) * 0.5,
+                        (zs[k] + zs[k + 1]) * 0.5,
+                    );
+                    let in_a = bounds_a.contains_point(center, tol);
+                    let in_b = bounds_b.contains_point(center, tol);
+                    occupied[cell_index(i, j, k, ny, nz)] = match op {
+                        BooleanOpType::Union => in_a || in_b,
+                        BooleanOpType::Difference => in_a && !in_b,
+                        BooleanOpType::Intersection => in_a && in_b,
+                    };
+                }
+            }
+        }
+
+        if occupied.iter().all(|is_occupied| !*is_occupied) {
+            return Err("Exact axis-aligned box boolean produced an empty result".to_string());
+        }
+        if !occupied_cells_are_connected(&occupied, nx, ny, nz) {
+            return Err(
+                "Exact axis-aligned box boolean produced multiple disjoint regions".to_string(),
+            );
+        }
+
+        let mut faces = Vec::new();
+        for i in 0..nx {
+            for j in 0..ny {
+                for k in 0..nz {
+                    if !occupied[cell_index(i, j, k, ny, nz)] {
+                        continue;
+                    }
+                    for side in 0..6 {
+                        if neighbor_is_occupied(&occupied, nx, ny, nz, i, j, k, side) {
+                            continue;
+                        }
+                        faces.push(make_grid_boundary_face(&xs, &ys, &zs, i, j, k, side, tol)?);
+                    }
+                }
+            }
+        }
+
+        Solid::try_simple(Shell::closed(faces), tol).map_err(|err| err.to_string())
     }
 
     fn make_box_from_bounds(bounds: AxisAlignedBoxBounds) -> Result<Solid, String> {
