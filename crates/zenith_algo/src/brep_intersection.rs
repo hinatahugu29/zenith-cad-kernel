@@ -1,6 +1,6 @@
 use zenith_geom::{NurbsCurve3, PlaneSurface3};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec3, Vec3Ext};
-use zenith_topo::{Edge, Face, FaceGeometry, FacePcurveLoop, Vertex};
+use zenith_topo::{Edge, Face, FaceGeometry, FacePcurveLoop, OrientedEdge, Vertex, Wire};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FaceIntersectionKind {
@@ -107,6 +107,191 @@ impl BrepIntersectionBuilder {
             })
             .collect()
     }
+
+    pub fn split_planar_face_by_edge(
+        face: &Face,
+        split_edge: &Edge,
+        tol: &Tolerance,
+    ) -> Result<Vec<Face>, String> {
+        let FaceGeometry::Plane(plane) = &face.geometry else {
+            return Err("Only planar faces can be split by an intersection edge".to_string());
+        };
+        if !face.inner_wires.is_empty() {
+            return Err(
+                "Planar face splitting with inner wires is not implemented yet".to_string(),
+            );
+        }
+        if split_edge.curve.degree != 1 || split_edge.curve.control_points.len() != 2 {
+            return Err("Only linear split edges are supported".to_string());
+        }
+
+        let boundary = face.outer_wire.sample_points(1);
+        if boundary.len() < 3 {
+            return Err("Cannot split a face with fewer than three boundary points".to_string());
+        }
+
+        let start = split_edge.start_vertex.point;
+        let end = split_edge.end_vertex.point;
+        if (end - start).norm() <= tol.linear {
+            return Err("Split edge is degenerate".to_string());
+        }
+        if !point_lies_on_plane(start, plane, tol) || !point_lies_on_plane(end, plane, tol) {
+            return Err("Split edge endpoints must lie on the planar face".to_string());
+        }
+
+        let boundary_uv: Vec<Point2> = boundary
+            .iter()
+            .map(|point| project_to_plane_uv(*point, plane))
+            .collect();
+        let start_uv = project_to_plane_uv(start, plane);
+        let end_uv = project_to_plane_uv(end, plane);
+        let start_hit = boundary_hit(start, start_uv, &boundary_uv, tol)
+            .ok_or_else(|| "Split edge start does not lie on the outer boundary".to_string())?;
+        let end_hit = boundary_hit(end, end_uv, &boundary_uv, tol)
+            .ok_or_else(|| "Split edge end does not lie on the outer boundary".to_string())?;
+        if boundary_hits_same(&start_hit, &end_hit, tol) {
+            return Err("Split edge endpoints collapse on the boundary".to_string());
+        }
+        let mid_uv = project_to_plane_uv(start + (end - start) * 0.5, plane);
+        if !point_in_polygon_2d(mid_uv, &boundary_uv, tol.parametric)
+            || point_on_polygon_boundary(mid_uv, &boundary_uv, tol.parametric)
+        {
+            return Err("Split edge must cross the face interior".to_string());
+        }
+
+        let loop_a = clean_loop_points(
+            boundary_path_between(&boundary, &start_hit, &end_hit)
+                .into_iter()
+                .chain([start])
+                .collect(),
+            tol,
+        );
+        let loop_b = clean_loop_points(
+            boundary_path_between(&boundary, &end_hit, &start_hit)
+                .into_iter()
+                .chain([end])
+                .collect(),
+            tol,
+        );
+
+        if loop_a.len() < 3 || loop_b.len() < 3 {
+            return Err("Split edge did not produce two valid face loops".to_string());
+        }
+
+        let face_a = face_from_polygon(face, loop_a, tol)?;
+        let face_b = face_from_polygon(face, loop_b, tol)?;
+        Ok(vec![face_a, face_b])
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BoundaryHit {
+    segment_index: usize,
+    point: Point3,
+}
+
+fn boundary_hit(
+    point: Point3,
+    uv: Point2,
+    boundary_uv: &[Point2],
+    tol: &Tolerance,
+) -> Option<BoundaryHit> {
+    let mut best = None;
+    let mut best_distance = f64::INFINITY;
+    for i in 0..boundary_uv.len() {
+        let a = boundary_uv[i];
+        let b = boundary_uv[(i + 1) % boundary_uv.len()];
+        let ab = b - a;
+        let len_sq = ab.norm_squared();
+        if len_sq <= tol.parametric.max(1e-12) {
+            continue;
+        }
+        let t = ((uv - a).dot(&ab) / len_sq).clamp(0.0, 1.0);
+        let closest = a + ab * t;
+        let distance = (uv - closest).norm();
+        if distance <= tol.parametric.max(tol.linear) * 10.0 && distance < best_distance {
+            best = Some(BoundaryHit {
+                segment_index: i,
+                point,
+            });
+            best_distance = distance;
+        }
+    }
+
+    best
+}
+
+fn boundary_hits_same(a: &BoundaryHit, b: &BoundaryHit, tol: &Tolerance) -> bool {
+    (a.point - b.point).norm() <= tol.linear
+}
+
+fn point_lies_on_plane(point: Point3, plane: &PlaneSurface3, tol: &Tolerance) -> bool {
+    (point - plane.origin).dot(&plane.normal).abs() <= tol.linear * 10.0
+}
+
+fn boundary_path_between(boundary: &[Point3], from: &BoundaryHit, to: &BoundaryHit) -> Vec<Point3> {
+    let mut path = vec![from.point];
+    let n = boundary.len();
+    let mut index = (from.segment_index + 1) % n;
+
+    loop {
+        path.push(boundary[index]);
+        if index == to.segment_index {
+            break;
+        }
+        index = (index + 1) % n;
+    }
+    path.push(to.point);
+    path
+}
+
+fn clean_loop_points(points: Vec<Point3>, tol: &Tolerance) -> Vec<Point3> {
+    let mut clean = Vec::new();
+    for point in points {
+        if clean
+            .last()
+            .map(|last: &Point3| (point - *last).norm() <= tol.linear)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        clean.push(point);
+    }
+
+    if clean.len() > 1 && (clean[0] - *clean.last().unwrap()).norm() <= tol.linear {
+        clean.pop();
+    }
+
+    clean
+}
+
+fn face_from_polygon(
+    template: &Face,
+    points: Vec<Point3>,
+    tol: &Tolerance,
+) -> Result<Face, String> {
+    let mut oriented_edges = Vec::with_capacity(points.len());
+    for i in 0..points.len() {
+        let start = points[i];
+        let end = points[(i + 1) % points.len()];
+        if (end - start).norm() <= tol.linear {
+            return Err("Split face loop contains a degenerate edge".to_string());
+        }
+        let curve =
+            NurbsCurve3::bspline_from_points(1, vec![start, end]).map_err(|err| err.to_string())?;
+        let start_vertex = Vertex::new(start, tol.linear);
+        let end_vertex = Vertex::new(end, tol.linear);
+        let edge = Edge::new(curve, start_vertex, end_vertex, tol.linear);
+        oriented_edges.push(OrientedEdge::forward(edge));
+    }
+
+    Ok(Face::new(
+        template.geometry.clone(),
+        Wire::new(oriented_edges),
+        Vec::new(),
+        template.orientation,
+        template.tolerance,
+    ))
 }
 
 fn face_boundary_bbox(face: &Face) -> Option<BoundingBox3> {
