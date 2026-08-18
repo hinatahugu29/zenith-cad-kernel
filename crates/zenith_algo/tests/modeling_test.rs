@@ -456,7 +456,62 @@ fn test_exact_brep_boolean_rejects_middle_slab_cylinder_difference_as_compound()
     )
     .expect_err("middle slab difference needs compound result support");
 
-    assert!(err.contains("multiple disjoint regions"));
+    assert!(err.contains("disjoint solids"));
+}
+
+#[test]
+fn test_exact_brep_boolean_result_returns_two_cylinders_for_middle_slab_difference() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let middle_slab = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(24.0, 24.0, 6.0).unwrap(),
+        Vec3::new(-12.0, -12.0, 12.0),
+    );
+
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+        &cylinder,
+        &middle_slab,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("middle slab difference should return a multi-solid exact result");
+
+    assert_eq!(result.solids.len(), 2);
+    let params = TessellationParams {
+        u_divisions: 48,
+        v_divisions: 8,
+    };
+    let result_mesh = result.tessellate(&params);
+    let total_volume = zenith_algo::MassCalculator::compute_from_mesh(&result_mesh).volume;
+    let mut z_spans = Vec::new();
+    for solid in &result.solids {
+        assert_eq!(solid.outer_shell.faces.len(), 6);
+        assert!(solid.is_topologically_valid(&tol));
+        let sampled: Vec<Point3> = solid
+            .outer_shell
+            .faces
+            .iter()
+            .flat_map(|face| face.outer_wire.sample_points(8))
+            .collect();
+        let z_min = sampled
+            .iter()
+            .map(|point| point.z)
+            .fold(f64::INFINITY, f64::min);
+        let z_max = sampled
+            .iter()
+            .map(|point| point.z)
+            .fold(f64::NEG_INFINITY, f64::max);
+        z_spans.push((z_min, z_max));
+    }
+    z_spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    assert!((z_spans[0].0 - 0.0).abs() < 1e-6);
+    assert!((z_spans[0].1 - 12.0).abs() < 1e-6);
+    assert!((z_spans[1].0 - 18.0).abs() < 1e-6);
+    assert!((z_spans[1].1 - 30.0).abs() < 1e-6);
+    let expected_volume = std::f64::consts::PI * 10.0 * 10.0 * 24.0;
+    assert!(total_volume > expected_volume * 0.9);
+    assert!(total_volume < expected_volume * 1.05);
 }
 
 #[test]

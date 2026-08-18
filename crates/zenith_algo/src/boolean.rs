@@ -13,6 +13,37 @@ pub enum BooleanOpType {
 /// B-Rep / ポリゴンブーリアン演算エンジン
 pub struct BooleanEngine;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExactBooleanResult {
+    pub solids: Vec<Solid>,
+}
+
+impl ExactBooleanResult {
+    pub fn single(solid: Solid) -> Self {
+        Self {
+            solids: vec![solid],
+        }
+    }
+
+    pub fn try_single(self) -> Result<Solid, String> {
+        match self.solids.len() {
+            1 => Ok(self.solids.into_iter().next().unwrap()),
+            0 => Err("Exact B-Rep boolean produced an empty result".to_string()),
+            count => Err(format!(
+                "Exact B-Rep boolean produced {count} disjoint solids; use boolean_solids_exact_result for multi-solid results"
+            )),
+        }
+    }
+
+    pub fn tessellate(&self, params: &TessellationParams) -> TriangleMesh {
+        let mut mesh = TriangleMesh::new();
+        for solid in &self.solids {
+            mesh.merge(&tessellate_solid(solid, params));
+        }
+        mesh
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExactBooleanPreparationReport {
     pub face_pair_candidate_count: usize,
@@ -59,13 +90,22 @@ impl BooleanEngine {
         op: BooleanOpType,
         tol: &Tolerance,
     ) -> Result<Solid, String> {
+        Self::boolean_solids_exact_result(solid_a, solid_b, op, tol)?.try_single()
+    }
+
+    pub fn boolean_solids_exact_result(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<ExactBooleanResult, String> {
         if std::ptr::eq(solid_a, solid_b)
             && matches!(op, BooleanOpType::Union | BooleanOpType::Intersection)
         {
             if !solid_a.is_topologically_valid(tol) {
                 return Err("Exact B-Rep boolean input A is not topologically valid".to_string());
             }
-            return Ok(solid_a.clone());
+            return Ok(ExactBooleanResult::single(solid_a.clone()));
         }
         if !solid_a.is_topologically_valid(tol) {
             return Err("Exact B-Rep boolean input A is not topologically valid".to_string());
@@ -75,21 +115,22 @@ impl BooleanEngine {
         }
 
         if !Self::has_face_pair_candidates(solid_a, solid_b, tol) {
-            return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol);
+            return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol)
+                .map(ExactBooleanResult::single);
         }
-        if let Some(solid) =
-            crate::cylinder_boolean::CylinderBoolean::boolean_axis_cylinder_and_slab_exact(
+        if let Some(result) =
+            crate::cylinder_boolean::CylinderBoolean::boolean_axis_cylinder_and_slab_exact_result(
                 solid_a, solid_b, op, tol,
             )?
         {
-            return Ok(solid);
+            return Ok(result);
         }
         if let Some(solid) =
             crate::orthogonal_boolean::OrthogonalBoxBoolean::boolean_axis_aligned_boxes_exact(
                 solid_a, solid_b, op, tol,
             )?
         {
-            return Ok(solid);
+            return Ok(ExactBooleanResult::single(solid));
         }
 
         let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
@@ -99,13 +140,15 @@ impl BooleanEngine {
             return crate::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(
                 &shell_assembly.selection.selected_face_pieces,
                 tol,
-            );
+            )
+            .map(ExactBooleanResult::single);
         }
         if shell_assembly.assembly.stitch_report.is_closed_manifold() {
             return crate::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(
                 &shell_assembly.assembly.selected_face_pieces,
                 tol,
-            );
+            )
+            .map(ExactBooleanResult::single);
         }
 
         let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;

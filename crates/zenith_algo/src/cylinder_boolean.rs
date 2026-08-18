@@ -1,5 +1,5 @@
 use crate::orthogonal_boolean::OrthogonalBoxBoolean;
-use crate::{BooleanOpType, BrepTransform, PrimitiveBuilder};
+use crate::{BooleanOpType, BrepTransform, ExactBooleanResult, PrimitiveBuilder};
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_topo::{FaceGeometry, Solid};
 
@@ -13,23 +13,25 @@ struct AxisCylinderBounds {
 }
 
 impl CylinderBoolean {
-    pub(crate) fn boolean_axis_cylinder_and_slab_exact(
+    pub(crate) fn boolean_axis_cylinder_and_slab_exact_result(
         solid_a: &Solid,
         solid_b: &Solid,
         op: BooleanOpType,
         tol: &Tolerance,
-    ) -> Result<Option<Solid>, String> {
+    ) -> Result<Option<ExactBooleanResult>, String> {
         match op {
             BooleanOpType::Intersection => {
                 if let Some(result) = Self::intersect_slab_and_cylinder(solid_a, solid_b, tol)? {
-                    return Ok(Some(result));
+                    return Ok(Some(ExactBooleanResult::single(result)));
                 }
                 if let Some(result) = Self::intersect_slab_and_cylinder(solid_b, solid_a, tol)? {
-                    return Ok(Some(result));
+                    return Ok(Some(ExactBooleanResult::single(result)));
                 }
             }
             BooleanOpType::Difference => {
-                if let Some(result) = Self::subtract_slab_from_cylinder(solid_a, solid_b, tol)? {
+                if let Some(result) =
+                    Self::subtract_slab_from_cylinder_result(solid_a, solid_b, tol)?
+                {
                     return Ok(Some(result));
                 }
             }
@@ -71,11 +73,11 @@ impl CylinderBoolean {
         )))
     }
 
-    fn subtract_slab_from_cylinder(
+    fn subtract_slab_from_cylinder_result(
         cylinder_solid: &Solid,
         slab_solid: &Solid,
         tol: &Tolerance,
-    ) -> Result<Option<Solid>, String> {
+    ) -> Result<Option<ExactBooleanResult>, String> {
         let Some(cylinder) = axis_cylinder_bounds(cylinder_solid, tol) else {
             return Ok(None);
         };
@@ -105,19 +107,44 @@ impl CylinderBoolean {
         } else if overlap_max >= cylinder.z_max - tol.linear {
             (cylinder.z_min, overlap_min)
         } else {
-            return Err(
-                "Exact cylinder-slab difference produced multiple disjoint regions".to_string(),
-            );
+            return Self::make_disjoint_cylinder_sections(cylinder, overlap_min, overlap_max, tol)
+                .map(Some);
         };
         if z_max - z_min <= tol.linear {
             return Err("Exact cylinder-slab difference produced an empty result".to_string());
         }
 
         let cylinder = PrimitiveBuilder::make_cylinder(cylinder.radius, z_max - z_min)?;
-        Ok(Some(BrepTransform::translate_solid(
-            &cylinder,
-            Vec3::new(0.0, 0.0, z_min),
+        Ok(Some(ExactBooleanResult::single(
+            BrepTransform::translate_solid(&cylinder, Vec3::new(0.0, 0.0, z_min)),
         )))
+    }
+
+    fn make_disjoint_cylinder_sections(
+        cylinder: AxisCylinderBounds,
+        cut_min: f64,
+        cut_max: f64,
+        tol: &Tolerance,
+    ) -> Result<ExactBooleanResult, String> {
+        let mut solids = Vec::new();
+        if cut_min - cylinder.z_min > tol.linear {
+            let lower = PrimitiveBuilder::make_cylinder(cylinder.radius, cut_min - cylinder.z_min)?;
+            solids.push(BrepTransform::translate_solid(
+                &lower,
+                Vec3::new(0.0, 0.0, cylinder.z_min),
+            ));
+        }
+        if cylinder.z_max - cut_max > tol.linear {
+            let upper = PrimitiveBuilder::make_cylinder(cylinder.radius, cylinder.z_max - cut_max)?;
+            solids.push(BrepTransform::translate_solid(
+                &upper,
+                Vec3::new(0.0, 0.0, cut_max),
+            ));
+        }
+        if solids.len() < 2 {
+            return Err("Exact cylinder-slab difference produced an empty result".to_string());
+        }
+        Ok(ExactBooleanResult { solids })
     }
 }
 

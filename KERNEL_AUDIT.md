@@ -97,6 +97,7 @@ Current hardening:
 - Slab-vs-cylinder exact boolean preparation now reaches cylinder-side split counts from real solid operands, proving the curved split path is wired through the public preparation report instead of only isolated helper tests.
 - Added a guarded exact B-Rep intersection for a Z-axis cylinder fully covered in XY by a horizontal slab, returning a valid shortened cylinder solid with NURBS side faces and STEP-exportable topology.
 - Extended the guarded cylinder-slab exact path to support end-trimming differences when the slab removes the top or bottom of the cylinder, while explicitly rejecting middle cuts that require compound multi-solid results.
+- Added a multi-solid exact boolean result API so middle cylinder-slab differences can return two valid disjoint cylinder solids while the legacy single-solid API reports that callers should use the multi-solid path.
 
 ### 2. Planar trimming is still mesh-only
 
