@@ -139,6 +139,7 @@ Current hardening:
 - STEP import now splits entity arguments at top-level commas only, so nested lists such as `ADVANCED_FACE('',(#bound1,#bound2),#surface,.T.)` and point tuples are not corrupted by naive comma splitting.
 - STEP import now preserves simple `TRIMMED_CURVE` of `CIRCLE` arcs as degree-2 rational NURBS instead of always falling back to straight line edges.
 - STEP `TRIMMED_CURVE` import now reads trim point references and can derive circle trim endpoints from `PARAMETER_VALUE` ranges when explicit point refs are absent.
+- STEP `TRIMMED_CURVE` import now honors `sense_agreement`; false-sense circle trims are imported with reversed curve direction.
 - STEP import now reconstructs direct and complex `B_SPLINE_CURVE_WITH_KNOTS` edge curves, including `RATIONAL_B_SPLINE_CURVE` weights.
 - STEP import now honors `EDGE_CURVE` same-sense flags by reversing NURBS curve parameter direction when the STEP edge runs opposite to the underlying geometry.
 - STEP import now reconstructs direct and complex `B_SPLINE_SURFACE_WITH_KNOTS` entities, including rational surface weights from `RATIONAL_B_SPLINE_SURFACE`.

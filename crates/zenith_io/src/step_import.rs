@@ -298,9 +298,18 @@ impl StepImporter {
             let parts = Self::split_top_level_args(&raw.args);
             if parts.len() >= 4 {
                 if let Some(base_curve_id) = Self::parse_entity_ref(parts[1]) {
+                    let same_sense = parts
+                        .get(4)
+                        .map(|sense| sense.trim() == ".T.")
+                        .unwrap_or(true);
                     if let Ok(Some((trim_start, trim_end))) =
                         Self::trimmed_circle_points(ctx, base_curve_id, parts[2], parts[3])
                     {
+                        let (trim_start, trim_end) = if same_sense {
+                            (trim_start, trim_end)
+                        } else {
+                            (trim_end, trim_start)
+                        };
                         if let Ok(Some(c)) =
                             Self::arc_from_circle_curve(ctx, base_curve_id, trim_start, trim_end)
                         {
@@ -308,9 +317,17 @@ impl StepImporter {
                             return Ok(c);
                         }
                     }
-                    if let Ok(Some(c)) =
-                        Self::arc_from_circle_curve(ctx, base_curve_id, p_start, p_end)
-                    {
+                    let (fallback_start, fallback_end) = if same_sense {
+                        (p_start, p_end)
+                    } else {
+                        (p_end, p_start)
+                    };
+                    if let Ok(Some(c)) = Self::arc_from_circle_curve(
+                        ctx,
+                        base_curve_id,
+                        fallback_start,
+                        fallback_end,
+                    ) {
                         ctx.curves.insert(id, c.clone());
                         return Ok(c);
                     }
@@ -1186,6 +1203,60 @@ mod tests {
         assert!((curve.evaluate(0.0) - Point3::new(10.0, 0.0, 0.0)).norm() < 1e-6);
         assert!((curve.evaluate(1.0) - Point3::new(0.0, 10.0, 0.0)).norm() < 1e-6);
         assert!((curve.evaluate(0.5) - Point3::new(7.0710678119, 7.0710678119, 0.0)).norm() < 1e-6);
+    }
+
+    #[test]
+    fn trimmed_circle_false_sense_reverses_trim_direction() {
+        let mut ctx = ImportContext::new();
+        ctx.raw_entities.insert(1, point_entity(0.0, 0.0, 0.0));
+        ctx.raw_entities.insert(
+            2,
+            RawEntity {
+                name: "DIRECTION".to_string(),
+                args: "'',(0.0,0.0,1.0)".to_string(),
+            },
+        );
+        ctx.raw_entities.insert(
+            3,
+            RawEntity {
+                name: "DIRECTION".to_string(),
+                args: "'',(1.0,0.0,0.0)".to_string(),
+            },
+        );
+        ctx.raw_entities.insert(
+            4,
+            RawEntity {
+                name: "AXIS2_PLACEMENT_3D".to_string(),
+                args: "'',#1,#2,#3".to_string(),
+            },
+        );
+        ctx.raw_entities.insert(
+            5,
+            RawEntity {
+                name: "CIRCLE".to_string(),
+                args: "'',#4,10.0".to_string(),
+            },
+        );
+        ctx.raw_entities.insert(
+            6,
+            RawEntity {
+                name: "TRIMMED_CURVE".to_string(),
+                args:
+                    "'',#5,(PARAMETER_VALUE(0.0)),(PARAMETER_VALUE(1.570796326795)),.F.,.PARAMETER."
+                        .to_string(),
+            },
+        );
+
+        let curve = StepImporter::get_curve(
+            &mut ctx,
+            6,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+        )
+        .expect("false-sense trimmed circle import should succeed");
+
+        assert!((curve.evaluate(0.0) - Point3::new(0.0, 10.0, 0.0)).norm() < 1e-6);
+        assert!((curve.evaluate(1.0) - Point3::new(10.0, 0.0, 0.0)).norm() < 1e-6);
     }
 
     #[test]
