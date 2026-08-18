@@ -3,7 +3,12 @@ use zenith_topo::{Face, FaceGeometry};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FaceIntersectionKind {
-    Line { point: Point3, direction: Vec3 },
+    Line {
+        point: Point3,
+        direction: Vec3,
+        segment_start: Point3,
+        segment_end: Point3,
+    },
     Coincident,
     Unsupported,
 }
@@ -36,7 +41,14 @@ impl BrepIntersectionBuilder {
                 ) {
                     continue;
                 }
-                if let Some(kind) = intersect_face_supports(face_a, face_b, tol) {
+                if let Some(kind) = intersect_face_supports(face_a, face_b, tol).and_then(|kind| {
+                    clip_candidate_to_face_bboxes(
+                        kind,
+                        bboxes_a[face_a_index].as_ref(),
+                        bboxes_b[face_b_index].as_ref(),
+                        tol,
+                    )
+                }) {
                     candidates.push(FaceIntersectionCandidate {
                         face_a_index,
                         face_b_index,
@@ -77,6 +89,79 @@ fn face_bboxes_intersect(
         (Some(a), Some(b)) => a.intersects(b, tol.linear),
         _ => true,
     }
+}
+
+fn clip_candidate_to_face_bboxes(
+    kind: FaceIntersectionKind,
+    bbox_a: Option<&BoundingBox3>,
+    bbox_b: Option<&BoundingBox3>,
+    tol: &Tolerance,
+) -> Option<FaceIntersectionKind> {
+    match kind {
+        FaceIntersectionKind::Line {
+            point, direction, ..
+        } => {
+            let bbox_a = bbox_a?;
+            let bbox_b = bbox_b?;
+            let overlap = bbox_overlap(bbox_a, bbox_b, tol.linear)?;
+            let (t_min, t_max) = clip_line_to_bbox(point, direction, &overlap, tol.linear)?;
+            Some(FaceIntersectionKind::Line {
+                point,
+                direction,
+                segment_start: point + direction * t_min,
+                segment_end: point + direction * t_max,
+            })
+        }
+        other => Some(other),
+    }
+}
+
+fn bbox_overlap(a: &BoundingBox3, b: &BoundingBox3, tol: f64) -> Option<BoundingBox3> {
+    let min = Point3::new(
+        a.min.x.max(b.min.x) - tol,
+        a.min.y.max(b.min.y) - tol,
+        a.min.z.max(b.min.z) - tol,
+    );
+    let max = Point3::new(
+        a.max.x.min(b.max.x) + tol,
+        a.max.y.min(b.max.y) + tol,
+        a.max.z.min(b.max.z) + tol,
+    );
+    (min.x <= max.x && min.y <= max.y && min.z <= max.z)
+        .then_some(BoundingBox3::from_min_max(min, max))
+}
+
+fn clip_line_to_bbox(
+    point: Point3,
+    direction: Vec3,
+    bbox: &BoundingBox3,
+    tol: f64,
+) -> Option<(f64, f64)> {
+    let mut t_min = f64::NEG_INFINITY;
+    let mut t_max = f64::INFINITY;
+
+    for axis in 0..3 {
+        let p = point[axis];
+        let d = direction[axis];
+        let min = bbox.min[axis];
+        let max = bbox.max[axis];
+        if d.abs() <= tol.max(1e-12) {
+            if p < min || p > max {
+                return None;
+            }
+            continue;
+        }
+
+        let t1 = (min - p) / d;
+        let t2 = (max - p) / d;
+        t_min = t_min.max(t1.min(t2));
+        t_max = t_max.min(t1.max(t2));
+        if t_min > t_max {
+            return None;
+        }
+    }
+
+    (t_min.is_finite() && t_max.is_finite() && t_min <= t_max).then_some((t_min, t_max))
 }
 
 fn point3_is_finite(point: Point3) -> bool {
@@ -148,5 +233,7 @@ fn intersect_planes(
     FaceIntersectionKind::Line {
         point: Point3::from(point_vec),
         direction: direction.normalize(),
+        segment_start: Point3::from(point_vec),
+        segment_end: Point3::from(point_vec),
     }
 }

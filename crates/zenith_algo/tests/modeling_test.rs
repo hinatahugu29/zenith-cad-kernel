@@ -248,8 +248,15 @@ fn test_brep_intersection_collects_plane_plane_candidates() {
         zenith_algo::FaceIntersectionKind::Line { .. }
     )));
     for candidate in &candidates {
-        if let zenith_algo::FaceIntersectionKind::Line { point, direction } = candidate.kind {
+        if let zenith_algo::FaceIntersectionKind::Line {
+            point,
+            direction,
+            segment_start,
+            segment_end,
+        } = candidate.kind
+        {
             assert!(direction.norm() > 0.99);
+            assert!((segment_end - segment_start).norm() > tol.linear);
             let FaceGeometry::Plane(plane_a) =
                 &solid_a.outer_shell.faces[candidate.face_a_index].geometry
             else {
@@ -262,6 +269,10 @@ fn test_brep_intersection_collects_plane_plane_candidates() {
             };
             assert!((point - plane_a.origin).dot(&plane_a.normal).abs() <= tol.linear * 10.0);
             assert!((point - plane_b.origin).dot(&plane_b.normal).abs() <= tol.linear * 10.0);
+            assert!(
+                (segment_start - plane_a.origin).dot(&plane_a.normal).abs() <= tol.linear * 10.0
+            );
+            assert!((segment_end - plane_b.origin).dot(&plane_b.normal).abs() <= tol.linear * 10.0);
         }
     }
     assert!(candidates.iter().any(|candidate| {
@@ -321,6 +332,71 @@ fn test_brep_intersection_broad_phase_skips_disjoint_face_bounds() {
     );
 
     assert!(candidates.is_empty());
+}
+
+#[test]
+fn test_brep_intersection_clips_plane_plane_line_to_face_bbox_overlap() {
+    let tol = Tolerance::default();
+    let make_face = |points: [Point3; 4], normal: Vec3| {
+        let vertices: Vec<Vertex> = points
+            .iter()
+            .map(|point| Vertex::from_point(*point))
+            .collect();
+        let edges = vec![
+            Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+            Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+            Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+            Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+        ];
+        let wire = Wire::new(edges.into_iter().map(OrientedEdge::forward).collect());
+        let u_axis = (points[1] - points[0]).normalize();
+        let v_axis = normal.cross(&u_axis).normalize();
+        let plane = PlaneSurface3::new(points[0], u_axis, v_axis).unwrap();
+        Face::simple(FaceGeometry::Plane(plane), wire)
+    };
+
+    let face_a = make_face(
+        [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(4.0, 4.0, 0.0),
+            Point3::new(0.0, 4.0, 0.0),
+        ],
+        Vec3::new(0.0, 0.0, 1.0),
+    );
+    let face_b = make_face(
+        [
+            Point3::new(2.0, 2.0, -1.0),
+            Point3::new(2.0, 2.0, 1.0),
+            Point3::new(2.0, 5.0, 1.0),
+            Point3::new(2.0, 5.0, -1.0),
+        ],
+        Vec3::new(-1.0, 0.0, 0.0),
+    );
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_face_pair_candidates(
+        &[face_a],
+        &[face_b],
+        &tol,
+    );
+    let line = candidates
+        .iter()
+        .find_map(|candidate| match candidate.kind {
+            zenith_algo::FaceIntersectionKind::Line {
+                segment_start,
+                segment_end,
+                ..
+            } => Some((segment_start, segment_end)),
+            _ => None,
+        })
+        .expect("plane-plane candidate line");
+
+    for point in [line.0, line.1] {
+        assert!((point.x - 2.0).abs() <= tol.linear * 10.0);
+        assert!(point.y >= 2.0 - tol.linear * 10.0 && point.y <= 4.0 + tol.linear * 10.0);
+        assert!(point.z.abs() <= tol.linear * 10.0);
+    }
+    assert!((line.1 - line.0).norm() > 1.5);
 }
 
 #[test]

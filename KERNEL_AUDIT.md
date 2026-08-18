@@ -62,6 +62,7 @@ Current hardening:
 - Added a `BrepIntersectionBuilder` scaffold that enumerates face-pair support intersections for exact boolean pre-processing.
 - Added plane/plane support-intersection candidates with line and coincident classifications, plus tests proving candidate lines lie on both source planes.
 - Added face-boundary AABB broad phase filtering before support-surface intersection, avoiding obvious disjoint face pairs in the future exact boolean pipeline.
+- Plane/plane line candidates now carry a finite segment clipped to the overlap of both face-boundary AABBs, giving the future split stage a bounded starting interval.
 
 ### 2. Planar trimming is still mesh-only
 
