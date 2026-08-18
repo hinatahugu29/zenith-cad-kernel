@@ -78,6 +78,13 @@ impl BooleanEngine {
             return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol);
         }
         if let Some(solid) =
+            crate::cylinder_boolean::CylinderBoolean::boolean_axis_cylinder_and_slab_exact(
+                solid_a, solid_b, op, tol,
+            )?
+        {
+            return Ok(solid);
+        }
+        if let Some(solid) =
             crate::orthogonal_boolean::OrthogonalBoxBoolean::boolean_axis_aligned_boxes_exact(
                 solid_a, solid_b, op, tol,
             )?

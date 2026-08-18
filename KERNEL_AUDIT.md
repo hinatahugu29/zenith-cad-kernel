@@ -95,6 +95,7 @@ Current hardening:
 - Exact boolean preparation reports now include skipped batch split counts, making curved-intersection gaps visible instead of hiding them behind a generic unsupported result.
 - Recognized cylinder-side NURBS faces can now be split by a horizontal circular arc edge into upper and lower NURBS face fragments with valid p-curves, allowing plane-cylinder split candidates to carry fragments for both operands.
 - Slab-vs-cylinder exact boolean preparation now reaches cylinder-side split counts from real solid operands, proving the curved split path is wired through the public preparation report instead of only isolated helper tests.
+- Added a guarded exact B-Rep intersection for a Z-axis cylinder fully covered in XY by a horizontal slab, returning a valid shortened cylinder solid with NURBS side faces and STEP-exportable topology.
 
 ### 2. Planar trimming is still mesh-only
 

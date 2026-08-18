@@ -285,6 +285,78 @@ fn test_exact_boolean_preparation_reaches_cylinder_side_splits_for_slab_cut() {
 }
 
 #[test]
+fn test_exact_brep_boolean_returns_cylinder_slice_for_slab_intersection() {
+    let tol = Tolerance::default();
+    let slab = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(24.0, 24.0, 6.0).unwrap(),
+        Vec3::new(-12.0, -12.0, 12.0),
+    );
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+
+    let slice = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &slab,
+        &cylinder,
+        zenith_algo::BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("slab-cylinder exact intersection should return a B-Rep cylinder slice");
+
+    assert_eq!(slice.outer_shell.faces.len(), 6);
+    assert!(slice.is_topologically_valid(&tol));
+    let params = TessellationParams {
+        u_divisions: 48,
+        v_divisions: 8,
+    };
+    let mesh = tessellate_solid(&slice, &params);
+    let props = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    let expected_volume = std::f64::consts::PI * 10.0 * 10.0 * 6.0;
+    assert!(props.volume > expected_volume * 0.9);
+    assert!(props.volume < expected_volume * 1.05);
+
+    let step = zenith_io::StepExporter::export_solid_to_string(&slice, "CYLINDER_SLICE");
+    assert!(step.contains("MANIFOLD_SOLID_BREP"));
+    assert!(step.contains("B_SPLINE_SURFACE_WITH_KNOTS"));
+}
+
+#[test]
+fn test_exact_brep_boolean_cylinder_slab_intersection_is_operand_order_independent() {
+    let tol = Tolerance::default();
+    let slab = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(24.0, 24.0, 6.0).unwrap(),
+        Vec3::new(-12.0, -12.0, 12.0),
+    );
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+
+    let a = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &slab,
+        &cylinder,
+        zenith_algo::BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("slab-cylinder exact intersection");
+    let b = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &cylinder,
+        &slab,
+        zenith_algo::BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("cylinder-slab exact intersection");
+
+    assert_eq!(a.outer_shell.faces.len(), b.outer_shell.faces.len());
+    assert!(a.is_topologically_valid(&tol));
+    assert!(b.is_topologically_valid(&tol));
+    let params = TessellationParams {
+        u_divisions: 48,
+        v_divisions: 8,
+    };
+    let volume_a =
+        zenith_algo::MassCalculator::compute_from_mesh(&tessellate_solid(&a, &params)).volume;
+    let volume_b =
+        zenith_algo::MassCalculator::compute_from_mesh(&tessellate_solid(&b, &params)).volume;
+    assert!((volume_a - volume_b).abs() < 1e-6);
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_solid_for_identical_union_and_intersection() {
     let tol = Tolerance::default();
     let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();

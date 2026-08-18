@@ -1,0 +1,144 @@
+use crate::orthogonal_boolean::OrthogonalBoxBoolean;
+use crate::{BooleanOpType, BrepTransform, PrimitiveBuilder};
+use zenith_math::{Point3, Tolerance, Vec3};
+use zenith_topo::{FaceGeometry, Solid};
+
+pub(crate) struct CylinderBoolean;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AxisCylinderBounds {
+    radius: f64,
+    z_min: f64,
+    z_max: f64,
+}
+
+impl CylinderBoolean {
+    pub(crate) fn boolean_axis_cylinder_and_slab_exact(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<Option<Solid>, String> {
+        if op != BooleanOpType::Intersection {
+            return Ok(None);
+        }
+
+        if let Some(result) = Self::intersect_slab_and_cylinder(solid_a, solid_b, tol)? {
+            return Ok(Some(result));
+        }
+        if let Some(result) = Self::intersect_slab_and_cylinder(solid_b, solid_a, tol)? {
+            return Ok(Some(result));
+        }
+
+        Ok(None)
+    }
+
+    fn intersect_slab_and_cylinder(
+        slab_solid: &Solid,
+        cylinder_solid: &Solid,
+        tol: &Tolerance,
+    ) -> Result<Option<Solid>, String> {
+        let Some(slab) = OrthogonalBoxBoolean::axis_aligned_box_bounds(slab_solid, tol) else {
+            return Ok(None);
+        };
+        let Some(cylinder) = axis_cylinder_bounds(cylinder_solid, tol) else {
+            return Ok(None);
+        };
+        if slab.min.x > -cylinder.radius + tol.linear
+            || slab.max.x < cylinder.radius - tol.linear
+            || slab.min.y > -cylinder.radius + tol.linear
+            || slab.max.y < cylinder.radius - tol.linear
+        {
+            return Ok(None);
+        }
+
+        let z_min = slab.min.z.max(cylinder.z_min);
+        let z_max = slab.max.z.min(cylinder.z_max);
+        if z_max - z_min <= tol.linear {
+            return Err("Exact cylinder-slab intersection has no positive volume".to_string());
+        }
+
+        let cylinder = PrimitiveBuilder::make_cylinder(cylinder.radius, z_max - z_min)?;
+        Ok(Some(BrepTransform::translate_solid(
+            &cylinder,
+            Vec3::new(0.0, 0.0, z_min),
+        )))
+    }
+}
+
+fn axis_cylinder_bounds(solid: &Solid, tol: &Tolerance) -> Option<AxisCylinderBounds> {
+    if !solid.inner_shells.is_empty() || solid.outer_shell.faces.len() != 6 {
+        return None;
+    }
+
+    let nurbs_count = solid
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+        .count();
+    let plane_count = solid
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| matches!(face.geometry, FaceGeometry::Plane(_)))
+        .count();
+    if nurbs_count != 4 || plane_count != 2 {
+        return None;
+    }
+
+    let points = solid_outer_sample_points(solid);
+    if points.is_empty()
+        || points
+            .iter()
+            .any(|point| !point.coords.iter().all(|v| v.is_finite()))
+    {
+        return None;
+    }
+
+    let z_min = points
+        .iter()
+        .map(|point| point.z)
+        .fold(f64::INFINITY, f64::min);
+    let z_max = points
+        .iter()
+        .map(|point| point.z)
+        .fold(f64::NEG_INFINITY, f64::max);
+    if z_max - z_min <= tol.linear {
+        return None;
+    }
+
+    let radius = points
+        .iter()
+        .map(|point| (point.x * point.x + point.y * point.y).sqrt())
+        .fold(0.0, f64::max);
+    if radius <= tol.linear {
+        return None;
+    }
+
+    let samples_on_cylinder = points.iter().filter(|point| {
+        let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
+        (radial_distance - radius).abs() <= tol.linear * 20.0
+            && point.z >= z_min - tol.linear
+            && point.z <= z_max + tol.linear
+    });
+    if samples_on_cylinder.count() < 16 {
+        return None;
+    }
+
+    Some(AxisCylinderBounds {
+        radius,
+        z_min,
+        z_max,
+    })
+}
+
+fn solid_outer_sample_points(solid: &Solid) -> Vec<Point3> {
+    let mut points = Vec::new();
+    for face in &solid.outer_shell.faces {
+        for point in face.outer_wire.sample_points(8) {
+            points.push(point);
+        }
+    }
+    points
+}

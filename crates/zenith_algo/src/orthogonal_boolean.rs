@@ -6,9 +6,9 @@ use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Shell, Solid, Vertex, 
 pub(crate) struct OrthogonalBoxBoolean;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct AxisAlignedBoxBounds {
-    min: Point3,
-    max: Point3,
+pub(crate) struct AxisAlignedBoxBounds {
+    pub(crate) min: Point3,
+    pub(crate) max: Point3,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,7 +158,10 @@ impl OrthogonalBoxBoolean {
         Ok(BrepTransform::translate_solid(&solid, bounds.min.coords))
     }
 
-    fn axis_aligned_box_bounds(solid: &Solid, tol: &Tolerance) -> Option<AxisAlignedBoxBounds> {
+    pub(crate) fn axis_aligned_box_bounds(
+        solid: &Solid,
+        tol: &Tolerance,
+    ) -> Option<AxisAlignedBoxBounds> {
         if !solid.inner_shells.is_empty() || solid.outer_shell.faces.len() != 6 {
             return None;
         }

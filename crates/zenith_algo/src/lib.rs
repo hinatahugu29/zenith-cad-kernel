@@ -5,6 +5,7 @@ pub mod brep_intersection;
 pub mod brep_transform;
 pub mod cap;
 pub mod chamfer;
+mod cylinder_boolean;
 pub mod direct_edit;
 pub mod extrude;
 pub mod feature_tree;
