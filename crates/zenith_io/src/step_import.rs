@@ -59,16 +59,25 @@ impl StepImporter {
         // 1. DATAセクションのエンティティ辞書を構築
         Self::parse_data_section(content, &mut ctx)?;
 
-        // 2. MANIFOLD_SOLID_BREP を探索
+        // 2. Solid B-Rep を探索
         let mut solid_brep_id = None;
         for (&id, ent) in &ctx.raw_entities {
-            if ent.name == "MANIFOLD_SOLID_BREP" {
+            if ent.name == "BREP_WITH_VOIDS" {
                 solid_brep_id = Some(id);
                 break;
             }
         }
+        if solid_brep_id.is_none() {
+            for (&id, ent) in &ctx.raw_entities {
+                if ent.name == "MANIFOLD_SOLID_BREP" {
+                    solid_brep_id = Some(id);
+                    break;
+                }
+            }
+        }
 
-        let solid_id = solid_brep_id.ok_or("MANIFOLD_SOLID_BREP not found in STEP data")?;
+        let solid_id =
+            solid_brep_id.ok_or("MANIFOLD_SOLID_BREP or BREP_WITH_VOIDS not found in STEP data")?;
         Self::resolve_solid(&mut ctx, solid_id)
     }
 
@@ -830,13 +839,70 @@ impl StepImporter {
             .get(&solid_id)
             .ok_or("Solid entity not found")?
             .clone();
-        // MANIFOLD_SOLID_BREP('',#shell_id)
+
+        match raw.name.as_str() {
+            "MANIFOLD_SOLID_BREP" => Self::resolve_manifold_solid_brep(ctx, &raw),
+            "BREP_WITH_VOIDS" => Self::resolve_brep_with_voids(ctx, &raw),
+            _ => Err(format!("Unsupported solid entity {}", raw.name)),
+        }
+    }
+
+    fn resolve_manifold_solid_brep(
+        ctx: &mut ImportContext,
+        raw: &RawEntity,
+    ) -> Result<Solid, String> {
         let parts = Self::split_top_level_args(&raw.args);
         if parts.len() < 2 {
             return Err("Invalid MANIFOLD_SOLID_BREP format".to_string());
         }
 
         let shell_id = Self::parse_entity_ref(parts[1]).ok_or("Invalid shell ref")?;
+        let outer_shell = Self::resolve_closed_shell(ctx, shell_id)?;
+        Solid::try_simple(outer_shell, &Tolerance::default()).map_err(|err| err.to_string())
+    }
+
+    fn resolve_brep_with_voids(ctx: &mut ImportContext, raw: &RawEntity) -> Result<Solid, String> {
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 3 {
+            return Err("Invalid BREP_WITH_VOIDS format".to_string());
+        }
+
+        let outer_shell_id = Self::parse_entity_ref(parts[1]).ok_or("Invalid outer shell ref")?;
+        let outer_shell = Self::resolve_closed_shell(ctx, outer_shell_id)?;
+        let mut inner_shells = Vec::new();
+        for oriented_shell_id in Self::parse_ref_list(parts[2]) {
+            inner_shells.push(Self::resolve_oriented_closed_shell(ctx, oriented_shell_id)?);
+        }
+
+        Solid::try_new(outer_shell, inner_shells, &Tolerance::default())
+            .map_err(|err| err.to_string())
+    }
+
+    fn resolve_oriented_closed_shell(
+        ctx: &mut ImportContext,
+        oriented_shell_id: u64,
+    ) -> Result<Shell, String> {
+        let raw = ctx
+            .raw_entities
+            .get(&oriented_shell_id)
+            .ok_or("Oriented closed shell not found")?
+            .clone();
+        if raw.name != "ORIENTED_CLOSED_SHELL" {
+            return Err(format!(
+                "Expected ORIENTED_CLOSED_SHELL but found {}",
+                raw.name
+            ));
+        }
+
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 4 {
+            return Err("Invalid ORIENTED_CLOSED_SHELL format".to_string());
+        }
+        let shell_id = Self::parse_entity_ref(parts[2]).ok_or("Invalid oriented shell ref")?;
+        Self::resolve_closed_shell(ctx, shell_id)
+    }
+
+    fn resolve_closed_shell(ctx: &mut ImportContext, shell_id: u64) -> Result<Shell, String> {
         let shell_raw = ctx
             .raw_entities
             .get(&shell_id)
@@ -853,8 +919,7 @@ impl StepImporter {
             }
         }
 
-        let outer_shell = Shell::closed(faces);
-        Solid::try_simple(outer_shell, &Tolerance::default()).map_err(|err| err.to_string())
+        Ok(Shell::closed(faces))
     }
 
     fn resolve_face(ctx: &mut ImportContext, face_id: u64) -> Result<Face, String> {

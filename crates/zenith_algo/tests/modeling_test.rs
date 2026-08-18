@@ -466,6 +466,48 @@ fn test_step_export_uses_brep_with_voids_for_inner_shells() {
 }
 
 #[test]
+fn test_step_roundtrip_preserves_brep_with_voids_inner_shells() {
+    let tol = Tolerance::default();
+    let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let inner = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(3.0, 3.0, 3.0).unwrap(),
+        Vec3::new(2.0, 2.0, 2.0),
+    );
+    let difference = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &outer,
+        &inner,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("contained exact difference should return an inner-shell cavity");
+    let step = zenith_io::StepExporter::export_solid_to_string(&difference, "VOID_ROUNDTRIP");
+
+    let imported = zenith_io::StepImporter::import_solid_from_str(&step)
+        .expect("BREP_WITH_VOIDS STEP should import");
+
+    assert_eq!(
+        imported.outer_shell.faces.len(),
+        difference.outer_shell.faces.len()
+    );
+    assert_eq!(imported.inner_shells.len(), 1);
+    assert_eq!(
+        imported.inner_shells[0].faces.len(),
+        difference.inner_shells[0].faces.len()
+    );
+    assert!(imported.is_topologically_valid(&tol));
+
+    let mesh = tessellate_solid(
+        &imported,
+        &TessellationParams {
+            u_divisions: 4,
+            v_divisions: 4,
+        },
+    );
+    let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    assert!((mass.volume - (10.0 * 10.0 * 10.0 - 3.0 * 3.0 * 3.0)).abs() < 1.0);
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_left_solid_for_disjoint_difference() {
     let tol = Tolerance::default();
     let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
