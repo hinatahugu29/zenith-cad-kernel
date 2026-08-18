@@ -1,8 +1,8 @@
 use zenith_geom::{NurbsCurve3, PlaneSurface3};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec3, Vec3Ext};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
-use zenith_topo::Solid;
 use zenith_topo::{Edge, Face, FaceGeometry, FacePcurveLoop, OrientedEdge, Vertex, Wire};
+use zenith_topo::{Shell, Solid};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FaceIntersectionKind {
@@ -294,6 +294,33 @@ impl BrepIntersectionBuilder {
         tol: &Tolerance,
     ) -> SelectedFaceStitchReport {
         diagnose_selected_face_stitching(pieces, tol)
+    }
+
+    pub fn build_solid_from_selected_face_pieces(
+        pieces: &[SelectedBooleanFacePiece],
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        let stitch_report = diagnose_selected_face_stitching(pieces, tol);
+        if !stitch_report.is_closed_manifold() {
+            return Err(format!(
+                "Selected face pieces are not stitchable: {} unmatched edge uses, {} non-manifold edge uses, {} same-direction edge uses",
+                stitch_report.unmatched_edge_use_count,
+                stitch_report.non_manifold_edge_use_count,
+                stitch_report.same_direction_edge_use_count
+            ));
+        }
+
+        let faces = pieces
+            .iter()
+            .map(|piece| {
+                if piece.reverse_orientation {
+                    reverse_face_orientation(&piece.face)
+                } else {
+                    piece.face.clone()
+                }
+            })
+            .collect();
+        Solid::try_simple(Shell::closed(faces), tol).map_err(|err| err.to_string())
     }
 
     pub fn split_planar_face_by_edge(
@@ -615,6 +642,28 @@ fn collect_wire_stitch_edge_uses(
             edge_uses.push(StitchEdgeUse { start, end });
         }
     }
+}
+
+fn reverse_face_orientation(face: &Face) -> Face {
+    let outer_wire = reverse_wire(&face.outer_wire);
+    let inner_wires = face.inner_wires.iter().map(reverse_wire).collect();
+    Face::new(
+        face.geometry.clone(),
+        outer_wire,
+        inner_wires,
+        face.orientation.reversed(),
+        face.tolerance,
+    )
+}
+
+fn reverse_wire(wire: &Wire) -> Wire {
+    Wire::new(
+        wire.edges
+            .iter()
+            .rev()
+            .map(|edge| OrientedEdge::new(edge.edge.clone(), edge.orientation.reversed()))
+            .collect(),
+    )
 }
 
 fn same_undirected_stitch_edge(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -> bool {

@@ -867,6 +867,31 @@ fn test_brep_selected_face_stitching_diagnostics() {
 }
 
 #[test]
+fn test_brep_builds_solid_from_stitched_selected_face_pieces() {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let pieces: Vec<_> = solid
+        .outer_shell
+        .faces
+        .iter()
+        .cloned()
+        .map(|face| zenith_algo::SelectedBooleanFacePiece {
+            operand: zenith_algo::BooleanOperand::A,
+            face,
+            location: zenith_algo::FaceRegionLocation::Outside,
+            reverse_orientation: false,
+        })
+        .collect();
+
+    let rebuilt =
+        zenith_algo::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(&pieces, &tol)
+            .expect("stitched selected faces should rebuild a valid solid");
+
+    assert_eq!(rebuilt.outer_shell.faces.len(), 6);
+    assert!(rebuilt.is_topologically_valid(&tol));
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(

@@ -71,6 +71,7 @@ Current hardening:
 - Added boolean-operation face-piece selection for classified split faces, including `Difference` handling that keeps A outside pieces and reversed B inside pieces before future shell reconstruction.
 - Added an exact boolean preparation report that exposes face-pair, intersection-edge, planar-split, classified-split, and selected-face-piece counts before the final shell reconstruction stage exists.
 - Added selected-face stitching diagnostics that count unmatched, non-manifold, and same-direction edge uses before attempting to build a result shell.
+- Added a guarded reconstruction helper that turns stitchable selected face pieces into a validated `Solid`, giving the exact boolean path a final shell-construction gate for limited closed cases.
 
 ### 2. Planar trimming is still mesh-only
 
