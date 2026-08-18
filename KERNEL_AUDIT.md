@@ -59,6 +59,8 @@ Current hardening:
 - Added `BooleanEngine::boolean_solids_mesh_preview()` to label the current tessellation/ray-cast path as display-only mesh output.
 - Added `BooleanEngine::boolean_solids_exact()` as the future exact B-Rep entry point; it validates inputs and fails explicitly instead of silently returning a mesh.
 - Added a regression test proving exact B-Rep boolean does not fall back to preview mesh output.
+- Added a `BrepIntersectionBuilder` scaffold that enumerates face-pair support intersections for exact boolean pre-processing.
+- Added plane/plane support-intersection candidates with line and coincident classifications, plus tests proving candidate lines lie on both source planes.
 
 ### 2. Planar trimming is still mesh-only
 

@@ -45,6 +45,17 @@ impl BooleanEngine {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
         }
 
+        let candidates = crate::BrepIntersectionBuilder::collect_face_pair_candidates(
+            &solid_a.outer_shell.faces,
+            &solid_b.outer_shell.faces,
+            tol,
+        );
+        if candidates.is_empty() {
+            return Err(
+                "Exact B-Rep boolean found no face-pair intersection candidates".to_string(),
+            );
+        }
+
         Err("Exact B-Rep boolean is not implemented yet; use boolean_solids_mesh_preview only for display/preview mesh results".to_string())
     }
 

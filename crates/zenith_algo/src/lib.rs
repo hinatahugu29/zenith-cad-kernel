@@ -1,6 +1,7 @@
 //! Zenith Algo: CADモデリングアルゴリズムライブラリ
 
 pub mod boolean;
+pub mod brep_intersection;
 pub mod cap;
 pub mod chamfer;
 pub mod direct_edit;
@@ -22,6 +23,9 @@ use zenith_math::Tolerance;
 use zenith_topo::{Shell, Solid};
 
 pub use boolean::{BooleanEngine, BooleanOpType};
+pub use brep_intersection::{
+    BrepIntersectionBuilder, FaceIntersectionCandidate, FaceIntersectionKind,
+};
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;
 pub use direct_edit::{DirectModeling, EdgeInspection, EdgeKind, FaceInspection};

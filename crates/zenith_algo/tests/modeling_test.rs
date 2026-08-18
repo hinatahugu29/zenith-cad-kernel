@@ -232,6 +232,49 @@ fn test_exact_brep_boolean_entry_is_separate_from_mesh_preview() {
 }
 
 #[test]
+fn test_brep_intersection_collects_plane_plane_candidates() {
+    let tol = Tolerance::default();
+    let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let solid_b = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_face_pair_candidates(
+        &solid_a.outer_shell.faces,
+        &solid_b.outer_shell.faces,
+        &tol,
+    );
+
+    assert!(candidates.iter().any(|candidate| matches!(
+        candidate.kind,
+        zenith_algo::FaceIntersectionKind::Line { .. }
+    )));
+    for candidate in &candidates {
+        if let zenith_algo::FaceIntersectionKind::Line { point, direction } = candidate.kind {
+            assert!(direction.norm() > 0.99);
+            let FaceGeometry::Plane(plane_a) =
+                &solid_a.outer_shell.faces[candidate.face_a_index].geometry
+            else {
+                continue;
+            };
+            let FaceGeometry::Plane(plane_b) =
+                &solid_b.outer_shell.faces[candidate.face_b_index].geometry
+            else {
+                continue;
+            };
+            assert!((point - plane_a.origin).dot(&plane_a.normal).abs() <= tol.linear * 10.0);
+            assert!((point - plane_b.origin).dot(&plane_b.normal).abs() <= tol.linear * 10.0);
+        }
+    }
+    assert!(candidates.iter().any(|candidate| {
+        candidate.face_a_index == 0
+            && candidate.face_b_index == 0
+            && matches!(
+                candidate.kind,
+                zenith_algo::FaceIntersectionKind::Coincident
+            )
+    }));
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(
