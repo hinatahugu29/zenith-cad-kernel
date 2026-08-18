@@ -306,8 +306,18 @@ pub fn tessellate_shell(shell: &Shell, params: &TessellationParams) -> TriangleM
 pub fn tessellate_solid(solid: &Solid, params: &TessellationParams) -> TriangleMesh {
     let mut total_mesh = tessellate_shell(&solid.outer_shell, params);
     for inner in &solid.inner_shells {
-        let inner_mesh = tessellate_shell(inner, params);
+        let mut inner_mesh = tessellate_shell(inner, params);
+        flip_mesh_orientation(&mut inner_mesh);
         total_mesh.merge(&inner_mesh);
     }
     total_mesh
+}
+
+fn flip_mesh_orientation(mesh: &mut TriangleMesh) {
+    for normal in &mut mesh.normals {
+        *normal = -*normal;
+    }
+    for tri in &mut mesh.indices {
+        tri.swap(1, 2);
+    }
 }

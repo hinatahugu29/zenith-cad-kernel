@@ -42,6 +42,30 @@ impl BrepTransform {
             face.tolerance,
         )
     }
+
+    pub fn reverse_shell_orientation(shell: &Shell) -> Shell {
+        Shell::new(
+            shell
+                .faces
+                .iter()
+                .map(Self::reverse_face_orientation)
+                .collect(),
+            shell.is_closed,
+        )
+    }
+
+    pub fn reverse_face_orientation(face: &Face) -> Face {
+        Face::new(
+            face.geometry.clone(),
+            reverse_wire_orientation(&face.outer_wire),
+            face.inner_wires
+                .iter()
+                .map(reverse_wire_orientation)
+                .collect(),
+            face.orientation.reversed(),
+            face.tolerance,
+        )
+    }
 }
 
 fn translate_face_geometry(geometry: &FaceGeometry, offset: Vec3) -> FaceGeometry {
@@ -70,6 +94,16 @@ fn translate_wire(wire: &Wire, offset: Vec3) -> Wire {
         wire.edges
             .iter()
             .map(|edge| OrientedEdge::new(translate_edge(&edge.edge, offset), edge.orientation))
+            .collect(),
+    )
+}
+
+fn reverse_wire_orientation(wire: &Wire) -> Wire {
+    Wire::new(
+        wire.edges
+            .iter()
+            .rev()
+            .map(|edge| OrientedEdge::new(edge.edge.clone(), edge.orientation.reversed()))
             .collect(),
     )
 }

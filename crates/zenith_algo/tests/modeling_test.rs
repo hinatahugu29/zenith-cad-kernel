@@ -302,6 +302,30 @@ fn test_brep_transform_translates_solid_without_breaking_topology() {
 }
 
 #[test]
+fn test_brep_transform_reverses_shell_orientation_for_cavities() {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::PrimitiveBuilder::make_box(3.0, 3.0, 3.0).unwrap();
+    let reversed = zenith_algo::BrepTransform::reverse_shell_orientation(&solid.outer_shell);
+
+    assert!(reversed.is_topologically_closed(&tol));
+    assert_eq!(reversed.faces.len(), solid.outer_shell.faces.len());
+    assert_ne!(
+        reversed.faces[0].orientation,
+        solid.outer_shell.faces[0].orientation
+    );
+    assert_eq!(
+        reversed.faces[0].outer_wire.edges[0].orientation,
+        solid.outer_shell.faces[0].outer_wire.edges[3]
+            .orientation
+            .reversed()
+    );
+    assert_eq!(
+        reversed.faces[0].outer_wire.edges[0].edge.id,
+        solid.outer_shell.faces[0].outer_wire.edges[3].edge.id
+    );
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_inner_solid_for_contained_intersection() {
     let tol = Tolerance::default();
     let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
@@ -347,7 +371,7 @@ fn test_exact_brep_boolean_returns_outer_solid_for_contained_union() {
 }
 
 #[test]
-fn test_exact_brep_boolean_reports_contained_difference_requires_cavity() {
+fn test_exact_brep_boolean_returns_cavity_for_contained_difference() {
     let tol = Tolerance::default();
     let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
     let inner = zenith_algo::BrepTransform::translate_solid(
@@ -355,15 +379,34 @@ fn test_exact_brep_boolean_reports_contained_difference_requires_cavity() {
         Vec3::new(2.0, 2.0, 2.0),
     );
 
-    let err = zenith_algo::BooleanEngine::boolean_solids_exact(
+    let difference = zenith_algo::BooleanEngine::boolean_solids_exact(
         &outer,
         &inner,
         zenith_algo::BooleanOpType::Difference,
         &tol,
     )
-    .expect_err("contained exact difference needs inner-shell cavity construction");
+    .expect("contained exact difference should return an inner-shell cavity");
 
-    assert!(err.contains("inner-shell cavity construction"));
+    assert_eq!(
+        difference.outer_shell.faces.len(),
+        outer.outer_shell.faces.len()
+    );
+    assert_eq!(difference.inner_shells.len(), 1);
+    assert_eq!(
+        difference.inner_shells[0].faces.len(),
+        inner.outer_shell.faces.len()
+    );
+    assert!(difference.is_topologically_valid(&tol));
+
+    let mesh = tessellate_solid(
+        &difference,
+        &TessellationParams {
+            u_divisions: 4,
+            v_divisions: 4,
+        },
+    );
+    let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    assert!((mass.volume - (10.0 * 10.0 * 10.0 - 3.0 * 3.0 * 3.0)).abs() < 1.0);
 }
 
 #[test]

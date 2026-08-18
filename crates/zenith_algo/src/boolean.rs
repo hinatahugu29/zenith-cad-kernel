@@ -156,7 +156,12 @@ impl BooleanEngine {
                 if a_inside_b {
                     Err("Exact B-Rep boolean difference is empty because input A is contained in input B".to_string())
                 } else if b_inside_a {
-                    Err("Exact B-Rep boolean difference with a contained subtracting solid requires inner-shell cavity construction".to_string())
+                    Solid::try_new(
+                        solid_a.outer_shell.clone(),
+                        vec![solid_b.outer_shell.clone()],
+                        tol,
+                    )
+                    .map_err(|err| err.to_string())
                 } else {
                     Ok(solid_a.clone())
                 }
