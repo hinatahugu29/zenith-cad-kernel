@@ -1,0 +1,19 @@
+[package]
+name = "zenith_py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "zenith_cad"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+zenith_math = { path = "../zenith_math" }
+zenith_geom = { path = "../zenith_geom" }
+zenith_topo = { path = "../zenith_topo" }
+zenith_algo = { path = "../zenith_algo" }
+zenith_tess = { path = "../zenith_tess" }
+zenith_io = { path = "../zenith_io" }
+serde_json = { workspace = true }
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"] }

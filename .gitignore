@@ -1,0 +1,19 @@
+# Rust build artifacts
+/target/
+/target*/
+**/target/
+
+# Local/generated verification outputs
+/target_*/
+
+# External/reference source drops kept beside the kernel
+/reference/
+
+# Local logs
+/agent-work-log.json
+
+# Editor and OS noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

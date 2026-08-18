@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "crates/zenith_math",
+    "crates/zenith_geom",
+    "crates/zenith_topo",
+    "crates/zenith_algo",
+    "crates/zenith_tess",
+    "crates/zenith_io",
+    "crates/zenith_py",
+    "crates/zenith_server",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Zenith CAD Contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/zenith-cad/zenith"
+
+[workspace.dependencies]
+nalgebra = { version = "0.33", default-features = false, features = ["std", "serde-serialize"] }
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+approx = "0.5"
+rayon = "1.10"
+robust = "1.1"
+earcutr = "0.4"
+serde_json = "1.0"

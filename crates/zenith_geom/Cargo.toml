@@ -1,0 +1,13 @@
+[package]
+name = "zenith_geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zenith_math = { path = "../zenith_math" }
+nalgebra.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+approx.workspace = true
+log.workspace = true
