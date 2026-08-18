@@ -959,6 +959,125 @@ fn test_brep_intersection_promotes_trimmed_lines_to_edge_candidates() {
 }
 
 #[test]
+fn test_brep_intersection_collects_plane_cylinder_curve_candidate() {
+    let tol = Tolerance::default();
+    let radius = 10.0;
+    let z = 15.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    let plane = PlaneSurface3::new(
+        Point3::new(-12.0, -12.0, z),
+        Vec3::new(24.0, 0.0, 0.0),
+        Vec3::new(0.0, 24.0, 0.0),
+    )
+    .unwrap();
+    let points = [
+        Point3::new(-12.0, -12.0, z),
+        Point3::new(12.0, -12.0, z),
+        Point3::new(12.0, 12.0, z),
+        Point3::new(-12.0, 12.0, z),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+        Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let cut_face = Face::simple(
+        FaceGeometry::Plane(plane),
+        Wire::new(edges.into_iter().map(OrientedEdge::forward).collect()),
+    );
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_face_pair_candidates(
+        &[cut_face],
+        &[side_face],
+        &tol,
+    );
+
+    let edge = candidates
+        .iter()
+        .find_map(|candidate| match &candidate.kind {
+            zenith_algo::FaceIntersectionKind::Curve { edge } => Some(edge),
+            _ => None,
+        })
+        .expect("plane-cylinder curve intersection candidate");
+
+    assert_eq!(edge.curve.degree, 2);
+    assert_eq!(edge.curve.control_points.len(), 3);
+    let (t_min, t_max) = edge.curve.param_range();
+    for step in 0..=8 {
+        let t = t_min + (t_max - t_min) * (step as f64 / 8.0);
+        let point = edge.curve.evaluate(t);
+        let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
+        assert!((point.z - z).abs() < 1e-6);
+        assert!((radial_distance - radius).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn test_brep_intersection_promotes_plane_cylinder_curve_to_edge_candidate() {
+    let tol = Tolerance::default();
+    let radius = 10.0;
+    let z = 15.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    let cut_plane = PlaneSurface3::new(
+        Point3::new(-12.0, -12.0, z),
+        Vec3::new(24.0, 0.0, 0.0),
+        Vec3::new(0.0, 24.0, 0.0),
+    )
+    .unwrap();
+    let points = [
+        Point3::new(-12.0, -12.0, z),
+        Point3::new(12.0, -12.0, z),
+        Point3::new(12.0, 12.0, z),
+        Point3::new(-12.0, 12.0, z),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let cut_edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+        Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let cut_face = Face::simple(
+        FaceGeometry::Plane(cut_plane),
+        Wire::new(cut_edges.into_iter().map(OrientedEdge::forward).collect()),
+    );
+
+    let edges = zenith_algo::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        &[cut_face],
+        &[side_face],
+        &tol,
+    );
+
+    let edge = edges
+        .first()
+        .expect("plane-cylinder curve should become an edge candidate");
+    assert_eq!(edge.face_a_index, 0);
+    assert_eq!(edge.face_b_index, 0);
+    assert_eq!(edge.edge.curve.degree, 2);
+
+    let (t_min, t_max) = edge.edge.curve.param_range();
+    for step in 0..=8 {
+        let t = t_min + (t_max - t_min) * (step as f64 / 8.0);
+        let point = edge.edge.curve.evaluate(t);
+        let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
+        assert!((point.z - z).abs() < 1e-6);
+        assert!((radial_distance - radius).abs() < 1e-6);
+    }
+}
+
+#[test]
 fn test_brep_intersection_edge_splits_planar_face() {
     let tol = Tolerance::default();
     let make_face = |points: [Point3; 4], normal: Vec3| {

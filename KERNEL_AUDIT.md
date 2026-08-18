@@ -89,6 +89,7 @@ Current hardening:
 - Extended the guarded axis-aligned box path to return exact B-Rep boxes for single-box unions and edge-trimming differences when the result can be represented without general face graph assembly.
 - Added connected-cell orthogonal B-Rep assembly for axis-aligned box booleans, allowing L-shaped unions and corner-notch differences to return validated planar solids with checked volumes.
 - Moved guarded axis-aligned and orthogonal box boolean assembly into a dedicated module, keeping the main exact boolean engine focused on orchestration and general B-Rep preparation.
+- Added a first guarded curved-surface intersection case: horizontal planes can now intersect recognized cylinder-side NURBS patches and produce circular arc edge candidates for future curved-face splitting.
 
 ### 2. Planar trimming is still mesh-only
 

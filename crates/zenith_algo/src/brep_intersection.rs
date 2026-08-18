@@ -1,6 +1,6 @@
 use crate::cap::CapBuilder;
 use std::collections::BTreeMap;
-use zenith_geom::{NurbsCurve3, PlaneSurface3};
+use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec3, Vec3Ext};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
 use zenith_topo::{Edge, Face, FaceGeometry, FacePcurveLoop, OrientedEdge, Vertex, Wire};
@@ -13,6 +13,9 @@ pub enum FaceIntersectionKind {
         direction: Vec3,
         segment_start: Point3,
         segment_end: Point3,
+    },
+    Curve {
+        edge: Edge,
     },
     Coincident,
     Unsupported,
@@ -209,24 +212,26 @@ impl BrepIntersectionBuilder {
         Self::collect_face_pair_candidates(faces_a, faces_b, tol)
             .into_iter()
             .filter_map(|candidate| {
-                let FaceIntersectionKind::Line {
-                    segment_start,
-                    segment_end,
-                    ..
-                } = candidate.kind
-                else {
-                    return None;
+                let edge = match candidate.kind {
+                    FaceIntersectionKind::Line {
+                        segment_start,
+                        segment_end,
+                        ..
+                    } => {
+                        if (segment_end - segment_start).norm() <= tol.linear {
+                            return None;
+                        }
+
+                        let curve =
+                            NurbsCurve3::bspline_from_points(1, vec![segment_start, segment_end])
+                                .ok()?;
+                        let start_vertex = Vertex::new(segment_start, tol.linear);
+                        let end_vertex = Vertex::new(segment_end, tol.linear);
+                        Edge::new(curve, start_vertex, end_vertex, tol.linear)
+                    }
+                    FaceIntersectionKind::Curve { edge } => edge,
+                    _ => return None,
                 };
-
-                if (segment_end - segment_start).norm() <= tol.linear {
-                    return None;
-                }
-
-                let curve =
-                    NurbsCurve3::bspline_from_points(1, vec![segment_start, segment_end]).ok()?;
-                let start_vertex = Vertex::new(segment_start, tol.linear);
-                let end_vertex = Vertex::new(segment_end, tol.linear);
-                let edge = Edge::new(curve, start_vertex, end_vertex, tol.linear);
 
                 Some(IntersectionEdgeCandidate {
                     face_a_index: candidate.face_a_index,
@@ -1584,11 +1589,13 @@ fn intersect_face_supports(
             oriented_plane_normal(face_b),
             tol,
         )),
+        (FaceGeometry::Plane(plane), FaceGeometry::Nurbs(surface)) => Some(
+            intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_a), surface, tol),
+        ),
+        (FaceGeometry::Nurbs(surface), FaceGeometry::Plane(plane)) => Some(
+            intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_b), surface, tol),
+        ),
         (FaceGeometry::Nurbs(_), FaceGeometry::Nurbs(_)) => Some(FaceIntersectionKind::Unsupported),
-        (FaceGeometry::Plane(_), FaceGeometry::Nurbs(_))
-        | (FaceGeometry::Nurbs(_), FaceGeometry::Plane(_)) => {
-            Some(FaceIntersectionKind::Unsupported)
-        }
         _ => None,
     }
 }
@@ -1639,4 +1646,110 @@ fn intersect_planes(
         segment_start: Point3::from(point_vec),
         segment_end: Point3::from(point_vec),
     }
+}
+
+fn intersect_plane_cylinder_patch(
+    plane: &PlaneSurface3,
+    plane_normal: Vec3,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> FaceIntersectionKind {
+    let Some(normal) = plane_normal.try_normalize_safe(1e-12) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+    if normal.cross(&Vec3::new(0.0, 0.0, 1.0)).norm() > tol.angular {
+        return FaceIntersectionKind::Unsupported;
+    }
+
+    let Some((z_min, z_max)) = cylinder_patch_z_span(surface, tol) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+    let z = plane.origin.z;
+    if z < z_min - tol.linear || z > z_max + tol.linear {
+        return FaceIntersectionKind::Unsupported;
+    }
+
+    let Some(curve) = horizontal_section_curve(surface, z.clamp(z_min, z_max), z_min, z_max, tol)
+    else {
+        return FaceIntersectionKind::Unsupported;
+    };
+    let (t_min, t_max) = curve.param_range();
+    let start = curve.evaluate(t_min);
+    let end = curve.evaluate(t_max);
+    if !point_lies_on_plane(start, plane, tol) || !point_lies_on_plane(end, plane, tol) {
+        return FaceIntersectionKind::Unsupported;
+    }
+
+    FaceIntersectionKind::Curve {
+        edge: Edge::new(
+            curve,
+            Vertex::new(start, tol.linear),
+            Vertex::new(end, tol.linear),
+            tol.linear,
+        ),
+    }
+}
+
+fn cylinder_patch_z_span(surface: &NurbsSurface3, tol: &Tolerance) -> Option<(f64, f64)> {
+    if surface.degree_u != 2
+        || surface.degree_v != 1
+        || surface.control_points.len() != 3
+        || surface.control_points.iter().any(|row| row.len() != 2)
+    {
+        return None;
+    }
+
+    for row in &surface.control_points {
+        let bottom = row[0];
+        let top = row[1];
+        if (bottom.weight - top.weight).abs() > tol.linear
+            || (bottom.point.x - top.point.x).abs() > tol.linear
+            || (bottom.point.y - top.point.y).abs() > tol.linear
+        {
+            return None;
+        }
+    }
+
+    let z_min = surface.control_points[0][0].point.z;
+    let z_max = surface.control_points[0][1].point.z;
+    if z_max - z_min <= tol.linear {
+        return None;
+    }
+    if surface.control_points.iter().any(|row| {
+        (row[0].point.z - z_min).abs() > tol.linear || (row[1].point.z - z_max).abs() > tol.linear
+    }) {
+        return None;
+    }
+
+    Some((z_min, z_max))
+}
+
+fn horizontal_section_curve(
+    surface: &NurbsSurface3,
+    z: f64,
+    z_min: f64,
+    z_max: f64,
+    tol: &Tolerance,
+) -> Option<NurbsCurve3> {
+    let alpha = (z - z_min) / (z_max - z_min);
+    if alpha < -tol.parametric || alpha > 1.0 + tol.parametric {
+        return None;
+    }
+
+    let control_points = surface
+        .control_points
+        .iter()
+        .map(|row| {
+            let bottom = row[0].to_homogeneous();
+            let top = row[1].to_homogeneous();
+            ControlPoint3::from_homogeneous(&(bottom * (1.0 - alpha) + top * alpha))
+        })
+        .collect();
+
+    NurbsCurve3::new(
+        surface.degree_u,
+        control_points,
+        KnotVector::new(surface.knots_u.knots.clone()),
+    )
+    .ok()
 }
