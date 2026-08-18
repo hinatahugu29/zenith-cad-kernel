@@ -22,6 +22,8 @@ pub struct ShellValidationReport {
     pub unmatched_edge_use_count: usize,
     pub non_manifold_edge_use_count: usize,
     pub same_direction_edge_use_count: usize,
+    pub degenerate_edge_use_count: usize,
+    pub min_edge_use_length: f64,
     pub edge_curve_endpoint_mismatch_count: usize,
     pub max_edge_curve_endpoint_distance: f64,
     pub off_surface_boundary_count: usize,
@@ -74,6 +76,8 @@ impl Shell {
             unmatched_edge_use_count: 0,
             non_manifold_edge_use_count: 0,
             same_direction_edge_use_count: 0,
+            degenerate_edge_use_count: 0,
+            min_edge_use_length: f64::INFINITY,
             edge_curve_endpoint_mismatch_count: 0,
             max_edge_curve_endpoint_distance: 0.0,
             off_surface_boundary_count: 0,
@@ -153,6 +157,9 @@ impl Shell {
         }
 
         report.edge_use_count = edge_uses.len();
+        if report.edge_use_count == 0 {
+            report.min_edge_use_length = 0.0;
+        }
 
         for edge_use in &edge_uses {
             let mates: Vec<&EdgeUse> = edge_uses
@@ -207,6 +214,15 @@ fn collect_wire_edge_uses(
     tol: &Tolerance,
 ) {
     for (edge_index, edge) in edges.iter().enumerate() {
+        let edge_length = sampled_edge_length(edge, 8);
+        report.min_edge_use_length = report.min_edge_use_length.min(edge_length);
+        if edge_length <= tol.linear {
+            report.degenerate_edge_use_count += 1;
+            report.errors.push(format!(
+                "Edge use f{face_index}:w{wire_index}:e{edge_index} is degenerate; sampled length {edge_length:.6e}"
+            ));
+        }
+
         let curve_start_distance =
             (edge.evaluate_normalized(0.0) - edge.start_vertex().point).norm();
         let curve_end_distance = (edge.evaluate_normalized(1.0) - edge.end_vertex().point).norm();
@@ -228,6 +244,19 @@ fn collect_wire_edge_uses(
             end: edge.end_vertex().point,
         });
     }
+}
+
+fn sampled_edge_length(edge: &crate::edge::OrientedEdge, segments: usize) -> f64 {
+    let segments = segments.max(1);
+    let mut length = 0.0;
+    let mut prev = edge.evaluate_normalized(0.0);
+    for i in 1..=segments {
+        let t = i as f64 / segments as f64;
+        let current = edge.evaluate_normalized(t);
+        length += (current - prev).norm();
+        prev = current;
+    }
+    length
 }
 
 fn same_edge_use(a: &EdgeUse, b: &EdgeUse) -> bool {

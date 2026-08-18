@@ -132,6 +132,8 @@ Current hardening:
 - Added a regression test that reverses one box face loop and proves same-direction shared edges are detected.
 - Shell validation now checks that each oriented edge's curve endpoints match its oriented start/end vertices.
 - Added a regression test proving a closed shell with a shifted edge curve is rejected even when the topological vertex loop still closes.
+- Shell validation now rejects degenerate edge uses whose start/end vertices collapse within linear tolerance.
+- Added a regression test proving a zero-length edge is reported even when its curve endpoints remain coherent with the collapsed vertices.
 - Added `Solid::try_new()` / `Solid::try_simple()` so callers can create solids through the validation gate and receive structured reports on failure.
 - Added an internal `zenith_algo::validated_solid()` helper and moved normal `zenith_algo` solid generation paths onto the validated generation gate.
 - Fixed `DirectModeling::push_pull_face()` plane reconstruction so moved planar faces rebuild their supporting plane from shifted boundary points, keeping p-curves, faces, and wires coherent.
