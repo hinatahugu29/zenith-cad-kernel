@@ -1,6 +1,6 @@
-use zenith_geom::PlaneSurface3;
+use zenith_geom::{NurbsCurve3, PlaneSurface3};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec3, Vec3Ext};
-use zenith_topo::{Face, FaceGeometry, FacePcurveLoop};
+use zenith_topo::{Edge, Face, FaceGeometry, FacePcurveLoop, Vertex};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FaceIntersectionKind {
@@ -19,6 +19,13 @@ pub struct FaceIntersectionCandidate {
     pub face_a_index: usize,
     pub face_b_index: usize,
     pub kind: FaceIntersectionKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntersectionEdgeCandidate {
+    pub face_a_index: usize,
+    pub face_b_index: usize,
+    pub edge: Edge,
 }
 
 pub struct BrepIntersectionBuilder;
@@ -63,6 +70,42 @@ impl BrepIntersectionBuilder {
         }
 
         candidates
+    }
+
+    pub fn collect_intersection_edge_candidates(
+        faces_a: &[Face],
+        faces_b: &[Face],
+        tol: &Tolerance,
+    ) -> Vec<IntersectionEdgeCandidate> {
+        Self::collect_face_pair_candidates(faces_a, faces_b, tol)
+            .into_iter()
+            .filter_map(|candidate| {
+                let FaceIntersectionKind::Line {
+                    segment_start,
+                    segment_end,
+                    ..
+                } = candidate.kind
+                else {
+                    return None;
+                };
+
+                if (segment_end - segment_start).norm() <= tol.linear {
+                    return None;
+                }
+
+                let curve =
+                    NurbsCurve3::bspline_from_points(1, vec![segment_start, segment_end]).ok()?;
+                let start_vertex = Vertex::new(segment_start, tol.linear);
+                let end_vertex = Vertex::new(segment_end, tol.linear);
+                let edge = Edge::new(curve, start_vertex, end_vertex, tol.linear);
+
+                Some(IntersectionEdgeCandidate {
+                    face_a_index: candidate.face_a_index,
+                    face_b_index: candidate.face_b_index,
+                    edge,
+                })
+            })
+            .collect()
     }
 }
 

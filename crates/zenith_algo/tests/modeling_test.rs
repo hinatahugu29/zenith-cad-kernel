@@ -479,6 +479,38 @@ fn test_brep_intersection_clips_plane_plane_line_to_planar_trim() {
 }
 
 #[test]
+fn test_brep_intersection_promotes_trimmed_lines_to_edge_candidates() {
+    let tol = Tolerance::default();
+    let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let solid_b = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+
+    let edges = zenith_algo::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        &solid_a.outer_shell.faces,
+        &solid_b.outer_shell.faces,
+        &tol,
+    );
+
+    assert!(!edges.is_empty());
+    for candidate in edges {
+        assert!(candidate.edge.tolerance >= tol.linear);
+        assert!(
+            (candidate.edge.end_vertex.point - candidate.edge.start_vertex.point).norm()
+                > tol.linear
+        );
+
+        let (u_min, u_max) = candidate.edge.curve.param_range();
+        assert!(
+            (candidate.edge.evaluate(u_min) - candidate.edge.start_vertex.point).norm()
+                <= tol.linear * 10.0
+        );
+        assert!(
+            (candidate.edge.evaluate(u_max) - candidate.edge.end_vertex.point).norm()
+                <= tol.linear * 10.0
+        );
+    }
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(
