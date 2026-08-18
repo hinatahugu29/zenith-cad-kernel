@@ -63,6 +63,7 @@ Current hardening:
 - Added plane/plane support-intersection candidates with line and coincident classifications, plus tests proving candidate lines lie on both source planes.
 - Added face-boundary AABB broad phase filtering before support-surface intersection, avoiding obvious disjoint face pairs in the future exact boolean pipeline.
 - Plane/plane line candidates now carry a finite segment clipped to the overlap of both face-boundary AABBs, giving the future split stage a bounded starting interval.
+- Plane/plane line candidates are now further clipped against each planar face's outer p-curve trim polygon, so the future split stage receives a trim-bounded segment rather than only an AABB-bounded segment.
 
 ### 2. Planar trimming is still mesh-only
 

@@ -400,6 +400,85 @@ fn test_brep_intersection_clips_plane_plane_line_to_face_bbox_overlap() {
 }
 
 #[test]
+fn test_brep_intersection_clips_plane_plane_line_to_planar_trim() {
+    let tol = Tolerance::default();
+    let make_triangle_face = |points: [Point3; 3], normal: Vec3| {
+        let vertices: Vec<Vertex> = points
+            .iter()
+            .map(|point| Vertex::from_point(*point))
+            .collect();
+        let edges = vec![
+            Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+            Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+            Edge::line_between(vertices[2].clone(), vertices[0].clone()).unwrap(),
+        ];
+        let wire = Wire::new(edges.into_iter().map(OrientedEdge::forward).collect());
+        let u_axis = (points[1] - points[0]).normalize();
+        let v_axis = normal.cross(&u_axis).normalize();
+        let plane = PlaneSurface3::new(points[0], u_axis, v_axis).unwrap();
+        Face::simple(FaceGeometry::Plane(plane), wire)
+    };
+    let make_quad_face = |points: [Point3; 4], normal: Vec3| {
+        let vertices: Vec<Vertex> = points
+            .iter()
+            .map(|point| Vertex::from_point(*point))
+            .collect();
+        let edges = vec![
+            Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+            Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+            Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+            Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+        ];
+        let wire = Wire::new(edges.into_iter().map(OrientedEdge::forward).collect());
+        let u_axis = (points[1] - points[0]).normalize();
+        let v_axis = normal.cross(&u_axis).normalize();
+        let plane = PlaneSurface3::new(points[0], u_axis, v_axis).unwrap();
+        Face::simple(FaceGeometry::Plane(plane), wire)
+    };
+
+    let face_a = make_triangle_face(
+        [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(0.0, 4.0, 0.0),
+        ],
+        Vec3::new(0.0, 0.0, 1.0),
+    );
+    let face_b = make_quad_face(
+        [
+            Point3::new(3.0, 0.0, -1.0),
+            Point3::new(3.0, 0.0, 1.0),
+            Point3::new(3.0, 4.0, 1.0),
+            Point3::new(3.0, 4.0, -1.0),
+        ],
+        Vec3::new(-1.0, 0.0, 0.0),
+    );
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_face_pair_candidates(
+        &[face_a],
+        &[face_b],
+        &tol,
+    );
+    let (segment_start, segment_end) = candidates
+        .iter()
+        .find_map(|candidate| match candidate.kind {
+            zenith_algo::FaceIntersectionKind::Line {
+                segment_start,
+                segment_end,
+                ..
+            } => Some((segment_start, segment_end)),
+            _ => None,
+        })
+        .expect("trimmed plane-plane candidate");
+
+    let y_min = segment_start.y.min(segment_end.y);
+    let y_max = segment_start.y.max(segment_end.y);
+    assert!(y_min <= tol.linear * 10.0);
+    assert!(y_max <= 1.0 + tol.linear * 10.0);
+    assert!((segment_end - segment_start).norm() < 1.1);
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(
