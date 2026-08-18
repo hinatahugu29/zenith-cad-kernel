@@ -20,6 +20,7 @@ pub struct ExactBooleanPreparationReport {
     pub planar_split_candidate_count: usize,
     pub planar_batch_split_face_count: usize,
     pub planar_batch_applied_split_count: usize,
+    pub planar_batch_skipped_split_count: usize,
     pub classified_split_candidate_count: usize,
     pub selected_face_piece_count: usize,
     pub planar_cap_loop_count: usize,
@@ -102,12 +103,13 @@ impl BooleanEngine {
 
         let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;
         Err(format!(
-            "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} classified split candidates, {} selected face pieces, {} cap loops, and {} cap faces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses; with caps it has {} face pieces, {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
+            "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} skipped batch splits, {} classified split candidates, {} selected face pieces, {} cap loops, and {} cap faces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses; with caps it has {} face pieces, {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
             report.face_pair_candidate_count,
             report.intersection_edge_candidate_count,
             report.planar_split_candidate_count,
             report.planar_batch_split_face_count,
             report.planar_batch_applied_split_count,
+            report.planar_batch_skipped_split_count,
             report.classified_split_candidate_count,
             report.selected_face_piece_count,
             report.planar_cap_loop_count,
@@ -242,6 +244,14 @@ impl BooleanEngine {
             .chain(shell_assembly.selection.batch_splits.splits_b.iter())
             .map(|split| split.result.applied_split_count)
             .sum();
+        let planar_batch_skipped_split_count = shell_assembly
+            .selection
+            .batch_splits
+            .splits_a
+            .iter()
+            .chain(shell_assembly.selection.batch_splits.splits_b.iter())
+            .map(|split| split.result.skipped_split_count)
+            .sum();
 
         Ok(ExactBooleanPreparationReport {
             face_pair_candidate_count,
@@ -249,6 +259,7 @@ impl BooleanEngine {
             planar_split_candidate_count,
             planar_batch_split_face_count,
             planar_batch_applied_split_count,
+            planar_batch_skipped_split_count,
             classified_split_candidate_count: classified_splits.len(),
             selected_face_piece_count: shell_assembly.selection.selected_face_pieces.len(),
             planar_cap_loop_count: shell_assembly

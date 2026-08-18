@@ -248,6 +248,10 @@ fn test_exact_brep_boolean_preparation_reports_pipeline_counts() {
     assert!(report.face_pair_candidate_count > 0);
     assert!(report.intersection_edge_candidate_count <= report.face_pair_candidate_count);
     assert!(report.planar_split_candidate_count <= report.intersection_edge_candidate_count);
+    assert!(
+        report.planar_batch_applied_split_count + report.planar_batch_skipped_split_count
+            <= report.intersection_edge_candidate_count * 2
+    );
     assert!(report.classified_split_candidate_count <= report.planar_split_candidate_count);
     assert!(report.selected_face_piece_count > 0);
     assert!(report.selected_with_caps_face_piece_count >= report.selected_face_piece_count);
