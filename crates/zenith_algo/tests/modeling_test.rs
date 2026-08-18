@@ -716,6 +716,95 @@ fn test_brep_face_classification_against_solid() {
 }
 
 #[test]
+fn test_brep_boolean_face_piece_selection_from_classification() {
+    let tol = Tolerance::default();
+    let points = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(1.0, 1.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+        Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let wire = Wire::new(edges.into_iter().map(OrientedEdge::forward).collect());
+    let plane = PlaneSurface3::new(
+        points[0],
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let face = Face::simple(FaceGeometry::Plane(plane), wire);
+    let split_edge = Edge::line_between(
+        Vertex::new(Point3::new(0.5, 0.0, 0.0), tol.linear),
+        Vertex::new(Point3::new(0.5, 1.0, 0.0), tol.linear),
+    )
+    .unwrap();
+    let candidate = zenith_algo::ClassifiedPlanarFaceSplitCandidate {
+        face_a_index: 0,
+        face_b_index: 0,
+        split_edge,
+        split_faces_a: vec![
+            zenith_algo::ClassifiedFacePiece {
+                face: face.clone(),
+                location: zenith_algo::FaceRegionLocation::Outside,
+            },
+            zenith_algo::ClassifiedFacePiece {
+                face: face.clone(),
+                location: zenith_algo::FaceRegionLocation::Inside,
+            },
+        ],
+        split_faces_b: vec![
+            zenith_algo::ClassifiedFacePiece {
+                face: face.clone(),
+                location: zenith_algo::FaceRegionLocation::Outside,
+            },
+            zenith_algo::ClassifiedFacePiece {
+                face,
+                location: zenith_algo::FaceRegionLocation::Inside,
+            },
+        ],
+    };
+
+    let union = zenith_algo::BrepIntersectionBuilder::select_boolean_face_pieces(
+        &candidate,
+        zenith_algo::BooleanOpType::Union,
+    );
+    assert_eq!(union.len(), 2);
+    assert!(union
+        .iter()
+        .all(|piece| piece.location == zenith_algo::FaceRegionLocation::Outside));
+
+    let intersection = zenith_algo::BrepIntersectionBuilder::select_boolean_face_pieces(
+        &candidate,
+        zenith_algo::BooleanOpType::Intersection,
+    );
+    assert_eq!(intersection.len(), 2);
+    assert!(intersection
+        .iter()
+        .all(|piece| piece.location == zenith_algo::FaceRegionLocation::Inside));
+
+    let difference = zenith_algo::BrepIntersectionBuilder::select_boolean_face_pieces(
+        &candidate,
+        zenith_algo::BooleanOpType::Difference,
+    );
+    assert_eq!(difference.len(), 2);
+    assert!(difference.iter().any(|piece| {
+        piece.operand == zenith_algo::BooleanOperand::A && !piece.reverse_orientation
+    }));
+    assert!(difference.iter().any(|piece| {
+        piece.operand == zenith_algo::BooleanOperand::B && piece.reverse_orientation
+    }));
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(

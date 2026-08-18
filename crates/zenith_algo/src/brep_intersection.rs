@@ -61,6 +61,20 @@ pub struct ClassifiedPlanarFaceSplitCandidate {
     pub split_faces_b: Vec<ClassifiedFacePiece>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BooleanOperand {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedBooleanFacePiece {
+    pub operand: BooleanOperand,
+    pub face: Face,
+    pub location: FaceRegionLocation,
+    pub reverse_orientation: bool,
+}
+
 pub struct BrepIntersectionBuilder;
 
 impl BrepIntersectionBuilder {
@@ -223,6 +237,37 @@ impl BrepIntersectionBuilder {
     ) -> FaceRegionLocation {
         let mesh = tessellate_solid(solid, &TessellationParams::default());
         classify_face_against_mesh(face, &mesh, tol)
+    }
+
+    pub fn select_boolean_face_pieces(
+        candidate: &ClassifiedPlanarFaceSplitCandidate,
+        op: crate::BooleanOpType,
+    ) -> Vec<SelectedBooleanFacePiece> {
+        let mut selected = Vec::new();
+
+        for piece in &candidate.split_faces_a {
+            if keep_piece(BooleanOperand::A, piece.location, op) {
+                selected.push(SelectedBooleanFacePiece {
+                    operand: BooleanOperand::A,
+                    face: piece.face.clone(),
+                    location: piece.location,
+                    reverse_orientation: false,
+                });
+            }
+        }
+
+        for piece in &candidate.split_faces_b {
+            if keep_piece(BooleanOperand::B, piece.location, op) {
+                selected.push(SelectedBooleanFacePiece {
+                    operand: BooleanOperand::B,
+                    face: piece.face.clone(),
+                    location: piece.location,
+                    reverse_orientation: op == crate::BooleanOpType::Difference,
+                });
+            }
+        }
+
+        selected
     }
 
     pub fn split_planar_face_by_edge(
@@ -424,6 +469,39 @@ fn classify_face_against_mesh(
         FaceRegionLocation::Inside
     } else {
         FaceRegionLocation::Outside
+    }
+}
+
+fn keep_piece(
+    operand: BooleanOperand,
+    location: FaceRegionLocation,
+    op: crate::BooleanOpType,
+) -> bool {
+    match (op, operand, location) {
+        (
+            crate::BooleanOpType::Union,
+            _,
+            FaceRegionLocation::Outside | FaceRegionLocation::Boundary,
+        ) => true,
+        (crate::BooleanOpType::Union, _, FaceRegionLocation::Inside) => false,
+        (
+            crate::BooleanOpType::Intersection,
+            _,
+            FaceRegionLocation::Inside | FaceRegionLocation::Boundary,
+        ) => true,
+        (crate::BooleanOpType::Intersection, _, FaceRegionLocation::Outside) => false,
+        (
+            crate::BooleanOpType::Difference,
+            BooleanOperand::A,
+            FaceRegionLocation::Outside | FaceRegionLocation::Boundary,
+        ) => true,
+        (crate::BooleanOpType::Difference, BooleanOperand::A, FaceRegionLocation::Inside) => false,
+        (
+            crate::BooleanOpType::Difference,
+            BooleanOperand::B,
+            FaceRegionLocation::Inside | FaceRegionLocation::Boundary,
+        ) => true,
+        (crate::BooleanOpType::Difference, BooleanOperand::B, FaceRegionLocation::Outside) => false,
     }
 }
 
