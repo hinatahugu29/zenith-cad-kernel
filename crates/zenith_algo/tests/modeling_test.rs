@@ -1127,6 +1127,80 @@ fn test_brep_assembles_selected_faces_with_caps_for_stitching() {
 }
 
 #[test]
+fn test_brep_assembly_orients_reversed_caps_for_stitching() {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let cap = zenith_algo::BrepIntersectionBuilder::build_planar_cap_from_edge_loop(
+        &solid.outer_shell.faces[1]
+            .outer_wire
+            .edges
+            .iter()
+            .map(|edge| edge.edge.clone())
+            .collect::<Vec<_>>(),
+        &tol,
+    )
+    .expect("top cap from the top face boundary");
+    let reversed_cap = Face::new(
+        cap.geometry.clone(),
+        Wire::new(
+            cap.outer_wire
+                .edges
+                .iter()
+                .rev()
+                .map(|edge| OrientedEdge::new(edge.edge.clone(), edge.orientation.reversed()))
+                .collect(),
+        ),
+        cap.inner_wires
+            .iter()
+            .rev()
+            .map(|wire| {
+                Wire::new(
+                    wire.edges
+                        .iter()
+                        .rev()
+                        .map(|edge| {
+                            OrientedEdge::new(edge.edge.clone(), edge.orientation.reversed())
+                        })
+                        .collect(),
+                )
+            })
+            .collect(),
+        cap.orientation.reversed(),
+        cap.tolerance,
+    );
+    let pieces: Vec<_> = solid
+        .outer_shell
+        .faces
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != 1)
+        .map(|(_, face)| zenith_algo::SelectedBooleanFacePiece {
+            operand: zenith_algo::BooleanOperand::A,
+            face: face.clone(),
+            location: zenith_algo::FaceRegionLocation::Outside,
+            reverse_orientation: false,
+        })
+        .collect();
+
+    let assembly = zenith_algo::BrepIntersectionBuilder::assemble_selected_face_pieces_with_caps(
+        &pieces,
+        &[reversed_cap],
+        &tol,
+    );
+
+    assert_eq!(assembly.cap_face_count, 1);
+    assert_eq!(assembly.selected_face_pieces.len(), 6);
+    assert!(assembly.stitch_report.is_closed_manifold());
+    assert!(
+        assembly
+            .selected_face_pieces
+            .last()
+            .unwrap()
+            .reverse_orientation
+    );
+}
+
+#[test]
 fn test_brep_extracts_intersection_edge_loops_and_builds_caps() {
     let tol = Tolerance::default();
     let make_edge = |a: Point3, b: Point3| {

@@ -79,6 +79,7 @@ Current hardening:
 - Added a guarded planar cap builder for closed intersection edge loops, ordering unordered/reversed linear edges into a closed wire before creating a p-curve-backed planar cutting face.
 - Added extraction of multiple closed intersection edge loops from unordered edge sets, then generation of planar cutting cap faces for each valid loop.
 - Added a shell-assembly integration pass that appends generated planar cap faces to selected boolean face pieces and reports stitching diagnostics both before and after cap insertion.
+- Exact boolean now attempts to build a validated B-Rep solid from cap-augmented selected face assemblies when the stitched result is closed, and cap insertion chooses the orientation that minimizes stitching errors.
 
 ### 2. Planar trimming is still mesh-only
 

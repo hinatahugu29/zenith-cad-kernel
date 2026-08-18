@@ -66,18 +66,30 @@ impl BooleanEngine {
             }
             return Ok(solid_a.clone());
         }
+        if !solid_a.is_topologically_valid(tol) {
+            return Err("Exact B-Rep boolean input A is not topologically valid".to_string());
+        }
+        if !solid_b.is_topologically_valid(tol) {
+            return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
+        }
 
-        let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;
-        let selection = crate::BrepIntersectionBuilder::collect_selected_boolean_face_pieces(
+        let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
             solid_a, solid_b, op, tol,
         );
-        if selection.stitch_report.is_closed_manifold() {
+        if shell_assembly.selection.stitch_report.is_closed_manifold() {
             return crate::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(
-                &selection.selected_face_pieces,
+                &shell_assembly.selection.selected_face_pieces,
+                tol,
+            );
+        }
+        if shell_assembly.assembly.stitch_report.is_closed_manifold() {
+            return crate::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(
+                &shell_assembly.assembly.selected_face_pieces,
                 tol,
             );
         }
 
+        let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;
         Err(format!(
             "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} classified split candidates, {} selected face pieces, {} cap loops, and {} cap faces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses; with caps it has {} face pieces, {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
             report.face_pair_candidate_count,

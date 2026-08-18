@@ -422,14 +422,34 @@ impl BrepIntersectionBuilder {
         tol: &Tolerance,
     ) -> BooleanFaceAssembly {
         let mut selected_face_pieces = pieces.to_vec();
-        selected_face_pieces.extend(cap_faces.iter().cloned().map(|face| {
-            SelectedBooleanFacePiece {
+        for face in cap_faces {
+            let forward_piece = SelectedBooleanFacePiece {
                 operand: BooleanOperand::A,
-                face,
+                face: face.clone(),
                 location: FaceRegionLocation::Boundary,
                 reverse_orientation: false,
+            };
+            let reversed_piece = SelectedBooleanFacePiece {
+                reverse_orientation: true,
+                ..forward_piece.clone()
+            };
+
+            let mut forward_pieces = selected_face_pieces.clone();
+            forward_pieces.push(forward_piece.clone());
+            let forward_score =
+                stitch_report_score(&diagnose_selected_face_stitching(&forward_pieces, tol));
+
+            let mut reversed_pieces = selected_face_pieces.clone();
+            reversed_pieces.push(reversed_piece.clone());
+            let reversed_score =
+                stitch_report_score(&diagnose_selected_face_stitching(&reversed_pieces, tol));
+
+            if reversed_score < forward_score {
+                selected_face_pieces.push(reversed_piece);
+            } else {
+                selected_face_pieces.push(forward_piece);
             }
-        }));
+        }
         let stitch_report = diagnose_selected_face_stitching(&selected_face_pieces, tol);
 
         BooleanFaceAssembly {
@@ -1031,6 +1051,14 @@ fn diagnose_selected_face_stitching(
         non_manifold_edge_use_count,
         same_direction_edge_use_count,
     }
+}
+
+fn stitch_report_score(report: &SelectedFaceStitchReport) -> (usize, usize, usize) {
+    (
+        report.unmatched_edge_use_count,
+        report.non_manifold_edge_use_count,
+        report.same_direction_edge_use_count,
+    )
 }
 
 fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEdgeUse> {
