@@ -13,6 +13,15 @@ pub enum BooleanOpType {
 /// B-Rep / ポリゴンブーリアン演算エンジン
 pub struct BooleanEngine;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExactBooleanPreparationReport {
+    pub face_pair_candidate_count: usize,
+    pub intersection_edge_candidate_count: usize,
+    pub planar_split_candidate_count: usize,
+    pub classified_split_candidate_count: usize,
+    pub selected_face_piece_count: usize,
+}
+
 impl BooleanEngine {
     /// 2つの Solid に対する表示用メッシュブーリアン。
     ///
@@ -35,9 +44,27 @@ impl BooleanEngine {
     pub fn boolean_solids_exact(
         solid_a: &Solid,
         solid_b: &Solid,
-        _op: BooleanOpType,
+        op: BooleanOpType,
         tol: &Tolerance,
     ) -> Result<Solid, String> {
+        let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;
+
+        Err(format!(
+            "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} classified split candidates, and {} selected face pieces. Use boolean_solids_mesh_preview only for display/preview mesh results",
+            report.face_pair_candidate_count,
+            report.intersection_edge_candidate_count,
+            report.planar_split_candidate_count,
+            report.classified_split_candidate_count,
+            report.selected_face_piece_count
+        ))
+    }
+
+    pub fn prepare_exact_boolean(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<ExactBooleanPreparationReport, String> {
         if !solid_a.is_topologically_valid(tol) {
             return Err("Exact B-Rep boolean input A is not topologically valid".to_string());
         }
@@ -45,18 +72,51 @@ impl BooleanEngine {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
         }
 
-        let candidates = crate::BrepIntersectionBuilder::collect_face_pair_candidates(
-            &solid_a.outer_shell.faces,
-            &solid_b.outer_shell.faces,
-            tol,
-        );
-        if candidates.is_empty() {
+        let face_pair_candidate_count =
+            crate::BrepIntersectionBuilder::collect_face_pair_candidates(
+                &solid_a.outer_shell.faces,
+                &solid_b.outer_shell.faces,
+                tol,
+            )
+            .len();
+        if face_pair_candidate_count == 0 {
             return Err(
                 "Exact B-Rep boolean found no face-pair intersection candidates".to_string(),
             );
         }
 
-        Err("Exact B-Rep boolean is not implemented yet; use boolean_solids_mesh_preview only for display/preview mesh results".to_string())
+        let intersection_edge_candidate_count =
+            crate::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+                &solid_a.outer_shell.faces,
+                &solid_b.outer_shell.faces,
+                tol,
+            )
+            .len();
+        let planar_split_candidate_count =
+            crate::BrepIntersectionBuilder::collect_planar_face_split_candidates(
+                &solid_a.outer_shell.faces,
+                &solid_b.outer_shell.faces,
+                tol,
+            )
+            .len();
+        let classified_splits =
+            crate::BrepIntersectionBuilder::collect_classified_planar_face_split_candidates(
+                solid_a, solid_b, tol,
+            );
+        let selected_face_piece_count = classified_splits
+            .iter()
+            .map(|candidate| {
+                crate::BrepIntersectionBuilder::select_boolean_face_pieces(candidate, op).len()
+            })
+            .sum();
+
+        Ok(ExactBooleanPreparationReport {
+            face_pair_candidate_count,
+            intersection_edge_candidate_count,
+            planar_split_candidate_count,
+            classified_split_candidate_count: classified_splits.len(),
+            selected_face_piece_count,
+        })
     }
 
     /// 2つの Solid に対する互換API。現在は表示用メッシュブーリアンを返す。

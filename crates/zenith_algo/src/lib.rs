@@ -22,7 +22,7 @@ pub mod thicken;
 use zenith_math::Tolerance;
 use zenith_topo::{Shell, Solid};
 
-pub use boolean::{BooleanEngine, BooleanOpType};
+pub use boolean::{BooleanEngine, BooleanOpType, ExactBooleanPreparationReport};
 pub use brep_intersection::{
     BooleanOperand, BrepIntersectionBuilder, ClassifiedFacePiece,
     ClassifiedPlanarFaceSplitCandidate, FaceIntersectionCandidate, FaceIntersectionKind,

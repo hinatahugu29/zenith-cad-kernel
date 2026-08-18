@@ -69,6 +69,7 @@ Current hardening:
 - Added collection of paired planar split candidates, so an intersection edge can now produce split source faces on both boolean operands before classification.
 - Added initial split-face classification against a solid as `Inside`, `Outside`, or `Boundary` using a representative face point, current tessellated-solid ray casting, and mesh boundary distance. This is a replaceable approximation until exact B-Rep point-in-solid classification is implemented.
 - Added boolean-operation face-piece selection for classified split faces, including `Difference` handling that keeps A outside pieces and reversed B inside pieces before future shell reconstruction.
+- Added an exact boolean preparation report that exposes face-pair, intersection-edge, planar-split, classified-split, and selected-face-piece counts before the final shell reconstruction stage exists.
 
 ### 2. Planar trimming is still mesh-only
 
