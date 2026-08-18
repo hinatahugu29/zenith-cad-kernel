@@ -26,6 +26,7 @@ Changes made:
 - Added `Wire::sample_points()` for display/tessellation boundary extraction.
 - Updated planar face tessellation to triangulate sampled curve boundaries instead of topology vertices.
 - Added a regression test asserting cylinder caps sample more than four points.
+- Added numeric cylinder checks proving each side NURBS patch stays on the analytic cylinder radius and cap p-curves share the same circular edge geometry instead of drifting into a square boundary.
 
 Relevant files:
 

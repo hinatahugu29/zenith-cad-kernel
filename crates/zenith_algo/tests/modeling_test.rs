@@ -1879,6 +1879,80 @@ fn test_cylinder_cap_curve_sampling_refines_with_tessellation_params() {
 }
 
 #[test]
+fn test_cylinder_side_nurbs_patch_stays_on_analytic_cylinder() {
+    let radius = 10.0;
+    let height = 30.0;
+    let cyl = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height)
+        .expect("Cylinder creation failed");
+
+    for face in cyl.outer_shell.faces.iter().take(4) {
+        let FaceGeometry::Nurbs(surface) = &face.geometry else {
+            panic!("Cylinder side should be a NURBS face");
+        };
+        let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+
+        for u_step in 0..=8 {
+            for v_step in 0..=4 {
+                let u = u_min + (u_max - u_min) * (u_step as f64 / 8.0);
+                let v = v_min + (v_max - v_min) * (v_step as f64 / 4.0);
+                let point = surface.evaluate(u, v);
+                let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
+
+                assert!(
+                    (radial_distance - radius).abs() < 1e-6,
+                    "side patch point should stay on the cylinder radius"
+                );
+                assert!(
+                    point.z >= -1e-6 && point.z <= height + 1e-6,
+                    "side patch point should remain within cylinder height"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_cylinder_cap_boundaries_share_side_edge_circles() {
+    let radius = 10.0;
+    let cyl = zenith_algo::PrimitiveBuilder::make_cylinder(radius, 30.0)
+        .expect("Cylinder creation failed");
+
+    for cap_face in cyl.outer_shell.faces.iter().skip(4) {
+        let FaceGeometry::Plane(plane) = &cap_face.geometry else {
+            panic!("Cylinder cap should be planar");
+        };
+        let pcurves = cap_face
+            .pcurves
+            .as_ref()
+            .expect("cap should store p-curves");
+        assert_eq!(pcurves.outer_loop.segments.len(), 4);
+
+        for (edge, segment) in cap_face
+            .outer_wire
+            .edges
+            .iter()
+            .zip(pcurves.outer_loop.segments.iter())
+        {
+            assert_eq!(segment.edge_id, edge.edge.id);
+            let (t_min, t_max) = segment.curve.param_range();
+            for step in 0..=8 {
+                let t = step as f64 / 8.0;
+                let point_from_edge = edge.evaluate_normalized(t);
+                let uv_t = t_min + (t_max - t_min) * t;
+                let uv = segment.curve.evaluate(uv_t);
+                let point_from_cap = plane.evaluate(uv.x, uv.y);
+                let radial_distance = (point_from_cap.x * point_from_cap.x
+                    + point_from_cap.y * point_from_cap.y)
+                    .sqrt();
+
+                assert!((point_from_cap - point_from_edge).norm() < 1e-6);
+                assert!((radial_distance - radius).abs() < 1e-6);
+            }
+        }
+    }
+}
+
+#[test]
 fn test_closed_shell_validation_for_primitives() {
     let tol = Tolerance::default();
     let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
