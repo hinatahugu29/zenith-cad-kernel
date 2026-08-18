@@ -85,6 +85,7 @@ Current hardening:
 - Solid tessellation now flips `inner_shells` while merging meshes so cavity mass properties subtract from the outer shell, and STEP export emits `BREP_WITH_VOIDS` with `ORIENTED_CLOSED_SHELL` entries for inner-shell cavities.
 - STEP import now recognizes `BREP_WITH_VOIDS`, resolves outer and oriented inner closed shells, and round-trips contained-difference cavity solids with valid topology and subtractive mass properties.
 - Added a guarded exact intersection path for axis-aligned rectangular boxes that returns the overlapping volume as a validated B-Rep box, covering the first partial-overlap solid-producing boolean case.
+- Extended the guarded axis-aligned box path to return exact B-Rep boxes for single-box unions and edge-trimming differences when the result can be represented without general face graph assembly.
 
 ### 2. Planar trimming is still mesh-only
 

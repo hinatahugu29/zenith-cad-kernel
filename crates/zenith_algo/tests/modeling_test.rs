@@ -382,6 +382,70 @@ fn test_exact_brep_boolean_returns_overlap_box_for_partial_box_intersection() {
 }
 
 #[test]
+fn test_exact_brep_boolean_returns_merged_box_for_aligned_box_union() {
+    let tol = Tolerance::default();
+    let solid_a = zenith_algo::PrimitiveBuilder::make_box(6.0, 4.0, 3.0).unwrap();
+    let solid_b = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(6.0, 4.0, 3.0).unwrap(),
+        Vec3::new(4.0, 0.0, 0.0),
+    );
+
+    let union = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &solid_a,
+        &solid_b,
+        zenith_algo::BooleanOpType::Union,
+        &tol,
+    )
+    .expect("aligned overlapping boxes should merge into one exact B-Rep box");
+
+    assert_eq!(union.outer_shell.faces.len(), 6);
+    assert!(union.inner_shells.is_empty());
+    assert!(union.is_topologically_valid(&tol));
+
+    let mesh = tessellate_solid(
+        &union,
+        &TessellationParams {
+            u_divisions: 4,
+            v_divisions: 4,
+        },
+    );
+    let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    assert!((mass.volume - (10.0 * 4.0 * 3.0)).abs() < 1.0);
+}
+
+#[test]
+fn test_exact_brep_boolean_returns_trimmed_box_for_aligned_edge_difference() {
+    let tol = Tolerance::default();
+    let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 4.0, 3.0).unwrap();
+    let solid_b = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(6.0, 4.0, 3.0).unwrap(),
+        Vec3::new(6.0, 0.0, 0.0),
+    );
+
+    let difference = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &solid_a,
+        &solid_b,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("aligned edge overlap should trim input A into one exact B-Rep box");
+
+    assert_eq!(difference.outer_shell.faces.len(), 6);
+    assert!(difference.inner_shells.is_empty());
+    assert!(difference.is_topologically_valid(&tol));
+
+    let mesh = tessellate_solid(
+        &difference,
+        &TessellationParams {
+            u_divisions: 4,
+            v_divisions: 4,
+        },
+    );
+    let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    assert!((mass.volume - (6.0 * 4.0 * 3.0)).abs() < 1.0);
+}
+
+#[test]
 fn test_exact_brep_boolean_returns_outer_solid_for_contained_union() {
     let tol = Tolerance::default();
     let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();

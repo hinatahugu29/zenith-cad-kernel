@@ -13,6 +13,159 @@ pub enum BooleanOpType {
 /// B-Rep / ポリゴンブーリアン演算エンジン
 pub struct BooleanEngine;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct AxisAlignedBoxBounds {
+    min: Point3,
+    max: Point3,
+}
+
+impl AxisAlignedBoxBounds {
+    fn intersection(self, other: Self, tol: &Tolerance) -> Option<Self> {
+        let min = Point3::new(
+            self.min.x.max(other.min.x),
+            self.min.y.max(other.min.y),
+            self.min.z.max(other.min.z),
+        );
+        let max = Point3::new(
+            self.max.x.min(other.max.x),
+            self.max.y.min(other.max.y),
+            self.max.z.min(other.max.z),
+        );
+        Self::from_min_max_if_positive(min, max, tol)
+    }
+
+    fn union_if_single_box(self, other: Self, tol: &Tolerance) -> Option<Self> {
+        for axis in 0..3 {
+            if self.same_span_on_other_axes(other, axis, tol)
+                && intervals_overlap_or_touch(
+                    self.axis_min(axis),
+                    self.axis_max(axis),
+                    other.axis_min(axis),
+                    other.axis_max(axis),
+                    tol,
+                )
+            {
+                return Some(Self {
+                    min: Point3::new(
+                        self.min.x.min(other.min.x),
+                        self.min.y.min(other.min.y),
+                        self.min.z.min(other.min.z),
+                    ),
+                    max: Point3::new(
+                        self.max.x.max(other.max.x),
+                        self.max.y.max(other.max.y),
+                        self.max.z.max(other.max.z),
+                    ),
+                });
+            }
+        }
+
+        None
+    }
+
+    fn difference_if_single_box(self, subtract: Self, tol: &Tolerance) -> Option<Self> {
+        for axis in 0..3 {
+            if !subtract.covers_other_axes(self, axis, tol) {
+                continue;
+            }
+
+            let a_min = self.axis_min(axis);
+            let a_max = self.axis_max(axis);
+            let b_min = subtract.axis_min(axis);
+            let b_max = subtract.axis_max(axis);
+
+            if b_min <= a_min + tol.linear
+                && b_max > a_min + tol.linear
+                && b_max < a_max - tol.linear
+            {
+                return Self::from_axis_interval(self, axis, b_max, a_max, tol);
+            }
+            if b_max >= a_max - tol.linear
+                && b_min > a_min + tol.linear
+                && b_min < a_max - tol.linear
+            {
+                return Self::from_axis_interval(self, axis, a_min, b_min, tol);
+            }
+        }
+
+        None
+    }
+
+    fn from_min_max_if_positive(min: Point3, max: Point3, tol: &Tolerance) -> Option<Self> {
+        let size = max - min;
+        (size.x > tol.linear && size.y > tol.linear && size.z > tol.linear)
+            .then_some(Self { min, max })
+    }
+
+    fn from_axis_interval(
+        source: Self,
+        axis: usize,
+        min_value: f64,
+        max_value: f64,
+        tol: &Tolerance,
+    ) -> Option<Self> {
+        let mut min = source.min;
+        let mut max = source.max;
+        set_axis_value(&mut min, axis, min_value);
+        set_axis_value(&mut max, axis, max_value);
+        Self::from_min_max_if_positive(min, max, tol)
+    }
+
+    fn same_span_on_other_axes(self, other: Self, axis: usize, tol: &Tolerance) -> bool {
+        (0..3)
+            .filter(|candidate| *candidate != axis)
+            .all(|candidate| {
+                (self.axis_min(candidate) - other.axis_min(candidate)).abs() <= tol.linear
+                    && (self.axis_max(candidate) - other.axis_max(candidate)).abs() <= tol.linear
+            })
+    }
+
+    fn covers_other_axes(self, other: Self, axis: usize, tol: &Tolerance) -> bool {
+        (0..3)
+            .filter(|candidate| *candidate != axis)
+            .all(|candidate| {
+                self.axis_min(candidate) <= other.axis_min(candidate) + tol.linear
+                    && self.axis_max(candidate) >= other.axis_max(candidate) - tol.linear
+            })
+    }
+
+    fn axis_min(self, axis: usize) -> f64 {
+        axis_value(self.min, axis)
+    }
+
+    fn axis_max(self, axis: usize) -> f64 {
+        axis_value(self.max, axis)
+    }
+}
+
+fn intervals_overlap_or_touch(
+    a_min: f64,
+    a_max: f64,
+    b_min: f64,
+    b_max: f64,
+    tol: &Tolerance,
+) -> bool {
+    a_min <= b_max + tol.linear && b_min <= a_max + tol.linear
+}
+
+fn axis_value(point: Point3, axis: usize) -> f64 {
+    match axis {
+        0 => point.x,
+        1 => point.y,
+        2 => point.z,
+        _ => unreachable!("axis must be 0, 1, or 2"),
+    }
+}
+
+fn set_axis_value(point: &mut Point3, axis: usize, value: f64) {
+    match axis {
+        0 => point.x = value,
+        1 => point.y = value,
+        2 => point.z = value,
+        _ => unreachable!("axis must be 0, 1, or 2"),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExactBooleanPreparationReport {
     pub face_pair_candidate_count: usize,
@@ -133,40 +286,50 @@ impl BooleanEngine {
         op: BooleanOpType,
         tol: &Tolerance,
     ) -> Result<Option<Solid>, String> {
-        if op != BooleanOpType::Intersection {
-            return Ok(None);
-        }
-        let Some((min_a, max_a)) = Self::axis_aligned_box_bounds(solid_a, tol) else {
+        let Some(bounds_a) = Self::axis_aligned_box_bounds(solid_a, tol) else {
             return Ok(None);
         };
-        let Some((min_b, max_b)) = Self::axis_aligned_box_bounds(solid_b, tol) else {
+        let Some(bounds_b) = Self::axis_aligned_box_bounds(solid_b, tol) else {
             return Ok(None);
         };
 
-        let min = Point3::new(
-            min_a.x.max(min_b.x),
-            min_a.y.max(min_b.y),
-            min_a.z.max(min_b.z),
-        );
-        let max = Point3::new(
-            max_a.x.min(max_b.x),
-            max_a.y.min(max_b.y),
-            max_a.z.min(max_b.z),
-        );
-        let size = max - min;
-        if size.x <= tol.linear || size.y <= tol.linear || size.z <= tol.linear {
-            return Err(
-                "Exact B-Rep boolean intersection has no positive volume overlap".to_string(),
-            );
+        match op {
+            BooleanOpType::Intersection => {
+                let Some(overlap) = bounds_a.intersection(bounds_b, tol) else {
+                    return Err(
+                        "Exact B-Rep boolean intersection has no positive volume overlap"
+                            .to_string(),
+                    );
+                };
+                Self::make_box_from_bounds(overlap).map(Some)
+            }
+            BooleanOpType::Union => {
+                if let Some(union) = bounds_a.union_if_single_box(bounds_b, tol) {
+                    Self::make_box_from_bounds(union).map(Some)
+                } else {
+                    Ok(None)
+                }
+            }
+            BooleanOpType::Difference => {
+                if let Some(difference) = bounds_a.difference_if_single_box(bounds_b, tol) {
+                    Self::make_box_from_bounds(difference).map(Some)
+                } else {
+                    Ok(None)
+                }
+            }
         }
-
-        let overlap = crate::PrimitiveBuilder::make_box(size.x, size.y, size.z)?;
-        Ok(Some(crate::BrepTransform::translate_solid(
-            &overlap, min.coords,
-        )))
     }
 
-    fn axis_aligned_box_bounds(solid: &Solid, tol: &Tolerance) -> Option<(Point3, Point3)> {
+    fn make_box_from_bounds(bounds: AxisAlignedBoxBounds) -> Result<Solid, String> {
+        let size = bounds.max - bounds.min;
+        let solid = crate::PrimitiveBuilder::make_box(size.x, size.y, size.z)?;
+        Ok(crate::BrepTransform::translate_solid(
+            &solid,
+            bounds.min.coords,
+        ))
+    }
+
+    fn axis_aligned_box_bounds(solid: &Solid, tol: &Tolerance) -> Option<AxisAlignedBoxBounds> {
         if !solid.inner_shells.is_empty() || solid.outer_shell.faces.len() != 6 {
             return None;
         }
@@ -249,7 +412,7 @@ impl BooleanEngine {
             }
         }
 
-        Some((min, max))
+        Some(AxisAlignedBoxBounds { min, max })
     }
 
     fn solid_outer_wire_points(solid: &Solid) -> Vec<Point3> {
