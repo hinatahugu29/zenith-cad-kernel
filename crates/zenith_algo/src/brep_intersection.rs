@@ -122,6 +122,20 @@ pub struct BooleanFaceSelection {
     pub stitch_report: SelectedFaceStitchReport,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BooleanFaceAssembly {
+    pub selected_face_pieces: Vec<SelectedBooleanFacePiece>,
+    pub cap_face_count: usize,
+    pub stitch_report: SelectedFaceStitchReport,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BooleanShellAssembly {
+    pub selection: BooleanFaceSelection,
+    pub cap_generation: PlanarCapGeneration,
+    pub assembly: BooleanFaceAssembly,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedFaceStitchReport {
     pub face_piece_count: usize,
@@ -399,6 +413,56 @@ impl BrepIntersectionBuilder {
             batch_splits,
             selected_face_pieces,
             stitch_report,
+        }
+    }
+
+    pub fn assemble_selected_face_pieces_with_caps(
+        pieces: &[SelectedBooleanFacePiece],
+        cap_faces: &[Face],
+        tol: &Tolerance,
+    ) -> BooleanFaceAssembly {
+        let mut selected_face_pieces = pieces.to_vec();
+        selected_face_pieces.extend(cap_faces.iter().cloned().map(|face| {
+            SelectedBooleanFacePiece {
+                operand: BooleanOperand::A,
+                face,
+                location: FaceRegionLocation::Boundary,
+                reverse_orientation: false,
+            }
+        }));
+        let stitch_report = diagnose_selected_face_stitching(&selected_face_pieces, tol);
+
+        BooleanFaceAssembly {
+            selected_face_pieces,
+            cap_face_count: cap_faces.len(),
+            stitch_report,
+        }
+    }
+
+    pub fn collect_boolean_shell_assembly(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: crate::BooleanOpType,
+        tol: &Tolerance,
+    ) -> BooleanShellAssembly {
+        let selection = Self::collect_selected_boolean_face_pieces(solid_a, solid_b, op, tol);
+        let edge_candidates = Self::collect_intersection_edge_candidates(
+            &solid_a.outer_shell.faces,
+            &solid_b.outer_shell.faces,
+            tol,
+        );
+        let cap_generation =
+            Self::build_planar_caps_from_intersection_edge_candidates(&edge_candidates, tol);
+        let assembly = Self::assemble_selected_face_pieces_with_caps(
+            &selection.selected_face_pieces,
+            &cap_generation.cap_faces,
+            tol,
+        );
+
+        BooleanShellAssembly {
+            selection,
+            cap_generation,
+            assembly,
         }
     }
 

@@ -78,6 +78,7 @@ Current hardening:
 - The exact boolean entry point can now return a validated B-Rep `Solid` for guarded limited cases: identical-object union/intersection, or future selected face pieces that already stitch into a closed manifold.
 - Added a guarded planar cap builder for closed intersection edge loops, ordering unordered/reversed linear edges into a closed wire before creating a p-curve-backed planar cutting face.
 - Added extraction of multiple closed intersection edge loops from unordered edge sets, then generation of planar cutting cap faces for each valid loop.
+- Added a shell-assembly integration pass that appends generated planar cap faces to selected boolean face pieces and reports stitching diagnostics both before and after cap insertion.
 
 ### 2. Planar trimming is still mesh-only
 

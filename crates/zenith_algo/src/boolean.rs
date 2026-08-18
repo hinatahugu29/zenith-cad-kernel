@@ -22,6 +22,12 @@ pub struct ExactBooleanPreparationReport {
     pub planar_batch_applied_split_count: usize,
     pub classified_split_candidate_count: usize,
     pub selected_face_piece_count: usize,
+    pub planar_cap_loop_count: usize,
+    pub planar_cap_face_count: usize,
+    pub selected_with_caps_face_piece_count: usize,
+    pub selected_with_caps_unmatched_edge_use_count: usize,
+    pub selected_with_caps_non_manifold_edge_use_count: usize,
+    pub selected_with_caps_same_direction_edge_use_count: usize,
     pub selected_face_unmatched_edge_use_count: usize,
     pub selected_face_non_manifold_edge_use_count: usize,
     pub selected_face_same_direction_edge_use_count: usize,
@@ -73,7 +79,7 @@ impl BooleanEngine {
         }
 
         Err(format!(
-            "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} classified split candidates, and {} selected face pieces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
+            "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} classified split candidates, {} selected face pieces, {} cap loops, and {} cap faces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses; with caps it has {} face pieces, {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
             report.face_pair_candidate_count,
             report.intersection_edge_candidate_count,
             report.planar_split_candidate_count,
@@ -81,9 +87,15 @@ impl BooleanEngine {
             report.planar_batch_applied_split_count,
             report.classified_split_candidate_count,
             report.selected_face_piece_count,
+            report.planar_cap_loop_count,
+            report.planar_cap_face_count,
             report.selected_face_unmatched_edge_use_count,
             report.selected_face_non_manifold_edge_use_count,
-            report.selected_face_same_direction_edge_use_count
+            report.selected_face_same_direction_edge_use_count,
+            report.selected_with_caps_face_piece_count,
+            report.selected_with_caps_unmatched_edge_use_count,
+            report.selected_with_caps_non_manifold_edge_use_count,
+            report.selected_with_caps_same_direction_edge_use_count
         ))
     }
 
@@ -131,16 +143,17 @@ impl BooleanEngine {
             crate::BrepIntersectionBuilder::collect_classified_planar_face_split_candidates(
                 solid_a, solid_b, tol,
             );
-        let selection = crate::BrepIntersectionBuilder::collect_selected_boolean_face_pieces(
+        let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
             solid_a, solid_b, op, tol,
         );
-        let planar_batch_split_face_count =
-            selection.batch_splits.splits_a.len() + selection.batch_splits.splits_b.len();
-        let planar_batch_applied_split_count = selection
+        let planar_batch_split_face_count = shell_assembly.selection.batch_splits.splits_a.len()
+            + shell_assembly.selection.batch_splits.splits_b.len();
+        let planar_batch_applied_split_count = shell_assembly
+            .selection
             .batch_splits
             .splits_a
             .iter()
-            .chain(selection.batch_splits.splits_b.iter())
+            .chain(shell_assembly.selection.batch_splits.splits_b.iter())
             .map(|split| split.result.applied_split_count)
             .sum();
 
@@ -151,14 +164,36 @@ impl BooleanEngine {
             planar_batch_split_face_count,
             planar_batch_applied_split_count,
             classified_split_candidate_count: classified_splits.len(),
-            selected_face_piece_count: selection.selected_face_pieces.len(),
-            selected_face_unmatched_edge_use_count: selection
+            selected_face_piece_count: shell_assembly.selection.selected_face_pieces.len(),
+            planar_cap_loop_count: shell_assembly
+                .cap_generation
+                .edge_loop_extraction
+                .loops
+                .len(),
+            planar_cap_face_count: shell_assembly.cap_generation.cap_faces.len(),
+            selected_with_caps_face_piece_count: shell_assembly.assembly.selected_face_pieces.len(),
+            selected_with_caps_unmatched_edge_use_count: shell_assembly
+                .assembly
                 .stitch_report
                 .unmatched_edge_use_count,
-            selected_face_non_manifold_edge_use_count: selection
+            selected_with_caps_non_manifold_edge_use_count: shell_assembly
+                .assembly
                 .stitch_report
                 .non_manifold_edge_use_count,
-            selected_face_same_direction_edge_use_count: selection
+            selected_with_caps_same_direction_edge_use_count: shell_assembly
+                .assembly
+                .stitch_report
+                .same_direction_edge_use_count,
+            selected_face_unmatched_edge_use_count: shell_assembly
+                .selection
+                .stitch_report
+                .unmatched_edge_use_count,
+            selected_face_non_manifold_edge_use_count: shell_assembly
+                .selection
+                .stitch_report
+                .non_manifold_edge_use_count,
+            selected_face_same_direction_edge_use_count: shell_assembly
+                .selection
                 .stitch_report
                 .same_direction_edge_use_count,
         })
