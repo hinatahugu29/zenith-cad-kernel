@@ -1,7 +1,7 @@
-use crate::face::Face;
+use crate::face::{Face, FaceGeometry};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use zenith_math::{Point3, Tolerance};
+use zenith_math::{Point2, Point3, Tolerance};
 
 static SHELL_ID_GEN: AtomicU64 = AtomicU64::new(1);
 
@@ -24,6 +24,8 @@ pub struct ShellValidationReport {
     pub same_direction_edge_use_count: usize,
     pub degenerate_edge_use_count: usize,
     pub min_edge_use_length: f64,
+    pub planar_face_orientation_mismatch_count: usize,
+    pub min_planar_face_oriented_area: f64,
     pub edge_curve_endpoint_mismatch_count: usize,
     pub max_edge_curve_endpoint_distance: f64,
     pub off_surface_boundary_count: usize,
@@ -78,6 +80,8 @@ impl Shell {
             same_direction_edge_use_count: 0,
             degenerate_edge_use_count: 0,
             min_edge_use_length: f64::INFINITY,
+            planar_face_orientation_mismatch_count: 0,
+            min_planar_face_oriented_area: f64::INFINITY,
             edge_curve_endpoint_mismatch_count: 0,
             max_edge_curve_endpoint_distance: 0.0,
             off_surface_boundary_count: 0,
@@ -95,6 +99,8 @@ impl Shell {
         let mut edge_uses = Vec::new();
 
         for (face_index, face) in self.faces.iter().enumerate() {
+            validate_planar_face_orientation(face_index, face, &mut report, tol);
+
             let boundary_report = face.validate_boundary_on_surface(tol, 8);
             report.off_surface_boundary_count += boundary_report.off_surface_point_count;
             report.max_boundary_surface_distance = report
@@ -257,6 +263,76 @@ fn sampled_edge_length(edge: &crate::edge::OrientedEdge, segments: usize) -> f64
         prev = current;
     }
     length
+}
+
+fn validate_planar_face_orientation(
+    face_index: usize,
+    face: &Face,
+    report: &mut ShellValidationReport,
+    tol: &Tolerance,
+) {
+    let FaceGeometry::Plane(_) = &face.geometry else {
+        return;
+    };
+    let Ok(pcurves) = face.pcurves(tol) else {
+        return;
+    };
+    let area = pcurve_loop_signed_area(&pcurves.outer_loop.segments, 8);
+    if area.abs() <= tol.parametric {
+        return;
+    }
+
+    let oriented_area = if face.orientation.is_forward() {
+        area
+    } else {
+        -area
+    };
+    report.min_planar_face_oriented_area = report.min_planar_face_oriented_area.min(oriented_area);
+    if oriented_area <= tol.parametric {
+        report.planar_face_orientation_mismatch_count += 1;
+        report.errors.push(format!(
+            "Face {face_index} planar p-curve loop is inconsistent with face orientation; oriented area {oriented_area:.6e}"
+        ));
+    }
+}
+
+fn pcurve_loop_signed_area(
+    segments: &[crate::face::FacePcurveSegment],
+    samples_per_segment: usize,
+) -> f64 {
+    let mut points = Vec::new();
+    for (segment_index, segment) in segments.iter().enumerate() {
+        let segment_points = segment.curve.sample_points(samples_per_segment);
+        let start_index = usize::from(segment_index > 0);
+        for point in segment_points.into_iter().skip(start_index) {
+            points.push(point);
+        }
+    }
+
+    if points.len() > 1 && points_same_2d(points[0], *points.last().unwrap(), 1e-9) {
+        points.pop();
+    }
+
+    signed_area_2d(&points)
+}
+
+fn signed_area_2d(points: &[Point2]) -> f64 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+
+    let mut area = 0.0;
+    for i in 0..points.len() {
+        let current = points[i];
+        let next = points[(i + 1) % points.len()];
+        area += current.x * next.y - next.x * current.y;
+    }
+
+    area * 0.5
+}
+
+fn points_same_2d(a: Point2, b: Point2, tol: f64) -> bool {
+    (a - b).norm() <= tol
 }
 
 fn same_edge_use(a: &EdgeUse, b: &EdgeUse) -> bool {

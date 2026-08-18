@@ -584,6 +584,21 @@ fn test_closed_shell_validation_rejects_degenerate_edge_use() {
 }
 
 #[test]
+fn test_closed_shell_validation_rejects_inward_planar_face_orientation() {
+    let tol = Tolerance::default();
+    let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
+    let mut faces = box_solid.outer_shell.faces.clone();
+    faces[0].orientation = Orientation::Reversed;
+
+    let corrupted_shell = Shell::closed(faces);
+    let report = corrupted_shell.validate_closed(&tol);
+
+    assert!(!report.is_valid());
+    assert!(report.planar_face_orientation_mismatch_count > 0);
+    assert!(report.min_planar_face_oriented_area < 0.0);
+}
+
+#[test]
 fn test_solid_try_simple_accepts_valid_primitives() {
     let tol = Tolerance::default();
     let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
