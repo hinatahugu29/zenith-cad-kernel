@@ -66,6 +66,7 @@ Current hardening:
 - Plane/plane line candidates are now further clipped against each planar face's outer p-curve trim polygon, so the future split stage receives a trim-bounded segment rather than only an AABB-bounded segment.
 - Trim-bounded plane/plane line candidates can now be promoted into linear topology `Edge` candidates while preserving source face indices for the future split stage.
 - Added an initial planar face split step for linear intersection edges crossing an outer-loop-only planar face, producing two new p-curve-backed planar faces for the future exact boolean reconstruction stage.
+- Added collection of paired planar split candidates, so an intersection edge can now produce split source faces on both boolean operands before classification.
 
 ### 2. Planar trimming is still mesh-only
 

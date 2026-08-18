@@ -28,6 +28,15 @@ pub struct IntersectionEdgeCandidate {
     pub edge: Edge,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanarFaceSplitCandidate {
+    pub face_a_index: usize,
+    pub face_b_index: usize,
+    pub split_edge: Edge,
+    pub split_faces_a: Vec<Face>,
+    pub split_faces_b: Vec<Face>,
+}
+
 pub struct BrepIntersectionBuilder;
 
 impl BrepIntersectionBuilder {
@@ -103,6 +112,38 @@ impl BrepIntersectionBuilder {
                     face_a_index: candidate.face_a_index,
                     face_b_index: candidate.face_b_index,
                     edge,
+                })
+            })
+            .collect()
+    }
+
+    pub fn collect_planar_face_split_candidates(
+        faces_a: &[Face],
+        faces_b: &[Face],
+        tol: &Tolerance,
+    ) -> Vec<PlanarFaceSplitCandidate> {
+        Self::collect_intersection_edge_candidates(faces_a, faces_b, tol)
+            .into_iter()
+            .filter_map(|candidate| {
+                let split_faces_a = Self::split_planar_face_by_edge(
+                    &faces_a[candidate.face_a_index],
+                    &candidate.edge,
+                    tol,
+                )
+                .ok()?;
+                let split_faces_b = Self::split_planar_face_by_edge(
+                    &faces_b[candidate.face_b_index],
+                    &candidate.edge,
+                    tol,
+                )
+                .ok()?;
+
+                Some(PlanarFaceSplitCandidate {
+                    face_a_index: candidate.face_a_index,
+                    face_b_index: candidate.face_b_index,
+                    split_edge: candidate.edge,
+                    split_faces_a,
+                    split_faces_b,
                 })
             })
             .collect()

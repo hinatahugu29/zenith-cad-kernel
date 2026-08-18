@@ -581,6 +581,65 @@ fn test_brep_intersection_edge_splits_planar_face() {
 }
 
 #[test]
+fn test_brep_intersection_collects_planar_face_split_candidates() {
+    let tol = Tolerance::default();
+    let make_face = |points: [Point3; 4], normal: Vec3| {
+        let vertices: Vec<Vertex> = points
+            .iter()
+            .map(|point| Vertex::from_point(*point))
+            .collect();
+        let edges = vec![
+            Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+            Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+            Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+            Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+        ];
+        let wire = Wire::new(edges.into_iter().map(OrientedEdge::forward).collect());
+        let u_axis = (points[1] - points[0]).normalize();
+        let v_axis = normal.cross(&u_axis).normalize();
+        let plane = PlaneSurface3::new(points[0], u_axis, v_axis).unwrap();
+        Face::simple(FaceGeometry::Plane(plane), wire)
+    };
+    let face_a = make_face(
+        [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(4.0, 4.0, 0.0),
+            Point3::new(0.0, 4.0, 0.0),
+        ],
+        Vec3::new(0.0, 0.0, 1.0),
+    );
+    let face_b = make_face(
+        [
+            Point3::new(2.0, 0.0, -1.0),
+            Point3::new(2.0, 0.0, 1.0),
+            Point3::new(2.0, 4.0, 1.0),
+            Point3::new(2.0, 4.0, -1.0),
+        ],
+        Vec3::new(-1.0, 0.0, 0.0),
+    );
+
+    let splits = zenith_algo::BrepIntersectionBuilder::collect_planar_face_split_candidates(
+        &[face_a],
+        &[face_b],
+        &tol,
+    );
+
+    assert_eq!(splits.len(), 1);
+    let split = &splits[0];
+    assert_eq!(split.face_a_index, 0);
+    assert_eq!(split.face_b_index, 0);
+    assert_eq!(split.split_faces_a.len(), 2);
+    assert_eq!(split.split_faces_b.len(), 2);
+    assert!((split.split_edge.end_vertex.point - split.split_edge.start_vertex.point).norm() > 3.9);
+
+    for face in split.split_faces_a.iter().chain(split.split_faces_b.iter()) {
+        assert!(face.outer_wire.is_closed(&tol));
+        assert!(face.validate_pcurves(&tol, 4).unwrap().is_valid());
+    }
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(
