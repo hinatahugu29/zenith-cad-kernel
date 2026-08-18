@@ -93,6 +93,7 @@ Current hardening:
 - Planar face splitting can now preserve a curved split edge when its endpoints lie on the face boundary, enabling arc-bounded planar fragments instead of forcing every split loop back into straight polygon edges.
 - Batch planar splitting now accepts those guarded curved split edges on the planar operand, and tessellation keeps the arc boundary sampled instead of collapsing the fragment into a straight chord.
 - Exact boolean preparation reports now include skipped batch split counts, making curved-intersection gaps visible instead of hiding them behind a generic unsupported result.
+- Recognized cylinder-side NURBS faces can now be split by a horizontal circular arc edge into upper and lower NURBS face fragments with valid p-curves, allowing plane-cylinder split candidates to carry fragments for both operands.
 
 ### 2. Planar trimming is still mesh-only
 

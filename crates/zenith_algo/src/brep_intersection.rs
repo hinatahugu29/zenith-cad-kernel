@@ -252,13 +252,13 @@ impl BrepIntersectionBuilder {
         Self::collect_intersection_edge_candidates(faces_a, faces_b, tol)
             .into_iter()
             .filter_map(|candidate| {
-                let split_faces_a = Self::split_planar_face_by_edge(
+                let split_faces_a = Self::split_face_by_edge(
                     &faces_a[candidate.face_a_index],
                     &candidate.edge,
                     tol,
                 )
                 .ok()?;
-                let split_faces_b = Self::split_planar_face_by_edge(
+                let split_faces_b = Self::split_face_by_edge(
                     &faces_b[candidate.face_b_index],
                     &candidate.edge,
                     tol,
@@ -656,6 +656,20 @@ impl BrepIntersectionBuilder {
         Ok(vec![face_a, face_b])
     }
 
+    pub fn split_face_by_edge(
+        face: &Face,
+        split_edge: &Edge,
+        tol: &Tolerance,
+    ) -> Result<Vec<Face>, String> {
+        match &face.geometry {
+            FaceGeometry::Plane(_) => Self::split_planar_face_by_edge(face, split_edge, tol),
+            FaceGeometry::Nurbs(surface) => {
+                split_cylinder_side_face_by_horizontal_edge(face, surface, split_edge, tol)
+            }
+            _ => Err("Face splitting is not implemented for this geometry".to_string()),
+        }
+    }
+
     pub fn split_planar_face_by_edges(
         face: &Face,
         split_edges: &[Edge],
@@ -680,6 +694,43 @@ impl BrepIntersectionBuilder {
 
             for current_face in faces {
                 match Self::split_planar_face_by_edge(&current_face, split_edge, tol) {
+                    Ok(split_faces) => {
+                        applied_split_count += 1;
+                        applied_this_edge = true;
+                        next_faces.extend(split_faces);
+                    }
+                    Err(_) => next_faces.push(current_face),
+                }
+            }
+
+            if !applied_this_edge {
+                skipped_split_count += 1;
+            }
+            faces = next_faces;
+        }
+
+        Ok(PlanarFaceMultiSplitResult {
+            faces,
+            applied_split_count,
+            skipped_split_count,
+        })
+    }
+
+    pub fn split_face_by_edges(
+        face: &Face,
+        split_edges: &[Edge],
+        tol: &Tolerance,
+    ) -> Result<PlanarFaceMultiSplitResult, String> {
+        let mut faces = vec![face.clone()];
+        let mut applied_split_count = 0;
+        let mut skipped_split_count = 0;
+
+        for split_edge in split_edges {
+            let mut next_faces = Vec::new();
+            let mut applied_this_edge = false;
+
+            for current_face in faces {
+                match Self::split_face_by_edge(&current_face, split_edge, tol) {
                     Ok(split_faces) => {
                         applied_split_count += 1;
                         applied_this_edge = true;
@@ -756,8 +807,7 @@ fn collect_batch_splits_for_faces(
         .filter_map(|(face_index, split_edges)| {
             let face = faces.get(face_index)?;
             let result =
-                BrepIntersectionBuilder::split_planar_face_by_edges(face, &split_edges, tol)
-                    .ok()?;
+                BrepIntersectionBuilder::split_face_by_edges(face, &split_edges, tol).ok()?;
             (result.applied_split_count > 0).then_some(PlanarFaceBatchSplit {
                 face_index,
                 split_edge_count: split_edges.len(),
@@ -991,6 +1041,166 @@ fn face_from_boundary_path_and_split_edge(
         template.orientation,
         template.tolerance,
     ))
+}
+
+fn split_cylinder_side_face_by_horizontal_edge(
+    face: &Face,
+    surface: &NurbsSurface3,
+    split_edge: &Edge,
+    tol: &Tolerance,
+) -> Result<Vec<Face>, String> {
+    if !face.inner_wires.is_empty() {
+        return Err("NURBS face splitting with inner wires is not implemented yet".to_string());
+    }
+    let Some((z_min, z_max)) = cylinder_patch_z_span(surface, tol) else {
+        return Err("Only recognized cylinder-side NURBS patches can be split".to_string());
+    };
+    if !edge_lies_on_recognized_cylinder_patch(split_edge, surface, tol) {
+        return Err("Split edge must lie on the NURBS face".to_string());
+    }
+
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let split_z = split_edge.start_vertex.point.z;
+    if (split_edge.end_vertex.point.z - split_z).abs() > tol.linear {
+        return Err("Cylinder-side split edge must be horizontal".to_string());
+    }
+    if split_z <= z_min + tol.linear || split_z >= z_max - tol.linear {
+        return Err("Cylinder-side split edge must cross the face interior".to_string());
+    }
+
+    let split_v = v_min + (v_max - v_min) * ((split_z - z_min) / (z_max - z_min));
+    let bottom_start = surface.evaluate(u_min, v_min);
+    let bottom_end = surface.evaluate(u_max, v_min);
+    let split_start = surface.evaluate(u_min, split_v);
+    let split_end = surface.evaluate(u_max, split_v);
+    let top_start = surface.evaluate(u_min, v_max);
+    let top_end = surface.evaluate(u_max, v_max);
+
+    let split_forward = orient_edge_for_points(split_edge, split_start, split_end, tol)
+        .ok_or_else(|| "Split edge endpoints do not match cylinder side boundaries".to_string())?;
+    let split_reversed = OrientedEdge::new(
+        split_forward.edge.clone(),
+        split_forward.orientation.reversed(),
+    );
+    let bottom_edge = horizontal_section_edge(surface, z_min, z_min, z_max, tol)?;
+    let top_edge = horizontal_section_edge(surface, z_max, z_min, z_max, tol)?;
+    let left_lower = Edge::line_between(
+        Vertex::new(bottom_start, tol.linear),
+        Vertex::new(split_start, tol.linear),
+    )?;
+    let right_lower = Edge::line_between(
+        Vertex::new(bottom_end, tol.linear),
+        Vertex::new(split_end, tol.linear),
+    )?;
+    let left_upper = Edge::line_between(
+        Vertex::new(split_start, tol.linear),
+        Vertex::new(top_start, tol.linear),
+    )?;
+    let right_upper = Edge::line_between(
+        Vertex::new(split_end, tol.linear),
+        Vertex::new(top_end, tol.linear),
+    )?;
+
+    let lower = Face::new(
+        face.geometry.clone(),
+        Wire::new(vec![
+            OrientedEdge::forward(bottom_edge),
+            OrientedEdge::forward(right_lower),
+            split_reversed,
+            OrientedEdge::reversed(left_lower),
+        ]),
+        Vec::new(),
+        face.orientation,
+        face.tolerance,
+    );
+    let upper = Face::new(
+        face.geometry.clone(),
+        Wire::new(vec![
+            split_forward,
+            OrientedEdge::forward(right_upper),
+            OrientedEdge::reversed(top_edge),
+            OrientedEdge::reversed(left_upper),
+        ]),
+        Vec::new(),
+        face.orientation,
+        face.tolerance,
+    );
+
+    for split_face in [&lower, &upper] {
+        if !split_face.outer_wire.is_closed(tol) {
+            return Err("Cylinder-side split produced an open wire".to_string());
+        }
+        let report = split_face.validate_pcurves(tol, 8)?;
+        if !report.is_valid() {
+            return Err(format!(
+                "Cylinder-side split p-curves are invalid with {} mismatches",
+                report.mismatch_count
+            ));
+        }
+    }
+
+    Ok(vec![lower, upper])
+}
+
+fn horizontal_section_edge(
+    surface: &NurbsSurface3,
+    z: f64,
+    z_min: f64,
+    z_max: f64,
+    tol: &Tolerance,
+) -> Result<Edge, String> {
+    let curve = horizontal_section_curve(surface, z, z_min, z_max, tol)
+        .ok_or_else(|| "Failed to build cylinder horizontal section curve".to_string())?;
+    let (t_min, t_max) = curve.param_range();
+    let start = curve.evaluate(t_min);
+    let end = curve.evaluate(t_max);
+    Ok(Edge::new(
+        curve,
+        Vertex::new(start, tol.linear),
+        Vertex::new(end, tol.linear),
+        tol.linear,
+    ))
+}
+
+fn orient_edge_for_points(
+    edge: &Edge,
+    start: Point3,
+    end: Point3,
+    tol: &Tolerance,
+) -> Option<OrientedEdge> {
+    if (edge.start_vertex.point - start).norm() <= tol.linear * 10.0
+        && (edge.end_vertex.point - end).norm() <= tol.linear * 10.0
+    {
+        return Some(OrientedEdge::forward(edge.clone()));
+    }
+    if (edge.end_vertex.point - start).norm() <= tol.linear * 10.0
+        && (edge.start_vertex.point - end).norm() <= tol.linear * 10.0
+    {
+        return Some(OrientedEdge::reversed(edge.clone()));
+    }
+    None
+}
+
+fn edge_lies_on_recognized_cylinder_patch(
+    edge: &Edge,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> bool {
+    let Some((z_min, z_max)) = cylinder_patch_z_span(surface, tol) else {
+        return false;
+    };
+    let radius = (surface.control_points[0][0].point.x.powi(2)
+        + surface.control_points[0][0].point.y.powi(2))
+    .sqrt();
+    let (t_min, t_max) = edge.curve.param_range();
+    (0..=8).all(|i| {
+        let t = t_min + (t_max - t_min) * (i as f64 / 8.0);
+        let point = edge.curve.evaluate(t);
+        let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
+        point.z >= z_min - tol.linear * 10.0
+            && point.z <= z_max + tol.linear * 10.0
+            && (radial_distance - radius).abs() <= tol.linear * 10.0
+    })
 }
 
 fn classify_face_against_mesh(

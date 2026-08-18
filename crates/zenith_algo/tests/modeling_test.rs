@@ -1245,7 +1245,7 @@ fn test_batch_split_applies_plane_cylinder_curved_edge_to_planar_operand() {
     );
 
     assert_eq!(batches.splits_a.len(), 1);
-    assert!(batches.splits_b.is_empty());
+    assert_eq!(batches.splits_b.len(), 1);
     assert_eq!(batches.splits_a[0].split_edge_count, 1);
     assert_eq!(batches.splits_a[0].result.applied_split_count, 1);
     assert_eq!(batches.splits_a[0].result.skipped_split_count, 0);
@@ -1257,6 +1257,15 @@ fn test_batch_split_applies_plane_cylinder_curved_edge_to_planar_operand() {
             .edges
             .iter()
             .any(|edge| edge.edge.curve.degree == 2));
+        assert!(face.validate_pcurves(&tol, 8).unwrap().is_valid());
+    }
+    assert_eq!(batches.splits_b[0].split_edge_count, 1);
+    assert_eq!(batches.splits_b[0].result.applied_split_count, 1);
+    assert_eq!(batches.splits_b[0].result.skipped_split_count, 0);
+    assert_eq!(batches.splits_b[0].result.faces.len(), 2);
+    for face in &batches.splits_b[0].result.faces {
+        assert!(matches!(face.geometry, FaceGeometry::Nurbs(_)));
+        assert!(face.outer_wire.is_closed(&tol));
         assert!(face.validate_pcurves(&tol, 8).unwrap().is_valid());
     }
 }
@@ -1333,6 +1342,125 @@ fn test_curved_planar_split_tessellates_arc_boundary() {
             && point.z > z - 1e-6
             && point.z < z + 1e-6
     }));
+}
+
+#[test]
+fn test_nurbs_cylinder_side_split_by_horizontal_arc_edge() {
+    let tol = Tolerance::default();
+    let z = 15.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    let cut_plane = PlaneSurface3::new(
+        Point3::new(10.0, 0.0, z),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let points = [
+        Point3::new(10.0, 0.0, z),
+        Point3::new(12.0, 12.0, z),
+        Point3::new(0.0, 10.0, z),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let boundary_edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let cut_face = Face::simple(
+        FaceGeometry::Plane(cut_plane),
+        Wire::new(
+            boundary_edges
+                .into_iter()
+                .map(OrientedEdge::forward)
+                .collect(),
+        ),
+    );
+    let curved_edge = zenith_algo::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        &[cut_face],
+        &[side_face.clone()],
+        &tol,
+    )
+    .into_iter()
+    .next()
+    .expect("plane-cylinder curve should become an edge candidate")
+    .edge;
+
+    let split_faces =
+        zenith_algo::BrepIntersectionBuilder::split_face_by_edge(&side_face, &curved_edge, &tol)
+            .expect("cylinder side split");
+
+    assert_eq!(split_faces.len(), 2);
+    for face in split_faces {
+        assert!(matches!(face.geometry, FaceGeometry::Nurbs(_)));
+        assert!(face.outer_wire.is_closed(&tol));
+        assert!(face.outer_wire.edges.iter().any(|edge| {
+            edge.edge.id == curved_edge.id && edge.edge.curve.degree == curved_edge.curve.degree
+        }));
+        assert!(face.pcurves.is_some());
+        assert!(face.validate_pcurves(&tol, 8).unwrap().is_valid());
+    }
+}
+
+#[test]
+fn test_plane_cylinder_curve_split_candidate_splits_both_faces() {
+    let tol = Tolerance::default();
+    let z = 15.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    let cut_plane = PlaneSurface3::new(
+        Point3::new(10.0, 0.0, z),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let points = [
+        Point3::new(10.0, 0.0, z),
+        Point3::new(12.0, 12.0, z),
+        Point3::new(0.0, 10.0, z),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let boundary_edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[0].clone()).unwrap(),
+    ];
+    let cut_face = Face::simple(
+        FaceGeometry::Plane(cut_plane),
+        Wire::new(
+            boundary_edges
+                .into_iter()
+                .map(OrientedEdge::forward)
+                .collect(),
+        ),
+    );
+
+    let splits = zenith_algo::BrepIntersectionBuilder::collect_planar_face_split_candidates(
+        &[cut_face],
+        &[side_face],
+        &tol,
+    );
+
+    assert_eq!(splits.len(), 1);
+    assert_eq!(splits[0].split_edge.curve.degree, 2);
+    assert_eq!(splits[0].split_faces_a.len(), 2);
+    assert_eq!(splits[0].split_faces_b.len(), 2);
+    assert!(splits[0]
+        .split_faces_a
+        .iter()
+        .all(|face| matches!(face.geometry, FaceGeometry::Plane(_))));
+    assert!(splits[0]
+        .split_faces_b
+        .iter()
+        .all(|face| matches!(face.geometry, FaceGeometry::Nurbs(_))));
 }
 
 #[test]
