@@ -73,6 +73,10 @@ impl BooleanEngine {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
         }
 
+        if !Self::has_face_pair_candidates(solid_a, solid_b, tol) {
+            return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol);
+        }
+
         let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
             solid_a, solid_b, op, tol,
         );
@@ -109,6 +113,64 @@ impl BooleanEngine {
             report.selected_with_caps_non_manifold_edge_use_count,
             report.selected_with_caps_same_direction_edge_use_count
         ))
+    }
+
+    fn has_face_pair_candidates(solid_a: &Solid, solid_b: &Solid, tol: &Tolerance) -> bool {
+        !crate::BrepIntersectionBuilder::collect_face_pair_candidates(
+            &solid_a.outer_shell.faces,
+            &solid_b.outer_shell.faces,
+            tol,
+        )
+        .is_empty()
+    }
+
+    fn boolean_solids_exact_without_intersections(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        let a_inside_b = Self::solid_is_inside_or_on_boundary(solid_a, solid_b, tol);
+        let b_inside_a = Self::solid_is_inside_or_on_boundary(solid_b, solid_a, tol);
+
+        match op {
+            BooleanOpType::Union => {
+                if a_inside_b {
+                    Ok(solid_b.clone())
+                } else if b_inside_a {
+                    Ok(solid_a.clone())
+                } else {
+                    Err("Exact B-Rep boolean union of disjoint solids requires compound result support".to_string())
+                }
+            }
+            BooleanOpType::Intersection => {
+                if a_inside_b {
+                    Ok(solid_a.clone())
+                } else if b_inside_a {
+                    Ok(solid_b.clone())
+                } else {
+                    Err("Exact B-Rep boolean intersection is empty for disjoint solids".to_string())
+                }
+            }
+            BooleanOpType::Difference => {
+                if a_inside_b {
+                    Err("Exact B-Rep boolean difference is empty because input A is contained in input B".to_string())
+                } else if b_inside_a {
+                    Err("Exact B-Rep boolean difference with a contained subtracting solid requires inner-shell cavity construction".to_string())
+                } else {
+                    Ok(solid_a.clone())
+                }
+            }
+        }
+    }
+
+    fn solid_is_inside_or_on_boundary(solid: &Solid, container: &Solid, tol: &Tolerance) -> bool {
+        solid.outer_shell.faces.iter().all(|face| {
+            matches!(
+                crate::BrepIntersectionBuilder::classify_face_against_solid(face, container, tol),
+                crate::FaceRegionLocation::Inside | crate::FaceRegionLocation::Boundary
+            )
+        })
     }
 
     pub fn prepare_exact_boolean(

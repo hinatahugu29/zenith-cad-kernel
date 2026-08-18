@@ -326,6 +326,71 @@ fn test_exact_brep_boolean_returns_inner_solid_for_contained_intersection() {
 }
 
 #[test]
+fn test_exact_brep_boolean_returns_outer_solid_for_contained_union() {
+    let tol = Tolerance::default();
+    let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let inner = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(3.0, 3.0, 3.0).unwrap(),
+        Vec3::new(2.0, 2.0, 2.0),
+    );
+
+    let union = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &outer,
+        &inner,
+        zenith_algo::BooleanOpType::Union,
+        &tol,
+    )
+    .expect("contained exact union should return the outer B-Rep solid");
+
+    assert_eq!(union.outer_shell.faces.len(), outer.outer_shell.faces.len());
+    assert!(union.is_topologically_valid(&tol));
+}
+
+#[test]
+fn test_exact_brep_boolean_reports_contained_difference_requires_cavity() {
+    let tol = Tolerance::default();
+    let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let inner = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(3.0, 3.0, 3.0).unwrap(),
+        Vec3::new(2.0, 2.0, 2.0),
+    );
+
+    let err = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &outer,
+        &inner,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect_err("contained exact difference needs inner-shell cavity construction");
+
+    assert!(err.contains("inner-shell cavity construction"));
+}
+
+#[test]
+fn test_exact_brep_boolean_returns_left_solid_for_disjoint_difference() {
+    let tol = Tolerance::default();
+    let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let solid_b = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(2.0, 2.0, 2.0).unwrap(),
+        Vec3::new(20.0, 20.0, 20.0),
+    );
+
+    let difference = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &solid_a,
+        &solid_b,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("disjoint exact difference should return input A");
+
+    assert_eq!(
+        difference.outer_shell.faces.len(),
+        solid_a.outer_shell.faces.len()
+    );
+    assert!(difference.is_topologically_valid(&tol));
+}
+
+#[test]
 fn test_exact_brep_boolean_rejects_empty_disjoint_intersection() {
     let tol = Tolerance::default();
     let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
@@ -342,7 +407,7 @@ fn test_exact_brep_boolean_rejects_empty_disjoint_intersection() {
     )
     .expect_err("disjoint exact intersection should not build an empty solid");
 
-    assert!(err.contains("no face-pair intersection candidates"));
+    assert!(err.contains("intersection is empty for disjoint solids"));
 }
 
 #[test]
