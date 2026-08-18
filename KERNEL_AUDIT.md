@@ -61,6 +61,7 @@ Current hardening:
 - Added a regression test proving exact B-Rep boolean does not fall back to preview mesh output.
 - Added a `BrepIntersectionBuilder` scaffold that enumerates face-pair support intersections for exact boolean pre-processing.
 - Added plane/plane support-intersection candidates with line and coincident classifications, plus tests proving candidate lines lie on both source planes.
+- Added face-boundary AABB broad phase filtering before support-surface intersection, avoiding obvious disjoint face pairs in the future exact boolean pipeline.
 
 ### 2. Planar trimming is still mesh-only
 

@@ -1,4 +1,4 @@
-use zenith_math::{Point3, Tolerance, Vec3, Vec3Ext};
+use zenith_math::{BoundingBox3, Point3, Tolerance, Vec3, Vec3Ext};
 use zenith_topo::{Face, FaceGeometry};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,9 +24,18 @@ impl BrepIntersectionBuilder {
         tol: &Tolerance,
     ) -> Vec<FaceIntersectionCandidate> {
         let mut candidates = Vec::new();
+        let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_boundary_bbox).collect();
+        let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_boundary_bbox).collect();
 
         for (face_a_index, face_a) in faces_a.iter().enumerate() {
             for (face_b_index, face_b) in faces_b.iter().enumerate() {
+                if !face_bboxes_intersect(
+                    bboxes_a[face_a_index].as_ref(),
+                    bboxes_b[face_b_index].as_ref(),
+                    tol,
+                ) {
+                    continue;
+                }
                 if let Some(kind) = intersect_face_supports(face_a, face_b, tol) {
                     candidates.push(FaceIntersectionCandidate {
                         face_a_index,
@@ -39,6 +48,39 @@ impl BrepIntersectionBuilder {
 
         candidates
     }
+}
+
+fn face_boundary_bbox(face: &Face) -> Option<BoundingBox3> {
+    let mut bbox = BoundingBox3::empty();
+    for point in face.outer_wire.sample_points(12) {
+        if point3_is_finite(point) {
+            bbox.extend_point(point);
+        }
+    }
+    for wire in &face.inner_wires {
+        for point in wire.sample_points(12) {
+            if point3_is_finite(point) {
+                bbox.extend_point(point);
+            }
+        }
+    }
+
+    bbox.is_valid().then_some(bbox)
+}
+
+fn face_bboxes_intersect(
+    bbox_a: Option<&BoundingBox3>,
+    bbox_b: Option<&BoundingBox3>,
+    tol: &Tolerance,
+) -> bool {
+    match (bbox_a, bbox_b) {
+        (Some(a), Some(b)) => a.intersects(b, tol.linear),
+        _ => true,
+    }
+}
+
+fn point3_is_finite(point: Point3) -> bool {
+    point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
 }
 
 fn intersect_face_supports(
