@@ -24,6 +24,8 @@ pub struct ShellValidationReport {
     pub same_direction_edge_use_count: usize,
     pub duplicate_edge_use_count: usize,
     pub duplicate_face_count: usize,
+    pub degenerate_face_count: usize,
+    pub min_planar_face_area: f64,
     pub degenerate_edge_use_count: usize,
     pub min_edge_use_length: f64,
     pub non_finite_point_count: usize,
@@ -83,6 +85,8 @@ impl Shell {
             same_direction_edge_use_count: 0,
             duplicate_edge_use_count: 0,
             duplicate_face_count: 0,
+            degenerate_face_count: 0,
+            min_planar_face_area: f64::INFINITY,
             degenerate_edge_use_count: 0,
             min_edge_use_length: f64::INFINITY,
             non_finite_point_count: 0,
@@ -427,8 +431,15 @@ fn validate_planar_face_orientation(
     };
     let area = pcurve_loop_signed_area(&pcurves.outer_loop.segments, 8);
     if area.abs() <= tol.parametric {
+        report.degenerate_face_count += 1;
+        report.min_planar_face_area = report.min_planar_face_area.min(area.abs());
+        report.errors.push(format!(
+            "Face {face_index} planar p-curve outer loop is degenerate; area {:.6e}",
+            area.abs()
+        ));
         return;
     }
+    report.min_planar_face_area = report.min_planar_face_area.min(area.abs());
 
     let oriented_area = if face.orientation.is_forward() {
         area

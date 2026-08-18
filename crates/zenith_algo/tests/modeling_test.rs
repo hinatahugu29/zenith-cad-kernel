@@ -631,6 +631,26 @@ fn test_closed_shell_validation_reports_duplicate_face_and_edge_uses() {
 }
 
 #[test]
+fn test_closed_shell_validation_rejects_degenerate_planar_face_area() {
+    let tol = Tolerance::default();
+    let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
+    let mut faces = box_solid.outer_shell.faces.clone();
+    let pcurves = faces[0].pcurves.as_mut().expect("plane p-curves");
+    for segment in &mut pcurves.outer_loop.segments {
+        for control in &mut segment.curve.control_points {
+            control.point.y = 0.0;
+        }
+    }
+
+    let corrupted_shell = Shell::closed(faces);
+    let report = corrupted_shell.validate_closed(&tol);
+
+    assert!(!report.is_valid());
+    assert!(report.degenerate_face_count > 0);
+    assert!(report.min_planar_face_area <= tol.parametric);
+}
+
+#[test]
 fn test_solid_try_simple_accepts_valid_primitives() {
     let tol = Tolerance::default();
     let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();

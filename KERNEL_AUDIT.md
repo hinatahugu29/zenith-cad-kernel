@@ -140,6 +140,8 @@ Current hardening:
 - Added a regression test proving a NaN curve control point is reported even when the owning topological vertices are finite.
 - Shell validation now reports duplicate face boundary signatures and duplicate directed edge uses so copied/overlapping topology is diagnosable before boolean or export steps.
 - Added a regression test proving a duplicated box face is reported through dedicated duplicate face/edge-use counters.
+- Shell validation now rejects degenerate planar faces whose p-curve outer loop collapses to near-zero signed area.
+- Added a regression test proving a planar face with collapsed UV trim area is rejected even when the rest of the shell remains present.
 - Added `Solid::try_new()` / `Solid::try_simple()` so callers can create solids through the validation gate and receive structured reports on failure.
 - Added an internal `zenith_algo::validated_solid()` helper and moved normal `zenith_algo` solid generation paths onto the validated generation gate.
 - Fixed `DirectModeling::push_pull_face()` plane reconstruction so moved planar faces rebuild their supporting plane from shifted boundary points, keeping p-curves, faces, and wires coherent.
