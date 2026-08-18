@@ -136,6 +136,8 @@ Current hardening:
 - Added a regression test proving a zero-length edge is reported even when its curve endpoints remain coherent with the collapsed vertices.
 - Shell validation now checks planar face orientation consistency through p-curve outer-loop winding.
 - Added a regression test proving a closed box shell with one inward planar face orientation is rejected without relying on broken edge pairing.
+- Shell validation now rejects non-finite edge-use vertices and curve samples before NaN/Inf can leak into downstream tessellation or booleans.
+- Added a regression test proving a NaN curve control point is reported even when the owning topological vertices are finite.
 - Added `Solid::try_new()` / `Solid::try_simple()` so callers can create solids through the validation gate and receive structured reports on failure.
 - Added an internal `zenith_algo::validated_solid()` helper and moved normal `zenith_algo` solid generation paths onto the validated generation gate.
 - Fixed `DirectModeling::push_pull_face()` plane reconstruction so moved planar faces rebuild their supporting plane from shifted boundary points, keeping p-curves, faces, and wires coherent.

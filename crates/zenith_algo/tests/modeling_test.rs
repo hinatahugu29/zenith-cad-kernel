@@ -599,6 +599,23 @@ fn test_closed_shell_validation_rejects_inward_planar_face_orientation() {
 }
 
 #[test]
+fn test_closed_shell_validation_rejects_non_finite_edge_curve_points() {
+    let tol = Tolerance::default();
+    let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
+    let mut faces = box_solid.outer_shell.faces.clone();
+    faces[0].outer_wire.edges[0].edge.curve.control_points[0]
+        .point
+        .x = f64::NAN;
+    faces[0].pcurves = None;
+
+    let corrupted_shell = Shell::closed(faces);
+    let report = corrupted_shell.validate_closed(&tol);
+
+    assert!(!report.is_valid());
+    assert!(report.non_finite_point_count > 0);
+}
+
+#[test]
 fn test_solid_try_simple_accepts_valid_primitives() {
     let tol = Tolerance::default();
     let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();

@@ -24,6 +24,7 @@ pub struct ShellValidationReport {
     pub same_direction_edge_use_count: usize,
     pub degenerate_edge_use_count: usize,
     pub min_edge_use_length: f64,
+    pub non_finite_point_count: usize,
     pub planar_face_orientation_mismatch_count: usize,
     pub min_planar_face_oriented_area: f64,
     pub edge_curve_endpoint_mismatch_count: usize,
@@ -80,6 +81,7 @@ impl Shell {
             same_direction_edge_use_count: 0,
             degenerate_edge_use_count: 0,
             min_edge_use_length: f64::INFINITY,
+            non_finite_point_count: 0,
             planar_face_orientation_mismatch_count: 0,
             min_planar_face_oriented_area: f64::INFINITY,
             edge_curve_endpoint_mismatch_count: 0,
@@ -220,13 +222,22 @@ fn collect_wire_edge_uses(
     tol: &Tolerance,
 ) {
     for (edge_index, edge) in edges.iter().enumerate() {
+        validate_finite_edge_use_points(face_index, wire_index, edge_index, edge, report);
+
         let edge_length = sampled_edge_length(edge, 8);
-        report.min_edge_use_length = report.min_edge_use_length.min(edge_length);
-        if edge_length <= tol.linear {
+        if !edge_length.is_finite() {
+            report.non_finite_point_count += 1;
+            report.errors.push(format!(
+                "Edge use f{face_index}:w{wire_index}:e{edge_index} has non-finite sampled length"
+            ));
+        } else if edge_length <= tol.linear {
+            report.min_edge_use_length = report.min_edge_use_length.min(edge_length);
             report.degenerate_edge_use_count += 1;
             report.errors.push(format!(
                 "Edge use f{face_index}:w{wire_index}:e{edge_index} is degenerate; sampled length {edge_length:.6e}"
             ));
+        } else {
+            report.min_edge_use_length = report.min_edge_use_length.min(edge_length);
         }
 
         let curve_start_distance =
@@ -250,6 +261,35 @@ fn collect_wire_edge_uses(
             end: edge.end_vertex().point,
         });
     }
+}
+
+fn validate_finite_edge_use_points(
+    face_index: usize,
+    wire_index: usize,
+    edge_index: usize,
+    edge: &crate::edge::OrientedEdge,
+    report: &mut ShellValidationReport,
+) {
+    let checks = [
+        ("start vertex", edge.start_vertex().point),
+        ("end vertex", edge.end_vertex().point),
+        ("curve start", edge.evaluate_normalized(0.0)),
+        ("curve midpoint", edge.evaluate_normalized(0.5)),
+        ("curve end", edge.evaluate_normalized(1.0)),
+    ];
+
+    for (label, point) in checks {
+        if !point3_is_finite(point) {
+            report.non_finite_point_count += 1;
+            report.errors.push(format!(
+                "Edge use f{face_index}:w{wire_index}:e{edge_index} has non-finite {label}"
+            ));
+        }
+    }
+}
+
+fn point3_is_finite(point: Point3) -> bool {
+    point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
 }
 
 fn sampled_edge_length(edge: &crate::edge::OrientedEdge, segments: usize) -> f64 {
