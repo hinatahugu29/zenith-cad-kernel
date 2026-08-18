@@ -541,6 +541,30 @@ fn test_closed_shell_validation_rejects_same_direction_shared_edge() {
 }
 
 #[test]
+fn test_closed_shell_validation_rejects_edge_curve_endpoint_mismatch() {
+    let tol = Tolerance::default();
+    let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
+    let mut faces = box_solid.outer_shell.faces.clone();
+    let corrupt_edge = &mut faces[0].outer_wire.edges[0].edge;
+    corrupt_edge.curve = NurbsCurve3::bspline_from_points(
+        1,
+        vec![
+            corrupt_edge.start_vertex.point + Vec3::new(1.0, 0.0, 0.0),
+            corrupt_edge.end_vertex.point + Vec3::new(1.0, 0.0, 0.0),
+        ],
+    )
+    .unwrap();
+    faces[0].pcurves = None;
+
+    let corrupted_shell = Shell::closed(faces);
+    let report = corrupted_shell.validate_closed(&tol);
+
+    assert!(!report.is_valid());
+    assert!(report.edge_curve_endpoint_mismatch_count > 0);
+    assert!(report.max_edge_curve_endpoint_distance > 0.5);
+}
+
+#[test]
 fn test_solid_try_simple_accepts_valid_primitives() {
     let tol = Tolerance::default();
     let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();

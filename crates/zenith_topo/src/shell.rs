@@ -22,6 +22,8 @@ pub struct ShellValidationReport {
     pub unmatched_edge_use_count: usize,
     pub non_manifold_edge_use_count: usize,
     pub same_direction_edge_use_count: usize,
+    pub edge_curve_endpoint_mismatch_count: usize,
+    pub max_edge_curve_endpoint_distance: f64,
     pub off_surface_boundary_count: usize,
     pub max_boundary_surface_distance: f64,
     pub pcurve_mismatch_count: usize,
@@ -72,6 +74,8 @@ impl Shell {
             unmatched_edge_use_count: 0,
             non_manifold_edge_use_count: 0,
             same_direction_edge_use_count: 0,
+            edge_curve_endpoint_mismatch_count: 0,
+            max_edge_curve_endpoint_distance: 0.0,
             off_surface_boundary_count: 0,
             max_boundary_surface_distance: 0.0,
             pcurve_mismatch_count: 0,
@@ -121,7 +125,14 @@ impl Shell {
                     .errors
                     .push(format!("Face {face_index} outer wire is open"));
             }
-            collect_wire_edge_uses(face_index, 0, &face.outer_wire.edges, &mut edge_uses);
+            collect_wire_edge_uses(
+                face_index,
+                0,
+                &face.outer_wire.edges,
+                &mut edge_uses,
+                &mut report,
+                tol,
+            );
 
             for (inner_index, wire) in face.inner_wires.iter().enumerate() {
                 if !wire.is_closed(tol) {
@@ -130,7 +141,14 @@ impl Shell {
                         "Face {face_index} inner wire {inner_index} is open"
                     ));
                 }
-                collect_wire_edge_uses(face_index, inner_index + 1, &wire.edges, &mut edge_uses);
+                collect_wire_edge_uses(
+                    face_index,
+                    inner_index + 1,
+                    &wire.edges,
+                    &mut edge_uses,
+                    &mut report,
+                    tol,
+                );
             }
         }
 
@@ -185,8 +203,23 @@ fn collect_wire_edge_uses(
     wire_index: usize,
     edges: &[crate::edge::OrientedEdge],
     edge_uses: &mut Vec<EdgeUse>,
+    report: &mut ShellValidationReport,
+    tol: &Tolerance,
 ) {
     for (edge_index, edge) in edges.iter().enumerate() {
+        let curve_start_distance =
+            (edge.evaluate_normalized(0.0) - edge.start_vertex().point).norm();
+        let curve_end_distance = (edge.evaluate_normalized(1.0) - edge.end_vertex().point).norm();
+        let max_distance = curve_start_distance.max(curve_end_distance);
+        report.max_edge_curve_endpoint_distance =
+            report.max_edge_curve_endpoint_distance.max(max_distance);
+        if max_distance > tol.linear {
+            report.edge_curve_endpoint_mismatch_count += 1;
+            report.errors.push(format!(
+                "Edge use f{face_index}:w{wire_index}:e{edge_index} curve endpoints differ from vertices by {max_distance:.6e}"
+            ));
+        }
+
         edge_uses.push(EdgeUse {
             face_index,
             wire_index,
