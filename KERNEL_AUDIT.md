@@ -67,6 +67,7 @@ Current hardening:
 - Trim-bounded plane/plane line candidates can now be promoted into linear topology `Edge` candidates while preserving source face indices for the future split stage.
 - Added an initial planar face split step for linear intersection edges crossing an outer-loop-only planar face, producing two new p-curve-backed planar faces for the future exact boolean reconstruction stage.
 - Added collection of paired planar split candidates, so an intersection edge can now produce split source faces on both boolean operands before classification.
+- Added initial split-face classification against a solid as `Inside`, `Outside`, or `Boundary` using a representative face point, current tessellated-solid ray casting, and mesh boundary distance. This is a replaceable approximation until exact B-Rep point-in-solid classification is implemented.
 
 ### 2. Planar trimming is still mesh-only
 

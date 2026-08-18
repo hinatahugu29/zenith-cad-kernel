@@ -24,8 +24,9 @@ use zenith_topo::{Shell, Solid};
 
 pub use boolean::{BooleanEngine, BooleanOpType};
 pub use brep_intersection::{
-    BrepIntersectionBuilder, FaceIntersectionCandidate, FaceIntersectionKind,
-    IntersectionEdgeCandidate, PlanarFaceSplitCandidate,
+    BrepIntersectionBuilder, ClassifiedFacePiece, ClassifiedPlanarFaceSplitCandidate,
+    FaceIntersectionCandidate, FaceIntersectionKind, FaceRegionLocation, IntersectionEdgeCandidate,
+    PlanarFaceSplitCandidate,
 };
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;

@@ -1,5 +1,7 @@
 use zenith_geom::{NurbsCurve3, PlaneSurface3};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec3, Vec3Ext};
+use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
+use zenith_topo::Solid;
 use zenith_topo::{Edge, Face, FaceGeometry, FacePcurveLoop, OrientedEdge, Vertex, Wire};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,6 +37,28 @@ pub struct PlanarFaceSplitCandidate {
     pub split_edge: Edge,
     pub split_faces_a: Vec<Face>,
     pub split_faces_b: Vec<Face>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaceRegionLocation {
+    Inside,
+    Outside,
+    Boundary,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassifiedFacePiece {
+    pub face: Face,
+    pub location: FaceRegionLocation,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassifiedPlanarFaceSplitCandidate {
+    pub face_a_index: usize,
+    pub face_b_index: usize,
+    pub split_edge: Edge,
+    pub split_faces_a: Vec<ClassifiedFacePiece>,
+    pub split_faces_b: Vec<ClassifiedFacePiece>,
 }
 
 pub struct BrepIntersectionBuilder;
@@ -147,6 +171,58 @@ impl BrepIntersectionBuilder {
                 })
             })
             .collect()
+    }
+
+    pub fn collect_classified_planar_face_split_candidates(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        tol: &Tolerance,
+    ) -> Vec<ClassifiedPlanarFaceSplitCandidate> {
+        let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
+        let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
+
+        Self::collect_planar_face_split_candidates(
+            &solid_a.outer_shell.faces,
+            &solid_b.outer_shell.faces,
+            tol,
+        )
+        .into_iter()
+        .map(|candidate| {
+            let split_faces_a = candidate
+                .split_faces_a
+                .into_iter()
+                .map(|face| ClassifiedFacePiece {
+                    location: classify_face_against_mesh(&face, &mesh_b, tol),
+                    face,
+                })
+                .collect();
+            let split_faces_b = candidate
+                .split_faces_b
+                .into_iter()
+                .map(|face| ClassifiedFacePiece {
+                    location: classify_face_against_mesh(&face, &mesh_a, tol),
+                    face,
+                })
+                .collect();
+
+            ClassifiedPlanarFaceSplitCandidate {
+                face_a_index: candidate.face_a_index,
+                face_b_index: candidate.face_b_index,
+                split_edge: candidate.split_edge,
+                split_faces_a,
+                split_faces_b,
+            }
+        })
+        .collect()
+    }
+
+    pub fn classify_face_against_solid(
+        face: &Face,
+        solid: &Solid,
+        tol: &Tolerance,
+    ) -> FaceRegionLocation {
+        let mesh = tessellate_solid(solid, &TessellationParams::default());
+        classify_face_against_mesh(face, &mesh, tol)
     }
 
     pub fn split_planar_face_by_edge(
@@ -333,6 +409,96 @@ fn face_from_polygon(
         template.orientation,
         template.tolerance,
     ))
+}
+
+fn classify_face_against_mesh(
+    face: &Face,
+    mesh: &TriangleMesh,
+    tol: &Tolerance,
+) -> FaceRegionLocation {
+    let sample = representative_face_point(face);
+    if point_mesh_distance(sample, mesh) <= tol.linear * 100.0 {
+        return FaceRegionLocation::Boundary;
+    }
+    if crate::BooleanEngine::is_point_inside_mesh(sample, mesh) {
+        FaceRegionLocation::Inside
+    } else {
+        FaceRegionLocation::Outside
+    }
+}
+
+fn representative_face_point(face: &Face) -> Point3 {
+    let points = face.outer_wire.sample_points(2);
+    if points.is_empty() {
+        return Point3::new(0.0, 0.0, 0.0);
+    }
+
+    let sum = points
+        .iter()
+        .fold(Vec3::new(0.0, 0.0, 0.0), |acc, point| acc + point.coords);
+    Point3::from(sum / points.len() as f64)
+}
+
+fn point_mesh_distance(point: Point3, mesh: &TriangleMesh) -> f64 {
+    mesh.indices
+        .iter()
+        .map(|tri| {
+            let a = mesh.positions[tri[0] as usize];
+            let b = mesh.positions[tri[1] as usize];
+            let c = mesh.positions[tri[2] as usize];
+            point_triangle_distance(point, a, b, c)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+fn point_triangle_distance(point: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
+    let ab = b - a;
+    let ac = c - a;
+    let ap = point - a;
+
+    let d1 = ab.dot(&ap);
+    let d2 = ac.dot(&ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return (point - a).norm();
+    }
+
+    let bp = point - b;
+    let d3 = ab.dot(&bp);
+    let d4 = ac.dot(&bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        return (point - b).norm();
+    }
+
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return (point - (a + ab * v)).norm();
+    }
+
+    let cp = point - c;
+    let d5 = ab.dot(&cp);
+    let d6 = ac.dot(&cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        return (point - c).norm();
+    }
+
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return (point - (a + ac * w)).norm();
+    }
+
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return (point - (b + (c - b) * w)).norm();
+    }
+
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    let closest = a + ab * v + ac * w;
+    (point - closest).norm()
 }
 
 fn face_boundary_bbox(face: &Face) -> Option<BoundingBox3> {

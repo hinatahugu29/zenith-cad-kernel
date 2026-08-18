@@ -640,6 +640,82 @@ fn test_brep_intersection_collects_planar_face_split_candidates() {
 }
 
 #[test]
+fn test_brep_face_classification_against_solid() {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let make_face = |points: [Point3; 4], normal: Vec3| {
+        let vertices: Vec<Vertex> = points
+            .iter()
+            .map(|point| Vertex::from_point(*point))
+            .collect();
+        let edges = vec![
+            Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+            Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+            Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+            Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+        ];
+        let wire = Wire::new(edges.into_iter().map(OrientedEdge::forward).collect());
+        let u_axis = (points[1] - points[0]).normalize();
+        let v_axis = normal.cross(&u_axis).normalize();
+        let plane = PlaneSurface3::new(points[0], u_axis, v_axis).unwrap();
+        Face::simple(FaceGeometry::Plane(plane), wire)
+    };
+
+    let inside_face = make_face(
+        [
+            Point3::new(2.0, 2.0, 5.0),
+            Point3::new(4.0, 2.0, 5.0),
+            Point3::new(4.0, 4.0, 5.0),
+            Point3::new(2.0, 4.0, 5.0),
+        ],
+        Vec3::new(0.0, 0.0, 1.0),
+    );
+    let outside_face = make_face(
+        [
+            Point3::new(12.0, 2.0, 5.0),
+            Point3::new(14.0, 2.0, 5.0),
+            Point3::new(14.0, 4.0, 5.0),
+            Point3::new(12.0, 4.0, 5.0),
+        ],
+        Vec3::new(0.0, 0.0, 1.0),
+    );
+    let boundary_face = make_face(
+        [
+            Point3::new(2.0, 2.0, 0.0),
+            Point3::new(4.0, 2.0, 0.0),
+            Point3::new(4.0, 4.0, 0.0),
+            Point3::new(2.0, 4.0, 0.0),
+        ],
+        Vec3::new(0.0, 0.0, 1.0),
+    );
+
+    assert_eq!(
+        zenith_algo::BrepIntersectionBuilder::classify_face_against_solid(
+            &inside_face,
+            &solid,
+            &tol
+        ),
+        zenith_algo::FaceRegionLocation::Inside
+    );
+    assert_eq!(
+        zenith_algo::BrepIntersectionBuilder::classify_face_against_solid(
+            &outside_face,
+            &solid,
+            &tol
+        ),
+        zenith_algo::FaceRegionLocation::Outside
+    );
+    assert_eq!(
+        zenith_algo::BrepIntersectionBuilder::classify_face_against_solid(
+            &boundary_face,
+            &solid,
+            &tol
+        ),
+        zenith_algo::FaceRegionLocation::Boundary
+    );
+}
+
+#[test]
 fn test_step_export_solid() {
     let solid = zenith_algo::PrimitiveBuilder::make_box(15.0, 25.0, 35.0).unwrap();
     zenith_io::StepExporter::export_solid_to_file(
