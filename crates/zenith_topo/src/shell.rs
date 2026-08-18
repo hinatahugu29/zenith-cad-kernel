@@ -22,6 +22,8 @@ pub struct ShellValidationReport {
     pub unmatched_edge_use_count: usize,
     pub non_manifold_edge_use_count: usize,
     pub same_direction_edge_use_count: usize,
+    pub duplicate_edge_use_count: usize,
+    pub duplicate_face_count: usize,
     pub degenerate_edge_use_count: usize,
     pub min_edge_use_length: f64,
     pub non_finite_point_count: usize,
@@ -79,6 +81,8 @@ impl Shell {
             unmatched_edge_use_count: 0,
             non_manifold_edge_use_count: 0,
             same_direction_edge_use_count: 0,
+            duplicate_edge_use_count: 0,
+            duplicate_face_count: 0,
             degenerate_edge_use_count: 0,
             min_edge_use_length: f64::INFINITY,
             non_finite_point_count: 0,
@@ -97,6 +101,8 @@ impl Shell {
             report.errors.push("Shell has no faces".to_string());
             return report;
         }
+
+        validate_duplicate_faces(&self.faces, &mut report, tol);
 
         let mut edge_uses = Vec::new();
 
@@ -168,6 +174,7 @@ impl Shell {
         if report.edge_use_count == 0 {
             report.min_edge_use_length = 0.0;
         }
+        validate_duplicate_edge_uses(&edge_uses, &mut report, tol);
 
         for edge_use in &edge_uses {
             let mates: Vec<&EdgeUse> = edge_uses
@@ -261,6 +268,107 @@ fn collect_wire_edge_uses(
             end: edge.end_vertex().point,
         });
     }
+}
+
+fn validate_duplicate_faces(faces: &[Face], report: &mut ShellValidationReport, tol: &Tolerance) {
+    let signatures: Vec<Option<Vec<QuantizedPoint3>>> = faces
+        .iter()
+        .map(|face| face_boundary_signature(face, tol.linear))
+        .collect();
+
+    for i in 0..signatures.len() {
+        let Some(left) = &signatures[i] else {
+            continue;
+        };
+        for (j, right) in signatures.iter().enumerate().skip(i + 1) {
+            let Some(right) = right else {
+                continue;
+            };
+            if left == right {
+                report.duplicate_face_count += 1;
+                report.errors.push(format!(
+                    "Faces {i} and {j} have duplicate boundary signatures"
+                ));
+            }
+        }
+    }
+}
+
+fn validate_duplicate_edge_uses(
+    edge_uses: &[EdgeUse],
+    report: &mut ShellValidationReport,
+    tol: &Tolerance,
+) {
+    for i in 0..edge_uses.len() {
+        if points_same(edge_uses[i].start, edge_uses[i].end, tol.linear) {
+            continue;
+        }
+        for j in i + 1..edge_uses.len() {
+            if points_same(edge_uses[j].start, edge_uses[j].end, tol.linear) {
+                continue;
+            }
+            if same_directed_edge(&edge_uses[i], &edge_uses[j], tol.linear) {
+                report.duplicate_edge_use_count += 1;
+                report.errors.push(format!(
+                    "Edge uses f{}:w{}:e{} and f{}:w{}:e{} are duplicate directed uses",
+                    edge_uses[i].face_index,
+                    edge_uses[i].wire_index,
+                    edge_uses[i].edge_index,
+                    edge_uses[j].face_index,
+                    edge_uses[j].wire_index,
+                    edge_uses[j].edge_index
+                ));
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct QuantizedPoint3 {
+    x: i64,
+    y: i64,
+    z: i64,
+}
+
+fn face_boundary_signature(face: &Face, tol: f64) -> Option<Vec<QuantizedPoint3>> {
+    let mut points = Vec::new();
+    append_wire_signature_points(&face.outer_wire, &mut points, tol)?;
+    for wire in &face.inner_wires {
+        append_wire_signature_points(wire, &mut points, tol)?;
+    }
+
+    points.sort_unstable();
+    points.dedup();
+    if points.is_empty() {
+        None
+    } else {
+        Some(points)
+    }
+}
+
+fn append_wire_signature_points(
+    wire: &crate::wire::Wire,
+    points: &mut Vec<QuantizedPoint3>,
+    tol: f64,
+) -> Option<()> {
+    for edge in &wire.edges {
+        points.push(quantized_point3(edge.start_vertex().point, tol)?);
+        points.push(quantized_point3(edge.end_vertex().point, tol)?);
+    }
+    Some(())
+}
+
+fn quantized_point3(point: Point3, tol: f64) -> Option<QuantizedPoint3> {
+    if !point3_is_finite(point) {
+        return None;
+    }
+
+    let scale = tol.max(1e-12);
+    Some(QuantizedPoint3 {
+        x: (point.x / scale).round() as i64,
+        y: (point.y / scale).round() as i64,
+        z: (point.z / scale).round() as i64,
+    })
 }
 
 fn validate_finite_edge_use_points(
@@ -382,6 +490,10 @@ fn same_edge_use(a: &EdgeUse, b: &EdgeUse) -> bool {
 fn same_undirected_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
     points_same(a.start, b.start, tol) && points_same(a.end, b.end, tol)
         || points_same(a.start, b.end, tol) && points_same(a.end, b.start, tol)
+}
+
+fn same_directed_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
+    points_same(a.start, b.start, tol) && points_same(a.end, b.end, tol)
 }
 
 fn opposite_direction_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {

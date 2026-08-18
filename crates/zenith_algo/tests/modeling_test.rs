@@ -616,6 +616,21 @@ fn test_closed_shell_validation_rejects_non_finite_edge_curve_points() {
 }
 
 #[test]
+fn test_closed_shell_validation_reports_duplicate_face_and_edge_uses() {
+    let tol = Tolerance::default();
+    let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
+    let mut faces = box_solid.outer_shell.faces.clone();
+    faces.push(faces[0].clone());
+
+    let corrupted_shell = Shell::closed(faces);
+    let report = corrupted_shell.validate_closed(&tol);
+
+    assert!(!report.is_valid());
+    assert!(report.duplicate_face_count > 0);
+    assert!(report.duplicate_edge_use_count > 0);
+}
+
+#[test]
 fn test_solid_try_simple_accepts_valid_primitives() {
     let tol = Tolerance::default();
     let box_solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
