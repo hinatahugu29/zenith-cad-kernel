@@ -89,6 +89,57 @@ impl RevolveBuilder {
         NurbsSurface3::new(degree_u, degree_v, ctrl_pts_grid, knots_u, knot_vec_v)
     }
 
+
+    /// 単一セグメント（角度 d_theta <= PI/2）に対するプロファイル曲線の正確な有理2次NURBS回転曲面
+    pub fn revolve_curve_segment(
+        curve: &NurbsCurve3,
+        axis_origin: Point3,
+        axis_dir: Vec3,
+        d_theta: f64,
+        _tol: &Tolerance,
+    ) -> Result<NurbsSurface3, String> {
+        let axis_dir = axis_dir
+            .try_normalize_safe(1e-12)
+            .ok_or("Axis direction is zero")?;
+        let num_u = curve.control_points.len();
+        let degree_u = curve.degree;
+        let degree_v = 2;
+        let wm = (d_theta / 2.0).cos();
+
+        let mut ctrl_pts_grid = vec![Vec::with_capacity(3); num_u];
+
+        for (i, cp) in curve.control_points.iter().enumerate() {
+            let p = cp.point;
+            let v_p = p - axis_origin;
+            let proj_len = v_p.dot(&axis_dir);
+            let p_center = axis_origin + axis_dir * proj_len;
+            let v_radial = p - p_center;
+            let radius = v_radial.norm();
+
+            if radius < 1e-12 {
+                ctrl_pts_grid[i].push(ControlPoint3::new(p, cp.weight));
+                ctrl_pts_grid[i].push(ControlPoint3::new(p, cp.weight * wm));
+                ctrl_pts_grid[i].push(ControlPoint3::new(p, cp.weight));
+            } else {
+                let x_axis = v_radial / radius;
+                let y_axis = axis_dir.cross(&x_axis);
+
+                let p0 = p;
+                let p_mid = p_center + (x_axis * (d_theta / 2.0).cos() + y_axis * (d_theta / 2.0).sin()) * (radius / wm);
+                let p1 = p_center + (x_axis * d_theta.cos() + y_axis * d_theta.sin()) * radius;
+
+                ctrl_pts_grid[i].push(ControlPoint3::new(p0, cp.weight));
+                ctrl_pts_grid[i].push(ControlPoint3::new(p_mid, cp.weight * wm));
+                ctrl_pts_grid[i].push(ControlPoint3::new(p1, cp.weight));
+            }
+        }
+
+        let knots_u = curve.knots.clone();
+        let knots_v = KnotVector::clamped_uniform(3, degree_v);
+        NurbsSurface3::new(degree_u, degree_v, ctrl_pts_grid, knots_u, knots_v)
+    }
+
+
     /// 閉断面ワイヤを軸まわりに360度回転させ、完全閉B-Repソリッド（Solid）を構築
     pub fn revolve_wire_solid(
         wire: &zenith_topo::Wire,
@@ -262,11 +313,12 @@ impl RevolveBuilder {
                     zenith_topo::OrientedEdge::reversed(bot_arc.clone()),
                 ]);
 
-                // 90度回転有理NURBS曲面の構築
+                // 単一回転セグメント有理NURBS曲面の構築
                 let curve = &left_edge.curve;
-                let surf = Self::revolve_curve(curve, axis_origin, axis_dir, d_theta, tol)?;
+                let surf = Self::revolve_curve_segment(curve, axis_origin, axis_dir, d_theta, tol)?;
 
                 faces.push(zenith_topo::Face::simple(zenith_topo::FaceGeometry::Nurbs(surf), face_wire));
+
             }
         }
 
@@ -444,53 +496,30 @@ impl RevolveBuilder {
                 ]);
 
                 let curve = &left_edge.curve;
-                let surf = Self::revolve_curve(curve, axis_origin, axis_dir, d_theta, tol)?;
+                let surf = Self::revolve_curve_segment(curve, axis_origin, axis_dir, d_theta, tol)?;
                 faces.push(zenith_topo::Face::simple(zenith_topo::FaceGeometry::Nurbs(surf), face_wire));
+
             }
         }
 
-        // 5. 始点断面キャップFace（theta = 0）: ワイヤを反転（逆向き共有）、法線 -Y (外向き)
-        let mut start_cap_edges = Vec::with_capacity(num_edges);
-        for i in (0..num_edges).rev() {
-            start_cap_edges.push(zenith_topo::OrientedEdge::reversed(profile_edges[0][i].clone()));
+        // 5. 始点断面キャップFace（theta = 0）: ワイヤ逆順共有、外向き法線
+        let mut start_raw_edges = Vec::with_capacity(num_edges);
+        for i in 0..num_edges {
+            start_raw_edges.push(zenith_topo::OrientedEdge::forward(profile_edges[0][i].clone()));
         }
-        let start_wire = zenith_topo::Wire::new(start_cap_edges);
-        let start_origin = wire.edges[0].start_vertex().point;
-        let v_radial0 = (start_origin - axis_origin) - axis_dir * (start_origin - axis_origin).dot(&axis_dir);
-        let r0_norm = v_radial0.try_normalize_safe(1e-12).unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-        let start_u_axis = -axis_dir;
-        let start_v_axis = r0_norm;
-        let start_plane = zenith_geom::PlaneSurface3::new(start_origin, start_u_axis, start_v_axis).ok_or("Failed plane")?;
-        let start_face = zenith_topo::Face::new(
-            zenith_topo::FaceGeometry::Plane(start_plane),
-            start_wire,
-            vec![],
-            zenith_topo::Orientation::Reversed,
-            tol.linear,
-        );
-
+        let start_raw_wire = zenith_topo::Wire::new(start_raw_edges);
+        let start_face = create_cap_face(&start_raw_wire, true, tol)?;
         faces.push(start_face);
 
-        // 6. 終点断面キャップFace（theta = angle_rad）: ワイヤを正順で共有、法線 +Y' (外向き)
-        let mut end_cap_edges = Vec::with_capacity(num_edges);
+        // 6. 終点断面キャップFace（theta = angle_rad）: ワイヤ正順共有、外向き法線
+        let mut end_raw_edges = Vec::with_capacity(num_edges);
         for i in 0..num_edges {
-            end_cap_edges.push(zenith_topo::OrientedEdge::forward(profile_edges[num_segments][i].clone()));
+            end_raw_edges.push(zenith_topo::OrientedEdge::forward(profile_edges[num_segments][i].clone()));
         }
-        let end_wire = zenith_topo::Wire::new(end_cap_edges);
-        let end_origin = rotated_vertices[num_segments][0].point;
-        let v_radial_end = (end_origin - axis_origin) - axis_dir * (end_origin - axis_origin).dot(&axis_dir);
-        let r_end_norm = v_radial_end.try_normalize_safe(1e-12).unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-        let end_u_axis = r_end_norm;
-        let end_v_axis = axis_dir;
-        let end_plane = zenith_geom::PlaneSurface3::new(end_origin, end_u_axis, end_v_axis).ok_or("Failed plane")?;
-        let end_face = zenith_topo::Face::new(
-            zenith_topo::FaceGeometry::Plane(end_plane),
-            end_wire,
-            vec![],
-            zenith_topo::Orientation::Forward,
-            tol.linear,
-        );
+        let end_raw_wire = zenith_topo::Wire::new(end_raw_edges);
+        let end_face = create_cap_face(&end_raw_wire, false, tol)?;
         faces.push(end_face);
+
 
 
         let shell = zenith_topo::Shell::closed(faces);
@@ -501,6 +530,57 @@ impl RevolveBuilder {
         crate::validated_solid(shell)
     }
 }
+
+/// 閉じた平坦ワイヤから端面キャップFaceを生成（is_bottom: true の場合は反転して逆向き外向き法線にする）
+fn create_cap_face(wire: &zenith_topo::Wire, is_bottom: bool, _tol: &Tolerance) -> Result<zenith_topo::Face, String> {
+    let pts: Vec<Point3> = wire.edges.iter().map(|oe| oe.start_vertex().point).collect();
+    let n_pts = pts.len();
+    if n_pts < 3 {
+        return Err("Cap wire has fewer than 3 vertices".to_string());
+    }
+
+    let mut normal = Vec3::zeros();
+    for i in 0..n_pts {
+        let curr = pts[i];
+        let next = pts[(i + 1) % n_pts];
+        normal.x += (curr.y - next.y) * (curr.z + next.z);
+        normal.y += (curr.z - next.z) * (curr.x + next.x);
+        normal.z += (curr.x - next.x) * (curr.y + next.y);
+    }
+
+    let norm_len = normal.norm();
+    let base_normal = if norm_len > 1e-9 {
+        normal / norm_len
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    };
+
+    let normal = if is_bottom { -base_normal } else { base_normal };
+
+    let p0 = pts[0];
+    let arb = if normal.x.abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_axis = normal.cross(&arb).normalize();
+    let v_axis = normal.cross(&u_axis).normalize();
+
+    let plane = zenith_geom::PlaneSurface3::new(p0, u_axis, v_axis).ok_or("Failed to create cap plane")?;
+
+    let cap_wire = if is_bottom {
+        let mut rev_edges = Vec::with_capacity(n_pts);
+        for oe in wire.edges.iter().rev() {
+            rev_edges.push(zenith_topo::OrientedEdge::new(oe.edge.clone(), oe.orientation.reversed()));
+        }
+        zenith_topo::Wire::new(rev_edges)
+    } else {
+        wire.clone()
+    };
+
+    Ok(zenith_topo::Face::simple(zenith_topo::FaceGeometry::Plane(plane), cap_wire))
+}
+
 
 
 
