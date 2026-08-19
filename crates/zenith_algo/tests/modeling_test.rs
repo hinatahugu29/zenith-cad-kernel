@@ -1652,6 +1652,121 @@ fn test_exact_brep_boolean_cuts_cylinder_lengthwise_with_box() {
 }
 
 #[test]
+fn test_exact_brep_boolean_cuts_rotated_cylinder_lengthwise() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height = 30.0;
+    let cut_x: f64 = 6.0;
+
+    // 円柱軸をZから傾けても、同じ切断が同じ結果を返さなければならない
+    let rotation = zenith_math::Transform3::from_axis_angle(
+        &Vec3::new(1.0, 0.0, 0.0),
+        std::f64::consts::FRAC_PI_2,
+    );
+    let cylinder = zenith_algo::BrepTransform::transform_solid(
+        &zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap(),
+        &rotation,
+    )
+    .unwrap();
+    let cutter = zenith_algo::BrepTransform::transform_solid(
+        &zenith_algo::BrepTransform::translate_solid(
+            &zenith_algo::PrimitiveBuilder::make_box(20.0, 40.0, 50.0).unwrap(),
+            Vec3::new(cut_x, -20.0, -10.0),
+        ),
+        &rotation,
+    )
+    .unwrap();
+
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+        &cylinder,
+        &cutter,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("a rotated cylinder must cut exactly like an axis-aligned one");
+    assert_eq!(result.len(), 1);
+
+    let solid = &result.solids[0];
+    assert!(solid.is_topologically_valid(&tol));
+    assert_eq!(solid.outer_shell.faces.len(), 7);
+    assert_eq!(
+        solid
+            .outer_shell
+            .faces
+            .iter()
+            .filter(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+            .count(),
+        4
+    );
+
+    // X軸まわりの回転なので円柱軸は -Y に倒れ、切断平面 x = cut_x はそのまま
+    for face in &solid.outer_shell.faces {
+        for point in face.outer_wire.sample_points(8) {
+            assert!(
+                point.x <= cut_x + 1e-6,
+                "material left beyond the cut plane"
+            );
+        }
+        if let FaceGeometry::Nurbs(surface) = &face.geometry {
+            let ruling = surface.control_points[0][1].point - surface.control_points[0][0].point;
+            assert!(
+                ruling.normalize().x.abs() < 1e-9 && ruling.normalize().z.abs() < 1e-9,
+                "the recognized patch axis should be along Y after the rotation"
+            );
+        }
+    }
+
+    let segment_area = radius * radius * (cut_x / radius).acos()
+        - cut_x * (radius * radius - cut_x * cut_x).sqrt();
+    let expected = (std::f64::consts::PI * radius * radius - segment_area) * height;
+    let mesh = tessellate_solid(
+        solid,
+        &TessellationParams {
+            u_divisions: 96,
+            v_divisions: 16,
+        },
+    );
+    let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    assert!(
+        (mass.volume - expected).abs() < expected * 5e-3,
+        "volume {} should match analytic {expected}",
+        mass.volume
+    );
+}
+
+#[test]
+fn test_rigid_transform_preserves_brep_and_rejects_scaling() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+
+    let rotation = zenith_math::Transform3::from_axis_angle(
+        &Vec3::new(0.0, 1.0, 0.0),
+        std::f64::consts::FRAC_PI_4,
+    );
+    let rotated = zenith_algo::BrepTransform::transform_solid(&cylinder, &rotation).unwrap();
+    assert!(rotated.is_topologically_valid(&tol));
+
+    // 有理重みが保たれ、側面は傾いた軸まわりの真円柱のまま
+    let axis = rotation.transform_vector(&Vec3::new(0.0, 0.0, 1.0));
+    let base = rotation.transform_point(&Point3::new(0.0, 0.0, 0.0));
+    for face in &rotated.outer_shell.faces {
+        let FaceGeometry::Nurbs(surface) = &face.geometry else {
+            continue;
+        };
+        for step in 0..=8 {
+            let u = step as f64 / 8.0;
+            let point = surface.evaluate(u, 0.5);
+            let offset = point - base;
+            let radial = (offset - axis * offset.dot(&axis)).norm();
+            assert!((radial - 10.0).abs() < 1e-9, "radius drifted to {radial}");
+        }
+    }
+
+    let scaling = zenith_math::Transform3::from_scale(2.0);
+    assert!(zenith_algo::BrepTransform::transform_solid(&cylinder, &scaling).is_err());
+}
+
+#[test]
 fn test_planar_face_imprint_by_interior_loop() {
     let tol = Tolerance::default();
     let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();

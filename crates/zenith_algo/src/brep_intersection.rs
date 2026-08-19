@@ -1221,7 +1221,7 @@ fn split_cylinder_side_face_by_horizontal_edge(
     if !face.inner_wires.is_empty() {
         return Err("NURBS face splitting with inner wires is not implemented yet".to_string());
     }
-    let Some((z_min, z_max)) = cylinder_patch_z_span(surface, tol) else {
+    let Some(patch) = recognize_cylinder_patch(surface, tol) else {
         return Err("Only recognized cylinder-side NURBS patches can be split".to_string());
     };
     if !edge_lies_on_recognized_cylinder_patch(split_edge, surface, tol) {
@@ -1229,15 +1229,16 @@ fn split_cylinder_side_face_by_horizontal_edge(
     }
 
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
-    let split_z = split_edge.start_vertex.point.z;
-    if (split_edge.end_vertex.point.z - split_z).abs() > tol.linear {
-        return Err("Cylinder-side split edge must be horizontal".to_string());
+    let split_axial = patch.axial_coordinate(split_edge.start_vertex.point);
+    if (patch.axial_coordinate(split_edge.end_vertex.point) - split_axial).abs() > tol.linear {
+        return Err("Cylinder-side split edge must follow a section of the patch".to_string());
     }
-    if split_z <= z_min + tol.linear || split_z >= z_max - tol.linear {
+    let split_alpha = split_axial / patch.height;
+    if split_axial <= tol.linear || split_axial >= patch.height - tol.linear {
         return Err("Cylinder-side split edge must cross the face interior".to_string());
     }
 
-    let split_v = v_min + (v_max - v_min) * ((split_z - z_min) / (z_max - z_min));
+    let split_v = v_min + (v_max - v_min) * split_alpha;
     let bottom_start = surface.evaluate(u_min, v_min);
     let bottom_end = surface.evaluate(u_max, v_min);
     let split_start = surface.evaluate(u_min, split_v);
@@ -1251,8 +1252,8 @@ fn split_cylinder_side_face_by_horizontal_edge(
         split_forward.edge.clone(),
         split_forward.orientation.reversed(),
     );
-    let bottom_edge = horizontal_section_edge(surface, z_min, z_min, z_max, tol)?;
-    let top_edge = horizontal_section_edge(surface, z_max, z_min, z_max, tol)?;
+    let bottom_edge = cylinder_section_edge(surface, 0.0, tol)?;
+    let top_edge = cylinder_section_edge(surface, 1.0, tol)?;
     let left_lower = Edge::line_between(
         Vertex::new(bottom_start, tol.linear),
         Vertex::new(split_start, tol.linear),
@@ -1325,7 +1326,7 @@ fn split_cylinder_side_face_by_vertical_edge(
     if !face.inner_wires.is_empty() {
         return Err("NURBS face splitting with inner wires is not implemented yet".to_string());
     }
-    let Some((center, _radius, z_min, z_max)) = cylinder_patch_axis_circle(surface, tol) else {
+    let Some(patch) = recognize_cylinder_patch(surface, tol) else {
         return Err("Only recognized cylinder-side NURBS patches can be split".to_string());
     };
     if !edge_lies_on_recognized_cylinder_patch(split_edge, surface, tol) {
@@ -1334,30 +1335,30 @@ fn split_cylinder_side_face_by_vertical_edge(
 
     let edge_start = split_edge.start_vertex.point;
     let edge_end = split_edge.end_vertex.point;
-    if (Point2::new(edge_start.x, edge_start.y) - Point2::new(edge_end.x, edge_end.y)).norm()
-        > tol.linear * 10.0
-    {
-        return Err("Cylinder-side split edge must be a vertical ruling".to_string());
+    let along_axis = (edge_end - edge_start).dot(&patch.axis);
+    if ((edge_end - edge_start) - patch.axis * along_axis).norm() > tol.linear * 10.0 {
+        return Err("Cylinder-side split edge must be a ruling along the patch axis".to_string());
     }
-    let edge_z_low = edge_start.z.min(edge_end.z);
-    let edge_z_high = edge_start.z.max(edge_end.z);
-    if (edge_z_low - z_min).abs() > tol.linear * 10.0
-        || (edge_z_high - z_max).abs() > tol.linear * 10.0
-    {
+    let edge_low = patch
+        .axial_coordinate(edge_start)
+        .min(patch.axial_coordinate(edge_end));
+    let edge_high = patch
+        .axial_coordinate(edge_start)
+        .max(patch.axial_coordinate(edge_end));
+    if edge_low.abs() > tol.linear * 10.0 || (edge_high - patch.height).abs() > tol.linear * 10.0 {
         return Err("Cylinder-side ruling split must span the full patch height".to_string());
     }
 
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
-    let split_xy = Point2::new(edge_start.x, edge_start.y);
-    let u_split = cylinder_patch_u_for_point(surface, split_xy, center, v_min, tol)
+    let u_split = cylinder_patch_u_for_point(surface, &patch, edge_start, tol)
         .ok_or_else(|| "Split ruling does not lie on the patch angular span".to_string())?;
     if u_split <= u_min + tol.parametric || u_split >= u_max - tol.parametric {
         return Err("Cylinder-side ruling split must cross the face interior".to_string());
     }
 
-    let bottom_curve = horizontal_section_curve(surface, z_min, z_min, z_max, tol)
+    let bottom_curve = cylinder_section_curve(surface, 0.0)
         .ok_or_else(|| "Failed to build cylinder bottom section curve".to_string())?;
-    let top_curve = horizontal_section_curve(surface, z_max, z_min, z_max, tol)
+    let top_curve = cylinder_section_curve(surface, 1.0)
         .ok_or_else(|| "Failed to build cylinder top section curve".to_string())?;
     let (bottom_left_curve, bottom_right_curve) = bottom_curve
         .split_bezier_at(u_split)
@@ -1449,31 +1450,22 @@ fn curve_edge(curve: NurbsCurve3, start: Point3, end: Point3, tol: &Tolerance) -
     )
 }
 
-/// Finds the `u` parameter whose patch point matches `target` in XY.
+/// Finds the `u` parameter whose patch point matches `target`.
 ///
 /// The angle around the axis is monotonic in `u` over a sub-half-turn rational
 /// arc, so a bisection on the swept-angle ratio converges without needing a
 /// closed form for the rational quadratic parameterization.
 fn cylinder_patch_u_for_point(
     surface: &NurbsSurface3,
-    target: Point2,
-    center: Point2,
-    v: f64,
+    patch: &CylinderPatch,
+    target: Point3,
     tol: &Tolerance,
 ) -> Option<f64> {
-    let ((u_min, u_max), _) = surface.param_range();
-    let angle_at = |u: f64| {
-        let point = surface.evaluate(u, v);
-        angle_at_center(Point2::new(point.x, point.y), center)
-    };
+    let ((u_min, u_max), (v_min, _)) = surface.param_range();
+    let (start_angle, sweep) = cylinder_patch_angle_span(surface, patch, tol)?;
+    let angle_at = |u: f64| patch.angle_of(surface.evaluate(u, v_min));
 
-    let start_angle = angle_at(u_min);
-    let sweep = wrap_signed_angle(angle_at(u_max) - start_angle);
-    if sweep.abs() <= tol.angular {
-        return None;
-    }
-
-    let target_ratio = wrap_signed_angle(angle_at_center(target, center) - start_angle) / sweep;
+    let target_ratio = wrap_signed_angle(patch.angle_of(target) - start_angle) / sweep;
     let margin = tol.angular / sweep.abs();
     if !(-margin..=1.0 + margin).contains(&target_ratio) {
         return None;
@@ -1492,19 +1484,18 @@ fn cylinder_patch_u_for_point(
     }
 
     let u = 0.5 * (low + high);
-    let point = surface.evaluate(u, v);
-    ((Point2::new(point.x, point.y) - target).norm() <= tol.linear * 10.0).then_some(u)
+    let point = surface.evaluate(u, v_min);
+    let radial_offset = point - target;
+    (radial_offset.norm() <= tol.linear * 10.0).then_some(u)
 }
 
-fn horizontal_section_edge(
+fn cylinder_section_edge(
     surface: &NurbsSurface3,
-    z: f64,
-    z_min: f64,
-    z_max: f64,
+    alpha: f64,
     tol: &Tolerance,
 ) -> Result<Edge, String> {
-    let curve = horizontal_section_curve(surface, z, z_min, z_max, tol)
-        .ok_or_else(|| "Failed to build cylinder horizontal section curve".to_string())?;
+    let curve = cylinder_section_curve(surface, alpha)
+        .ok_or_else(|| "Failed to build cylinder section curve".to_string())?;
     let (t_min, t_max) = curve.param_range();
     let start = curve.evaluate(t_min);
     let end = curve.evaluate(t_max);
@@ -1540,17 +1531,17 @@ fn edge_lies_on_recognized_cylinder_patch(
     surface: &NurbsSurface3,
     tol: &Tolerance,
 ) -> bool {
-    let Some((center, radius, z_min, z_max)) = cylinder_patch_axis_circle(surface, tol) else {
+    let Some(patch) = recognize_cylinder_patch(surface, tol) else {
         return false;
     };
     let (t_min, t_max) = edge.curve.param_range();
     (0..=8).all(|i| {
         let t = t_min + (t_max - t_min) * (i as f64 / 8.0);
         let point = edge.curve.evaluate(t);
-        let radial_distance = (Point2::new(point.x, point.y) - center).norm();
-        point.z >= z_min - tol.linear * 10.0
-            && point.z <= z_max + tol.linear * 10.0
-            && (radial_distance - radius).abs() <= tol.linear * 10.0
+        let axial = patch.axial_coordinate(point);
+        axial >= -tol.linear * 10.0
+            && axial <= patch.height + tol.linear * 10.0
+            && (patch.radial_distance(point) - patch.radius).abs() <= tol.linear * 10.0
     })
 }
 
@@ -2437,176 +2428,189 @@ fn intersect_planes(
     }
 }
 
-/// Dispatches plane/cylinder-patch support intersection by plane orientation.
-///
-/// Only axis-aligned cases are recognized so far: a plane perpendicular to the
-/// cylinder axis yields a horizontal section arc, and a plane parallel to the
-/// axis yields a vertical ruling line.
-fn intersect_plane_cylinder_patch(
-    plane: &PlaneSurface3,
-    plane_normal: Vec3,
-    surface: &NurbsSurface3,
-    tol: &Tolerance,
-) -> FaceIntersectionKind {
-    let Some(normal) = plane_normal.try_normalize_safe(1e-12) else {
-        return FaceIntersectionKind::Unsupported;
-    };
-    let axis = Vec3::new(0.0, 0.0, 1.0);
-    if normal.cross(&axis).norm() <= tol.angular {
-        return intersect_horizontal_plane_cylinder_patch(plane, surface, tol);
-    }
-    if normal.dot(&axis).abs() <= tol.angular {
-        return intersect_vertical_plane_cylinder_patch(plane, normal, surface, tol);
-    }
-
-    FaceIntersectionKind::Unsupported
+/// A NURBS patch recognized as a piece of a circular cylinder of any axis.
+#[derive(Debug, Clone, Copy)]
+struct CylinderPatch {
+    axis: Vec3,
+    base_center: Point3,
+    radius: f64,
+    height: f64,
+    frame_u: Vec3,
+    frame_v: Vec3,
 }
 
-fn intersect_horizontal_plane_cylinder_patch(
-    plane: &PlaneSurface3,
-    surface: &NurbsSurface3,
-    tol: &Tolerance,
-) -> FaceIntersectionKind {
-    let Some((z_min, z_max)) = cylinder_patch_z_span(surface, tol) else {
-        return FaceIntersectionKind::Unsupported;
-    };
-    let z = plane.origin.z;
-    if z < z_min - tol.linear || z > z_max + tol.linear {
-        return FaceIntersectionKind::Unsupported;
+impl CylinderPatch {
+    /// Distance along the axis from the base circle.
+    fn axial_coordinate(&self, point: Point3) -> f64 {
+        (point - self.base_center).dot(&self.axis)
     }
 
-    let Some(curve) = horizontal_section_curve(surface, z.clamp(z_min, z_max), z_min, z_max, tol)
-    else {
-        return FaceIntersectionKind::Unsupported;
-    };
-    let (t_min, t_max) = curve.param_range();
-    let start = curve.evaluate(t_min);
-    let end = curve.evaluate(t_max);
-    if !point_lies_on_plane(start, plane, tol) || !point_lies_on_plane(end, plane, tol) {
-        return FaceIntersectionKind::Unsupported;
+    /// Distance from the axis line.
+    fn radial_distance(&self, point: Point3) -> f64 {
+        let offset = point - self.base_center;
+        (offset - self.axis * offset.dot(&self.axis)).norm()
     }
 
-    FaceIntersectionKind::Curve {
-        edge: Edge::new(
-            curve,
-            Vertex::new(start, tol.linear),
-            Vertex::new(end, tol.linear),
-            tol.linear,
-        ),
+    /// Angle around the axis in the patch frame.
+    fn angle_of(&self, point: Point3) -> f64 {
+        let offset = point - self.base_center;
+        offset.dot(&self.frame_v).atan2(offset.dot(&self.frame_u))
     }
 }
 
-/// Intersects a plane parallel to the cylinder axis with a recognized cylinder patch.
+/// Recognizes a cylinder-side patch without assuming a Z axis.
 ///
-/// The support intersection of an infinite plane and a full cylinder is zero,
-/// one, or two vertical rulings. Only the case where exactly one ruling lands on
-/// this patch's angular span is promoted; a plane cutting the same patch twice is
-/// left `Unsupported` until the split stage can consume multiple rulings per pair.
-fn intersect_vertical_plane_cylinder_patch(
-    plane: &PlaneSurface3,
-    plane_normal: Vec3,
-    surface: &NurbsSurface3,
-    tol: &Tolerance,
-) -> FaceIntersectionKind {
-    let Some((center, radius, z_min, z_max)) = cylinder_patch_axis_circle(surface, tol) else {
-        return FaceIntersectionKind::Unsupported;
-    };
-
-    let normal_xy = Vec2::new(plane_normal.x, plane_normal.y);
-    let Some(normal_xy) = normal_xy.try_normalize(1e-12) else {
-        return FaceIntersectionKind::Unsupported;
-    };
-    let tangent_xy = Vec2::new(-normal_xy.y, normal_xy.x);
-
-    let origin_xy = Point2::new(plane.origin.x, plane.origin.y);
-    let center_offset = (center - origin_xy).dot(&normal_xy);
-    let foot = center - normal_xy * center_offset;
-    let half_chord_sq = radius * radius - center_offset * center_offset;
-    if half_chord_sq < -tol.linear * radius.max(1.0) {
-        return FaceIntersectionKind::Unsupported;
+/// The patch qualifies when it is linear in `v` with one shared ruling vector,
+/// and its `v = 0` section is a circle around that ruling direction.
+fn recognize_cylinder_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<CylinderPatch> {
+    if surface.degree_v != 1 || surface.degree_u != 2 {
+        return None;
     }
-
-    let half_chord = half_chord_sq.max(0.0).sqrt();
-    let offsets: Vec<f64> = if half_chord <= tol.linear {
-        vec![0.0]
-    } else {
-        vec![half_chord, -half_chord]
-    };
-
-    let mut hits = Vec::new();
-    for offset in offsets {
-        let hit = foot + tangent_xy * offset;
-        if !point_lies_on_cylinder_patch_arc(surface, hit, center, tol) {
-            continue;
-        }
-        if hits
-            .iter()
-            .any(|existing| points_same_2d(*existing, hit, tol.linear))
-        {
-            continue;
-        }
-        hits.push(hit);
-    }
-
-    if hits.len() != 1 {
-        return FaceIntersectionKind::Unsupported;
-    }
-
-    let hit = hits[0];
-    let segment_start = Point3::new(hit.x, hit.y, z_min);
-    let segment_end = Point3::new(hit.x, hit.y, z_max);
-    if !point_lies_on_plane(segment_start, plane, tol)
-        || !point_lies_on_plane(segment_end, plane, tol)
+    if surface.control_points.len() != surface.degree_u + 1
+        || surface.control_points.iter().any(|row| row.len() != 2)
     {
-        return FaceIntersectionKind::Unsupported;
+        return None;
     }
 
-    FaceIntersectionKind::Line {
-        point: segment_start,
-        direction: Vec3::new(0.0, 0.0, 1.0),
-        segment_start,
-        segment_end,
+    let mut ruling: Option<Vec3> = None;
+    for row in &surface.control_points {
+        let (bottom, top) = (row[0], row[1]);
+        if (bottom.weight - top.weight).abs() > tol.linear {
+            return None;
+        }
+        let offset = top.point - bottom.point;
+        match ruling {
+            None => ruling = Some(offset),
+            Some(first) => {
+                if (offset - first).norm() > tol.linear {
+                    return None;
+                }
+            }
+        }
     }
-}
 
-/// Recovers the axis circle (XY center, radius) and Z span of a recognized
-/// Z-axis cylinder patch, or `None` when the patch is not such a cylinder.
-fn cylinder_patch_axis_circle(
-    surface: &NurbsSurface3,
-    tol: &Tolerance,
-) -> Option<(Point2, f64, f64, f64)> {
-    let (z_min, z_max) = cylinder_patch_z_span(surface, tol)?;
-    let section = horizontal_section_curve(surface, z_min, z_min, z_max, tol)?;
-    let samples = sample_section_points_2d(&section, 8);
-    let center = circumcenter_2d(
-        samples[0],
-        samples[samples.len() / 2],
-        samples[samples.len() - 1],
+    let ruling = ruling?;
+    let height = ruling.norm();
+    if height <= tol.linear {
+        return None;
+    }
+    let axis = ruling / height;
+    let frame_u = axis_perpendicular(axis)?;
+    let frame_v = axis.cross(&frame_u);
+
+    let section = cylinder_section_curve(surface, 0.0)?;
+    let samples = sample_curve_points(&section, 8);
+    let origin = samples[0];
+    if samples
+        .iter()
+        .any(|sample| (sample - origin).dot(&axis).abs() > tol.linear)
+    {
+        return None;
+    }
+
+    let to_frame = |point: Point3| {
+        let offset = point - origin;
+        Point2::new(offset.dot(&frame_u), offset.dot(&frame_v))
+    };
+    let center_2d = circumcenter_2d(
+        to_frame(samples[0]),
+        to_frame(samples[samples.len() / 2]),
+        to_frame(samples[samples.len() - 1]),
         tol,
     )?;
-    let radius = (samples[0] - center).norm();
+    let base_center = origin + frame_u * center_2d.x + frame_v * center_2d.y;
+
+    let radius = (samples[0] - base_center).norm();
     if radius <= tol.linear {
         return None;
     }
     if samples
         .iter()
-        .any(|sample| ((sample - center).norm() - radius).abs() > tol.linear)
+        .any(|sample| ((sample - base_center).norm() - radius).abs() > tol.linear)
     {
         return None;
     }
 
-    Some((center, radius, z_min, z_max))
+    Some(CylinderPatch {
+        axis,
+        base_center,
+        radius,
+        height,
+        frame_u,
+        frame_v,
+    })
 }
 
-fn sample_section_points_2d(section: &NurbsCurve3, segments: usize) -> Vec<Point2> {
-    let (t_min, t_max) = section.param_range();
-    (0..=segments)
-        .map(|step| {
-            let t = t_min + (t_max - t_min) * (step as f64 / segments as f64);
-            let point = section.evaluate(t);
-            Point2::new(point.x, point.y)
+fn axis_perpendicular(axis: Vec3) -> Option<Vec3> {
+    let seed = if axis.x.abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    (seed - axis * seed.dot(&axis)).try_normalize_safe(1e-12)
+}
+
+/// The `v = alpha` iso-section of a ruled patch, as an exact rational curve.
+fn cylinder_section_curve(surface: &NurbsSurface3, alpha: f64) -> Option<NurbsCurve3> {
+    if !(-1e-9..=1.0 + 1e-9).contains(&alpha) {
+        return None;
+    }
+
+    let control_points = surface
+        .control_points
+        .iter()
+        .map(|row| {
+            let bottom = row[0].to_homogeneous();
+            let top = row[1].to_homogeneous();
+            ControlPoint3::from_homogeneous(&(bottom * (1.0 - alpha) + top * alpha))
         })
+        .collect();
+
+    NurbsCurve3::new(
+        surface.degree_u,
+        control_points,
+        KnotVector::new(surface.knots_u.knots.clone()),
+    )
+    .ok()
+}
+
+fn sample_curve_points(curve: &NurbsCurve3, segments: usize) -> Vec<Point3> {
+    let (t_min, t_max) = curve.param_range();
+    (0..=segments)
+        .map(|step| curve.evaluate(t_min + (t_max - t_min) * (step as f64 / segments as f64)))
         .collect()
+}
+
+/// Start angle and signed sweep of the patch around its axis.
+fn cylinder_patch_angle_span(
+    surface: &NurbsSurface3,
+    patch: &CylinderPatch,
+    tol: &Tolerance,
+) -> Option<(f64, f64)> {
+    let section = cylinder_section_curve(surface, 0.0)?;
+    let (t_min, t_max) = section.param_range();
+    let start_angle = patch.angle_of(section.evaluate(t_min));
+    let sweep = wrap_signed_angle(patch.angle_of(section.evaluate(t_max)) - start_angle);
+    (sweep.abs() > tol.angular).then_some((start_angle, sweep))
+}
+
+/// Tests whether a point at cylinder radius falls inside the patch angular span.
+///
+/// Angles are compared instead of distances so a quarter-arc patch is not
+/// widened by polyline sampling error.
+fn point_lies_on_cylinder_patch_arc(
+    surface: &NurbsSurface3,
+    patch: &CylinderPatch,
+    point: Point3,
+    tol: &Tolerance,
+) -> bool {
+    let Some((start_angle, sweep)) = cylinder_patch_angle_span(surface, patch, tol) else {
+        return false;
+    };
+    let ratio = wrap_signed_angle(patch.angle_of(point) - start_angle) / sweep;
+    let margin = tol.angular / sweep.abs();
+
+    (-margin..=1.0 + margin).contains(&ratio)
 }
 
 fn circumcenter_2d(a: Point2, b: Point2, c: Point2, tol: &Tolerance) -> Option<Point2> {
@@ -2627,42 +2631,6 @@ fn circumcenter_2d(a: Point2, b: Point2, c: Point2, tol: &Tolerance) -> Option<P
     Some(a + center_offset)
 }
 
-/// Tests whether an XY point at cylinder radius falls inside the patch's angular
-/// span. Angles are compared instead of distances so a quarter-arc patch is not
-/// widened by polyline sampling error.
-fn point_lies_on_cylinder_patch_arc(
-    surface: &NurbsSurface3,
-    point: Point2,
-    center: Point2,
-    tol: &Tolerance,
-) -> bool {
-    let Some((z_min, z_max)) = cylinder_patch_z_span(surface, tol) else {
-        return false;
-    };
-    let Some(section) = horizontal_section_curve(surface, z_min, z_min, z_max, tol) else {
-        return false;
-    };
-
-    let samples = sample_section_points_2d(&section, 1);
-    let start_angle = angle_at_center(samples[0], center);
-    let end_angle = angle_at_center(samples[samples.len() - 1], center);
-    let sweep = wrap_signed_angle(end_angle - start_angle);
-    if sweep.abs() <= tol.angular {
-        return false;
-    }
-
-    let point_angle = angle_at_center(point, center);
-    let ratio = wrap_signed_angle(point_angle - start_angle) / sweep;
-    let margin = tol.angular / sweep.abs();
-
-    (-margin..=1.0 + margin).contains(&ratio)
-}
-
-fn angle_at_center(point: Point2, center: Point2) -> f64 {
-    let offset = point - center;
-    offset.y.atan2(offset.x)
-}
-
 fn wrap_signed_angle(angle: f64) -> f64 {
     let two_pi = std::f64::consts::TAU;
     let mut wrapped = angle % two_pi;
@@ -2674,66 +2642,139 @@ fn wrap_signed_angle(angle: f64) -> f64 {
     wrapped
 }
 
-fn cylinder_patch_z_span(surface: &NurbsSurface3, tol: &Tolerance) -> Option<(f64, f64)> {
-    if surface.degree_u != 2
-        || surface.degree_v != 1
-        || surface.control_points.len() != 3
-        || surface.control_points.iter().any(|row| row.len() != 2)
-    {
-        return None;
+/// Dispatches plane/cylinder-patch support intersection by plane orientation.
+///
+/// Two cases are recognized so far: a plane perpendicular to the cylinder axis
+/// yields a section arc, and a plane parallel to the axis yields a ruling line.
+fn intersect_plane_cylinder_patch(
+    plane: &PlaneSurface3,
+    plane_normal: Vec3,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> FaceIntersectionKind {
+    let Some(normal) = plane_normal.try_normalize_safe(1e-12) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+    let Some(patch) = recognize_cylinder_patch(surface, tol) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+
+    if normal.cross(&patch.axis).norm() <= tol.angular {
+        return intersect_section_plane_cylinder_patch(plane, surface, &patch, tol);
+    }
+    if normal.dot(&patch.axis).abs() <= tol.angular {
+        return intersect_ruling_plane_cylinder_patch(plane, normal, surface, &patch, tol);
     }
 
-    for row in &surface.control_points {
-        let bottom = row[0];
-        let top = row[1];
-        if (bottom.weight - top.weight).abs() > tol.linear
-            || (bottom.point.x - top.point.x).abs() > tol.linear
-            || (bottom.point.y - top.point.y).abs() > tol.linear
-        {
-            return None;
-        }
-    }
-
-    let z_min = surface.control_points[0][0].point.z;
-    let z_max = surface.control_points[0][1].point.z;
-    if z_max - z_min <= tol.linear {
-        return None;
-    }
-    if surface.control_points.iter().any(|row| {
-        (row[0].point.z - z_min).abs() > tol.linear || (row[1].point.z - z_max).abs() > tol.linear
-    }) {
-        return None;
-    }
-
-    Some((z_min, z_max))
+    FaceIntersectionKind::Unsupported
 }
 
-fn horizontal_section_curve(
+fn intersect_section_plane_cylinder_patch(
+    plane: &PlaneSurface3,
     surface: &NurbsSurface3,
-    z: f64,
-    z_min: f64,
-    z_max: f64,
+    patch: &CylinderPatch,
     tol: &Tolerance,
-) -> Option<NurbsCurve3> {
-    let alpha = (z - z_min) / (z_max - z_min);
+) -> FaceIntersectionKind {
+    let alpha = patch.axial_coordinate(plane.origin) / patch.height;
     if alpha < -tol.parametric || alpha > 1.0 + tol.parametric {
-        return None;
+        return FaceIntersectionKind::Unsupported;
     }
 
-    let control_points = surface
-        .control_points
-        .iter()
-        .map(|row| {
-            let bottom = row[0].to_homogeneous();
-            let top = row[1].to_homogeneous();
-            ControlPoint3::from_homogeneous(&(bottom * (1.0 - alpha) + top * alpha))
-        })
-        .collect();
+    let Some(curve) = cylinder_section_curve(surface, alpha.clamp(0.0, 1.0)) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+    let (t_min, t_max) = curve.param_range();
+    let start = curve.evaluate(t_min);
+    let end = curve.evaluate(t_max);
+    if !point_lies_on_plane(start, plane, tol) || !point_lies_on_plane(end, plane, tol) {
+        return FaceIntersectionKind::Unsupported;
+    }
 
-    NurbsCurve3::new(
-        surface.degree_u,
-        control_points,
-        KnotVector::new(surface.knots_u.knots.clone()),
-    )
-    .ok()
+    FaceIntersectionKind::Curve {
+        edge: Edge::new(
+            curve,
+            Vertex::new(start, tol.linear),
+            Vertex::new(end, tol.linear),
+            tol.linear,
+        ),
+    }
+}
+
+/// Intersects a plane parallel to the cylinder axis with a recognized patch.
+///
+/// The support intersection of an infinite plane and a full cylinder is zero,
+/// one, or two rulings. Only the case where exactly one ruling lands on this
+/// patch's angular span is promoted; a plane cutting the same patch twice is
+/// left `Unsupported` until the split stage can consume multiple rulings per
+/// face pair.
+fn intersect_ruling_plane_cylinder_patch(
+    plane: &PlaneSurface3,
+    plane_normal: Vec3,
+    surface: &NurbsSurface3,
+    patch: &CylinderPatch,
+    tol: &Tolerance,
+) -> FaceIntersectionKind {
+    let normal_2d = Vec2::new(
+        plane_normal.dot(&patch.frame_u),
+        plane_normal.dot(&patch.frame_v),
+    );
+    let Some(normal_2d) = normal_2d.try_normalize(1e-12) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+    let tangent_2d = Vec2::new(-normal_2d.y, normal_2d.x);
+
+    let origin_offset = plane.origin - patch.base_center;
+    let origin_2d = Point2::new(
+        origin_offset.dot(&patch.frame_u),
+        origin_offset.dot(&patch.frame_v),
+    );
+    // 軸中心は frame 原点にあるので、中心から直線までの符号付き距離は -o.n
+    let center_offset = -origin_2d.coords.dot(&normal_2d);
+    let foot = Point2::from(-normal_2d * center_offset);
+    let half_chord_sq = patch.radius * patch.radius - center_offset * center_offset;
+    if half_chord_sq < -tol.linear * patch.radius.max(1.0) {
+        return FaceIntersectionKind::Unsupported;
+    }
+
+    let half_chord = half_chord_sq.max(0.0).sqrt();
+    let offsets: Vec<f64> = if half_chord <= tol.linear {
+        vec![0.0]
+    } else {
+        vec![half_chord, -half_chord]
+    };
+
+    let mut hits: Vec<Point3> = Vec::new();
+    for offset in offsets {
+        let hit_2d = foot + tangent_2d * offset;
+        let hit = patch.base_center + patch.frame_u * hit_2d.x + patch.frame_v * hit_2d.y;
+        if !point_lies_on_cylinder_patch_arc(surface, patch, hit, tol) {
+            continue;
+        }
+        if hits
+            .iter()
+            .any(|existing| points_same_3d(*existing, hit, tol.linear))
+        {
+            continue;
+        }
+        hits.push(hit);
+    }
+
+    if hits.len() != 1 {
+        return FaceIntersectionKind::Unsupported;
+    }
+
+    let segment_start = hits[0];
+    let segment_end = segment_start + patch.axis * patch.height;
+    if !point_lies_on_plane(segment_start, plane, tol)
+        || !point_lies_on_plane(segment_end, plane, tol)
+    {
+        return FaceIntersectionKind::Unsupported;
+    }
+
+    FaceIntersectionKind::Line {
+        point: segment_start,
+        direction: patch.axis,
+        segment_start,
+        segment_end,
+    }
 }
