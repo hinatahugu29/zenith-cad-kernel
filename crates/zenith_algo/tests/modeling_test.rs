@@ -1467,6 +1467,152 @@ fn test_brep_intersection_promotes_plane_cylinder_curve_to_edge_candidate() {
 }
 
 #[test]
+fn test_brep_intersection_collects_vertical_plane_cylinder_line_candidate() {
+    let tol = Tolerance::default();
+    let radius = 10.0;
+    let height = 30.0;
+    let plane_x: f64 = 6.0;
+    let expected_y = (radius * radius - plane_x * plane_x).sqrt();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+    let cut_face = vertical_cut_face(plane_x);
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_face_pair_candidates(
+        &[cut_face],
+        &[side_face],
+        &tol,
+    );
+
+    let (segment_start, segment_end) = candidates
+        .iter()
+        .find_map(|candidate| match &candidate.kind {
+            zenith_algo::FaceIntersectionKind::Line {
+                segment_start,
+                segment_end,
+                ..
+            } => Some((*segment_start, *segment_end)),
+            _ => None,
+        })
+        .expect("vertical plane-cylinder line intersection candidate");
+
+    for point in [segment_start, segment_end] {
+        assert!((point.x - plane_x).abs() < 1e-6);
+        assert!((point.y - expected_y).abs() < 1e-6);
+        let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
+        assert!((radial_distance - radius).abs() < 1e-6);
+    }
+
+    let z_low = segment_start.z.min(segment_end.z);
+    let z_high = segment_start.z.max(segment_end.z);
+    assert!(z_low.abs() < 1e-5);
+    assert!((z_high - height).abs() < 1e-5);
+}
+
+#[test]
+fn test_brep_intersection_promotes_vertical_plane_cylinder_line_to_edge_candidate() {
+    let tol = Tolerance::default();
+    let radius = 10.0;
+    let height = 30.0;
+    let plane_x: f64 = 6.0;
+    let expected_y = (radius * radius - plane_x * plane_x).sqrt();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+    let cut_face = vertical_cut_face(plane_x);
+
+    let edges = zenith_algo::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        &[cut_face],
+        &[side_face],
+        &tol,
+    );
+
+    let candidate = edges
+        .first()
+        .expect("vertical plane-cylinder line should become an edge candidate");
+    assert_eq!(candidate.face_a_index, 0);
+    assert_eq!(candidate.face_b_index, 0);
+    assert_eq!(candidate.edge.curve.degree, 1);
+
+    let (t_min, t_max) = candidate.edge.curve.param_range();
+    for step in 0..=8 {
+        let t = t_min + (t_max - t_min) * (step as f64 / 8.0);
+        let point = candidate.edge.curve.evaluate(t);
+        assert!((point.x - plane_x).abs() < 1e-6);
+        assert!((point.y - expected_y).abs() < 1e-6);
+        assert!(point.z >= -1e-5 && point.z <= height + 1e-5);
+    }
+}
+
+#[test]
+fn test_brep_intersection_skips_vertical_plane_outside_cylinder_radius() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+    let cut_face = vertical_cut_face(14.0);
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_face_pair_candidates(
+        &[cut_face],
+        &[side_face],
+        &tol,
+    );
+
+    assert!(
+        candidates.is_empty(),
+        "a plane beyond the cylinder radius must not produce an intersection candidate"
+    );
+}
+
+#[test]
+fn test_brep_intersection_skips_vertical_plane_missing_cylinder_quadrant() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let opposite_quadrant_face = cylinder.outer_shell.faces[1].clone();
+    let cut_face = vertical_cut_face(6.0);
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_face_pair_candidates(
+        &[cut_face],
+        &[opposite_quadrant_face],
+        &tol,
+    );
+
+    assert!(
+        candidates.is_empty(),
+        "the ruling at x = 6 lies outside the second quadrant patch angular span"
+    );
+}
+
+/// Builds an axis-parallel vertical cutting face at `plane_x`, spanning the full
+/// height and diameter of the 10 x 30 test cylinder.
+fn vertical_cut_face(plane_x: f64) -> Face {
+    let plane = PlaneSurface3::new(
+        Point3::new(plane_x, -12.0, -2.0),
+        Vec3::new(0.0, 24.0, 0.0),
+        Vec3::new(0.0, 0.0, 34.0),
+    )
+    .unwrap();
+    let points = [
+        Point3::new(plane_x, -12.0, -2.0),
+        Point3::new(plane_x, 12.0, -2.0),
+        Point3::new(plane_x, 12.0, 32.0),
+        Point3::new(plane_x, -12.0, 32.0),
+    ];
+    let vertices: Vec<Vertex> = points
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let edges = vec![
+        Edge::line_between(vertices[0].clone(), vertices[1].clone()).unwrap(),
+        Edge::line_between(vertices[1].clone(), vertices[2].clone()).unwrap(),
+        Edge::line_between(vertices[2].clone(), vertices[3].clone()).unwrap(),
+        Edge::line_between(vertices[3].clone(), vertices[0].clone()).unwrap(),
+    ];
+
+    Face::simple(
+        FaceGeometry::Plane(plane),
+        Wire::new(edges.into_iter().map(OrientedEdge::forward).collect()),
+    )
+}
+
+#[test]
 fn test_planar_split_reports_curved_plane_cylinder_edge_as_skipped() {
     let tol = Tolerance::default();
     let z = 15.0;
