@@ -185,9 +185,27 @@ impl SweepBuilder {
             faces.push(Face::simple(FaceGeometry::Nurbs(s), wire));
         }
 
-        // 6. 始点端面 (Start Cap: PLANE, 外向き法線 -t0, U=n0, V=-b0 で角度0から反時計回り)
+        // 6. 始点端面 (Start Cap: 平面 NURBS パッチ, 外向き法線 -t0)
         let (ctr0, _t0, n0, b0) = frames[0];
-        let p_start_cap = PlaneSurface3::new(ctr0, n0, -b0).ok_or("start cap plane")?;
+        let r_bound = radius * 1.5;
+        let u_vec0 = n0 * r_bound;
+        let v_vec0 = -b0 * r_bound;
+        let s_start_cap = NurbsSurface3::new(
+            1,
+            1,
+            vec![
+                vec![
+                    ControlPoint3::unweighted(ctr0 - u_vec0 - v_vec0),
+                    ControlPoint3::unweighted(ctr0 - u_vec0 + v_vec0),
+                ],
+                vec![
+                    ControlPoint3::unweighted(ctr0 + u_vec0 - v_vec0),
+                    ControlPoint3::unweighted(ctr0 + u_vec0 + v_vec0),
+                ],
+            ],
+            KnotVector::clamped_uniform(2, 1),
+            KnotVector::clamped_uniform(2, 1),
+        )?;
         let wire_start_cap = Wire::new(vec![
             OrientedEdge::reversed(bottom_ring_edges[3].clone()),
             OrientedEdge::reversed(bottom_ring_edges[2].clone()),
@@ -195,20 +213,38 @@ impl SweepBuilder {
             OrientedEdge::reversed(bottom_ring_edges[0].clone()),
         ]);
         faces.push(Face::simple(
-            FaceGeometry::Plane(p_start_cap),
+            FaceGeometry::Nurbs(s_start_cap),
             wire_start_cap,
         ));
 
-        // 7. 終点端面 (End Cap: PLANE, 外向き法線 +t1, U=n1, V=b1 で角度0から反時計回り)
+        // 7. 終点端面 (End Cap: 平面 NURBS パッチ, 外向き法線 +t1)
         let (ctr1, _t1, n1, b1) = frames[n_sec - 1];
-        let p_end_cap = PlaneSurface3::new(ctr1, n1, b1).ok_or("end cap plane")?;
+        let u_vec1 = n1 * r_bound;
+        let v_vec1 = b1 * r_bound;
+        let s_end_cap = NurbsSurface3::new(
+            1,
+            1,
+            vec![
+                vec![
+                    ControlPoint3::unweighted(ctr1 - u_vec1 - v_vec1),
+                    ControlPoint3::unweighted(ctr1 - u_vec1 + v_vec1),
+                ],
+                vec![
+                    ControlPoint3::unweighted(ctr1 + u_vec1 - v_vec1),
+                    ControlPoint3::unweighted(ctr1 + u_vec1 + v_vec1),
+                ],
+            ],
+            KnotVector::clamped_uniform(2, 1),
+            KnotVector::clamped_uniform(2, 1),
+        )?;
         let wire_end_cap = Wire::new(vec![
             OrientedEdge::forward(top_ring_edges[0].clone()),
             OrientedEdge::forward(top_ring_edges[1].clone()),
             OrientedEdge::forward(top_ring_edges[2].clone()),
             OrientedEdge::forward(top_ring_edges[3].clone()),
         ]);
-        faces.push(Face::simple(FaceGeometry::Plane(p_end_cap), wire_end_cap));
+        faces.push(Face::simple(FaceGeometry::Nurbs(s_end_cap), wire_end_cap));
+
 
 
         let shell = Shell::closed(faces);
