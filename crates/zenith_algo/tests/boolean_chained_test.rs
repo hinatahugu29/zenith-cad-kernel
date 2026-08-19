@@ -112,6 +112,47 @@ fn test_counterbore_on_an_already_drilled_block() {
 }
 
 #[test]
+fn test_counterbore_from_the_bottom_face() {
+    // 天面と裏面では刻印される面の向きが逆になる。片方だけ通る状態を防ぐ。
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    let drilled = drill(&block, 5.0, 60.0, Vec3::new(20.0, 20.0, -20.0), &tol);
+    let bored = drill(&drilled, 9.0, 40.0, Vec3::new(20.0, 20.0, -34.0), &tol);
+
+    let expected = 40.0 * 40.0 * 20.0 - PI * 25.0 * 20.0 - (PI * 81.0 - PI * 25.0) * 6.0;
+    let actual = volume(&bored);
+    assert!(
+        (actual - expected).abs() / expected < 1e-9,
+        "bottom counterbore volume {actual} should be {expected}"
+    );
+}
+
+#[test]
+fn test_two_separate_holes_through_the_same_faces() {
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    let once = drill(&block, 5.0, 60.0, Vec3::new(20.0, 20.0, -20.0), &tol);
+    let twice = drill(&once, 5.0, 60.0, Vec3::new(8.0, 8.0, -20.0), &tol);
+
+    let expected = 40.0 * 40.0 * 20.0 - 2.0 * PI * 25.0 * 20.0;
+    let actual = volume(&twice);
+    assert!(
+        (actual - expected).abs() / expected < 1e-9,
+        "two-hole volume {actual} should be {expected}"
+    );
+
+    // 2つ目の穴は、既に穴のある平面へ2本目の内側ループを足す。
+    let top_holes = twice
+        .outer_shell
+        .faces
+        .iter()
+        .map(|face| face.inner_wires.len())
+        .max()
+        .unwrap_or(0);
+    assert_eq!(top_holes, 2, "a face through which both holes pass has two loops");
+}
+
+#[test]
 fn test_chained_result_still_exports_with_shared_edges() {
     let tol = Tolerance::default();
     let plate = PrimitiveBuilder::make_box(60.0, 40.0, 15.0).unwrap();

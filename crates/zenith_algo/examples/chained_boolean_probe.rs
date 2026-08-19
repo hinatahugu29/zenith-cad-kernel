@@ -141,4 +141,135 @@ fn main() {
         }
         Err(err) => println!("    pilot hole FAILED: {err}"),
     }
+
+    println!();
+    println!("further chained configurations");
+
+    let base = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    let through = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(5.0, 60.0).unwrap(),
+        Vec3::new(20.0, 20.0, -20.0),
+    );
+    let drilled = BooleanEngine::boolean_solids_exact_result(
+        &base,
+        &through,
+        BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("through hole")
+    .solids
+    .into_iter()
+    .next()
+    .unwrap();
+
+    // 裏面からの座ぐり。刻印される面の向きが天面とは逆になる。
+    let bottom_bore = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(9.0, 40.0).unwrap(),
+        Vec3::new(20.0, 20.0, -34.0),
+    );
+    let expected_bottom =
+        40.0 * 40.0 * 20.0 - PI * 25.0 * 20.0 - (PI * 81.0 - PI * 25.0) * 6.0;
+    match BooleanEngine::boolean_solids_exact_result(
+        &drilled,
+        &bottom_bore,
+        BooleanOpType::Difference,
+        &tol,
+    ) {
+        Ok(result) => {
+            let actual = volume(&result.solids[0]);
+            println!(
+                "    counterbore from the bottom: {:.4}, expected {:.4}, relative {:.2e}",
+                actual,
+                expected_bottom,
+                (actual - expected_bottom).abs() / expected_bottom
+            );
+        }
+        Err(err) => println!(
+            "    counterbore from the bottom FAILED: {}",
+            err.chars().take(90).collect::<String>()
+        ),
+    }
+
+    // 直交する2本目の穴。1本目と交差する。
+    let rotation = zenith_math::Transform3::from_axis_angle(
+        &Vec3::new(0.0, 1.0, 0.0),
+        std::f64::consts::FRAC_PI_2,
+    );
+    let cross = BrepTransform::translate_solid(
+        &BrepTransform::transform_solid(
+            &PrimitiveBuilder::make_cylinder(4.0, 80.0).unwrap(),
+            &rotation,
+        )
+        .unwrap(),
+        Vec3::new(-20.0, 20.0, 10.0),
+    );
+    match BooleanEngine::boolean_solids_exact_result(
+        &drilled,
+        &cross,
+        BooleanOpType::Difference,
+        &tol,
+    ) {
+        Ok(result) => println!(
+            "    crossing second hole: {:.4} over {} solid(s)",
+            volume(&result.solids[0]),
+            result.solids.len()
+        ),
+        Err(err) => println!(
+            "    crossing second hole FAILED: {}",
+            err.chars().take(90).collect::<String>()
+        ),
+    }
+
+    // 交差しない2本目の穴（同じ面に2つ目の穴が開く）。
+    let second = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(5.0, 60.0).unwrap(),
+        Vec3::new(8.0, 8.0, -20.0),
+    );
+    let expected_two = 40.0 * 40.0 * 20.0 - 2.0 * PI * 25.0 * 20.0;
+    match BooleanEngine::boolean_solids_exact_result(
+        &drilled,
+        &second,
+        BooleanOpType::Difference,
+        &tol,
+    ) {
+        Ok(result) => {
+            let actual = volume(&result.solids[0]);
+            println!(
+                "    second separate hole: {:.4}, expected {:.4}, relative {:.2e}",
+                actual,
+                expected_two,
+                (actual - expected_two).abs() / expected_two
+            );
+        }
+        Err(err) => println!(
+            "    second separate hole FAILED: {}",
+            err.chars().take(90).collect::<String>()
+        ),
+    }
+
+    // 穴を塞ぐ: 差で開けた穴に、同じ円柱を和で戻す。
+    let plug = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(5.0, 20.0).unwrap(),
+        Vec3::new(20.0, 20.0, 0.0),
+    );
+    match BooleanEngine::boolean_solids_exact_result(
+        &drilled,
+        &plug,
+        BooleanOpType::Union,
+        &tol,
+    ) {
+        Ok(result) => {
+            let actual = volume(&result.solids[0]);
+            println!(
+                "    filling the hole back in: {:.4}, expected {:.4}, relative {:.2e}",
+                actual,
+                32000.0,
+                (actual - 32000.0f64).abs() / 32000.0
+            );
+        }
+        Err(err) => println!(
+            "    filling the hole back in FAILED: {}",
+            err.chars().take(90).collect::<String>()
+        ),
+    }
 }
