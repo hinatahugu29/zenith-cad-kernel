@@ -21,6 +21,120 @@ impl Default for TessellationParams {
     }
 }
 
+/// A face's parameter domain, triangulated inside its trim loops.
+///
+/// This is the tessellator's intermediate result, exposed because exact surface
+/// integration (area, volume, centroid) needs the same trimmed domain that the
+/// display mesh is built from, but must evaluate the surface itself rather than
+/// reuse the linearized triangle vertices.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct UvTriangulation {
+    pub uvs: Vec<Point2>,
+    pub triangles: Vec<[usize; 3]>,
+}
+
+impl UvTriangulation {
+    pub fn is_empty(&self) -> bool {
+        self.triangles.is_empty()
+    }
+}
+
+/// Triangulates a face's trimmed parameter domain.
+///
+/// Planar faces are triangulated exactly by their trim loops. NURBS faces use
+/// the same loops and are then refined for curvature. Faces whose trim loops
+/// cannot be used, and surface classes without p-curve support, fall back to a
+/// uniform grid over the whole parameter rectangle.
+pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTriangulation {
+    match &face.geometry {
+        FaceGeometry::Plane(_) => {
+            let trimmed = planar_uv_triangulation(face, params);
+            if trimmed.is_empty() {
+                UvTriangulation::default()
+            } else {
+                trimmed
+            }
+        }
+        FaceGeometry::Nurbs(nurbs) => {
+            let trimmed = trimmed_uv_triangulation(face, nurbs, params);
+            if trimmed.is_empty() {
+                grid_uv_triangulation(nurbs, params)
+            } else {
+                trimmed
+            }
+        }
+        FaceGeometry::Coons(coons) => grid_uv_triangulation(coons, params),
+        FaceGeometry::Gordon(gordon) => grid_uv_triangulation(gordon, params),
+        FaceGeometry::Triangular(triangular) => grid_uv_triangulation(triangular, params),
+    }
+}
+
+fn grid_uv_triangulation(surface: &impl Surface3, params: &TessellationParams) -> UvTriangulation {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let num_u = params.u_divisions.max(2);
+    let num_v = params.v_divisions.max(2);
+
+    let mut uvs = Vec::with_capacity((num_u + 1) * (num_v + 1));
+    for j in 0..=num_v {
+        let v = v_min + (v_max - v_min) * (j as f64 / num_v as f64);
+        for i in 0..=num_u {
+            let u = u_min + (u_max - u_min) * (i as f64 / num_u as f64);
+            uvs.push(Point2::new(u, v));
+        }
+    }
+
+    let mut triangles = Vec::with_capacity(num_u * num_v * 2);
+    for j in 0..num_v {
+        for i in 0..num_u {
+            let stride = num_u + 1;
+            let i0 = j * stride + i;
+            triangles.push([i0, i0 + 1, i0 + stride + 1]);
+            triangles.push([i0, i0 + stride + 1, i0 + stride]);
+        }
+    }
+
+    UvTriangulation { uvs, triangles }
+}
+
+/// Triangulates a planar face's trim loops in its own UV basis.
+fn planar_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTriangulation {
+    let Ok(pcurves) = face.plane_pcurves() else {
+        return UvTriangulation::default();
+    };
+    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+    if outer_uvs.len() < 3 {
+        return UvTriangulation::default();
+    }
+
+    let mut flat_coords = Vec::new();
+    let mut uvs = Vec::new();
+    let mut hole_indices = Vec::new();
+    for uv in &outer_uvs {
+        flat_coords.push(uv.x);
+        flat_coords.push(uv.y);
+        uvs.push(*uv);
+    }
+    for pcurve_loop in &pcurves.inner_loops {
+        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params);
+        if hole_uvs.len() >= 3 {
+            hole_indices.push(uvs.len());
+            for uv in &hole_uvs {
+                flat_coords.push(uv.x);
+                flat_coords.push(uv.y);
+                uvs.push(*uv);
+            }
+        }
+    }
+
+    let triangles: Vec<[usize; 3]> = earcutr::earcut(&flat_coords, &hole_indices, 2)
+        .unwrap_or_default()
+        .chunks_exact(3)
+        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+        .collect();
+
+    UvTriangulation { uvs, triangles }
+}
+
 /// 汎用 Surface3 トレイト実装からのグリッドテッセレーション
 pub fn tessellate_surface<S: Surface3>(
     surface: &S,
@@ -98,11 +212,11 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
         FaceGeometry::Nurbs(nurbs) => {
             // トリムループが使えるならそれに従い、扱えない面（球の極など）は
             // 従来どおりパラメータ矩形全体の一様グリッドに落とす
-            let trimmed = tessellate_nurbs_from_pcurves(face, nurbs, params);
-            if trimmed.indices.is_empty() {
+            let trimmed = trimmed_uv_triangulation(face, nurbs, params);
+            if trimmed.is_empty() {
                 tessellate_surface(nurbs, params, face.orientation)
             } else {
-                trimmed
+                build_trimmed_mesh(face, nurbs, &trimmed.uvs, &trimmed.triangles)
             }
         }
         FaceGeometry::Coons(coons) => tessellate_surface(coons, params, face.orientation),
@@ -193,17 +307,17 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
 /// until every triangle is no coarser than the requested parameter grid and its
 /// 3D chord stays within the deflection target. Refinement splits shared edges
 /// through one midpoint table, so the mesh never develops T-junction cracks.
-fn tessellate_nurbs_from_pcurves(
+fn trimmed_uv_triangulation(
     face: &Face,
     surface: &impl Surface3,
     params: &TessellationParams,
-) -> TriangleMesh {
+) -> UvTriangulation {
     let Some(pcurves) = &face.pcurves else {
-        return TriangleMesh::new();
+        return UvTriangulation::default();
     };
     let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
     if outer_uvs.len() < 3 {
-        return TriangleMesh::new();
+        return UvTriangulation::default();
     }
 
     let mut flat_coords = Vec::new();
@@ -230,7 +344,7 @@ fn tessellate_nurbs_from_pcurves(
 
     let triangle_indices = earcutr::earcut(&flat_coords, &hole_indices, 2).unwrap_or_default();
     if triangle_indices.is_empty() {
-        return TriangleMesh::new();
+        return UvTriangulation::default();
     }
     let mut triangles: Vec<[usize; 3]> = triangle_indices
         .chunks_exact(3)
@@ -238,7 +352,7 @@ fn tessellate_nurbs_from_pcurves(
         .collect();
 
     refine_uv_triangulation(surface, params, &mut uvs, &mut triangles);
-    build_trimmed_mesh(face, surface, &uvs, &triangles)
+    UvTriangulation { uvs, triangles }
 }
 
 /// Upper bound on triangles produced by trimmed refinement, so a pathological

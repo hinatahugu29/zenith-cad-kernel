@@ -1589,6 +1589,144 @@ fn test_brep_intersection_skips_vertical_plane_missing_cylinder_quadrant() {
 }
 
 #[test]
+fn test_brep_mass_properties_are_analytic_for_a_box() {
+    let params = TessellationParams {
+        u_divisions: 8,
+        v_divisions: 8,
+    };
+    let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&solid, &params);
+
+    assert!(
+        (mass.volume - 1000.0).abs() < 1e-9,
+        "volume {}",
+        mass.volume
+    );
+    assert!(
+        (mass.surface_area - 600.0).abs() < 1e-9,
+        "area {}",
+        mass.surface_area
+    );
+    for axis in 0..3 {
+        assert!((mass.center_of_mass[axis] - 5.0).abs() < 1e-9);
+        // 一辺 a の立方体（角が原点）: Ixx = 2 * a^5 / 3
+        assert!((mass.inertia_diagonal[axis] - 2.0 * 10.0_f64.powi(5) / 3.0).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn test_brep_mass_properties_beat_the_mesh_on_a_cylinder() {
+    let radius: f64 = 10.0;
+    let height: f64 = 30.0;
+    let params = TessellationParams {
+        u_divisions: 24,
+        v_divisions: 24,
+    };
+    let solid = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+
+    let expected_volume = std::f64::consts::PI * radius * radius * height;
+    let expected_area = 2.0 * std::f64::consts::PI * radius * (radius + height);
+    let expected_izz = 0.5 * expected_volume * radius * radius;
+
+    let brep = zenith_algo::MassCalculator::compute_from_brep(&solid, &params);
+    assert!(
+        (brep.volume - expected_volume).abs() < expected_volume * 1e-12,
+        "brep volume {} should be analytic {expected_volume}",
+        brep.volume
+    );
+    assert!(
+        (brep.surface_area - expected_area).abs() < expected_area * 1e-12,
+        "brep area {} should be analytic {expected_area}",
+        brep.surface_area
+    );
+    assert!((brep.center_of_mass.z - height / 2.0).abs() < 1e-9);
+    assert!(
+        (brep.inertia_diagonal.z - expected_izz).abs() < expected_izz * 1e-9,
+        "brep Izz {} should be analytic {expected_izz}",
+        brep.inertia_diagonal.z
+    );
+
+    // メッシュ由来の値は同じ設定でも桁違いに粗い
+    let mesh = zenith_algo::MassCalculator::compute_from_mesh(&tessellate_solid(&solid, &params));
+    let mesh_error = (mesh.volume - expected_volume).abs();
+    let brep_error = (brep.volume - expected_volume).abs();
+    assert!(
+        mesh_error > brep_error * 1e6,
+        "the mesh path should stay clearly coarser: mesh {mesh_error}, brep {brep_error}"
+    );
+}
+
+#[test]
+fn test_brep_mass_properties_subtract_void_shells() {
+    let tol = Tolerance::default();
+    let params = TessellationParams {
+        u_divisions: 8,
+        v_divisions: 8,
+    };
+    let outer = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let inner = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(3.0, 3.0, 3.0).unwrap(),
+        Vec3::new(2.0, 2.0, 2.0),
+    );
+    let hollow = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &outer,
+        &inner,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("contained difference should produce a cavity");
+
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&hollow, &params);
+    assert!(
+        (mass.volume - (1000.0 - 27.0)).abs() < 1e-9,
+        "cavity volume {}",
+        mass.volume
+    );
+    // 表面積は外殻と空洞の両方を数える
+    assert!(
+        (mass.surface_area - (600.0 + 54.0)).abs() < 1e-9,
+        "cavity area {}",
+        mass.surface_area
+    );
+}
+
+#[test]
+fn test_brep_mass_properties_integrate_a_boolean_result() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height = 30.0;
+    let cut_x: f64 = 6.0;
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+    let cutter = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(20.0, 40.0, 50.0).unwrap(),
+        Vec3::new(cut_x, -20.0, -10.0),
+    );
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact(
+        &cylinder,
+        &cutter,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .unwrap();
+
+    let segment_area = radius * radius * (cut_x / radius).acos()
+        - cut_x * (radius * radius - cut_x * cut_x).sqrt();
+    let expected = (std::f64::consts::PI * radius * radius - segment_area) * height;
+
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&result, &params);
+    assert!(
+        (mass.volume - expected).abs() < expected * 1e-6,
+        "boolean volume {} should match analytic {expected}",
+        mass.volume
+    );
+}
+
+#[test]
 fn test_exact_brep_boolean_cuts_cylinder_lengthwise_with_box() {
     let tol = Tolerance::default();
     let radius: f64 = 10.0;

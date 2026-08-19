@@ -1,6 +1,6 @@
 use crate::bspline_basis::KnotVector;
 use serde::{Deserialize, Serialize};
-use zenith_math::Point2;
+use zenith_math::{Point2, Vec2};
 
 /// 2次元制御点（UV空間座標 + 重み）
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -110,6 +110,36 @@ impl NurbsCurve2 {
     }
 
     /// サンプル点列の取得
+    /// パラメータ `t` における1階微分 dC/dt（有理曲線の商の微分則）
+    ///
+    /// トリム境界に沿った線積分（面積・モーメントの厳密計算）に必要。
+    pub fn evaluate_derivative(&self, t: f64) -> Vec2 {
+        let count = self.control_points.len();
+        let span = self.knots.find_span(count, self.degree, t);
+        let ders = self.knots.ders_basis_functions(span, self.degree, 1, t);
+
+        let mut value = nalgebra::Vector3::zeros();
+        let mut slope = nalgebra::Vector3::zeros();
+        for (i, (basis, basis_slope)) in ders[0]
+            .iter()
+            .zip(ders[1].iter())
+            .enumerate()
+            .take(self.degree + 1)
+        {
+            let control_point = self.control_points[span - self.degree + i].to_homogeneous();
+            value += control_point * *basis;
+            slope += control_point * *basis_slope;
+        }
+
+        let weight = value.z;
+        if weight.abs() <= 1e-15 {
+            return Vec2::zeros();
+        }
+        let point = Vec2::new(value.x, value.y) / weight;
+
+        (Vec2::new(slope.x, slope.y) - point * slope.z) / weight
+    }
+
     pub fn sample_points(&self, num_samples: usize) -> Vec<Point2> {
         let (t_min, t_max) = self.param_range();
         let n = num_samples.max(2);

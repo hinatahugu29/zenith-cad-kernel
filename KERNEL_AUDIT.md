@@ -247,6 +247,20 @@ Replacement target:
 - rebuild analytic curves as analytic curves, not lines
 - for general edits, solve adjacent surface extensions and re-trim
 
+### 7b. The sphere primitive is not an exact sphere
+
+`make_sphere()` builds a single NURBS patch whose points drift up to 0.2 mm from the true sphere at radius 15, about 1.3 percent. Exact B-Rep integration measures its volume as 13922 against an analytic 14137, so the error is in the geometry, not in the integration.
+
+Impact:
+
+- volume, area, and inertia are wrong by over one percent for any model containing a sphere
+- STEP export carries the approximation to other systems
+
+Replacement target:
+
+- build the sphere as an exact rational surface of revolution, the same way circles and cylinders already are
+- add a regression asserting sampled surface points stay on the analytic sphere
+
 ### 7. Cone apex is approximated as a tiny frustum
 
 `make_cone()` clamps the top radius with `r_top.max(0.001)` to avoid singular topology.
@@ -264,6 +278,8 @@ Replacement target:
 
 ### 8. Mass properties are mesh-derived
 
+Status: an exact B-Rep path now exists; the mesh path remains as preview.
+
 `MassCalculator::compute_from_mesh()` derives area and volume from triangles. This is useful for preview and coarse tests, but it depends on tessellation quality.
 
 Impact:
@@ -276,6 +292,15 @@ Replacement target:
 
 - keep mesh mass as preview
 - add exact or high-accuracy face integration for planes, cylinders, cones, spheres, tori, and NURBS patches
+
+Changes made:
+
+- Added `Surface3::evaluate_with_derivatives()` so any surface can report the area element `dS/du x dS/dv`. The default is a central difference; planes and NURBS surfaces override it with their analytic derivatives.
+- Added `zenith_tess::face_uv_triangulation()`, exposing the trimmed parameter domain the tessellator already builds, so integration and display share one notion of what a face covers.
+- Added `MassCalculator::compute_from_brep()`, which integrates volume, area, centroid, and the inertia diagonal over the faces by the divergence theorem, evaluating the surface inside each domain triangle with a degree-4 quadrature rule instead of reusing linearized triangle vertices. Void shells are subtracted.
+- Planar faces take an analytic path instead: on a plane every integrand is polynomial in `(u, v)`, so Green's theorem turns the domain integrals into line integrals along the p-curves, evaluated with 10-point Gauss-Legendre. This removes the polygonal approximation of curved trim boundaries, which was the dominant error - a circular cylinder cap was integrating as an inscribed polygon.
+- Added `NurbsCurve2::evaluate_derivative()` for the rational p-curve tangent those line integrals need.
+- A 10 x 30 cylinder now returns its analytic volume, area, centroid, and inertia to machine precision, where the mesh path at the same tessellation settings is short by about 0.9 percent.
 
 ## Medium-Risk Areas
 
