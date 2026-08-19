@@ -1,4 +1,5 @@
-use zenith_geom::PlaneSurface3;
+use std::collections::BTreeMap;
+use zenith_geom::{ControlPoint3, NurbsSurface3, PlaneSurface3};
 use zenith_math::{Point3, Vec3};
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Shell, Solid, Vertex, Wire};
 
@@ -175,6 +176,12 @@ impl DirectModeling {
     }
 
     /// 選択されたFaceをその法線方向に距離 distance だけ押し出し（Push-Pull）するソリッド変形
+    /// 選択されたFaceを法線方向に distance だけ押し出す（Push/Pull）
+    ///
+    /// 既存の曲線・曲面は作り直さず変換する。動かす頂点をすべて含む面は剛体
+    /// 移動し、片側だけ動く面はワイヤだけ差し替えて支持曲面を保つ。円柱側面の
+    /// ような v 方向に線形な面は、動く側の制御点行だけを平行移動して伸ばす。
+    /// 表現できない編集は直線で近似せず、明示的に失敗する。
     pub fn push_pull_face(
         solid: &Solid,
         face_index: usize,
@@ -185,74 +192,81 @@ impl DirectModeling {
         }
 
         let faces = &solid.outer_shell.faces;
-        if face_index >= faces.len() {
-            return Err("Invalid face index".to_string());
+        let target_face = faces.get(face_index).ok_or("Invalid face index")?;
+        let inspection = Self::inspect_face(target_face)?;
+        let offset = inspection.normal * distance;
+
+        let mut moved_points = Vec::new();
+        for edge in &target_face.outer_wire.edges {
+            moved_points.push(edge.start_vertex().point);
+            moved_points.push(edge.end_vertex().point);
+        }
+        let is_moved = |point: Point3| -> bool {
+            moved_points
+                .iter()
+                .any(|moved| (point - *moved).norm() < 1e-5)
+        };
+
+        // 共有エッジは元のIDで1度だけ作り直し、全ての面で同じ実体を使う
+        let mut rebuilt: BTreeMap<u64, Edge> = BTreeMap::new();
+        for face in faces {
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oriented in &wire.edges {
+                    let edge = &oriented.edge;
+                    if rebuilt.contains_key(&edge.id) {
+                        continue;
+                    }
+                    rebuilt.insert(edge.id, push_pull_edge(edge, offset, &is_moved)?);
+                }
+            }
         }
 
-        let target_face = &faces[face_index];
-        let insp = Self::inspect_face(target_face)?;
-        let offset_vec = insp.normal * distance;
-
-        // 対象面の頂点セットを収集
-        let mut target_vertex_pts = Vec::new();
-        for oe in &target_face.outer_wire.edges {
-            target_vertex_pts.push(oe.start_vertex().point);
-            target_vertex_pts.push(oe.end_vertex().point);
-        }
-
-        let is_target_pt =
-            |p: Point3| -> bool { target_vertex_pts.iter().any(|tp| (p - *tp).norm() < 1e-5) };
+        let rebuild_wire = |wire: &Wire| -> Wire {
+            Wire::new(
+                wire.edges
+                    .iter()
+                    .map(|oriented| {
+                        OrientedEdge::new(rebuilt[&oriented.edge.id].clone(), oriented.orientation)
+                    })
+                    .collect(),
+            )
+        };
 
         let mut new_faces = Vec::with_capacity(faces.len());
-
-        for f in faces.iter() {
-            let mut new_edges = Vec::new();
-            let mut shifted_pts = Vec::new();
-
-            for oe in &f.outer_wire.edges {
-                let p_s = oe.start_vertex().point;
-                let p_e = oe.end_vertex().point;
-
-                let new_p_s = if is_target_pt(p_s) {
-                    p_s + offset_vec
-                } else {
-                    p_s
-                };
-                let new_p_e = if is_target_pt(p_e) {
-                    p_e + offset_vec
-                } else {
-                    p_e
-                };
-
-                shifted_pts.push(new_p_s);
-
-                let vs = Vertex::from_point(new_p_s);
-                let ve = Vertex::from_point(new_p_e);
-                let e = Edge::line_between(vs, ve)?;
-                // ワイヤ進行順で作られたエッジのため forward で追加
-                new_edges.push(OrientedEdge::forward(e));
-            }
-
-            // 移動後の境界点から平面を張り直し、Face幾何とWireを一致させる。
-            let updated_geom = match &f.geometry {
-                FaceGeometry::Plane(p) => {
-                    if shifted_pts.len() >= 3 {
-                        let origin = shifted_pts[0];
-                        let u = shifted_pts[1] - shifted_pts[0];
-                        let v = shifted_pts[shifted_pts.len() - 1] - shifted_pts[0];
-                        FaceGeometry::Plane(PlaneSurface3::new(origin, u, v).unwrap_or(*p))
-                    } else {
-                        FaceGeometry::Plane(*p)
+        for face in faces {
+            let mut moved_count = 0;
+            let mut vertex_count = 0;
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oriented in &wire.edges {
+                    vertex_count += 1;
+                    if is_moved(oriented.start_vertex().point) {
+                        moved_count += 1;
                     }
                 }
-                other => other.clone(),
+            }
+
+            if moved_count == 0 {
+                new_faces.push(face.clone());
+                continue;
+            }
+
+            let geometry = if moved_count == vertex_count {
+                // 面全体が動くので幾何ごと剛体移動する
+                crate::BrepTransform::translate_face(face, offset).geometry
+            } else {
+                extended_face_geometry(face, offset, &is_moved)?
             };
 
-            new_faces.push(Face::simple(updated_geom, Wire::new(new_edges)));
+            new_faces.push(Face::new(
+                geometry,
+                rebuild_wire(&face.outer_wire),
+                face.inner_wires.iter().map(rebuild_wire).collect(),
+                face.orientation,
+                face.tolerance,
+            ));
         }
 
-        let shell = Shell::closed(new_faces);
-        crate::validated_solid(shell)
+        crate::validated_solid(Shell::closed(new_faces))
     }
 
     /// 選択されたFaceを特定の回転軸エッジまわりに角度 angle_deg だけ傾斜（Taper / Draft）
@@ -520,4 +534,100 @@ impl DirectModeling {
 
         Edge::line_between(new_v_start, new_v_end)
     }
+}
+
+/// Rebuilds one edge for a push/pull, preserving its curve wherever the edit is
+/// a rigid motion of the whole edge.
+fn push_pull_edge(
+    edge: &Edge,
+    offset: Vec3,
+    is_moved: &impl Fn(Point3) -> bool,
+) -> Result<Edge, String> {
+    let start_moved = is_moved(edge.start_vertex.point);
+    let end_moved = is_moved(edge.end_vertex.point);
+
+    match (start_moved, end_moved) {
+        (false, false) => Ok(edge.clone()),
+        (true, true) => Ok(crate::BrepTransform::translate_edge(edge, offset)),
+        _ => {
+            // 片端だけ動く辺は、直線なら伸縮で表せる。曲線の場合は隣接曲面を
+            // 延長して再トリムする必要があり、直線で近似すると円弧が失われる。
+            if edge.curve.degree != 1 || edge.curve.control_points.len() != 2 {
+                return Err(
+                    "Push-pull would have to rebuild a curved side edge; extending the adjacent surfaces is not implemented"
+                        .to_string(),
+                );
+            }
+            let start = if start_moved {
+                edge.start_vertex.point + offset
+            } else {
+                edge.start_vertex.point
+            };
+            let end = if end_moved {
+                edge.end_vertex.point + offset
+            } else {
+                edge.end_vertex.point
+            };
+            Edge::line_between(Vertex::from_point(start), Vertex::from_point(end))
+        }
+    }
+}
+
+/// Returns the geometry of a face only part of whose boundary moves.
+///
+/// A planar side wall keeps its plane as long as the push slides along it. A
+/// surface that is linear in `v` - a cylinder or cone side patch - is extended
+/// by translating the control row on the moving side, which keeps it exact.
+fn extended_face_geometry(
+    face: &Face,
+    offset: Vec3,
+    is_moved: &impl Fn(Point3) -> bool,
+) -> Result<FaceGeometry, String> {
+    match &face.geometry {
+        FaceGeometry::Plane(plane) => {
+            if offset.dot(&plane.normal).abs() > 1e-9 * offset.norm().max(1.0) {
+                return Err(
+                    "Push-pull direction is not tangent to an adjacent planar face".to_string(),
+                );
+            }
+            Ok(FaceGeometry::Plane(*plane))
+        }
+        FaceGeometry::Nurbs(surface) => extend_ruled_surface(surface, offset, is_moved)
+            .map(FaceGeometry::Nurbs)
+            .ok_or_else(|| {
+                "Push-pull across this curved face is not implemented; only surfaces linear in v can be extended"
+                    .to_string()
+            }),
+        _ => Err("Push-pull across this face geometry is not implemented".to_string()),
+    }
+}
+
+fn extend_ruled_surface(
+    surface: &NurbsSurface3,
+    offset: Vec3,
+    is_moved: &impl Fn(Point3) -> bool,
+) -> Option<NurbsSurface3> {
+    if surface.degree_v != 1 || surface.control_points.iter().any(|row| row.len() != 2) {
+        return None;
+    }
+
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let start_side_moves =
+        is_moved(surface.evaluate(u_min, v_min)) && is_moved(surface.evaluate(u_max, v_min));
+    let end_side_moves =
+        is_moved(surface.evaluate(u_min, v_max)) && is_moved(surface.evaluate(u_max, v_max));
+
+    let moving_column = match (start_side_moves, end_side_moves) {
+        (true, false) => 0,
+        (false, true) => 1,
+        _ => return None,
+    };
+
+    let mut extended = surface.clone();
+    for row in extended.control_points.iter_mut() {
+        let control_point = row[moving_column];
+        row[moving_column] = ControlPoint3::new(control_point.point + offset, control_point.weight);
+    }
+
+    Some(extended)
 }

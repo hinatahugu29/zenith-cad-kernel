@@ -83,6 +83,11 @@ impl BrepTransform {
         )
     }
 
+    /// 単一エッジの平行移動（曲線と頂点をそのまま移す）
+    pub fn translate_edge(edge: &Edge, offset: Vec3) -> Edge {
+        translate_edge(edge, offset)
+    }
+
     pub fn reverse_shell_orientation(shell: &Shell) -> Shell {
         Shell::new(
             shell

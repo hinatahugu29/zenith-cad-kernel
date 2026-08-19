@@ -233,18 +233,25 @@ Replacement target:
 
 ### 6. Direct modeling currently rebuilds many edges as lines
 
-`push_pull_face()` moves selected vertices and recreates all affected edges with `Edge::line_between()`. This destroys arcs/splines on affected boundaries.
+Status: fixed for rigid and ruled edits; general edits now fail loudly instead of degrading.
 
-Impact:
+`push_pull_face()` used to move selected vertices and recreate every affected edge with `Edge::line_between()`, destroying arcs and splines. Worse, it left curved face geometry untouched while moving that face's wire, so a cylinder came out with its surfaces no longer matching their boundaries.
 
-- box cases work
-- cylinder, holes, fillets, and freeform patches will degrade under editing
-- this conflicts directly with Plasticity-like direct editing goals
+It now classifies each element by how the edit moves it:
 
-Replacement target:
+- an edge whose endpoints both stay is kept exactly as it is, and one whose endpoints both move is translated with its curve intact
+- an edge with one endpoint moving must be linear; a curved one would need the adjacent surfaces extended and re-trimmed, so it is refused rather than replaced by a chord
+- a face whose whole boundary moves is transported rigidly, geometry included
+- a planar face only partly moving keeps its plane, provided the push slides along it
+- a face linear in `v` - a cylinder or cone side patch - is extended by translating the control row on the moving side, which keeps it exact
+- anything else returns an error naming what is missing
 
-- transform existing curves when the edit is rigid/affine
-- rebuild analytic curves as analytic curves, not lines
+Shared edges are rebuilt once and keyed by their original id, so faces keep sharing the same edge instead of each holding a private copy.
+
+Pulling a cylinder's cap now yields an exact taller cylinder: all four side patches stay NURBS, all sixteen circular arc uses survive, the boundary stays on the analytic cylinder to 1e-9, and the volume matches the analytic value.
+
+Remaining target:
+
 - for general edits, solve adjacent surface extensions and re-trim
 
 ### 7b. Surfaces of revolution were distorted near the axis

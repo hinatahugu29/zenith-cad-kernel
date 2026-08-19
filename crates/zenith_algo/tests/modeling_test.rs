@@ -4831,6 +4831,99 @@ fn test_sphere_solid() {
 }
 
 #[test]
+fn test_push_pull_keeps_a_cylinder_exact() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height: f64 = 30.0;
+    let growth: f64 = 10.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+
+    // 天面（+Z のキャップ）を引き上げる
+    let top_index = cylinder
+        .outer_shell
+        .faces
+        .iter()
+        .position(|face| {
+            matches!(face.geometry, FaceGeometry::Plane(_))
+                && face
+                    .outer_wire
+                    .sample_points(2)
+                    .iter()
+                    .all(|point| (point.z - height).abs() < 1e-9)
+        })
+        .expect("top cap");
+
+    let taller = zenith_algo::DirectModeling::push_pull_face(&cylinder, top_index, growth).unwrap();
+    assert!(taller.is_topologically_valid(&tol));
+
+    // 側面は NURBS のまま、境界の円弧も2次のまま残る
+    assert_eq!(
+        taller
+            .outer_shell
+            .faces
+            .iter()
+            .filter(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+            .count(),
+        4
+    );
+    let arc_uses = taller
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.edges.iter())
+        .filter(|edge| edge.edge.curve.degree == 2)
+        .count();
+    assert_eq!(
+        arc_uses, 16,
+        "every circular arc use should survive the edit"
+    );
+
+    // 境界が解析円柱から外れない
+    for face in &taller.outer_shell.faces {
+        for point in face.outer_wire.sample_points(8) {
+            let radial = (point.x * point.x + point.y * point.y).sqrt();
+            assert!(
+                (radial - radius).abs() < 1e-9,
+                "edited boundary left the cylinder at radius {radial}"
+            );
+            assert!(point.z >= -1e-9 && point.z <= height + growth + 1e-9);
+        }
+    }
+
+    // 体積は解析値どおりに増える
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&taller, &params);
+    let expected = std::f64::consts::PI * radius * radius * (height + growth);
+    assert!(
+        (mass.volume - expected).abs() < expected * 1e-9,
+        "push-pull volume {} vs analytic {expected}",
+        mass.volume
+    );
+}
+
+#[test]
+fn test_push_pull_refuses_edits_it_cannot_represent() {
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+
+    // 側面パッチを法線方向に押すと隣接曲面の延長・再トリムが必要になる。
+    // 直線で近似せず、明示的に失敗しなければならない。
+    let side_index = cylinder
+        .outer_shell
+        .faces
+        .iter()
+        .position(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+        .expect("side patch");
+    let result = zenith_algo::DirectModeling::push_pull_face(&cylinder, side_index, 5.0);
+    assert!(
+        result.is_err(),
+        "an unsupported push-pull must fail instead of degrading the geometry"
+    );
+}
+
+#[test]
 fn test_direct_modeling_inspection_and_push_pull() {
     // 10 x 20 x 30 の直方体
     let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
