@@ -523,7 +523,7 @@ impl BrepIntersectionBuilder {
             ));
         }
 
-        let faces = pieces
+        let faces: Vec<Face> = pieces
             .iter()
             .map(|piece| {
                 if piece.reverse_orientation {
@@ -533,6 +533,13 @@ impl BrepIntersectionBuilder {
                 }
             })
             .collect();
+
+        // 各面は独立に分割されるので、隣り合う面が同じ稜を別々のエッジとして
+        // 作ってしまう。幾何的には閉じていても、エッジの同一性が共有されて
+        // いないと他カーネルは閉シェルと認めない（OpenCASCADE は Solid では
+        // なく Shell として読む）。ここで実体を一本化する。
+        let faces = unify_coincident_edges(faces, tol);
+
         Solid::try_simple(Shell::closed(faces), tol).map_err(|err| err.to_string())
     }
 
@@ -1228,24 +1235,33 @@ fn split_cylinder_side_face_by_horizontal_edge(
         return Err("Split edge must lie on the NURBS face".to_string());
     }
 
-    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
-    let bottom_start = surface.evaluate(u_min, v_min);
-    let bottom_end = surface.evaluate(u_max, v_min);
-    let top_start = surface.evaluate(u_min, v_max);
-    let top_end = surface.evaluate(u_max, v_max);
+    // 一度分割された面は、境界ワイヤだけが変わって元の曲面をそのまま持ち続ける。
+    // したがって分割可否も分割後の境界も、曲面の全体範囲ではなく「その面が実際に
+    // 占めている範囲」で決めなければならない。曲面側を見ていたために、z=-20..0 の
+    // ピースを z=20 の円弧で「分割」して重なったピースを作っていた。
+    let bounds = cylinder_face_bounds(face, &patch, tol)
+        .ok_or_else(|| "Cylinder-side face boundary is not a four-sided patch".to_string())?;
 
-    // 分割エッジの端点は両側のルーリング上、かつパッチ内部の高さになければ
-    // ならない。両端の高さが同じなら水平断面、違えば斜め断面（楕円弧）。
-    let (split_start, split_end) =
-        ruling_boundary_endpoints(split_edge, bottom_start, bottom_end, &patch, tol).ok_or_else(
-            || "Split edge endpoints do not match cylinder side boundaries".to_string(),
-        )?;
+    let (split_start, split_end) = ruling_boundary_endpoints(
+        split_edge,
+        bounds.bottom_start,
+        bounds.bottom_end,
+        &patch,
+        tol,
+    )
+    .ok_or_else(|| "Split edge endpoints do not match cylinder side boundaries".to_string())?;
+
     for endpoint in [split_start, split_end] {
         let axial = patch.axial_coordinate(endpoint);
-        if axial <= tol.linear || axial >= patch.height - tol.linear {
+        if axial <= bounds.bottom_axial + tol.linear || axial >= bounds.top_axial - tol.linear {
             return Err("Cylinder-side split edge must cross the face interior".to_string());
         }
     }
+
+    let bottom_start = bounds.bottom_start;
+    let bottom_end = bounds.bottom_end;
+    let top_start = bounds.top_start;
+    let top_end = bounds.top_end;
 
     let split_forward = orient_edge_for_points(split_edge, split_start, split_end, tol)
         .ok_or_else(|| "Split edge endpoints do not match cylinder side boundaries".to_string())?;
@@ -1253,8 +1269,13 @@ fn split_cylinder_side_face_by_horizontal_edge(
         split_forward.edge.clone(),
         split_forward.orientation.reversed(),
     );
-    let bottom_edge = cylinder_section_edge(surface, 0.0, tol)?;
-    let top_edge = cylinder_section_edge(surface, 1.0, tol)?;
+    // 面から取り出した円弧は向きが揃っているとは限らないので、明示的に
+    // bottom_start -> bottom_end / top_start -> top_end に向ける。
+    let bottom_oriented =
+        orient_edge_for_points(&bounds.bottom_edge, bottom_start, bottom_end, tol)
+            .ok_or_else(|| "Cylinder-side bottom arc does not match the face corners".to_string())?;
+    let top_oriented = orient_edge_for_points(&bounds.top_edge, top_start, top_end, tol)
+        .ok_or_else(|| "Cylinder-side top arc does not match the face corners".to_string())?;
     let left_lower = Edge::line_between(
         Vertex::new(bottom_start, tol.linear),
         Vertex::new(split_start, tol.linear),
@@ -1275,7 +1296,7 @@ fn split_cylinder_side_face_by_horizontal_edge(
     let lower = Face::new(
         face.geometry.clone(),
         Wire::new(vec![
-            OrientedEdge::forward(bottom_edge),
+            bottom_oriented.clone(),
             OrientedEdge::forward(right_lower),
             split_reversed,
             OrientedEdge::reversed(left_lower),
@@ -1289,7 +1310,10 @@ fn split_cylinder_side_face_by_horizontal_edge(
         Wire::new(vec![
             split_forward,
             OrientedEdge::forward(right_upper),
-            OrientedEdge::reversed(top_edge),
+            OrientedEdge::new(
+                top_oriented.edge.clone(),
+                top_oriented.orientation.reversed(),
+            ),
             OrientedEdge::reversed(left_upper),
         ]),
         Vec::new(),
@@ -1311,6 +1335,93 @@ fn split_cylinder_side_face_by_horizontal_edge(
     }
 
     Ok(vec![lower, upper])
+}
+
+/// The extent a cylinder-side face actually occupies, read from its boundary
+/// wire rather than from the surface it sits on.
+///
+/// Splitting a face does not shrink its surface - only its wire changes - so a
+/// piece that covers a quarter of the patch still reports the whole patch's
+/// parameter range. Anything that reasons about "where this face is" has to
+/// consult the wire, or it will happily split a piece with an edge that lies
+/// outside it.
+struct CylinderFaceBounds {
+    bottom_edge: Edge,
+    top_edge: Edge,
+    bottom_axial: f64,
+    top_axial: f64,
+    bottom_start: Point3,
+    bottom_end: Point3,
+    top_start: Point3,
+    top_end: Point3,
+}
+
+fn cylinder_face_bounds(
+    face: &Face,
+    patch: &CylinderPatch,
+    tol: &Tolerance,
+) -> Option<CylinderFaceBounds> {
+    if face.outer_wire.edges.len() != 4 {
+        return None;
+    }
+
+    // 円弧側の辺は両端の軸方向座標が等しく、ルーリング側は異なる。
+    let mut arcs: Vec<(&Edge, f64)> = Vec::new();
+    for oriented in &face.outer_wire.edges {
+        let edge = &oriented.edge;
+        let start_axial = patch.axial_coordinate(edge.start_vertex.point);
+        let end_axial = patch.axial_coordinate(edge.end_vertex.point);
+        if (start_axial - end_axial).abs() <= tol.linear * 10.0 {
+            arcs.push((edge, 0.5 * (start_axial + end_axial)));
+        }
+    }
+
+    if arcs.len() != 2 {
+        return None;
+    }
+
+    let (mut bottom, mut top) = (arcs[0], arcs[1]);
+    if bottom.1 > top.1 {
+        std::mem::swap(&mut bottom, &mut top);
+    }
+    if (top.1 - bottom.1).abs() <= tol.linear {
+        return None;
+    }
+
+    let bottom_start = bottom.0.start_vertex.point;
+    let bottom_end = bottom.0.end_vertex.point;
+
+    // 上側の円弧の端点を、下側と同じルーリングに乗るように対応づける。
+    let on_same_ruling = |point: Point3, base: Point3| {
+        let offset = point - base;
+        (offset - patch.axis * offset.dot(&patch.axis)).norm() <= tol.linear * 10.0
+    };
+
+    let (top_start, top_end) = {
+        let candidate_start = top.0.start_vertex.point;
+        let candidate_end = top.0.end_vertex.point;
+        if on_same_ruling(candidate_start, bottom_start) && on_same_ruling(candidate_end, bottom_end)
+        {
+            (candidate_start, candidate_end)
+        } else if on_same_ruling(candidate_end, bottom_start)
+            && on_same_ruling(candidate_start, bottom_end)
+        {
+            (candidate_end, candidate_start)
+        } else {
+            return None;
+        }
+    };
+
+    Some(CylinderFaceBounds {
+        bottom_edge: bottom.0.clone(),
+        top_edge: top.0.clone(),
+        bottom_axial: bottom.1,
+        top_axial: top.1,
+        bottom_start,
+        bottom_end,
+        top_start,
+        top_end,
+    })
 }
 
 /// Matches a split edge's endpoints to the patch's two boundary rulings.
@@ -1518,24 +1629,6 @@ fn cylinder_patch_u_for_point(
     (radial_offset.norm() <= tol.linear * 10.0).then_some(u)
 }
 
-fn cylinder_section_edge(
-    surface: &NurbsSurface3,
-    alpha: f64,
-    tol: &Tolerance,
-) -> Result<Edge, String> {
-    let curve = cylinder_section_curve(surface, alpha)
-        .ok_or_else(|| "Failed to build cylinder section curve".to_string())?;
-    let (t_min, t_max) = curve.param_range();
-    let start = curve.evaluate(t_min);
-    let end = curve.evaluate(t_max);
-    Ok(Edge::new(
-        curve,
-        Vertex::new(start, tol.linear),
-        Vertex::new(end, tol.linear),
-        tol.linear,
-    ))
-}
-
 fn orient_edge_for_points(
     edge: &Edge,
     start: Point3,
@@ -1721,6 +1814,94 @@ fn reverse_face_orientation(face: &Face) -> Face {
         face.orientation.reversed(),
         face.tolerance,
     )
+}
+
+/// Replaces edges that describe the same curve with a single shared edge.
+///
+/// Faces are split independently, so two neighbouring pieces each build their
+/// own edge along the seam between them. Geometrically that is fine and the
+/// shell still closes, but edge *identity* is what a downstream kernel checks:
+/// with two distinct edges along one seam, OpenCASCADE reads the result as an
+/// open shell rather than a solid. Unifying them here is the sewing step.
+fn unify_coincident_edges(faces: Vec<Face>, tol: &Tolerance) -> Vec<Face> {
+    let mut canonical: Vec<Edge> = Vec::new();
+
+    let mut resolve = |edge: &Edge| -> Option<OrientedEdge> {
+        let start = edge.start_vertex.point;
+        let end = edge.end_vertex.point;
+
+        for existing in canonical.iter() {
+            let existing_start = existing.start_vertex.point;
+            let existing_end = existing.end_vertex.point;
+
+            if points_same_3d(existing_start, start, tol.linear)
+                && points_same_3d(existing_end, end, tol.linear)
+                && curves_coincide(existing, edge, tol)
+            {
+                return Some(OrientedEdge::forward(existing.clone()));
+            }
+            if points_same_3d(existing_start, end, tol.linear)
+                && points_same_3d(existing_end, start, tol.linear)
+                && curves_coincide(existing, edge, tol)
+            {
+                return Some(OrientedEdge::reversed(existing.clone()));
+            }
+        }
+
+        canonical.push(edge.clone());
+        Some(OrientedEdge::forward(edge.clone()))
+    };
+
+    let mut rewrite_wire = |wire: &Wire| -> Wire {
+        let edges = wire
+            .edges
+            .iter()
+            .map(|oriented| {
+                let Some(resolved) = resolve(&oriented.edge) else {
+                    return oriented.clone();
+                };
+                let orientation = if oriented.orientation.is_forward() {
+                    resolved.orientation
+                } else {
+                    resolved.orientation.reversed()
+                };
+                OrientedEdge::new(resolved.edge, orientation)
+            })
+            .collect();
+        Wire::new(edges)
+    };
+
+    faces
+        .iter()
+        .map(|face| {
+            Face::new(
+                face.geometry.clone(),
+                rewrite_wire(&face.outer_wire),
+                face.inner_wires.iter().map(&mut rewrite_wire).collect(),
+                face.orientation,
+                face.tolerance,
+            )
+        })
+        .collect()
+}
+
+/// Two edges describe the same curve when sampling them at matched parameters
+/// stays within tolerance. Endpoints alone are not enough: a straight edge and
+/// an arc can share both.
+fn curves_coincide(a: &Edge, b: &Edge, tol: &Tolerance) -> bool {
+    const SAMPLES: usize = 5;
+
+    let forward = points_same_3d(a.start_vertex.point, b.start_vertex.point, tol.linear);
+    let (a_min, a_max) = a.curve.param_range();
+    let (b_min, b_max) = b.curve.param_range();
+
+    (0..=SAMPLES).all(|index| {
+        let t = index as f64 / SAMPLES as f64;
+        let s = if forward { t } else { 1.0 - t };
+        let point_a = a.curve.evaluate(a_min + (a_max - a_min) * t);
+        let point_b = b.curve.evaluate(b_min + (b_max - b_min) * s);
+        points_same_3d(point_a, point_b, tol.linear * 10.0)
+    })
 }
 
 fn reverse_wire(wire: &Wire) -> Wire {

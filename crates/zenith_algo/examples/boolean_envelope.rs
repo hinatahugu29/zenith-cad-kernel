@@ -72,7 +72,14 @@ fn main() {
             name: "box x cylinder (axis-aligned through hole)",
             a: boxa.clone(),
             b: shifted(&cyl, 10.0, 10.0, -10.0),
-            expected: [None, None, None],
+            // 20^3 の箱を半径6の円柱が貫通する。穴の体積は pi*36*20。
+            // 円柱は高さ40なので、箱の外に出ている分は pi*36*40 - pi*36*20。
+            expected: [
+                Some(8000.0 + std::f64::consts::PI * 36.0 * 40.0
+                    - std::f64::consts::PI * 36.0 * 20.0),
+                Some(8000.0 - std::f64::consts::PI * 36.0 * 20.0),
+                Some(std::f64::consts::PI * 36.0 * 20.0),
+            ],
         },
         Case {
             name: "box x sphere",

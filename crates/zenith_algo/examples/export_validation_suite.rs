@@ -279,6 +279,72 @@ fn build_subjects() -> Vec<Subject> {
         }
     }
 
+    // 直線の内側ループを持つ中空押し出し。FACE_BOUND の扱いの対照実験になる。
+    {
+        let tol = Tolerance::default();
+        let rect = |half_x: f64, half_y: f64| {
+            let points = [
+                Point3::new(-half_x, -half_y, 0.0),
+                Point3::new(half_x, -half_y, 0.0),
+                Point3::new(half_x, half_y, 0.0),
+                Point3::new(-half_x, half_y, 0.0),
+            ];
+            let vertices: Vec<Vertex> = points.into_iter().map(Vertex::from_point).collect();
+            let edges = (0..4)
+                .filter_map(|index| {
+                    let edge = Edge::line_between(
+                        vertices[index].clone(),
+                        vertices[(index + 1) % 4].clone(),
+                    )
+                    .ok()?;
+                    Some(OrientedEdge::forward(edge))
+                })
+                .collect();
+            Wire::new(edges)
+        };
+
+        if let Ok(solid) = zenith_algo::ExtrudeBuilder::extrude_face_with_holes(
+            &rect(15.0, 10.0),
+            &[rect(8.0, 5.0)],
+            Vec3::new(0.0, 0.0, 25.0),
+            &tol,
+        ) {
+            subjects.push(Subject {
+                name: "hollow_extrusion",
+                solid,
+                analytic_volume: Some((30.0 * 20.0 - 16.0 * 10.0) * 25.0),
+                section: None,
+            });
+        }
+    }
+
+    // ブーリアンで開けた穴。専用ビルダーではなく汎用演算の結果を検証する。
+    if let (Ok(block), Ok(drill)) = (
+        PrimitiveBuilder::make_box(40.0, 40.0, 20.0),
+        PrimitiveBuilder::make_cylinder(6.0, 60.0),
+    ) {
+        let drill = zenith_algo::BrepTransform::translate_solid(&drill, Vec3::new(20.0, 20.0, -20.0));
+        if let Ok(result) = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+            &block,
+            &drill,
+            zenith_algo::BooleanOpType::Difference,
+            &Tolerance::default(),
+        ) {
+            if let Some(solid) = result.solids.into_iter().next() {
+                subjects.push(Subject {
+                    name: "boolean_drilled_block",
+                    solid,
+                    analytic_volume: Some(40.0 * 40.0 * 20.0 - PI * 36.0 * 20.0),
+                    section: Some((
+                        Point3::new(0.0, 0.0, 10.0),
+                        Vec3::new(0.0, 0.0, 1.0),
+                        Some(1600.0 - PI * 36.0),
+                    )),
+                });
+            }
+        }
+    }
+
     if let Ok(solid) = GearBuilder::make_spur_gear(2.0, 18, 20.0, 8.0, 6.0) {
         subjects.push(Subject {
             name: "spur_gear_m2_z18",
