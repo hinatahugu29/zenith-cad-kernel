@@ -73,6 +73,41 @@ fn report(name: &str, a: &Solid, b: &Solid) {
             .push(candidate);
     }
 
+    let mut by_face_b: BTreeMap<usize, Vec<_>> = BTreeMap::new();
+    for candidate in &candidates {
+        by_face_b
+            .entry(candidate.face_b_index)
+            .or_default()
+            .push(candidate);
+    }
+
+    for (face_index, entries) in &by_face_b {
+        let face = &b.outer_shell.faces[*face_index];
+        println!(
+            "    face B{face_index} ({}) receives {} segment(s)",
+            face_kind(face),
+            entries.len()
+        );
+        for entry in entries {
+            let start = entry.edge.start_vertex.point;
+            let end = entry.edge.end_vertex.point;
+            let start_gap = distance_to_boundary(face, start);
+            let end_gap = distance_to_boundary(face, end);
+            let verdict = match (start_gap <= tol.linear * 10.0, end_gap <= tol.linear * 10.0) {
+                (true, true) => "crosses the face",
+                (true, false) => "starts on the boundary, ends inside",
+                (false, true) => "starts inside, ends on the boundary",
+                (false, false) => "both ends inside",
+            };
+            println!(
+                "        len {:.3}  gaps {:.3}/{:.3}  {verdict}",
+                (end - start).norm(),
+                start_gap,
+                end_gap
+            );
+        }
+    }
+
     for (face_index, entries) in &by_face_a {
         let face = &a.outer_shell.faces[*face_index];
         println!(

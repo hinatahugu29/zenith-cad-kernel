@@ -20,7 +20,19 @@ fn main() {
     // 既定は穴あけ。引数 "rotated" で回転ボックスの和集合を見る。
     let case = std::env::args().nth(1).unwrap_or_else(|| "drill".to_string());
 
-    let (solid_a, solid_b, op) = if case == "rotated" {
+    let (solid_a, solid_b, op) = if case == "lifted" {
+        let boxa = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
+        let rotated = BrepTransform::transform_solid(
+            &BrepTransform::translate_solid(&boxa, Vec3::new(10.0, 10.0, 0.0)),
+            &zenith_math::Transform3::from_axis_angle(
+                &Vec3::new(0.0, 0.0, 1.0),
+                std::f64::consts::FRAC_PI_4,
+            ),
+        )
+        .unwrap();
+        let lifted = BrepTransform::translate_solid(&rotated, Vec3::new(0.0, 0.0, 7.0));
+        (boxa, lifted, BooleanOpType::Union)
+    } else if case == "rotated" {
         let boxa = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
         let rotated = BrepTransform::transform_solid(
             &BrepTransform::translate_solid(&boxa, Vec3::new(10.0, 10.0, 0.0)),
