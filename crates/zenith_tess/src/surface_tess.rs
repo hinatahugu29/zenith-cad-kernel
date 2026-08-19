@@ -603,17 +603,16 @@ fn sample_pcurve_loop_uv(pcurve_loop: &FacePcurveLoop, params: &TessellationPara
     let mut points = Vec::new();
     let deflection = loop_deflection_target(pcurve_loop, params);
 
-    for (segment_index, segment) in pcurve_loop.segments.iter().enumerate() {
-        let mut segment_points =
-            if segment.curve.degree == 1 && segment.curve.control_points.len() == 2 {
-                segment.curve.sample_points(2)
-            } else {
-                sample_pcurve_segment_adaptive(segment, deflection)
-            };
-
-        if segment_index > 0 && !segment_points.is_empty() {
-            segment_points.remove(0);
-        }
+    for segment in pcurve_loop.segments.iter() {
+        // 先頭点は「前の区間の終点と一致するときだけ」落とす。縮退エッジを
+        // 持つ面（円錐の頂点など）では UV 上に正当な跳びがあり、無条件に
+        // 落とすとトリム領域が欠ける。
+        let segment_points = if segment.curve.degree == 1 && segment.curve.control_points.len() == 2
+        {
+            segment.curve.sample_points(2)
+        } else {
+            sample_pcurve_segment_adaptive(segment, deflection)
+        };
 
         for uv in segment_points {
             let is_duplicate = points

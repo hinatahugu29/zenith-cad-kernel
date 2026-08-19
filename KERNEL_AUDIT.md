@@ -261,18 +261,13 @@ This affected every surface of revolution whose profile touches its axis, not on
 
 ### 7. Cone apex is approximated as a tiny frustum
 
-`make_cone()` clamps the top radius with `r_top.max(0.001)` to avoid singular topology.
+Status: fixed.
 
-Impact:
+`make_cone()` used to clamp the top radius with `r_top.max(0.001)`, so a cone was always a very thin frustum and its volume was off by about 0.01 percent with a spurious top face.
 
-- stable for preview
-- mathematically inaccurate for true cones
-- may leak into measurements and export
+`r_top <= 1e-6` now builds true apex topology: the side patch's `v = 1` row collapses to the apex point, the two rulings meet there, and the side wire closes with three edges - bottom arc plus two rulings - with no top face. The degenerate row keeps the same rational weight pattern as the rest of the patch, the same requirement that the revolve fix above turned on. Volume, area, and centroid now match the analytic cone to machine precision, and a positive `r_top` still builds an exact frustum with no clamping.
 
-Replacement target:
-
-- explicitly model singular apex topology, or expose the current behavior as `make_frustum`
-- add true cone tests and STEP export expectations
+Fixing this exposed a second defect: UV trim-loop sampling dropped each segment's first point unconditionally, assuming it duplicated the previous segment's last point. A face with a degenerate edge has a real jump in UV there, so the cone's trim domain came out as half its square and every integral over it was short by a third. Both UV loop samplers now drop a point only when it actually coincides with the previous one.
 
 ### 8. Mass properties are mesh-derived
 

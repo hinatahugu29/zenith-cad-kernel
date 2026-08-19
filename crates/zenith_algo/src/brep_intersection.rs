@@ -2238,11 +2238,19 @@ fn solve_quadratic_bernstein(b0: f64, b1: f64, b2: f64) -> Vec<f64> {
 }
 
 fn sample_pcurve_loop(loop_data: &FacePcurveLoop, samples_per_segment: usize) -> Vec<Point2> {
-    let mut points = Vec::new();
-    for (segment_index, segment) in loop_data.segments.iter().enumerate() {
-        let segment_points = segment.curve.sample_points(samples_per_segment);
-        let start_index = usize::from(segment_index > 0);
-        points.extend(segment_points.into_iter().skip(start_index));
+    // 先頭点は前区間の終点と一致するときだけ落とす。縮退エッジを持つ面では
+    // UV 上に正当な跳びがあるため、無条件に落とすと領域が欠ける。
+    let mut points: Vec<Point2> = Vec::new();
+    for segment in loop_data.segments.iter() {
+        for uv in segment.curve.sample_points(samples_per_segment) {
+            if points
+                .last()
+                .is_some_and(|last| points_same_2d(uv, *last, 1e-9))
+            {
+                continue;
+            }
+            points.push(uv);
+        }
     }
 
     if points.len() > 1 && points_same_2d(points[0], *points.last().unwrap(), 1e-9) {

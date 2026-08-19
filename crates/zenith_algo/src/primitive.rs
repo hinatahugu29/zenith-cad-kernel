@@ -339,9 +339,12 @@ impl PrimitiveBuilder {
         if r_bottom <= 1e-6 || height <= 1e-6 || r_top < 0.0 {
             return Err("Invalid cone parameters".to_string());
         }
+        if r_top <= 1e-6 {
+            return Self::make_cone_with_apex(r_bottom, height);
+        }
 
         let rb = r_bottom;
-        let rt = r_top.max(0.001); // 頂点特異点を防ぐ極小天面
+        let rt = r_top;
         let h = height;
         let weight = std::f64::consts::FRAC_1_SQRT_2;
 
@@ -481,6 +484,107 @@ impl PrimitiveBuilder {
 
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)
+    }
+
+    /// 真の頂点を持つ円錐（Cone）の生成
+    ///
+    /// 天面を極小の円で置き換えると、体積・表面積・STEP出力すべてに誤差が
+    /// 混入する。頂点では側面パッチの v 方向が1点に縮退し、稜線2本が頂点で
+    /// 出会うため、側面ワイヤは3辺（底面円弧＋稜線2本）で閉じる。
+    fn make_cone_with_apex(r_bottom: f64, height: f64) -> Result<Solid, String> {
+        let r = r_bottom;
+        let h = height;
+        let weight = std::f64::consts::FRAC_1_SQRT_2;
+
+        let pb = [
+            Point3::new(r, 0.0, 0.0),
+            Point3::new(0.0, r, 0.0),
+            Point3::new(-r, 0.0, 0.0),
+            Point3::new(0.0, -r, 0.0),
+        ];
+        let apex = Point3::new(0.0, 0.0, h);
+
+        let vb: Vec<Vertex> = pb.iter().map(|p| Vertex::from_point(*p)).collect();
+        let v_apex = Vertex::from_point(apex);
+
+        let mut rulings = Vec::with_capacity(4);
+        for vertex in vb.iter() {
+            rulings.push(Edge::line_between(vertex.clone(), v_apex.clone())?);
+        }
+
+        let mut bottom_arcs = Vec::with_capacity(4);
+        let mut faces = Vec::with_capacity(5);
+
+        for i in 0..4 {
+            let next = (i + 1) % 4;
+            let corner = match i {
+                0 => Point3::new(r, r, 0.0),
+                1 => Point3::new(-r, r, 0.0),
+                2 => Point3::new(-r, -r, 0.0),
+                _ => Point3::new(r, -r, 0.0),
+            };
+
+            let arc = Edge::new(
+                NurbsCurve3::new(
+                    2,
+                    vec![
+                        ControlPoint3::unweighted(pb[i]),
+                        ControlPoint3::new(corner, weight),
+                        ControlPoint3::unweighted(pb[next]),
+                    ],
+                    KnotVector::clamped_uniform(3, 2),
+                )?,
+                vb[i].clone(),
+                vb[next].clone(),
+                1e-6,
+            );
+            bottom_arcs.push(arc.clone());
+
+            // 縮退する天面側も、行ごとに同じ重みを保つ（分母を分離可能に保つ）
+            let surf = NurbsSurface3::new(
+                2,
+                1,
+                vec![
+                    vec![
+                        ControlPoint3::unweighted(pb[i]),
+                        ControlPoint3::unweighted(apex),
+                    ],
+                    vec![
+                        ControlPoint3::new(corner, weight),
+                        ControlPoint3::new(apex, weight),
+                    ],
+                    vec![
+                        ControlPoint3::unweighted(pb[next]),
+                        ControlPoint3::unweighted(apex),
+                    ],
+                ],
+                KnotVector::clamped_uniform(3, 2),
+                KnotVector::clamped_uniform(2, 1),
+            )?;
+
+            let wire = Wire::new(vec![
+                OrientedEdge::forward(arc),
+                OrientedEdge::forward(rulings[next].clone()),
+                OrientedEdge::reversed(rulings[i].clone()),
+            ]);
+            faces.push(Face::simple(FaceGeometry::Nurbs(surf), wire));
+        }
+
+        let bottom_plane = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .ok_or("plane bot")?;
+        let bottom_wire = Wire::new(vec![
+            OrientedEdge::reversed(bottom_arcs[3].clone()),
+            OrientedEdge::reversed(bottom_arcs[2].clone()),
+            OrientedEdge::reversed(bottom_arcs[1].clone()),
+            OrientedEdge::reversed(bottom_arcs[0].clone()),
+        ]);
+        faces.push(Face::simple(FaceGeometry::Plane(bottom_plane), bottom_wire));
+
+        crate::validated_solid(Shell::closed(faces))
     }
 
     /// トーラス（Torus: 主半径 r_major, 断面半径 r_minor）の生成

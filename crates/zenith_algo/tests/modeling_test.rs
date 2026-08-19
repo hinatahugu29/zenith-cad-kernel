@@ -1589,6 +1589,122 @@ fn test_brep_intersection_skips_vertical_plane_missing_cylinder_quadrant() {
 }
 
 #[test]
+fn test_cone_primitive_has_a_true_apex() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height: f64 = 20.0;
+    let cone = zenith_algo::PrimitiveBuilder::make_cone(radius, 0.0, height).unwrap();
+
+    // 頂点は1点に縮退し、天面は存在しない
+    assert!(cone.is_topologically_valid(&tol));
+    assert_eq!(cone.outer_shell.faces.len(), 5);
+    let apex = Point3::new(0.0, 0.0, height);
+    let side_faces = cone
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+        .count();
+    assert_eq!(side_faces, 4);
+    for face in &cone.outer_shell.faces {
+        if !matches!(face.geometry, FaceGeometry::Nurbs(_)) {
+            continue;
+        }
+        // 側面は底面円弧＋稜線2本の3辺で閉じる
+        assert_eq!(face.outer_wire.edges.len(), 3);
+        assert!(face
+            .outer_wire
+            .sample_points(4)
+            .iter()
+            .any(|point| (point - apex).norm() < 1e-9));
+    }
+
+    // 母線上の点が解析円錐に乗る
+    for face in &cone.outer_shell.faces {
+        let FaceGeometry::Nurbs(surface) = &face.geometry else {
+            continue;
+        };
+        for i in 0..=8 {
+            for j in 0..=8 {
+                let (u, v) = (i as f64 / 8.0, j as f64 / 8.0);
+                let point = surface.evaluate(u, v);
+                let expected = radius * (1.0 - point.z / height);
+                let actual = (point.x * point.x + point.y * point.y).sqrt();
+                assert!(
+                    (actual - expected).abs() < 1e-9,
+                    "cone radius {actual} vs {expected}"
+                );
+            }
+        }
+    }
+
+    // 体積・表面積・重心が解析値と一致する（極小天面による誤差がない）
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&cone, &params);
+    let slant = (radius * radius + height * height).sqrt();
+    let expected_volume = std::f64::consts::PI * radius * radius * height / 3.0;
+    let expected_area = std::f64::consts::PI * radius * (slant + radius);
+    assert!(
+        (mass.volume - expected_volume).abs() < expected_volume * 1e-9,
+        "cone volume {} vs analytic {expected_volume}",
+        mass.volume
+    );
+    assert!(
+        (mass.surface_area - expected_area).abs() < expected_area * 1e-9,
+        "cone area {} vs analytic {expected_area}",
+        mass.surface_area
+    );
+    assert!((mass.center_of_mass.z - height / 4.0).abs() < 1e-9);
+}
+
+#[test]
+fn test_frustum_primitive_stays_analytic() {
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let (r_bottom, r_top, height) = (10.0_f64, 4.0_f64, 20.0_f64);
+    let frustum = zenith_algo::PrimitiveBuilder::make_cone(r_bottom, r_top, height).unwrap();
+
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&frustum, &params);
+    let expected =
+        std::f64::consts::PI * height * (r_bottom * r_bottom + r_bottom * r_top + r_top * r_top)
+            / 3.0;
+    assert!(
+        (mass.volume - expected).abs() < expected * 1e-9,
+        "frustum volume {} vs analytic {expected}",
+        mass.volume
+    );
+}
+
+#[test]
+fn test_torus_primitive_stays_analytic() {
+    let params = TessellationParams {
+        u_divisions: 48,
+        v_divisions: 48,
+    };
+    let (major, minor) = (20.0_f64, 5.0_f64);
+    let torus = zenith_algo::PrimitiveBuilder::make_torus(major, minor).unwrap();
+
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&torus, &params);
+    let expected_volume = 2.0 * std::f64::consts::PI.powi(2) * major * minor * minor;
+    let expected_area = 4.0 * std::f64::consts::PI.powi(2) * major * minor;
+    assert!(
+        (mass.volume - expected_volume).abs() < expected_volume * 1e-9,
+        "torus volume {} vs analytic {expected_volume}",
+        mass.volume
+    );
+    assert!(
+        (mass.surface_area - expected_area).abs() < expected_area * 1e-9,
+        "torus area {} vs analytic {expected_area}",
+        mass.surface_area
+    );
+}
+
+#[test]
 fn test_sphere_primitive_is_an_exact_rational_sphere() {
     let radius: f64 = 15.0;
     let sphere = zenith_algo::PrimitiveBuilder::make_sphere(radius).unwrap();
