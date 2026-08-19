@@ -28,6 +28,7 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::make_chamfered_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_drilled_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_hollow_box, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_through_hollow_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_hollow_extrusion, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_draft_extrusion, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_sweep_pipe, m)?)?;
@@ -38,7 +39,9 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::make_partial_revolve_solid, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_loft, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_loft_solid, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_guided_loft_solid, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_mirror_box, m)?)?;
+
 
     m.add_function(wrap_pyfunction!(modeling::make_boolean, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::thicken_surface_patch, m)?)?;

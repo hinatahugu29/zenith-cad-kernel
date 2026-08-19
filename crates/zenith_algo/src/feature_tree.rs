@@ -22,9 +22,12 @@ pub enum FeatureOp {
     FilletEdge { dx: f64, dy: f64, dz: f64, edge_index: usize, radius: f64 },
     /// 単一エッジ・面取り
     ChamferEdge { dx: f64, dy: f64, dz: f64, edge_index: usize, distance: f64 },
-    /// 中空ボックス・シェル化
+    /// 中空ボックス・シェル化（単一面開口）
     HollowBox { dx: f64, dy: f64, dz: f64, thickness: f64, open_face_index: usize },
+    /// 両端開口中空角パイプソリッド
+    HollowThroughBox { dx: f64, dy: f64, dz: f64, thickness: f64 },
     /// 中空・穴あきプロファイルの押し出し
+
     ExtrudeHollow {
         outer_points: Vec<[f64; 3]>,
         inner_points: Vec<Vec<[f64; 3]>>,
@@ -200,7 +203,16 @@ impl FeatureTree {
                         *open_face_index,
                     )?);
                 }
+                FeatureOp::HollowThroughBox { dx, dy, dz, thickness } => {
+                    current_solid = Some(ShellBuilder::make_through_hollow_box(
+                        *dx,
+                        *dy,
+                        *dz,
+                        *thickness,
+                    )?);
+                }
                 FeatureOp::ExtrudeHollow { outer_points, inner_points, dir } => {
+
                     let outer_wire = make_wire(outer_points)?;
                     let mut inner_wires = Vec::with_capacity(inner_points.len());
                     for hole in inner_points {

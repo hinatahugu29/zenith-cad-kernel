@@ -159,7 +159,153 @@ impl LoftBuilder {
 
         Solid::try_simple(shell, tol).map_err(|err| format!("Loft solid validation failed: {}", err))
     }
+
+    /// ガイドレール曲線群（Guide Curves）に沿った閉断面ワイヤ群のロフト完全閉B-Repソリッド生成
+    pub fn loft_solid_guided(
+        section_wires: &[Wire],
+        guide_curves: &[NurbsCurve3],
+        degree_v: usize,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if guide_curves.is_empty() {
+            return Self::loft_solid(section_wires, degree_v, tol);
+        }
+
+        let m = section_wires.len();
+        if m < 2 {
+            return Err("Guided loft requires at least 2 section wires".to_string());
+        }
+
+        let k = section_wires[0].edges.len();
+        for (idx, wire) in section_wires.iter().enumerate() {
+            if !wire.is_closed(tol) {
+                return Err(format!("Section wire {} is not closed", idx));
+            }
+            if wire.edges.len() != k {
+                return Err(format!(
+                    "Section wire {} has {} edges, expected {}",
+                    idx,
+                    wire.edges.len(),
+                    k
+                ));
+            }
+        }
+
+        // 1. 各断面の各頂点を収集 [m][k]
+        let mut vertices_grid = Vec::with_capacity(m);
+        for wire in section_wires {
+            let mut row = Vec::with_capacity(k);
+            for oe in &wire.edges {
+                row.push(oe.start_vertex().clone());
+            }
+            vertices_grid.push(row);
+        }
+
+        // 2. ガイドレールに基づく柱（Pillar）NURBS曲線エッジ群の生成 [m - 1][k]
+        let mut pillar_edges = Vec::with_capacity(m - 1);
+        for i in 0..m - 1 {
+            let mut row = Vec::with_capacity(k);
+            let u_start = i as f64 / (m - 1) as f64;
+            let u_end = (i + 1) as f64 / (m - 1) as f64;
+
+            for j in 0..k {
+                let v_start = vertices_grid[i][j].clone();
+                let v_end = vertices_grid[i + 1][j].clone();
+
+                let guide = &guide_curves[j % guide_curves.len()];
+                let p_g0 = guide.evaluate(u_start);
+                let p_g1 = guide.evaluate((u_start + u_end) * 0.5);
+                let p_g2 = guide.evaluate(u_end);
+
+                let g_mid_offset = p_g1 - (p_g0 + (p_g2 - p_g0) * 0.5);
+                let p_mid = v_start.point + (v_end.point - v_start.point) * 0.5 + g_mid_offset;
+
+                let pillar_curve = NurbsCurve3::new(
+                    2,
+                    vec![
+                        zenith_geom::ControlPoint3::unweighted(v_start.point),
+                        zenith_geom::ControlPoint3::unweighted(p_mid),
+                        zenith_geom::ControlPoint3::unweighted(v_end.point),
+                    ],
+                    KnotVector::clamped_uniform(3, 2),
+                )?;
+                let edge = Edge::new(pillar_curve, v_start, v_end, tol.linear);
+                row.push(edge);
+            }
+            pillar_edges.push(row);
+        }
+
+        let mut faces = Vec::with_capacity(k * (m - 1) + 2);
+
+        // 3. 各区間 [i, i+1] における側面Face群の構築
+        for i in 0..m - 1 {
+            let u_start = i as f64 / (m - 1) as f64;
+            let u_end = (i + 1) as f64 / (m - 1) as f64;
+
+            for j in 0..k {
+                let next_j = (j + 1) % k;
+
+                let bot_edge = section_wires[i].edges[j].edge.clone();
+                let top_edge = section_wires[i + 1].edges[j].edge.clone();
+                let left_pillar = pillar_edges[i][j].clone();
+                let right_pillar = pillar_edges[i][next_j].clone();
+
+                // 側面Faceの4辺ワイヤ: bot(Fwd) -> right(Fwd) -> top(Rev) -> left(Rev)
+                let side_wire = Wire::new(vec![
+                    OrientedEdge::forward(bot_edge.clone()),
+                    OrientedEdge::forward(right_pillar.clone()),
+                    OrientedEdge::reversed(top_edge.clone()),
+                    OrientedEdge::reversed(left_pillar.clone()),
+                ]);
+
+                // 中間プロファイル曲線の生成 (ガイドレールの変位を反映)
+                let c0 = bot_edge.curve.clone();
+                let c1 = top_edge.curve.clone();
+                let mut c_mid_cps = Vec::with_capacity(c0.control_points.len());
+                for cp_idx in 0..c0.control_points.len() {
+                    let p0 = c0.control_points[cp_idx].point;
+                    let p1 = c1.control_points[cp_idx].point;
+                    let p_linear = p0 + (p1 - p0) * 0.5;
+
+                    let guide = &guide_curves[j % guide_curves.len()];
+                    let p_g0 = guide.evaluate(u_start);
+                    let p_g1 = guide.evaluate((u_start + u_end) * 0.5);
+                    let p_g2 = guide.evaluate(u_end);
+                    let g_offset = p_g1 - (p_g0 + (p_g2 - p_g0) * 0.5);
+
+                    c_mid_cps.push(zenith_geom::ControlPoint3::new(
+                        p_linear + g_offset,
+                        c0.control_points[cp_idx].weight,
+                    ));
+                }
+                let c_mid = NurbsCurve3::new(c0.degree, c_mid_cps, c0.knots.clone())?;
+
+                let loft_surf = Self::loft_curves(&[c0, c_mid, c1], 2, tol)?;
+                let face = Face::simple(FaceGeometry::Nurbs(loft_surf), side_wire);
+                faces.push(face);
+            }
+        }
+
+
+        // 4. 底面Faceの構築
+        let bot_wire = section_wires[0].clone();
+        let bot_face = create_cap_face(&bot_wire, true, tol)?;
+        faces.push(bot_face);
+
+        // 5. 天面Faceの構築
+        let top_wire = section_wires[m - 1].clone();
+        let top_face = create_cap_face(&top_wire, false, tol)?;
+        faces.push(top_face);
+
+        let shell = Shell::closed(faces);
+        let report = shell.validate_closed(tol);
+        if !report.is_valid() {
+            return Err(format!("Guided loft validation failed: {:?}", report.errors));
+        }
+        Solid::try_simple(shell, tol).map_err(|err| format!("Guided loft solid failed: {}", err))
+    }
 }
+
 
 
 /// 閉じた平坦ワイヤから端面キャップFaceを生成（is_bottom: true の場合は反転して下向き法線にする）

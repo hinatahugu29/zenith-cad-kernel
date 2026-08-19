@@ -662,7 +662,112 @@ pub fn make_mirror_box(
     Ok(PyMesh { mesh })
 }
 
+/// 直方体の両端面（底面・天面）を開口した角パイプ中空ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (dx, dy, dz, thickness, u_divisions = 4, v_divisions = 4, step_path = None))]
+pub fn make_through_hollow_box(
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    thickness: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::ShellBuilder::make_through_hollow_box(dx, dy, dz, thickness)
+        .map_err(|e| PyValueError::new_err(format!("Through tube failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_THROUGH_TUBE")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// ガイドレール曲線群（Guide Curves）に沿った閉断面ワイヤ群のロフト完全閉Solid生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (sections, guide_curves, degree_v = 2, u_divisions = 8, v_divisions = 8, step_path = None))]
+pub fn make_guided_loft_solid(
+    sections: Vec<Vec<[f64; 3]>>,
+    guide_curves: Vec<Vec<[f64; 3]>>,
+    degree_v: usize,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    if sections.len() < 2 {
+        return Err(PyValueError::new_err("Loft requires at least 2 sections"));
+    }
+    if guide_curves.is_empty() {
+        return Err(PyValueError::new_err("Guided loft requires at least 1 guide curve"));
+    }
+
+    let tol = Tolerance::default();
+    let make_wire = |pts: &[[f64; 3]]| -> PyResult<zenith_topo::Wire> {
+        let n = pts.len();
+        if n < 3 {
+            return Err(PyValueError::new_err("Profile requires at least 3 points"));
+        }
+        let vertices: Vec<zenith_topo::Vertex> = pts
+            .iter()
+            .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+            .collect();
+        let mut edges = Vec::with_capacity(n);
+        for i in 0..n {
+            let next_i = (i + 1) % n;
+            let edge = zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
+                .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+            edges.push(zenith_topo::OrientedEdge::forward(edge));
+        }
+        Ok(zenith_topo::Wire::new(edges))
+    };
+
+    let mut section_wires = Vec::with_capacity(sections.len());
+    for sec in &sections {
+        section_wires.push(make_wire(sec)?);
+    }
+
+    let mut guides = Vec::with_capacity(guide_curves.len());
+    for g_pts in &guide_curves {
+        let n = g_pts.len();
+        if n < 2 {
+            return Err(PyValueError::new_err("Guide curve requires at least 2 points"));
+        }
+        let degree = (n - 1).min(3);
+        let cps = g_pts
+            .iter()
+            .map(|p| zenith_geom::ControlPoint3::unweighted(Point3::new(p[0], p[1], p[2])))
+            .collect();
+        let knots = zenith_geom::KnotVector::clamped_uniform(n, degree);
+        let curve = zenith_geom::NurbsCurve3::new(degree, cps, knots)
+            .map_err(|e| PyValueError::new_err(format!("Guide curve creation failed: {}", e)))?;
+        guides.push(curve);
+    }
+
+    let solid = zenith_algo::LoftBuilder::loft_solid_guided(&section_wires, &guides, degree_v, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Guided loft failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_GUIDED_LOFT")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
 /// シェル化・肉厚中空ソリッド（容器・ケーシング）の生成
+
 
 
 
