@@ -121,6 +121,11 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
                 return TriangleMesh::new();
             }
 
+            // 三角形の向きはトリムループの周り方が決める。face.orientation と
+            // 周り方が食い違っている場合だけ反転させ、実効法線に揃える。
+            let loop_is_ccw = signed_area_uv(&outer_uvs) > 0.0;
+            let keep_loop_winding = loop_is_ccw == face.orientation.is_forward();
+
             // 穴がない単純凸多角形（3〜4頂点）の場合は最速ファン三角化
             if face.inner_wires.is_empty() && outer_uvs.len() <= 4 {
                 let mut mesh = TriangleMesh::new();
@@ -135,7 +140,7 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
                     mesh.uvs.push(Vec2::new(uv.x, uv.y));
                 }
                 for i in 1..outer_uvs.len() - 1 {
-                    if face.orientation.is_forward() {
+                    if keep_loop_winding {
                         mesh.indices.push([0, i as u32, (i + 1) as u32]);
                     } else {
                         mesh.indices.push([0, (i + 1) as u32, i as u32]);
@@ -186,7 +191,7 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
             }
 
             for chunk in triangle_indices.chunks_exact(3) {
-                if face.orientation.is_forward() {
+                if keep_loop_winding {
                     mesh.indices
                         .push([chunk[0] as u32, chunk[1] as u32, chunk[2] as u32]);
                 } else {
@@ -469,6 +474,7 @@ pub fn tessellate_shell(shell: &Shell, params: &TessellationParams) -> TriangleM
 /// B-Rep Solid のテッセレーション（Rayon によるマルチコア超並列処理）
 pub fn tessellate_solid(solid: &Solid, params: &TessellationParams) -> TriangleMesh {
     let mut total_mesh = tessellate_shell(&solid.outer_shell, params);
+    // 空洞シェルは通常のソリッド外殻と同じ向きで保持されるため、ここで反転する
     for inner in &solid.inner_shells {
         let mut inner_mesh = tessellate_shell(inner, params);
         flip_mesh_orientation(&mut inner_mesh);
@@ -484,4 +490,14 @@ fn flip_mesh_orientation(mesh: &mut TriangleMesh) {
     for tri in &mut mesh.indices {
         tri.swap(1, 2);
     }
+}
+
+fn signed_area_uv(polygon: &[Point2]) -> f64 {
+    let mut area = 0.0;
+    for i in 0..polygon.len() {
+        let a = polygon[i];
+        let b = polygon[(i + 1) % polygon.len()];
+        area += a.x * b.y - b.x * a.y;
+    }
+    area * 0.5
 }

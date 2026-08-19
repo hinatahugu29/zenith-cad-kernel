@@ -1,11 +1,9 @@
 use crate::cap::CapBuilder;
 use std::collections::BTreeMap;
-use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3};
+use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3, Surface3};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec2, Vec3, Vec3Ext};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
-use zenith_topo::{
-    Edge, Face, FaceGeometry, FacePcurveLoop, Orientation, OrientedEdge, Vertex, Wire,
-};
+use zenith_topo::{Edge, Face, FaceGeometry, FacePcurveLoop, OrientedEdge, Vertex, Wire};
 use zenith_topo::{Shell, Solid};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -453,10 +451,19 @@ impl BrepIntersectionBuilder {
             let reversed_score =
                 stitch_report_score(&diagnose_selected_face_stitching(&reversed_pieces, tol));
 
-            if reversed_score < forward_score {
-                selected_face_pieces.push(reversed_piece);
+            let base_score = stitch_report_score(&diagnose_selected_face_stitching(
+                &selected_face_pieces,
+                tol,
+            ));
+            let (best_score, best_piece) = if reversed_score < forward_score {
+                (reversed_score, reversed_piece)
             } else {
-                selected_face_pieces.push(forward_piece);
+                (forward_score, forward_piece)
+            };
+            // 既に閉じている選択面にキャップを足すと二重になるため、
+            // ステッチが改善する場合だけ採用する
+            if best_score < base_score {
+                selected_face_pieces.push(best_piece);
             }
         }
         let stitch_report = diagnose_selected_face_stitching(&selected_face_pieces, tol);
@@ -585,6 +592,11 @@ impl BrepIntersectionBuilder {
         Self::build_planar_caps_from_intersection_edges(&edges, tol)
     }
 
+    /// Splits a planar face into two faces along an intersection edge.
+    ///
+    /// The split endpoints are located on the real boundary curves, and the
+    /// boundary edges they land on are subdivided exactly, so a chord landing on
+    /// a circular face keeps its arcs instead of degrading into a polyline.
     pub fn split_planar_face_by_edge(
         face: &Face,
         split_edge: &Edge,
@@ -598,9 +610,9 @@ impl BrepIntersectionBuilder {
                 "Planar face splitting with inner wires is not implemented yet".to_string(),
             );
         }
-        let boundary = face.outer_wire.sample_points(1);
+        let boundary = &face.outer_wire.edges;
         if boundary.len() < 3 {
-            return Err("Cannot split a face with fewer than three boundary points".to_string());
+            return Err("Cannot split a face with fewer than three boundary edges".to_string());
         }
 
         let start = split_edge.start_vertex.point;
@@ -612,19 +624,20 @@ impl BrepIntersectionBuilder {
             return Err("Split edge must lie on the planar face".to_string());
         }
 
-        let boundary_uv: Vec<Point2> = boundary
+        let start_hit = locate_point_on_wire(boundary, start, tol)
+            .ok_or_else(|| "Split edge start does not lie on the outer boundary".to_string())?;
+        let end_hit = locate_point_on_wire(boundary, end, tol)
+            .ok_or_else(|| "Split edge end does not lie on the outer boundary".to_string())?;
+        if start_hit.edge_index == end_hit.edge_index {
+            return Err("Split edge endpoints collapse on one boundary edge".to_string());
+        }
+
+        let boundary_uv: Vec<Point2> = face
+            .outer_wire
+            .sample_points(16)
             .iter()
             .map(|point| project_to_plane_uv(*point, plane))
             .collect();
-        let start_uv = project_to_plane_uv(start, plane);
-        let end_uv = project_to_plane_uv(end, plane);
-        let start_hit = boundary_hit(start, start_uv, &boundary_uv, tol)
-            .ok_or_else(|| "Split edge start does not lie on the outer boundary".to_string())?;
-        let end_hit = boundary_hit(end, end_uv, &boundary_uv, tol)
-            .ok_or_else(|| "Split edge end does not lie on the outer boundary".to_string())?;
-        if boundary_hits_same(&start_hit, &end_hit, tol) {
-            return Err("Split edge endpoints collapse on the boundary".to_string());
-        }
         let mid_uv = project_to_plane_uv(edge_midpoint(split_edge), plane);
         if !point_in_polygon_2d(mid_uv, &boundary_uv, tol.parametric)
             || point_on_polygon_boundary(mid_uv, &boundary_uv, tol.parametric)
@@ -632,27 +645,11 @@ impl BrepIntersectionBuilder {
             return Err("Split edge must cross the face interior".to_string());
         }
 
-        let loop_a = clean_loop_points(boundary_path_between(&boundary, &start_hit, &end_hit), tol);
-        let loop_b = clean_loop_points(boundary_path_between(&boundary, &end_hit, &start_hit), tol);
+        let path_a = wire_path_between(boundary, &start_hit, &end_hit, tol)?;
+        let path_b = wire_path_between(boundary, &end_hit, &start_hit, tol)?;
 
-        if loop_a.len() < 2 || loop_b.len() < 2 {
-            return Err("Split edge did not produce two valid face loops".to_string());
-        }
-
-        let face_a = face_from_boundary_path_and_split_edge(
-            face,
-            loop_a,
-            split_edge,
-            Orientation::Reversed,
-            tol,
-        )?;
-        let face_b = face_from_boundary_path_and_split_edge(
-            face,
-            loop_b,
-            split_edge,
-            Orientation::Forward,
-            tol,
-        )?;
+        let face_a = face_from_wire_path_and_split_edge(face, path_a, split_edge, tol)?;
+        let face_b = face_from_wire_path_and_split_edge(face, path_b, split_edge, tol)?;
         Ok(vec![face_a, face_b])
     }
 
@@ -720,11 +717,110 @@ impl BrepIntersectionBuilder {
         })
     }
 
+    /// Imprints a closed intersection loop that lies strictly inside a planar
+    /// face, producing the region inside the loop and the remainder of the face
+    /// carrying the loop as a hole.
+    ///
+    /// This is the case a boundary-to-boundary split cannot express: the cut
+    /// curves never reach the face boundary, so the face is not cut in two but
+    /// perforated.
+    pub fn split_planar_face_by_interior_loop(
+        face: &Face,
+        split_edges: &[Edge],
+        tol: &Tolerance,
+    ) -> Result<Vec<Face>, String> {
+        let FaceGeometry::Plane(plane) = &face.geometry else {
+            return Err("Only planar faces can be imprinted by an interior loop".to_string());
+        };
+        if !face.inner_wires.is_empty() {
+            return Err("Imprinting a face that already has holes is not implemented".to_string());
+        }
+        for edge in split_edges {
+            if !edge_lies_on_plane(edge, plane, tol) {
+                return Err("Imprint loop edges must lie on the planar face".to_string());
+            }
+        }
+
+        let loop_wire = order_edges_into_closed_wire(split_edges, tol)?;
+        let boundary_uv: Vec<Point2> = face
+            .outer_wire
+            .sample_points(16)
+            .iter()
+            .map(|point| project_to_plane_uv(*point, plane))
+            .collect();
+        if boundary_uv.len() < 3 {
+            return Err("Face boundary is too coarse to imprint".to_string());
+        }
+
+        let loop_uv: Vec<Point2> = loop_wire
+            .sample_points(16)
+            .iter()
+            .map(|point| project_to_plane_uv(*point, plane))
+            .collect();
+        if loop_uv.len() < 3 {
+            return Err("Imprint loop is too coarse".to_string());
+        }
+        for uv in &loop_uv {
+            if !point_in_polygon_2d(*uv, &boundary_uv, tol.parametric)
+                || point_on_polygon_boundary(*uv, &boundary_uv, tol.parametric)
+            {
+                return Err("Imprint loop must stay strictly inside the face".to_string());
+            }
+        }
+
+        // 穴ループは外周ループと逆回りに、内側の面は同じ回りに揃える
+        let same_winding = signed_area_2d(&boundary_uv) * signed_area_2d(&loop_uv) > 0.0;
+        let reversed_loop = reverse_wire(&loop_wire);
+        let (inner_face_wire, hole_wire) = if same_winding {
+            (loop_wire, reversed_loop)
+        } else {
+            (reversed_loop, loop_wire)
+        };
+
+        let inner_face = Face::new(
+            face.geometry.clone(),
+            inner_face_wire,
+            Vec::new(),
+            face.orientation,
+            face.tolerance,
+        );
+        let outer_face = Face::new(
+            face.geometry.clone(),
+            face.outer_wire.clone(),
+            vec![hole_wire],
+            face.orientation,
+            face.tolerance,
+        );
+
+        for piece in [&inner_face, &outer_face] {
+            let report = piece.validate_pcurves(tol, 8)?;
+            if !report.is_valid() {
+                return Err(format!(
+                    "Imprinted face p-curves are invalid with {} mismatches",
+                    report.mismatch_count
+                ));
+            }
+        }
+
+        Ok(vec![inner_face, outer_face])
+    }
+
     pub fn split_face_by_edges(
         face: &Face,
         split_edges: &[Edge],
         tol: &Tolerance,
     ) -> Result<PlanarFaceMultiSplitResult, String> {
+        // 面の内部で閉じるループは境界間分割では表せないので、先に刻印を試す
+        if split_edges.len() >= 3 {
+            if let Ok(faces) = Self::split_planar_face_by_interior_loop(face, split_edges, tol) {
+                return Ok(PlanarFaceMultiSplitResult {
+                    faces,
+                    applied_split_count: 1,
+                    skipped_split_count: 0,
+                });
+            }
+        }
+
         let mut faces = vec![face.clone()];
         let mut applied_split_count = 0;
         let mut skipped_split_count = 0;
@@ -758,47 +854,10 @@ impl BrepIntersectionBuilder {
     }
 }
 
-#[derive(Debug, Clone)]
-struct BoundaryHit {
-    segment_index: usize,
-    point: Point3,
-}
-
 #[derive(Debug, Clone, Copy)]
 struct StitchEdgeUse {
     start: Point3,
     end: Point3,
-}
-
-fn boundary_hit(
-    point: Point3,
-    uv: Point2,
-    boundary_uv: &[Point2],
-    tol: &Tolerance,
-) -> Option<BoundaryHit> {
-    let mut best = None;
-    let mut best_distance = f64::INFINITY;
-    for i in 0..boundary_uv.len() {
-        let a = boundary_uv[i];
-        let b = boundary_uv[(i + 1) % boundary_uv.len()];
-        let ab = b - a;
-        let len_sq = ab.norm_squared();
-        if len_sq <= tol.parametric.max(1e-12) {
-            continue;
-        }
-        let t = ((uv - a).dot(&ab) / len_sq).clamp(0.0, 1.0);
-        let closest = a + ab * t;
-        let distance = (uv - closest).norm();
-        if distance <= tol.parametric.max(tol.linear) * 10.0 && distance < best_distance {
-            best = Some(BoundaryHit {
-                segment_index: i,
-                point,
-            });
-            best_distance = distance;
-        }
-    }
-
-    best
 }
 
 fn collect_batch_splits_for_faces(
@@ -945,10 +1004,6 @@ fn select_operand_faces_after_batch_split(
     selected
 }
 
-fn boundary_hits_same(a: &BoundaryHit, b: &BoundaryHit, tol: &Tolerance) -> bool {
-    (a.point - b.point).norm() <= tol.linear
-}
-
 fn point_lies_on_plane(point: Point3, plane: &PlaneSurface3, tol: &Tolerance) -> bool {
     (point - plane.origin).dot(&plane.normal).abs() <= tol.linear * 10.0
 }
@@ -966,81 +1021,191 @@ fn edge_midpoint(edge: &Edge) -> Point3 {
     edge.curve.evaluate((t_min + t_max) * 0.5)
 }
 
-fn boundary_path_between(boundary: &[Point3], from: &BoundaryHit, to: &BoundaryHit) -> Vec<Point3> {
-    let mut path = vec![from.point];
-    let n = boundary.len();
-    let mut index = (from.segment_index + 1) % n;
-
-    loop {
-        path.push(boundary[index]);
-        if index == to.segment_index {
-            break;
-        }
-        index = (index + 1) % n;
-    }
-    path.push(to.point);
-    path
+/// A located point on a wire: which oriented edge carries it, and where.
+#[derive(Debug, Clone, Copy)]
+struct WireHit {
+    edge_index: usize,
+    /// Normalized parameter along the oriented edge, in traversal direction.
+    t: f64,
 }
 
-fn clean_loop_points(points: Vec<Point3>, tol: &Tolerance) -> Vec<Point3> {
-    let mut clean = Vec::new();
-    for point in points {
-        if clean
-            .last()
-            .map(|last: &Point3| (point - *last).norm() <= tol.linear)
-            .unwrap_or(false)
-        {
+/// Finds which boundary edge a point sits on, refining the parameter by a
+/// ternary search on the distance to the real curve rather than to a sampled
+/// polyline.
+fn locate_point_on_wire(edges: &[OrientedEdge], point: Point3, tol: &Tolerance) -> Option<WireHit> {
+    const COARSE_SAMPLES: usize = 64;
+    const REFINE_STEPS: usize = 80;
+
+    let mut best: Option<(f64, WireHit)> = None;
+    for (edge_index, edge) in edges.iter().enumerate() {
+        let distance_at = |t: f64| (edge.evaluate_normalized(t) - point).norm();
+
+        let mut coarse_index = 0;
+        let mut coarse_distance = f64::INFINITY;
+        for step in 0..=COARSE_SAMPLES {
+            let distance = distance_at(step as f64 / COARSE_SAMPLES as f64);
+            if distance < coarse_distance {
+                coarse_distance = distance;
+                coarse_index = step;
+            }
+        }
+
+        let mut low = (coarse_index.saturating_sub(1)) as f64 / COARSE_SAMPLES as f64;
+        let mut high = (coarse_index + 1).min(COARSE_SAMPLES) as f64 / COARSE_SAMPLES as f64;
+        for _ in 0..REFINE_STEPS {
+            let third = (high - low) / 3.0;
+            let left = low + third;
+            let right = high - third;
+            if distance_at(left) < distance_at(right) {
+                high = right;
+            } else {
+                low = left;
+            }
+        }
+
+        let t = 0.5 * (low + high);
+        let distance = distance_at(t);
+        if distance > tol.linear * 10.0 {
             continue;
         }
-        clean.push(point);
+        if best.is_none_or(|(best_distance, _)| distance < best_distance) {
+            best = Some((distance, WireHit { edge_index, t }));
+        }
     }
 
-    if clean.len() > 1 && (clean[0] - *clean.last().unwrap()).norm() <= tol.linear {
-        clean.pop();
-    }
-
-    clean
+    best.map(|(_, hit)| hit)
 }
 
-fn face_from_boundary_path_and_split_edge(
+/// Walks the wire from one hit to the other in traversal order, subdividing the
+/// two boundary edges the hits landed on.
+fn wire_path_between(
+    edges: &[OrientedEdge],
+    from: &WireHit,
+    to: &WireHit,
+    tol: &Tolerance,
+) -> Result<Vec<OrientedEdge>, String> {
+    let mut path = Vec::new();
+    if let Some(tail) = oriented_edge_portion(&edges[from.edge_index], from.t, 1.0, tol)? {
+        path.push(tail);
+    }
+
+    let mut index = (from.edge_index + 1) % edges.len();
+    while index != to.edge_index {
+        path.push(edges[index].clone());
+        index = (index + 1) % edges.len();
+    }
+
+    if let Some(head) = oriented_edge_portion(&edges[to.edge_index], 0.0, to.t, tol)? {
+        path.push(head);
+    }
+
+    if path.is_empty() {
+        return Err("Split edge did not produce a boundary path".to_string());
+    }
+    Ok(path)
+}
+
+/// Returns the `[t_start, t_end]` portion of an oriented edge in traversal
+/// direction, or `None` when the portion collapses to a point.
+fn oriented_edge_portion(
+    edge: &OrientedEdge,
+    t_start: f64,
+    t_end: f64,
+    tol: &Tolerance,
+) -> Result<Option<OrientedEdge>, String> {
+    let length = oriented_edge_length(edge);
+    let parametric_tol = if length > tol.linear {
+        (tol.linear / length).min(1e-6)
+    } else {
+        1e-6
+    };
+    let keeps_start = t_start <= parametric_tol;
+    let keeps_end = t_end >= 1.0 - parametric_tol;
+
+    if keeps_start && keeps_end {
+        return Ok(Some(edge.clone()));
+    }
+    if t_end - t_start <= parametric_tol {
+        return Ok(None);
+    }
+    if !keeps_start && !keeps_end {
+        return Err("Boundary edge would need two split points".to_string());
+    }
+
+    let split_t = if keeps_start { t_end } else { t_start };
+    let (low, high) = split_oriented_edge_at(edge, split_t, tol)?;
+    Ok(Some(if keeps_start { low } else { high }))
+}
+
+/// Subdivides an oriented edge at a normalized traversal parameter, returning
+/// the portions before and after it in traversal order.
+fn split_oriented_edge_at(
+    edge: &OrientedEdge,
+    t: f64,
+    tol: &Tolerance,
+) -> Result<(OrientedEdge, OrientedEdge), String> {
+    let curve = &edge.edge.curve;
+    let (t_min, t_max) = curve.param_range();
+    let curve_param = if edge.orientation.is_forward() {
+        t_min + (t_max - t_min) * t
+    } else {
+        t_max - (t_max - t_min) * t
+    };
+
+    let (low, high) = curve
+        .split_bezier_at(curve_param)
+        .ok_or_else(|| "Boundary edge is not a single splittable Bezier span".to_string())?;
+    let (first, second) = if edge.orientation.is_forward() {
+        (low, high)
+    } else {
+        (high, low)
+    };
+
+    Ok((
+        OrientedEdge::new(curve_to_edge(first, tol), edge.orientation),
+        OrientedEdge::new(curve_to_edge(second, tol), edge.orientation),
+    ))
+}
+
+fn curve_to_edge(curve: NurbsCurve3, tol: &Tolerance) -> Edge {
+    let (t_min, t_max) = curve.param_range();
+    let start = curve.evaluate(t_min);
+    let end = curve.evaluate(t_max);
+    Edge::new(
+        curve,
+        Vertex::new(start, tol.linear),
+        Vertex::new(end, tol.linear),
+        tol.linear,
+    )
+}
+
+fn oriented_edge_length(edge: &OrientedEdge) -> f64 {
+    edge.sample_points(8, true)
+        .windows(2)
+        .map(|pair| (pair[1] - pair[0]).norm())
+        .sum()
+}
+
+fn face_from_wire_path_and_split_edge(
     template: &Face,
-    boundary_path: Vec<Point3>,
+    mut path: Vec<OrientedEdge>,
     split_edge: &Edge,
-    split_orientation: Orientation,
     tol: &Tolerance,
 ) -> Result<Face, String> {
-    if boundary_path.len() < 2 {
-        return Err("Split face loop contains too few boundary points".to_string());
-    }
+    let expected_start = path.last().unwrap().end_vertex().point;
+    let expected_end = path[0].start_vertex().point;
+    let oriented_split = orient_edge_for_points(split_edge, expected_start, expected_end, tol)
+        .ok_or_else(|| "Split edge orientation does not close the split loop".to_string())?;
+    path.push(oriented_split);
 
-    let mut oriented_edges = Vec::with_capacity(boundary_path.len());
-    for window in boundary_path.windows(2) {
-        let start = window[0];
-        let end = window[1];
-        if (end - start).norm() <= tol.linear {
-            return Err("Split face loop contains a degenerate edge".to_string());
-        }
-        let curve =
-            NurbsCurve3::bspline_from_points(1, vec![start, end]).map_err(|err| err.to_string())?;
-        let start_vertex = Vertex::new(start, tol.linear);
-        let end_vertex = Vertex::new(end, tol.linear);
-        let edge = Edge::new(curve, start_vertex, end_vertex, tol.linear);
-        oriented_edges.push(OrientedEdge::forward(edge));
+    let wire = Wire::new(path);
+    if !wire.is_closed(tol) {
+        return Err("Planar split produced an open wire".to_string());
     }
-
-    let expected_start = *boundary_path.last().unwrap();
-    let expected_end = boundary_path[0];
-    let oriented_split = OrientedEdge::new(split_edge.clone(), split_orientation);
-    if (oriented_split.start_vertex().point - expected_start).norm() > tol.linear * 10.0
-        || (oriented_split.end_vertex().point - expected_end).norm() > tol.linear * 10.0
-    {
-        return Err("Split edge orientation does not close the split loop".to_string());
-    }
-    oriented_edges.push(oriented_split);
 
     Ok(Face::new(
         template.geometry.clone(),
-        Wire::new(oriented_edges),
+        wire,
         Vec::new(),
         template.orientation,
         template.tolerance,
@@ -1562,6 +1727,15 @@ fn points_same_3d(a: Point3, b: Point3, tol: f64) -> bool {
 }
 
 fn representative_face_point(face: &Face) -> Point3 {
+    // 穴のある面の重心は穴の中に落ちることがあり、内外判定が反転する
+    if !face.inner_wires.is_empty() {
+        if let FaceGeometry::Plane(plane) = &face.geometry {
+            if let Some(point) = planar_point_clear_of_holes(face, plane) {
+                return point;
+            }
+        }
+    }
+
     let points = face.outer_wire.sample_points(2);
     if points.is_empty() {
         return Point3::new(0.0, 0.0, 0.0);
@@ -1571,6 +1745,94 @@ fn representative_face_point(face: &Face) -> Point3 {
         .iter()
         .fold(Vec3::new(0.0, 0.0, 0.0), |acc, point| acc + point.coords);
     Point3::from(sum / points.len() as f64)
+}
+
+/// Picks the material point of a pierced planar face that sits furthest from
+/// every trim loop, so classification samples solid material and not a hole.
+fn planar_point_clear_of_holes(face: &Face, plane: &zenith_geom::PlaneSurface3) -> Option<Point3> {
+    const GRID: usize = 24;
+
+    let outer: Vec<Point2> = face
+        .outer_wire
+        .sample_points(8)
+        .iter()
+        .map(|point| project_to_plane_uv(*point, plane))
+        .collect();
+    if outer.len() < 3 {
+        return None;
+    }
+    let holes: Vec<Vec<Point2>> = face
+        .inner_wires
+        .iter()
+        .map(|wire| {
+            wire.sample_points(8)
+                .iter()
+                .map(|point| project_to_plane_uv(*point, plane))
+                .collect()
+        })
+        .collect();
+
+    let (mut min_u, mut max_u) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut min_v, mut max_v) = (f64::INFINITY, f64::NEG_INFINITY);
+    for uv in &outer {
+        min_u = min_u.min(uv.x);
+        max_u = max_u.max(uv.x);
+        min_v = min_v.min(uv.y);
+        max_v = max_v.max(uv.y);
+    }
+
+    let mut best: Option<(f64, Point2)> = None;
+    for i in 1..GRID {
+        for j in 1..GRID {
+            let uv = Point2::new(
+                min_u + (max_u - min_u) * (i as f64 / GRID as f64),
+                min_v + (max_v - min_v) * (j as f64 / GRID as f64),
+            );
+            if !point_in_polygon_2d(uv, &outer, 0.0) {
+                continue;
+            }
+            if holes.iter().any(|hole| point_in_polygon_2d(uv, hole, 0.0)) {
+                continue;
+            }
+
+            let clearance = std::iter::once(&outer)
+                .chain(holes.iter())
+                .map(|polygon| polygon_min_distance_2d(uv, polygon))
+                .fold(f64::INFINITY, f64::min);
+            if best.is_none_or(|(best_clearance, _)| clearance > best_clearance) {
+                best = Some((clearance, uv));
+            }
+        }
+    }
+
+    best.map(|(_, uv)| plane.evaluate(uv.x, uv.y))
+}
+
+fn polygon_min_distance_2d(point: Point2, polygon: &[Point2]) -> f64 {
+    let mut best = f64::INFINITY;
+    for i in 0..polygon.len() {
+        let a = polygon[i];
+        let b = polygon[(i + 1) % polygon.len()];
+        let ab = b - a;
+        let len_sq = ab.norm_squared();
+        let closest = if len_sq <= 1e-18 {
+            a
+        } else {
+            a + ab * ((point - a).dot(&ab) / len_sq).clamp(0.0, 1.0)
+        };
+        best = best.min((point - closest).norm());
+    }
+    best
+}
+
+fn signed_area_2d(polygon: &[Point2]) -> f64 {
+    let mut area = 0.0;
+    for i in 0..polygon.len() {
+        let a = polygon[i];
+        let b = polygon[(i + 1) % polygon.len()];
+        area += a.x * b.y - b.x * a.y;
+    }
+    area * 0.5
 }
 
 fn point_mesh_distance(point: Point3, mesh: &TriangleMesh) -> f64 {

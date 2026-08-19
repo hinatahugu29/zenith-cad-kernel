@@ -955,7 +955,11 @@ fn test_exact_brep_boolean_returns_cavity_for_contained_difference() {
         },
     );
     let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
-    assert!((mass.volume - (10.0 * 10.0 * 10.0 - 3.0 * 3.0 * 3.0)).abs() < 1.0);
+    assert!(
+        (mass.volume - (10.0 * 10.0 * 10.0 - 3.0 * 3.0 * 3.0)).abs() < 1.0,
+        "volume was {}",
+        mass.volume
+    );
 }
 
 #[test]
@@ -1021,7 +1025,11 @@ fn test_step_roundtrip_preserves_brep_with_voids_inner_shells() {
         },
     );
     let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
-    assert!((mass.volume - (10.0 * 10.0 * 10.0 - 3.0 * 3.0 * 3.0)).abs() < 1.0);
+    assert!(
+        (mass.volume - (10.0 * 10.0 * 10.0 - 3.0 * 3.0 * 3.0)).abs() < 1.0,
+        "volume was {}",
+        mass.volume
+    );
 }
 
 #[test]
@@ -1578,6 +1586,183 @@ fn test_brep_intersection_skips_vertical_plane_missing_cylinder_quadrant() {
         candidates.is_empty(),
         "the ruling at x = 6 lies outside the second quadrant patch angular span"
     );
+}
+
+#[test]
+fn test_exact_brep_boolean_cuts_cylinder_lengthwise_with_box() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height = 30.0;
+    let cut_x: f64 = 6.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+    let cutter = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(20.0, 40.0, 50.0).unwrap(),
+        Vec3::new(cut_x, -20.0, -10.0),
+    );
+
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+        &cylinder,
+        &cutter,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("cutting a cylinder lengthwise should return an exact solid");
+    assert_eq!(result.len(), 1);
+
+    let solid = &result.solids[0];
+    assert!(solid.is_topologically_valid(&tol));
+    assert_eq!(solid.outer_shell.faces.len(), 7);
+
+    // 側面は NURBS のまま残り、平面はキャップ2枚＋切断面1枚
+    let nurbs_faces = solid
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+        .count();
+    assert_eq!(nurbs_faces, 4);
+
+    // 残った形状は切断平面を越えない
+    for face in &solid.outer_shell.faces {
+        for point in face.outer_wire.sample_points(8) {
+            assert!(
+                point.x <= cut_x + 1e-6,
+                "material left beyond the cut plane"
+            );
+        }
+    }
+
+    // 体積は円柱から円弓形を除いた解析値と一致する
+    let segment_area = radius * radius * (cut_x / radius).acos()
+        - cut_x * (radius * radius - cut_x * cut_x).sqrt();
+    let expected = (std::f64::consts::PI * radius * radius - segment_area) * height;
+    let mesh = tessellate_solid(
+        solid,
+        &TessellationParams {
+            u_divisions: 96,
+            v_divisions: 16,
+        },
+    );
+    let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    assert!(
+        (mass.volume - expected).abs() < expected * 5e-3,
+        "volume {} should match analytic {expected}",
+        mass.volume
+    );
+}
+
+#[test]
+fn test_planar_face_imprint_by_interior_loop() {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let face = solid
+        .outer_shell
+        .faces
+        .iter()
+        .find(|face| {
+            face.outer_wire
+                .sample_points(1)
+                .iter()
+                .all(|point| point.z.abs() < 1e-9)
+        })
+        .expect("bottom face")
+        .clone();
+
+    let corners = [
+        Point3::new(3.0, 3.0, 0.0),
+        Point3::new(7.0, 3.0, 0.0),
+        Point3::new(7.0, 7.0, 0.0),
+        Point3::new(3.0, 7.0, 0.0),
+    ];
+    let loop_edges: Vec<Edge> = (0..4)
+        .map(|i| {
+            Edge::line_between(
+                Vertex::from_point(corners[i]),
+                Vertex::from_point(corners[(i + 1) % 4]),
+            )
+            .unwrap()
+        })
+        .collect();
+
+    let pieces = zenith_algo::BrepIntersectionBuilder::split_planar_face_by_interior_loop(
+        &face,
+        &loop_edges,
+        &tol,
+    )
+    .expect("an interior loop should imprint the face");
+    assert_eq!(pieces.len(), 2);
+
+    let inner = &pieces[0];
+    let outer = &pieces[1];
+    assert!(inner.inner_wires.is_empty());
+    assert_eq!(outer.inner_wires.len(), 1);
+
+    let params = TessellationParams {
+        u_divisions: 8,
+        v_divisions: 8,
+    };
+    let inner_area = triangle_mesh_area(&tessellate_face(inner, &params));
+    let outer_area = triangle_mesh_area(&tessellate_face(outer, &params));
+    assert!((inner_area - 16.0).abs() < 1e-6, "inner area {inner_area}");
+    assert!(
+        (outer_area - (100.0 - 16.0)).abs() < 1e-6,
+        "outer area {outer_area}"
+    );
+
+    // 穴の開いた面の代表点は穴の中に落ちてはならない
+    let location = zenith_algo::BrepIntersectionBuilder::classify_face_against_solid(
+        outer,
+        &zenith_algo::BrepTransform::translate_solid(
+            &zenith_algo::PrimitiveBuilder::make_box(4.0, 4.0, 4.0).unwrap(),
+            Vec3::new(3.0, 3.0, -2.0),
+        ),
+        &tol,
+    );
+    assert_eq!(location, zenith_algo::FaceRegionLocation::Outside);
+}
+
+#[test]
+fn test_reversed_planar_face_flips_its_volume_contribution() {
+    let params = TessellationParams {
+        u_divisions: 4,
+        v_divisions: 4,
+    };
+    let solid = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let face = solid.outer_shell.faces[0].clone();
+
+    let forward = signed_mesh_volume(&tessellate_face(&face, &params));
+    let reversed_face = Face::new(
+        face.geometry.clone(),
+        Wire::new(
+            face.outer_wire
+                .edges
+                .iter()
+                .rev()
+                .map(|edge| OrientedEdge::new(edge.edge.clone(), edge.orientation.reversed()))
+                .collect(),
+        ),
+        Vec::new(),
+        face.orientation.reversed(),
+        face.tolerance,
+    );
+    let reversed = signed_mesh_volume(&tessellate_face(&reversed_face, &params));
+
+    assert!(
+        (forward + reversed).abs() < 1e-9,
+        "reversing a face must flip its divergence contribution: {forward} vs {reversed}"
+    );
+}
+
+fn signed_mesh_volume(mesh: &zenith_tess::TriangleMesh) -> f64 {
+    mesh.indices
+        .iter()
+        .map(|triangle| {
+            let a = mesh.positions[triangle[0] as usize];
+            let b = mesh.positions[triangle[1] as usize];
+            let c = mesh.positions[triangle[2] as usize];
+            a.coords.dot(&b.coords.cross(&c.coords)) / 6.0
+        })
+        .sum()
 }
 
 #[test]
