@@ -353,6 +353,12 @@ The critical path is:
 
 The next best engineering target is a `TrimmedFace`/p-curve layer plus adaptive tessellation. That directly supports cylinder caps, holes, curve patches, STEP fidelity, and future Plasticity-like modeling.
 
+## Conformance Sweep
+
+Every primitive is now covered by one table-driven test asserting it is a valid solid, that exact B-Rep integration reproduces its analytic volume and area, and that a STEP round-trip returns a valid solid with the same volume. Box, cylinder, sphere, cone, frustum, and torus all pass to within 1e-8 relative; the residual is quadrature error on the doubly curved surfaces, not geometry error.
+
+Building the sweep found that STEP export wrote reals with `{:.6}`, six decimal places. That capped interchange fidelity at roughly 1e-7 relative and was the dominant round-trip error for every curved primitive. Reals are now written with twelve decimals, which drops the round-trip volume error from about 5e-8 to about 1e-13.
+
 ## Current Kernel Hardening Queue
 
 1. Replace projected degree-1 UV polylines with fitted/interpolated p-curves where exact curve class is needed.

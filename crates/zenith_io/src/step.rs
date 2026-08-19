@@ -246,7 +246,7 @@ impl StepExporter {
     }
 
     fn write_point(ctx: &mut StepContext, p: Point3) -> u64 {
-        let p_str = format!("CARTESIAN_POINT('',({:.6},{:.6},{:.6}))", p.x, p.y, p.z);
+        let p_str = format!("CARTESIAN_POINT('',({:.12},{:.12},{:.12}))", p.x, p.y, p.z);
         ctx.add_entity(&p_str)
     }
 
@@ -268,7 +268,7 @@ impl StepExporter {
     }
 
     fn write_point2(ctx: &mut StepContext, p: Point2) -> u64 {
-        let p_str = format!("CARTESIAN_POINT('',({:.6},{:.6}))", p.x, p.y);
+        let p_str = format!("CARTESIAN_POINT('',({:.12},{:.12}))", p.x, p.y);
         ctx.add_entity(&p_str)
     }
 
@@ -314,7 +314,7 @@ impl StepExporter {
             let p_id = Self::write_point(ctx, p_start);
             let dir = (p_end - p_start).normalize();
             let dir_id = ctx.add_entity(&format!(
-                "DIRECTION('',({:.6},{:.6},{:.6}))",
+                "DIRECTION('',({:.12},{:.12},{:.12}))",
                 dir.x, dir.y, dir.z
             ));
             let vec_id = ctx.add_entity(&format!("VECTOR('',#{},1.0)", dir_id));
@@ -340,18 +340,18 @@ impl StepExporter {
                 if normal.norm() > 0.5 {
                     let center_id = Self::write_point(ctx, center);
                     let norm_id = ctx.add_entity(&format!(
-                        "DIRECTION('',({:.6},{:.6},{:.6}))",
+                        "DIRECTION('',({:.12},{:.12},{:.12}))",
                         normal.x, normal.y, normal.z
                     ));
                     let ref_id = ctx.add_entity(&format!(
-                        "DIRECTION('',({:.6},{:.6},{:.6}))",
+                        "DIRECTION('',({:.12},{:.12},{:.12}))",
                         v0.x, v0.y, v0.z
                     ));
                     let axis_id = ctx.add_entity(&format!(
                         "AXIS2_PLACEMENT_3D('',#{},#{},#{})",
                         center_id, norm_id, ref_id
                     ));
-                    let circle_id = ctx.add_entity(&format!("CIRCLE('',#{},{:.6})", axis_id, r0));
+                    let circle_id = ctx.add_entity(&format!("CIRCLE('',#{},{:.12})", axis_id, r0));
                     let p0_id = Self::write_point(ctx, p0);
                     let p2_id = Self::write_point(ctx, p2);
                     return ctx.add_entity(&format!(
@@ -376,7 +376,7 @@ impl StepExporter {
                 is_rational = true;
             }
             pt_ids.push(format!("#{}", Self::write_point(ctx, cp.point)));
-            weights.push(format!("{:.6}", cp.weight));
+            weights.push(format!("{:.12}", cp.weight));
         }
 
         let pts_str = format!("({})", pt_ids.join(","));
@@ -395,7 +395,7 @@ impl StepExporter {
             "({})",
             knots
                 .iter()
-                .map(|k| format!("{:.6}", k))
+                .map(|k| format!("{:.12}", k))
                 .collect::<Vec<_>>()
                 .join(",")
         );
@@ -423,7 +423,7 @@ impl StepExporter {
                 is_rational = true;
             }
             pt_ids.push(format!("#{}", Self::write_point2(ctx, cp.point)));
-            weights.push(format!("{:.6}", cp.weight));
+            weights.push(format!("{:.12}", cp.weight));
         }
 
         let pts_str = format!("({})", pt_ids.join(","));
@@ -442,7 +442,7 @@ impl StepExporter {
             "({})",
             knots
                 .iter()
-                .map(|k| format!("{:.6}", k))
+                .map(|k| format!("{:.12}", k))
                 .collect::<Vec<_>>()
                 .join(",")
         );
@@ -552,10 +552,14 @@ impl StepExporter {
                 let loc_id = Self::write_point(ctx, plane.origin);
                 let n = plane.normal.normalize();
                 let u = plane.u_axis.normalize();
-                let z_dir_id =
-                    ctx.add_entity(&format!("DIRECTION('',({:.6},{:.6},{:.6}))", n.x, n.y, n.z));
-                let x_dir_id =
-                    ctx.add_entity(&format!("DIRECTION('',({:.6},{:.6},{:.6}))", u.x, u.y, u.z));
+                let z_dir_id = ctx.add_entity(&format!(
+                    "DIRECTION('',({:.12},{:.12},{:.12}))",
+                    n.x, n.y, n.z
+                ));
+                let x_dir_id = ctx.add_entity(&format!(
+                    "DIRECTION('',({:.12},{:.12},{:.12}))",
+                    u.x, u.y, u.z
+                ));
                 let axis2_id = ctx.add_entity(&format!(
                     "AXIS2_PLACEMENT_3D('',#{},#{},#{})",
                     loc_id, z_dir_id, x_dir_id
@@ -651,7 +655,7 @@ impl StepExporter {
                 if (cp.weight - 1.0).abs() > 1e-6 {
                     is_rational = true;
                 }
-                w_row.push(format!("{:.6}", cp.weight));
+                w_row.push(format!("{:.12}", cp.weight));
                 pt_ids.push(format!("#{}", Self::write_point(ctx, cp.point)));
             }
             weights.push(format!("({})", w_row.join(",")));
@@ -683,7 +687,7 @@ impl StepExporter {
             "({})",
             u_knots
                 .iter()
-                .map(|k| format!("{:.6}", k))
+                .map(|k| format!("{:.12}", k))
                 .collect::<Vec<_>>()
                 .join(",")
         );
@@ -691,7 +695,7 @@ impl StepExporter {
             "({})",
             v_knots
                 .iter()
-                .map(|k| format!("{:.6}", k))
+                .map(|k| format!("{:.12}", k))
                 .collect::<Vec<_>>()
                 .join(",")
         );

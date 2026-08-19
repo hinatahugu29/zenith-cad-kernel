@@ -1816,6 +1816,106 @@ fn test_revolved_surface_keeps_on_axis_profile_points_exact() {
     }
 }
 
+/// Every primitive must be a valid solid, measure its analytic volume and area,
+/// and come back from STEP unchanged. One table keeps a new primitive - or a
+/// regression in an existing one - from slipping through with only its own test.
+#[test]
+fn test_every_primitive_is_valid_analytic_and_step_stable() {
+    let tol = Tolerance::default();
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let pi = std::f64::consts::PI;
+
+    let (dx, dy, dz) = (10.0_f64, 20.0_f64, 30.0_f64);
+    let (radius, height) = (10.0_f64, 30.0_f64);
+    let sphere_radius = 15.0_f64;
+    let (cone_radius, cone_height) = (10.0_f64, 20.0_f64);
+    let cone_slant = (cone_radius * cone_radius + cone_height * cone_height).sqrt();
+    let top_radius = 4.0_f64;
+    let frustum_slant = ((cone_radius - top_radius).powi(2) + cone_height * cone_height).sqrt();
+    let (major, minor) = (20.0_f64, 5.0_f64);
+
+    let cases: Vec<(&str, zenith_topo::Solid, f64, f64)> = vec![
+        (
+            "box",
+            zenith_algo::PrimitiveBuilder::make_box(dx, dy, dz).unwrap(),
+            dx * dy * dz,
+            2.0 * (dx * dy + dy * dz + dz * dx),
+        ),
+        (
+            "cylinder",
+            zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap(),
+            pi * radius * radius * height,
+            2.0 * pi * radius * (radius + height),
+        ),
+        (
+            "sphere",
+            zenith_algo::PrimitiveBuilder::make_sphere(sphere_radius).unwrap(),
+            4.0 / 3.0 * pi * sphere_radius.powi(3),
+            4.0 * pi * sphere_radius * sphere_radius,
+        ),
+        (
+            "cone",
+            zenith_algo::PrimitiveBuilder::make_cone(cone_radius, 0.0, cone_height).unwrap(),
+            pi * cone_radius * cone_radius * cone_height / 3.0,
+            pi * cone_radius * (cone_slant + cone_radius),
+        ),
+        (
+            "frustum",
+            zenith_algo::PrimitiveBuilder::make_cone(cone_radius, top_radius, cone_height).unwrap(),
+            pi * cone_height
+                * (cone_radius * cone_radius + cone_radius * top_radius + top_radius * top_radius)
+                / 3.0,
+            pi * (cone_radius + top_radius) * frustum_slant
+                + pi * cone_radius * cone_radius
+                + pi * top_radius * top_radius,
+        ),
+        (
+            "torus",
+            zenith_algo::PrimitiveBuilder::make_torus(major, minor).unwrap(),
+            2.0 * pi * pi * major * minor * minor,
+            4.0 * pi * pi * major * minor,
+        ),
+    ];
+
+    for (name, solid, expected_volume, expected_area) in cases {
+        assert!(
+            solid.is_topologically_valid(&tol),
+            "{name} is not a valid solid"
+        );
+
+        let mass = zenith_algo::MassCalculator::compute_from_brep(&solid, &params);
+        assert!(
+            (mass.volume - expected_volume).abs() < expected_volume * 1e-8,
+            "{name} volume {} vs analytic {expected_volume}",
+            mass.volume
+        );
+        assert!(
+            (mass.surface_area - expected_area).abs() < expected_area * 1e-8,
+            "{name} area {} vs analytic {expected_area}",
+            mass.surface_area
+        );
+
+        let step = zenith_io::StepExporter::export_solid_to_string(&solid, name);
+        let imported = zenith_io::StepImporter::import_solid_from_str(&step)
+            .unwrap_or_else(|error| panic!("{name} failed to round-trip through STEP: {error}"));
+        assert!(
+            imported.is_topologically_valid(&tol),
+            "{name} is invalid after a STEP round-trip"
+        );
+
+        // STEP の実数桁数が落ちていれば、ここで体積がずれる
+        let imported_mass = zenith_algo::MassCalculator::compute_from_brep(&imported, &params);
+        assert!(
+            (imported_mass.volume - expected_volume).abs() < expected_volume * 1e-8,
+            "{name} volume drifted to {} through STEP",
+            imported_mass.volume
+        );
+    }
+}
+
 #[test]
 fn test_brep_mass_properties_are_analytic_for_a_box() {
     let params = TessellationParams {
