@@ -56,6 +56,12 @@ pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTria
             }
         }
         FaceGeometry::Nurbs(nurbs) => {
+            // 境界がパラメータ矩形そのものなら、ノット線に整合したグリッドを
+            // 使う。B-spline は各ノット区間の内側でだけ滑らかなので、区間を
+            // またぐ三角形の上で求積すると、いくら細分しても誤差が減らない。
+            if let Some(aligned) = knot_aligned_uv_triangulation(face, nurbs, params) {
+                return aligned;
+            }
             let trimmed = trimmed_uv_triangulation(face, nurbs, params);
             if trimmed.is_empty() {
                 grid_uv_triangulation(nurbs, params)
@@ -67,6 +73,146 @@ pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTria
         FaceGeometry::Gordon(gordon) => grid_uv_triangulation(gordon, params),
         FaceGeometry::Triangular(triangular) => grid_uv_triangulation(triangular, params),
     }
+}
+
+/// Builds a grid whose lines include every interior knot, for a face whose trim
+/// loop is the whole parameter rectangle.
+///
+/// A B-spline is only smooth inside a knot span. Integrating over cells that
+/// straddle a span leaves an error that refinement cannot remove, which is what
+/// made a swept pipe's area wander at the fourth decimal no matter how many
+/// triangles it was given. Snapping the grid to the spans restores convergence,
+/// and it costs nothing for surfaces without interior knots.
+///
+/// Returns `None` when the face is genuinely trimmed, so the trimmed path keeps
+/// handling it.
+fn knot_aligned_uv_triangulation(
+    face: &Face,
+    surface: &zenith_geom::NurbsSurface3,
+    params: &TessellationParams,
+) -> Option<UvTriangulation> {
+    if !face.inner_wires.is_empty() {
+        return None;
+    }
+
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    if !(u_max > u_min && v_max > v_min) {
+        return None;
+    }
+
+    let pcurves = face.pcurves.as_ref()?;
+    if !pcurves.inner_loops.is_empty() {
+        return None;
+    }
+
+    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+    if outer_uvs.len() < 3 {
+        return None;
+    }
+    if !loop_covers_full_domain(&outer_uvs, u_min, u_max, v_min, v_max) {
+        return None;
+    }
+
+    let u_lines = span_aligned_lines(&surface.knots_u.knots, surface.degree_u, u_min, u_max, params.u_divisions);
+    let v_lines = span_aligned_lines(&surface.knots_v.knots, surface.degree_v, v_min, v_max, params.v_divisions);
+
+    let mut uvs = Vec::with_capacity(u_lines.len() * v_lines.len());
+    for v in &v_lines {
+        for u in &u_lines {
+            uvs.push(Point2::new(*u, *v));
+        }
+    }
+
+    let stride = u_lines.len();
+    let mut triangles = Vec::with_capacity((u_lines.len() - 1) * (v_lines.len() - 1) * 2);
+    for j in 0..v_lines.len() - 1 {
+        for i in 0..u_lines.len() - 1 {
+            let i0 = j * stride + i;
+            triangles.push([i0, i0 + 1, i0 + stride + 1]);
+            triangles.push([i0, i0 + stride + 1, i0 + stride]);
+        }
+    }
+
+    Some(UvTriangulation { uvs, triangles })
+}
+
+/// True when the sampled trim loop is the parameter rectangle itself.
+fn loop_covers_full_domain(
+    uvs: &[Point2],
+    u_min: f64,
+    u_max: f64,
+    v_min: f64,
+    v_max: f64,
+) -> bool {
+    let domain = (u_max - u_min) * (v_max - v_min);
+    if domain <= 0.0 {
+        return false;
+    }
+
+    let scale = (u_max - u_min).max(v_max - v_min);
+    let tolerance = scale * 1e-9;
+
+    for uv in uvs {
+        if uv.x < u_min - tolerance
+            || uv.x > u_max + tolerance
+            || uv.y < v_min - tolerance
+            || uv.y > v_max + tolerance
+        {
+            return false;
+        }
+        // 矩形の辺の上に乗っていない点があれば、それは本当のトリム境界。
+        let on_u_edge = (uv.x - u_min).abs() <= tolerance || (uv.x - u_max).abs() <= tolerance;
+        let on_v_edge = (uv.y - v_min).abs() <= tolerance || (uv.y - v_max).abs() <= tolerance;
+        if !on_u_edge && !on_v_edge {
+            return false;
+        }
+    }
+
+    let mut signed_area = 0.0;
+    for index in 0..uvs.len() {
+        let a = uvs[index];
+        let b = uvs[(index + 1) % uvs.len()];
+        signed_area += a.x * b.y - b.x * a.y;
+    }
+    (signed_area.abs() * 0.5 - domain).abs() <= domain * 1e-9
+}
+
+/// Grid lines covering `[min, max]`: every distinct interior knot, plus uniform
+/// subdivision inside each span so the requested density is still met.
+fn span_aligned_lines(
+    knots: &[f64],
+    degree: usize,
+    min: f64,
+    max: f64,
+    divisions: usize,
+) -> Vec<f64> {
+    let mut breaks: Vec<f64> = Vec::new();
+    let interior = knots
+        .iter()
+        .skip(degree + 1)
+        .take(knots.len().saturating_sub(2 * (degree + 1)));
+    for knot in interior {
+        if *knot > min + f64::EPSILON && *knot < max - f64::EPSILON {
+            breaks.push(*knot);
+        }
+    }
+    breaks.push(min);
+    breaks.push(max);
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup_by(|a, b| (*a - *b).abs() <= (max - min) * 1e-12);
+
+    let span_count = breaks.len() - 1;
+    let per_span = divisions.max(2).div_ceil(span_count).max(1);
+
+    let mut lines = Vec::with_capacity(span_count * per_span + 1);
+    for window in breaks.windows(2) {
+        let (start, end) = (window[0], window[1]);
+        for step in 0..per_span {
+            lines.push(start + (end - start) * (step as f64 / per_span as f64));
+        }
+    }
+    lines.push(max);
+    lines
 }
 
 fn grid_uv_triangulation(surface: &impl Surface3, params: &TessellationParams) -> UvTriangulation {

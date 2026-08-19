@@ -17,3 +17,6 @@ log.workspace = true
 
 [dev-dependencies]
 zenith_io = { path = "../zenith_io" }
+
+[dev-dependencies.serde_json]
+workspace = true

@@ -1,6 +1,7 @@
 //! Zenith Algo: CADモデリングアルゴリズムライブラリ
 
 pub mod boolean;
+pub mod boolean_validation;
 pub mod brep_intersection;
 pub mod brep_transform;
 pub mod cap;
@@ -10,6 +11,7 @@ pub mod direct_edit;
 pub mod extrude;
 pub mod feature_tree;
 pub mod fillet;
+pub mod gear;
 pub mod helix;
 pub mod hole;
 
@@ -39,6 +41,9 @@ use zenith_topo::{Shell, Solid};
 pub use boolean::{
     BooleanEngine, BooleanOpType, ExactBooleanPreparationReport, ExactBooleanResult,
 };
+pub use boolean_validation::{
+    BooleanResultReport, BooleanResultVerifier, BooleanVerificationParams,
+};
 pub use brep_intersection::{
     BooleanFaceAssembly, BooleanFaceSelection, BooleanOperand, BooleanShellAssembly,
     BrepIntersectionBuilder, ClassifiedFacePiece, ClassifiedPlanarFaceSplitCandidate,
@@ -54,6 +59,7 @@ pub use direct_edit::{DirectModeling, EdgeInspection, EdgeKind, FaceInspection};
 pub use extrude::ExtrudeBuilder;
 pub use feature_tree::{FeatureNode, FeatureOp, FeatureTree};
 pub use fillet::FilletBuilder;
+pub use gear::GearBuilder;
 pub use helix::HelixBuilder;
 pub use hole::HoleBuilder;
 pub use interference::{ClashStatus, InterferenceChecker, InterferenceReport};

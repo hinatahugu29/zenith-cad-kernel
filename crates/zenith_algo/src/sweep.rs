@@ -8,6 +8,120 @@ pub struct SweepBuilder;
 /// 3D パス沿いの RMF 標架データ (中心座標, 接線ベクトル, 法線ベクトル, 従法線ベクトル)
 type RmfFrame = (Point3, Vec3, Vec3, Vec3);
 
+/// スイープ方向の補間次数。断面を直線で繋ぐと、パイプは16角柱の連なりに
+/// なってしまい、面が各断面で折れる（C0）。3次で補間すると全断面をちょうど
+/// 通りながら C2 連続な滑らかな管になる。
+const SWEEP_SKIN_DEGREE: usize = 3;
+
+/// 断面列を通る3次B-スプラインの制御点と、全行で共有するノットベクトル。
+///
+/// テンソル積曲面にするため、どの行も同じパラメータ付けとノットを使う。
+/// Piegl & Tiller の大域補間（平均化ノット）で、データ点数と制御点数が
+/// 一致するので端条件を足す必要がない。
+fn skin_rows(
+    rows: &[Vec<ControlPoint3>],
+    parameters: &[f64],
+) -> Result<(Vec<Vec<ControlPoint3>>, KnotVector), String> {
+    let count = parameters.len();
+    if rows.iter().any(|row| row.len() != count) {
+        return Err("Skinning rows must all have one point per section".to_string());
+    }
+    if count < SWEEP_SKIN_DEGREE + 1 {
+        // 断面が少なすぎて3次補間できないときは折れ線のまま返す。
+        return Ok((rows.to_vec(), KnotVector::clamped_uniform(count, 1)));
+    }
+
+    let degree = SWEEP_SKIN_DEGREE;
+    let knots = averaged_knot_vector(parameters, degree);
+
+    // 補間行列 N[i][j] = B_j(u_i)
+    let mut matrix = nalgebra::DMatrix::<f64>::zeros(count, count);
+    for (i, u) in parameters.iter().enumerate() {
+        let span = knots.find_span(count, degree, *u);
+        let basis = knots.basis_functions(span, degree, *u);
+        for (offset, value) in basis.iter().enumerate() {
+            let column = span + offset - degree;
+            if column < count {
+                matrix[(i, column)] = *value;
+            }
+        }
+    }
+
+    let decomposition = matrix.lu();
+
+    let mut skinned = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut solved = vec![Point3::origin(); count];
+        for axis in 0..3 {
+            let rhs = nalgebra::DVector::<f64>::from_iterator(
+                count,
+                row.iter().map(|cp| cp.point[axis]),
+            );
+            let solution = decomposition
+                .solve(&rhs)
+                .ok_or_else(|| "Skinning interpolation matrix is singular".to_string())?;
+            for (index, value) in solution.iter().enumerate() {
+                solved[index][axis] = *value;
+            }
+        }
+
+        // 重みは行ごとに一定なので、そのまま持ち回れば有理性は保たれる。
+        let weight = row.first().map(|cp| cp.weight).unwrap_or(1.0);
+        skinned.push(
+            solved
+                .into_iter()
+                .map(|point| ControlPoint3::new(point, weight))
+                .collect(),
+        );
+    }
+
+    Ok((skinned, knots))
+}
+
+/// Averaged knot vector for global interpolation (Piegl & Tiller eq. 9.8).
+fn averaged_knot_vector(parameters: &[f64], degree: usize) -> KnotVector {
+    let count = parameters.len();
+    let mut knots = Vec::with_capacity(count + degree + 1);
+    for _ in 0..=degree {
+        knots.push(0.0);
+    }
+    for j in 1..count.saturating_sub(degree) {
+        let sum: f64 = parameters[j..j + degree].iter().sum();
+        knots.push(sum / degree as f64);
+    }
+    for _ in 0..=degree {
+        knots.push(1.0);
+    }
+    KnotVector::new(knots)
+}
+
+/// Chord-length parameters over the section centres, normalised to [0, 1].
+fn section_parameters(points: &[Point3]) -> Vec<f64> {
+    let count = points.len();
+    if count < 2 {
+        return vec![0.0; count];
+    }
+
+    let mut cumulative = Vec::with_capacity(count);
+    cumulative.push(0.0);
+    let mut total = 0.0;
+    for index in 1..count {
+        total += (points[index] - points[index - 1]).norm();
+        cumulative.push(total);
+    }
+
+    if total <= f64::EPSILON {
+        return (0..count)
+            .map(|index| index as f64 / (count - 1) as f64)
+            .collect();
+    }
+
+    cumulative
+        .into_iter()
+        .map(|distance| distance / total)
+        .collect()
+}
+
 impl SweepBuilder {
     /// 3D NURBS 軌道曲線に沿った連続最小回転標架 (Parallel Transport Frame / RMF) を算出
     pub fn compute_rmf_frames(path: &NurbsCurve3, num_sections: usize) -> Vec<RmfFrame> {
@@ -112,6 +226,26 @@ impl SweepBuilder {
             quad_rows.push((row0, row1, row2));
         }
 
+        // 1b. 断面列を3次で補間し、折れのない滑らかな側面にする。
+        let section_centres: Vec<Point3> = frames.iter().take(n_sec).map(|frame| frame.0).collect();
+        let sweep_parameters = section_parameters(&section_centres);
+        let mut skinned_quad_rows = Vec::with_capacity(4);
+        let mut sweep_knots = KnotVector::clamped_uniform(n_sec, 1);
+        for (row0, row1, row2) in &quad_rows {
+            let (skinned, knots) = skin_rows(
+                &[row0.clone(), row1.clone(), row2.clone()],
+                &sweep_parameters,
+            )?;
+            sweep_knots = knots;
+            skinned_quad_rows.push((skinned[0].clone(), skinned[1].clone(), skinned[2].clone()));
+        }
+        let sweep_degree = if skinned_quad_rows[0].0.len() == n_sec && n_sec >= SWEEP_SKIN_DEGREE + 1
+        {
+            SWEEP_SKIN_DEGREE
+        } else {
+            1
+        };
+
         // 2. 始点・終点リングの共有頂点 (4頂点ずつ)
         let mut vb = Vec::with_capacity(4);
         let mut vt = Vec::with_capacity(4);
@@ -120,11 +254,15 @@ impl SweepBuilder {
             vt.push(Vertex::from_point(quad_rows[quad].0[n_sec - 1].point));
         }
 
-        // 3. 4本の縦シームエッジ（vb[q] -> vt[q]）
-        let seam_knots = KnotVector::clamped_uniform(n_sec, 1);
+        // 3. 4本の縦シームエッジ（vb[q] -> vt[q]）。側面と同じ補間を使わないと
+        //    エッジが面の境界から浮く。
         let mut ev = Vec::with_capacity(4);
         for quad in 0..4 {
-            let curve = NurbsCurve3::new(1, quad_rows[quad].0.clone(), seam_knots.clone())?;
+            let curve = NurbsCurve3::new(
+                sweep_degree,
+                skinned_quad_rows[quad].0.clone(),
+                sweep_knots.clone(),
+            )?;
             let edge = Edge::new(curve, vb[quad].clone(), vt[quad].clone(), 1e-6);
             ev.push(edge);
         }
@@ -165,14 +303,14 @@ impl SweepBuilder {
         let mut faces = Vec::with_capacity(6);
         for quad in 0..4 {
             let next_q = (quad + 1) % 4;
-            let (ref r0, ref r1, ref r2) = quad_rows[quad];
+            let (ref r0, ref r1, ref r2) = skinned_quad_rows[quad];
 
             let s = NurbsSurface3::new(
                 2,
-                1,
+                sweep_degree,
                 vec![r0.clone(), r1.clone(), r2.clone()],
                 KnotVector::clamped_uniform(3, 2),
-                KnotVector::clamped_uniform(n_sec, 1),
+                sweep_knots.clone(),
             )?;
 
             let wire = Wire::new(vec![
@@ -185,88 +323,110 @@ impl SweepBuilder {
             faces.push(Face::simple(FaceGeometry::Nurbs(s), wire));
         }
 
-        // 6. 始点端面 (Start Cap: 4つの扇形有理NURBSパッチ, 外向き法線 -t0)
+        // 6. 始端面キャップ (4象限 NURBS パッチ)
         let (ctr0, _t0, _n0, _b0) = frames[0];
-        let center_v_bot = Vertex::from_point(ctr0);
-        let mut rad_b = Vec::with_capacity(4);
+        let v_bot_center = Vertex::new(ctr0, 1e-6);
+        let mut bot_spoke_edges = Vec::with_capacity(4);
         for quad in 0..4 {
-            rad_b.push(Edge::line_between(center_v_bot.clone(), vb[quad].clone())?);
+            let v_q = &bottom_ring_edges[quad].start_vertex;
+            let spoke_line = NurbsCurve3::new(
+                1,
+                vec![
+                    ControlPoint3::unweighted(ctr0),
+                    ControlPoint3::unweighted(v_q.point),
+                ],
+                KnotVector::clamped_uniform(2, 1),
+            )?;
+            bot_spoke_edges.push(Edge::new(spoke_line, v_bot_center.clone(), v_q.clone(), 1e-6));
         }
 
         for quad in 0..4 {
             let next_q = (quad + 1) % 4;
-            let (ref r0, ref r1, ref r2) = quad_rows[quad];
+            let p_s = bottom_ring_edges[quad].start_vertex.point;
+            let p_e = bottom_ring_edges[quad].end_vertex.point;
+            let corner = ctr0 + (p_s - ctr0) + (p_e - ctr0);
 
-            // 外周円弧 (r2[0] -> r1[0] -> r0[0]) と 中心点 ctr0
-            let grid = vec![
-                vec![r2[0].clone(), ControlPoint3::new(ctr0, 1.0)],
-                vec![r1[0].clone(), ControlPoint3::new(ctr0, weight)],
-                vec![r0[0].clone(), ControlPoint3::new(ctr0, 1.0)],
-            ];
+            // 3x2 有理 NURBS パッチ (U: 2次円弧 p_e -> p_s 3点, V: 1次放射 外周 -> 中心 2点)
+            // 法線: (p_e -> p_s) x (外周 -> 中心) = -t0 (外向き法線)
+            let row0 = vec![ControlPoint3::new(p_e, 1.0), ControlPoint3::new(ctr0, 1.0)];
+            let row1 = vec![ControlPoint3::new(corner, std::f64::consts::FRAC_1_SQRT_2), ControlPoint3::new(ctr0, std::f64::consts::FRAC_1_SQRT_2)];
+            let row2 = vec![ControlPoint3::new(p_s, 1.0), ControlPoint3::new(ctr0, 1.0)];
 
-            let s_cap = NurbsSurface3::new(
+            let surf = NurbsSurface3::new(
                 2,
                 1,
-                grid,
+                vec![row0, row1, row2],
                 KnotVector::clamped_uniform(3, 2),
                 KnotVector::clamped_uniform(2, 1),
             )?;
 
-            let wire_cap = Wire::new(vec![
+            // 3辺ワイヤ (外向き法線 -t0: CCW, v_next_q -> v_q -> v_ctr -> v_next_q)
+            let wire = Wire::new(vec![
                 OrientedEdge::reversed(bottom_ring_edges[quad].clone()),
-                OrientedEdge::reversed(rad_b[quad].clone()),
-                OrientedEdge::forward(rad_b[next_q].clone()),
+                OrientedEdge::reversed(bot_spoke_edges[quad].clone()),
+                OrientedEdge::forward(bot_spoke_edges[next_q].clone()),
             ]);
-
-            faces.push(Face::simple(FaceGeometry::Nurbs(s_cap), wire_cap));
+            faces.push(Face::simple(FaceGeometry::Nurbs(surf), wire));
         }
 
-        // 7. 終点端面 (End Cap: 4つの扇形有理NURBSパッチ, 外向き法線 +t1)
+
+        // 7. 終端面キャップ (4象限 NURBS パッチ)
         let (ctr1, _t1, _n1, _b1) = frames[n_sec - 1];
-        let center_v_top = Vertex::from_point(ctr1);
-        let mut rad_t = Vec::with_capacity(4);
+        let v_top_center = Vertex::new(ctr1, 1e-6);
+        let mut top_spoke_edges = Vec::with_capacity(4);
         for quad in 0..4 {
-            rad_t.push(Edge::line_between(center_v_top.clone(), vt[quad].clone())?);
+            let v_q = &top_ring_edges[quad].start_vertex;
+            let spoke_line = NurbsCurve3::new(
+                1,
+                vec![
+                    ControlPoint3::unweighted(ctr1),
+                    ControlPoint3::unweighted(v_q.point),
+                ],
+                KnotVector::clamped_uniform(2, 1),
+            )?;
+            top_spoke_edges.push(Edge::new(spoke_line, v_top_center.clone(), v_q.clone(), 1e-6));
         }
 
         for quad in 0..4 {
             let next_q = (quad + 1) % 4;
-            let (ref r0, ref r1, ref r2) = quad_rows[quad];
+            let p_s = top_ring_edges[quad].start_vertex.point;
+            let p_e = top_ring_edges[quad].end_vertex.point;
+            let corner = ctr1 + (p_s - ctr1) + (p_e - ctr1);
 
-            // 外周円弧 (r0[n-1] -> r1[n-1] -> r2[n-1]) と 中心点 ctr1
-            let grid = vec![
-                vec![r0[n_sec - 1].clone(), ControlPoint3::new(ctr1, 1.0)],
-                vec![r1[n_sec - 1].clone(), ControlPoint3::new(ctr1, weight)],
-                vec![r2[n_sec - 1].clone(), ControlPoint3::new(ctr1, 1.0)],
-            ];
+            let row0 = vec![ControlPoint3::new(p_s, 1.0), ControlPoint3::new(ctr1, 1.0)];
+            let row1 = vec![ControlPoint3::new(corner, std::f64::consts::FRAC_1_SQRT_2), ControlPoint3::new(ctr1, std::f64::consts::FRAC_1_SQRT_2)];
+            let row2 = vec![ControlPoint3::new(p_e, 1.0), ControlPoint3::new(ctr1, 1.0)];
 
-            let s_cap = NurbsSurface3::new(
+            let surf = NurbsSurface3::new(
                 2,
                 1,
-                grid,
+                vec![row0, row1, row2],
                 KnotVector::clamped_uniform(3, 2),
                 KnotVector::clamped_uniform(2, 1),
             )?;
 
-            let wire_cap = Wire::new(vec![
+            // 3辺ワイヤ (外向き法線 +t1: CCW, v_q -> v_next_q -> v_ctr -> v_q)
+            let wire = Wire::new(vec![
                 OrientedEdge::forward(top_ring_edges[quad].clone()),
-                OrientedEdge::reversed(rad_t[next_q].clone()),
-                OrientedEdge::forward(rad_t[quad].clone()),
+                OrientedEdge::reversed(top_spoke_edges[next_q].clone()),
+                OrientedEdge::forward(top_spoke_edges[quad].clone()),
             ]);
-
-            faces.push(Face::simple(FaceGeometry::Nurbs(s_cap), wire_cap));
+            faces.push(Face::simple(FaceGeometry::Nurbs(surf), wire));
         }
 
-
-
-
-
+        // 8. 閉シェル化とSolid検証
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)
     }
 
 
+
+
+
+
+
     /// 任意の2D/3D閉断面ワイヤを3D NURBS軌道曲線（パス）に沿って掃引した完全閉B-Repソリッドを生成
+
     pub fn sweep_wire_along_curve(
         profile_wire: &Wire,
         path: &NurbsCurve3,
@@ -299,16 +459,26 @@ impl SweepBuilder {
             vertex_matrix.push(row);
         }
 
-        // 2. 縦方向の継ぎ目エッジ（Seam/Pillarエッジ）群 [k] を構築
-        //    各頂点 j のパス沿い軌跡曲線を 1次 B-Spline で結ぶ
-        let seam_knots = KnotVector::clamped_uniform(n_sec, 1);
+        // 2. 縦方向の継ぎ目エッジ（Seam/Pillarエッジ）群 [k] を構築。
+        //    断面を直線で繋ぐと面が各断面で折れるので、3次で補間する。
+        let section_centres: Vec<Point3> = frames.iter().take(n_sec).map(|frame| frame.0).collect();
+        let sweep_parameters = section_parameters(&section_centres);
+        let sweep_degree = if n_sec >= SWEEP_SKIN_DEGREE + 1 {
+            SWEEP_SKIN_DEGREE
+        } else {
+            1
+        };
+
         let mut seam_edges = Vec::with_capacity(k);
         for j in 0..k {
             let mut ctrl_pts = Vec::with_capacity(n_sec);
             for i in 0..n_sec {
                 ctrl_pts.push(ControlPoint3::unweighted(vertex_matrix[i][j].point));
             }
-            let seam_curve = NurbsCurve3::new(1, ctrl_pts, seam_knots.clone())?;
+            let (skinned, seam_knots) =
+                skin_rows(std::slice::from_ref(&ctrl_pts), &sweep_parameters)?;
+            let seam_curve =
+                NurbsCurve3::new(sweep_degree, skinned[0].clone(), seam_knots.clone())?;
             let v_start = vertex_matrix[0][j].clone();
             let v_end = vertex_matrix[n_sec - 1][j].clone();
             let edge = Edge::new(seam_curve, v_start, v_end, tol.linear);
@@ -370,9 +540,10 @@ impl SweepBuilder {
             }
 
             let knots_u = orig_curve.knots.clone();
-            let knots_v = KnotVector::clamped_uniform(n_sec, 1);
+            let (skinned_grid, knots_v) = skin_rows(&ctrl_pts_grid, &sweep_parameters)?;
 
-            let side_surf = NurbsSurface3::new(degree_u, 1, ctrl_pts_grid, knots_u, knots_v)?;
+            let side_surf =
+                NurbsSurface3::new(degree_u, sweep_degree, skinned_grid, knots_u, knots_v)?;
 
             let bot_edge = ring_edges_matrix[0][j].clone();
             let top_edge = ring_edges_matrix[n_sec - 1][j].clone();

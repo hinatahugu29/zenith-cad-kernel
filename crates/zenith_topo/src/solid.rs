@@ -28,12 +28,14 @@ impl std::fmt::Display for SolidValidationError {
             .iter()
             .map(|report| report.errors.len())
             .sum();
+        let outer_err_str = self.outer_shell_report.errors.join("; ");
         write!(
             f,
-            "Solid validation failed with {outer_count} outer-shell errors and {inner_count} inner-shell errors"
+            "Solid validation failed with {outer_count} outer-shell errors ({outer_err_str}) and {inner_count} inner-shell errors"
         )
     }
 }
+
 
 impl std::error::Error for SolidValidationError {}
 

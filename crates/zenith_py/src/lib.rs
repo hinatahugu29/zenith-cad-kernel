@@ -50,7 +50,11 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::check_boxes_interference, m)?)?;
 
     m.add_function(wrap_pyfunction!(modeling::make_boolean, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_exact_box_boolean, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::thicken_surface_patch, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_spur_gear, m)?)?;
+
+
 
 
     // Direct Modeling

@@ -166,6 +166,8 @@ impl NurbsCurve3 {
     }
 
     /// パラメータ有効範囲 [u_min, u_max]
+
+
     pub fn param_range(&self) -> (f64, f64) {
         (
             self.knots.start_param(self.degree),

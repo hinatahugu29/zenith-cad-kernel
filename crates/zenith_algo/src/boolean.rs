@@ -113,7 +113,39 @@ impl BooleanEngine {
         Self::boolean_solids_exact_result(solid_a, solid_b, op, tol)?.try_single()
     }
 
+    /// Computes an exact B-Rep boolean and verifies the answer before handing
+    /// it back.
+    ///
+    /// A closed manifold shell is not proof of a correct boolean - returning
+    /// one operand untouched satisfies it - so the result is additionally
+    /// checked against the volume bounds and the point membership implied by
+    /// the operation. A result that fails becomes an error rather than a
+    /// plausible-looking wrong solid. Use
+    /// [`Self::boolean_solids_exact_result_unverified`] to skip the gate.
     pub fn boolean_solids_exact_result(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<ExactBooleanResult, String> {
+        let result = Self::boolean_solids_exact_result_unverified(solid_a, solid_b, op, tol)?;
+
+        let report = crate::BooleanResultVerifier::verify(solid_a, solid_b, &result.solids, op, tol);
+        if !report.is_valid() {
+            return Err(format!(
+                "Exact B-Rep boolean produced a result that fails verification: {}",
+                report.summary()
+            ));
+        }
+
+        Ok(result)
+    }
+
+    /// The raw boolean pipeline, without the correctness gate.
+    ///
+    /// Intended for diagnosing the pipeline itself; callers that need a
+    /// trustworthy solid should use [`Self::boolean_solids_exact_result`].
+    pub fn boolean_solids_exact_result_unverified(
         solid_a: &Solid,
         solid_b: &Solid,
         op: BooleanOpType,

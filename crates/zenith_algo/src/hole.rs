@@ -1,12 +1,12 @@
-use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3};
-use zenith_math::{Point3, Vec3};
+use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3};
+use zenith_math::Point3;
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Shell, Solid, Vertex, Wire};
 
 /// 穴あきソリッド（貫通穴・ポケット）ビルダー
 pub struct HoleBuilder;
 
 impl HoleBuilder {
-    /// 直方体にZ軸方向の貫通円形穴を開けたソリッドを生成（内側穴ループ FACE_BOUND 完全対応）
+    /// 直方体にZ軸方向の貫通円形穴を開けたソリッドを生成（4象限パッチマニホールド方式）
     pub fn make_drilled_box(dx: f64, dy: f64, dz: f64, hole_radius: f64) -> Result<Solid, String> {
         if hole_radius < 0.0 {
             return Err(format!(
@@ -28,76 +28,86 @@ impl HoleBuilder {
         let cy = dy * 0.5;
 
         // 1. 直方体の8頂点（外側四角形）
-        let p_b0 = Point3::new(0.0, 0.0, 0.0);
-        let p_b1 = Point3::new(dx, 0.0, 0.0);
-        let p_b2 = Point3::new(dx, dy, 0.0);
-        let p_b3 = Point3::new(0.0, dy, 0.0);
-
-        let p_t0 = Point3::new(0.0, 0.0, dz);
-        let p_t1 = Point3::new(dx, 0.0, dz);
-        let p_t2 = Point3::new(dx, dy, dz);
-        let p_t3 = Point3::new(0.0, dy, dz);
+        let p_b = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(dx, 0.0, 0.0),
+            Point3::new(dx, dy, 0.0),
+            Point3::new(0.0, dy, 0.0),
+        ];
+        let p_t = [
+            Point3::new(0.0, 0.0, dz),
+            Point3::new(dx, 0.0, dz),
+            Point3::new(dx, dy, dz),
+            Point3::new(0.0, dy, dz),
+        ];
 
         let vb = [
-            Vertex::from_point(p_b0),
-            Vertex::from_point(p_b1),
-            Vertex::from_point(p_b2),
-            Vertex::from_point(p_b3),
+            Vertex::from_point(p_b[0]),
+            Vertex::from_point(p_b[1]),
+            Vertex::from_point(p_b[2]),
+            Vertex::from_point(p_b[3]),
         ];
         let vt = [
-            Vertex::from_point(p_t0),
-            Vertex::from_point(p_t1),
-            Vertex::from_point(p_t2),
-            Vertex::from_point(p_t3),
+            Vertex::from_point(p_t[0]),
+            Vertex::from_point(p_t[1]),
+            Vertex::from_point(p_t[2]),
+            Vertex::from_point(p_t[3]),
         ];
 
-        // 2. 穴の4頂点（0度, 90度, 180度, 270度）
-        let p_hb0 = Point3::new(cx + r, cy, 0.0);
-        let p_hb1 = Point3::new(cx, cy + r, 0.0);
-        let p_hb2 = Point3::new(cx - r, cy, 0.0);
-        let p_hb3 = Point3::new(cx, cy - r, 0.0);
-
-        let p_ht0 = Point3::new(cx + r, cy, dz);
-        let p_ht1 = Point3::new(cx, cy + r, dz);
-        let p_ht2 = Point3::new(cx - r, cy, dz);
-        let p_ht3 = Point3::new(cx, cy - r, dz);
+        // 2. 穴の8頂点（0度: +X, 90度: +Y, 180度: -X, 270度: -Y）
+        let p_hb = [
+            Point3::new(cx + r, cy, 0.0),
+            Point3::new(cx, cy + r, 0.0),
+            Point3::new(cx - r, cy, 0.0),
+            Point3::new(cx, cy - r, 0.0),
+        ];
+        let p_ht = [
+            Point3::new(cx + r, cy, dz),
+            Point3::new(cx, cy + r, dz),
+            Point3::new(cx - r, cy, dz),
+            Point3::new(cx, cy - r, dz),
+        ];
 
         let v_hb = [
-            Vertex::from_point(p_hb0),
-            Vertex::from_point(p_hb1),
-            Vertex::from_point(p_hb2),
-            Vertex::from_point(p_hb3),
+            Vertex::from_point(p_hb[0]),
+            Vertex::from_point(p_hb[1]),
+            Vertex::from_point(p_hb[2]),
+            Vertex::from_point(p_hb[3]),
         ];
         let v_ht = [
-            Vertex::from_point(p_ht0),
-            Vertex::from_point(p_ht1),
-            Vertex::from_point(p_ht2),
-            Vertex::from_point(p_ht3),
+            Vertex::from_point(p_ht[0]),
+            Vertex::from_point(p_ht[1]),
+            Vertex::from_point(p_ht[2]),
+            Vertex::from_point(p_ht[3]),
         ];
 
         // 3. 直方体外側エッジ群
-        let eb01 = Edge::line_between(vb[0].clone(), vb[1].clone())?;
-        let eb12 = Edge::line_between(vb[1].clone(), vb[2].clone())?;
-        let eb23 = Edge::line_between(vb[2].clone(), vb[3].clone())?;
-        let eb30 = Edge::line_between(vb[3].clone(), vb[0].clone())?;
-
-        let et01 = Edge::line_between(vt[0].clone(), vt[1].clone())?;
-        let et12 = Edge::line_between(vt[1].clone(), vt[2].clone())?;
-        let et23 = Edge::line_between(vt[2].clone(), vt[3].clone())?;
-        let et30 = Edge::line_between(vt[3].clone(), vt[0].clone())?;
-
-        let ev0 = Edge::line_between(vb[0].clone(), vt[0].clone())?;
-        let ev1 = Edge::line_between(vb[1].clone(), vt[1].clone())?;
-        let ev2 = Edge::line_between(vb[2].clone(), vt[2].clone())?;
-        let ev3 = Edge::line_between(vb[3].clone(), vt[3].clone())?;
+        let eb = [
+            Edge::line_between(vb[0].clone(), vb[1].clone())?, // 0->1 (-Y)
+            Edge::line_between(vb[1].clone(), vb[2].clone())?, // 1->2 (+X)
+            Edge::line_between(vb[2].clone(), vb[3].clone())?, // 2->3 (+Y)
+            Edge::line_between(vb[3].clone(), vb[0].clone())?, // 3->0 (-X)
+        ];
+        let et = [
+            Edge::line_between(vt[0].clone(), vt[1].clone())?, // 0->1 (-Y)
+            Edge::line_between(vt[1].clone(), vt[2].clone())?, // 1->2 (+X)
+            Edge::line_between(vt[2].clone(), vt[3].clone())?, // 2->3 (+Y)
+            Edge::line_between(vt[3].clone(), vt[0].clone())?, // 3->0 (-X)
+        ];
+        let ev = [
+            Edge::line_between(vb[0].clone(), vt[0].clone())?,
+            Edge::line_between(vb[1].clone(), vt[1].clone())?,
+            Edge::line_between(vb[2].clone(), vt[2].clone())?,
+            Edge::line_between(vb[3].clone(), vt[3].clone())?,
+        ];
 
         // 4. 穴のエッジ群（4つの有理円弧 + 4つの垂直エッジ）
         let weight = std::f64::consts::FRAC_1_SQRT_2;
-        let make_hole_arc = |p_s: Point3,
-                             p_e: Point3,
-                             corner: Point3,
-                             v_s: Vertex,
-                             v_e: Vertex|
+        let make_arc = |p_s: Point3,
+                        p_e: Point3,
+                        corner: Point3,
+                        v_s: Vertex,
+                        v_e: Vertex|
          -> Result<Edge, String> {
             let curve = NurbsCurve3::new(
                 2,
@@ -111,268 +121,192 @@ impl HoleBuilder {
             Ok(Edge::new(curve, v_s, v_e, 1e-6))
         };
 
-        // 下面穴円弧 (z=0, 反時計回り: 0->1->2->3->0)
-        let arc_hb01 = make_hole_arc(
-            p_hb0,
-            p_hb1,
-            Point3::new(cx + r, cy + r, 0.0),
-            v_hb[0].clone(),
-            v_hb[1].clone(),
-        )?;
-        let arc_hb12 = make_hole_arc(
-            p_hb1,
-            p_hb2,
-            Point3::new(cx - r, cy + r, 0.0),
-            v_hb[1].clone(),
-            v_hb[2].clone(),
-        )?;
-        let arc_hb23 = make_hole_arc(
-            p_hb2,
-            p_hb3,
-            Point3::new(cx - r, cy - r, 0.0),
-            v_hb[2].clone(),
-            v_hb[3].clone(),
-        )?;
-        let arc_hb30 = make_hole_arc(
-            p_hb3,
-            p_hb0,
-            Point3::new(cx + r, cy - r, 0.0),
-            v_hb[3].clone(),
-            v_hb[0].clone(),
-        )?;
+        // 下面穴円弧 (反時計回り CCW: 0->1->2->3->0)
+        let arc_hb = [
+            make_arc(p_hb[0], p_hb[1], Point3::new(cx + r, cy + r, 0.0), v_hb[0].clone(), v_hb[1].clone())?,
+            make_arc(p_hb[1], p_hb[2], Point3::new(cx - r, cy + r, 0.0), v_hb[1].clone(), v_hb[2].clone())?,
+            make_arc(p_hb[2], p_hb[3], Point3::new(cx - r, cy - r, 0.0), v_hb[2].clone(), v_hb[3].clone())?,
+            make_arc(p_hb[3], p_hb[0], Point3::new(cx + r, cy - r, 0.0), v_hb[3].clone(), v_hb[0].clone())?,
+        ];
 
-        // 上面穴円弧 (z=dz, 反時計回り: 0->1->2->3->0)
-        let arc_ht01 = make_hole_arc(
-            p_ht0,
-            p_ht1,
-            Point3::new(cx + r, cy + r, dz),
-            v_ht[0].clone(),
-            v_ht[1].clone(),
-        )?;
-        let arc_ht12 = make_hole_arc(
-            p_ht1,
-            p_ht2,
-            Point3::new(cx - r, cy + r, dz),
-            v_ht[1].clone(),
-            v_ht[2].clone(),
-        )?;
-        let arc_ht23 = make_hole_arc(
-            p_ht2,
-            p_ht3,
-            Point3::new(cx - r, cy - r, dz),
-            v_ht[2].clone(),
-            v_ht[3].clone(),
-        )?;
-        let arc_ht30 = make_hole_arc(
-            p_ht3,
-            p_ht0,
-            Point3::new(cx + r, cy - r, dz),
-            v_ht[3].clone(),
-            v_ht[0].clone(),
-        )?;
+        // 上面穴円弧 (反時計回り CCW: 0->1->2->3->0)
+        let arc_ht = [
+            make_arc(p_ht[0], p_ht[1], Point3::new(cx + r, cy + r, dz), v_ht[0].clone(), v_ht[1].clone())?,
+            make_arc(p_ht[1], p_ht[2], Point3::new(cx - r, cy + r, dz), v_ht[1].clone(), v_ht[2].clone())?,
+            make_arc(p_ht[2], p_ht[3], Point3::new(cx - r, cy - r, dz), v_ht[2].clone(), v_ht[3].clone())?,
+            make_arc(p_ht[3], p_ht[0], Point3::new(cx + r, cy - r, dz), v_ht[3].clone(), v_ht[0].clone())?,
+        ];
 
         // 穴の垂直エッジ 4本 (v_hb[i] -> v_ht[i])
-        let ehv0 = Edge::line_between(v_hb[0].clone(), v_ht[0].clone())?;
-        let ehv1 = Edge::line_between(v_hb[1].clone(), v_ht[1].clone())?;
-        let ehv2 = Edge::line_between(v_hb[2].clone(), v_ht[2].clone())?;
-        let ehv3 = Edge::line_between(v_hb[3].clone(), v_ht[3].clone())?;
+        let ehv = [
+            Edge::line_between(v_hb[0].clone(), v_ht[0].clone())?,
+            Edge::line_between(v_hb[1].clone(), v_ht[1].clone())?,
+            Edge::line_between(v_hb[2].clone(), v_ht[2].clone())?,
+            Edge::line_between(v_hb[3].clone(), v_ht[3].clone())?,
+        ];
+
+        // 5. 底面・天面の斜め境界エッジ (4隅 vb[i] から 穴の点 v_hb[(i+3)%4] への直線)
+        let diag_b = [
+            Edge::line_between(vb[0].clone(), v_hb[3].clone())?,
+            Edge::line_between(vb[1].clone(), v_hb[0].clone())?,
+            Edge::line_between(vb[2].clone(), v_hb[1].clone())?,
+            Edge::line_between(vb[3].clone(), v_hb[2].clone())?,
+        ];
+
+        let diag_t = [
+            Edge::line_between(vt[0].clone(), v_ht[3].clone())?,
+            Edge::line_between(vt[1].clone(), v_ht[0].clone())?,
+            Edge::line_between(vt[2].clone(), v_ht[1].clone())?,
+            Edge::line_between(vt[3].clone(), v_ht[2].clone())?,
+        ];
 
         let mut faces = Vec::new();
 
-        // 5. 外側側面4面 (Front, Right, Back, Left)
-        // Front Face (-Y): vb0 -> vb1 -> vt1 -> vt0
-        let p_front = PlaneSurface3::new(p_b0, Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0))
-            .ok_or("plane front")?;
-        faces.push(Face::simple(
-            FaceGeometry::Plane(p_front),
-            Wire::new(vec![
-                OrientedEdge::forward(eb01.clone()),
-                OrientedEdge::forward(ev1.clone()),
-                OrientedEdge::reversed(et01.clone()),
-                OrientedEdge::reversed(ev0.clone()),
-            ]),
-        ));
+        // 6. 外側側面4面 (Front, Right, Back, Left) - 法線外向き
+        for i in 0..4 {
+            let next_i = (i + 1) % 4;
+            let p_s = p_b[i];
+            let p_e = p_b[next_i];
+            let row0 = vec![ControlPoint3::unweighted(p_s), ControlPoint3::unweighted(p_t[i])];
+            let row1 = vec![ControlPoint3::unweighted(p_e), ControlPoint3::unweighted(p_t[next_i])];
+            let s = NurbsSurface3::new(
+                1, 1,
+                vec![row0, row1],
+                KnotVector::clamped_uniform(2, 1),
+                KnotVector::clamped_uniform(2, 1),
+            )?;
+            let wire = Wire::new(vec![
+                OrientedEdge::forward(eb[i].clone()),
+                OrientedEdge::forward(ev[next_i].clone()),
+                OrientedEdge::reversed(et[i].clone()),
+                OrientedEdge::reversed(ev[i].clone()),
+            ]);
+            faces.push(Face::simple(FaceGeometry::Nurbs(s), wire));
+        }
 
-        // Right Face (+X): vb1 -> vb2 -> vt2 -> vt1
-        let p_right = PlaneSurface3::new(p_b1, Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0))
-            .ok_or("plane right")?;
-        faces.push(Face::simple(
-            FaceGeometry::Plane(p_right),
-            Wire::new(vec![
-                OrientedEdge::forward(eb12.clone()),
-                OrientedEdge::forward(ev2.clone()),
-                OrientedEdge::reversed(et12.clone()),
-                OrientedEdge::reversed(ev1.clone()),
-            ]),
-        ));
-
-        // Back Face (+Y): vb2 -> vb3 -> vt3 -> vt2
-        let p_back = PlaneSurface3::new(p_b2, Vec3::new(-1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0))
-            .ok_or("plane back")?;
-        faces.push(Face::simple(
-            FaceGeometry::Plane(p_back),
-            Wire::new(vec![
-                OrientedEdge::forward(eb23.clone()),
-                OrientedEdge::forward(ev3.clone()),
-                OrientedEdge::reversed(et23.clone()),
-                OrientedEdge::reversed(ev2.clone()),
-            ]),
-        ));
-
-        // Left Face (-X): vb3 -> vb0 -> vt0 -> vt3
-        let p_left = PlaneSurface3::new(p_b3, Vec3::new(0.0, -1.0, 0.0), Vec3::new(0.0, 0.0, 1.0))
-            .ok_or("plane left")?;
-        faces.push(Face::simple(
-            FaceGeometry::Plane(p_left),
-            Wire::new(vec![
-                OrientedEdge::forward(eb30.clone()),
-                OrientedEdge::forward(ev0.clone()),
-                OrientedEdge::reversed(et30.clone()),
-                OrientedEdge::reversed(ev3.clone()),
-            ]),
-        ));
-
-        // 6. 内側円筒穴の4曲面Face（法線が内向き＝円筒内側から穴の中心を見る向き）
-        let make_hole_cyl_patch = |p_s: Point3,
-                                   p_e: Point3,
-                                   corner_b: Point3,
-                                   arc_b: Edge,
-                                   arc_t: Edge,
-                                   ev_s: Edge,
-                                   ev_e: Edge|
-         -> Result<Face, String> {
+        // 7. 内側円筒穴の4曲面Face（法線が内向き＝軸を向く）
+        for i in 0..4 {
+            let next_i = (i + 1) % 4;
+            let corner_b = match i {
+                0 => Point3::new(cx + r, cy + r, 0.0),
+                1 => Point3::new(cx - r, cy + r, 0.0),
+                2 => Point3::new(cx - r, cy - r, 0.0),
+                _ => Point3::new(cx + r, cy - r, 0.0),
+            };
             let corner_t = Point3::new(corner_b.x, corner_b.y, dz);
+
             let row0 = vec![
-                ControlPoint3::unweighted(p_s),
-                ControlPoint3::unweighted(Point3::new(p_s.x, p_s.y, dz)),
+                ControlPoint3::unweighted(p_hb[next_i]),
+                ControlPoint3::unweighted(p_ht[next_i]),
             ];
             let row1 = vec![
                 ControlPoint3::new(corner_b, weight),
                 ControlPoint3::new(corner_t, weight),
             ];
             let row2 = vec![
-                ControlPoint3::unweighted(p_e),
-                ControlPoint3::unweighted(Point3::new(p_e.x, p_e.y, dz)),
+                ControlPoint3::unweighted(p_hb[i]),
+                ControlPoint3::unweighted(p_ht[i]),
             ];
-            // 穴の壁面は材料が外側にあるため、法線は軸へ向かなければならない。
-            // u 方向を逆に張ることで、ワイヤの回り方はそのままに法線を内向きにする。
+
             let s = NurbsSurface3::new(
-                2,
-                1,
-                vec![row2, row1, row0],
+                2, 1,
+                vec![row0, row1, row2],
                 KnotVector::clamped_uniform(3, 2),
                 KnotVector::clamped_uniform(2, 1),
             )?;
-            // 穴側面ワイヤ。穴は材料が外側にあるので、外側円筒とは逆回りに
-            // たどる。これで UV 上のループが反転した u 方向と整合し、面の
-            // 向きと巻き方向が一致する。
+
+            // 穴側面ワイヤ: ehv[i] -> arc_ht[i] -> reversed(ehv[next_i]) -> reversed(arc_hb[i])
             let wire = Wire::new(vec![
-                OrientedEdge::forward(ev_s),
-                OrientedEdge::forward(arc_t),
-                OrientedEdge::reversed(ev_e),
-                OrientedEdge::reversed(arc_b),
+                OrientedEdge::forward(ehv[i].clone()),
+                OrientedEdge::forward(arc_ht[i].clone()),
+                OrientedEdge::reversed(ehv[next_i].clone()),
+                OrientedEdge::reversed(arc_hb[i].clone()),
             ]);
-            Ok(Face::simple(FaceGeometry::Nurbs(s), wire))
-        };
+            faces.push(Face::simple(FaceGeometry::Nurbs(s), wire));
+        }
 
-        // Hole Patch 0: v_hb[0] -> v_hb[1]
-        faces.push(make_hole_cyl_patch(
-            p_hb0,
-            p_hb1,
-            Point3::new(cx + r, cy + r, 0.0),
-            arc_hb01.clone(),
-            arc_ht01.clone(),
-            ehv0.clone(),
-            ehv1.clone(),
-        )?);
-        // Hole Patch 1: v_hb[1] -> v_hb[2]
-        faces.push(make_hole_cyl_patch(
-            p_hb1,
-            p_hb2,
-            Point3::new(cx - r, cy + r, 0.0),
-            arc_hb12.clone(),
-            arc_ht12.clone(),
-            ehv1.clone(),
-            ehv2.clone(),
-        )?);
-        // Hole Patch 2: v_hb[2] -> v_hb[3]
-        faces.push(make_hole_cyl_patch(
-            p_hb2,
-            p_hb3,
-            Point3::new(cx - r, cy - r, 0.0),
-            arc_hb23.clone(),
-            arc_ht23.clone(),
-            ehv2.clone(),
-            ehv3.clone(),
-        )?);
-        // Hole Patch 3: v_hb[3] -> v_hb[0]
-        faces.push(make_hole_cyl_patch(
-            p_hb3,
-            p_hb0,
-            Point3::new(cx + r, cy - r, 0.0),
-            arc_hb30.clone(),
-            arc_ht30.clone(),
-            ehv3.clone(),
-            ehv0.clone(),
-        )?);
+        // 8. 底面 4象限パッチ (法線 -Z: 外向き)
+        // U: 外側 -> 内側 (2点), V: 円弧 CW (3点) -> 法線 -Z
+        for i in 0..4 {
+            let next_i = (i + 1) % 4;
+            let prev_i = (i + 3) % 4;
+            let corner_b = match prev_i {
+                0 => Point3::new(cx + r, cy + r, 0.0),
+                1 => Point3::new(cx - r, cy + r, 0.0),
+                2 => Point3::new(cx - r, cy - r, 0.0),
+                _ => Point3::new(cx + r, cy - r, 0.0),
+            };
 
-        // 7. Bottom Face (-Z, PLANE + 穴 FACE_BOUND)
-        // 外側ループ（反時計回り）: vb0 -> vb3 -> vb2 -> vb1 -> vb0
-        let p_bot = PlaneSurface3::new(
-            Point3::new(0.0, 0.0, 0.0),
-            Vec3::new(0.0, 1.0, 0.0),
-            Vec3::new(1.0, 0.0, 0.0),
-        )
-        .ok_or("plane bottom")?;
-        let outer_wire_bot = Wire::new(vec![
-            OrientedEdge::reversed(eb30.clone()),
-            OrientedEdge::reversed(eb23.clone()),
-            OrientedEdge::reversed(eb12.clone()),
-            OrientedEdge::reversed(eb01.clone()),
-        ]);
-        // 内側穴ループは外周ループと逆回りでなければ、穴がくり抜かれない
-        let inner_wire_bot = Wire::new(vec![
-            OrientedEdge::forward(arc_hb01.clone()),
-            OrientedEdge::forward(arc_hb12.clone()),
-            OrientedEdge::forward(arc_hb23.clone()),
-            OrientedEdge::forward(arc_hb30.clone()),
-        ]);
-        faces.push(Face::new(
-            FaceGeometry::Plane(p_bot),
-            outer_wire_bot,
-            vec![inner_wire_bot],
-            zenith_topo::Orientation::Forward,
-            1e-6,
-        ));
+            let row0 = vec![
+                ControlPoint3::unweighted(p_hb[i]),
+                ControlPoint3::new(corner_b, weight),
+                ControlPoint3::unweighted(p_hb[prev_i]),
+            ];
+            let row1 = vec![
+                ControlPoint3::unweighted(p_b[next_i]),
+                ControlPoint3::unweighted(Point3::new((p_b[i].x + p_b[next_i].x)*0.5, (p_b[i].y + p_b[next_i].y)*0.5, 0.0)),
+                ControlPoint3::unweighted(p_b[i]),
+            ];
 
-        // 8. Top Face (+Z, PLANE + 穴 FACE_BOUND)
-        // 外側ループ（反時計回り）: vt0 -> vt1 -> vt2 -> vt3 -> vt0
-        let p_top = PlaneSurface3::new(
-            Point3::new(0.0, 0.0, dz),
-            Vec3::new(1.0, 0.0, 0.0),
-            Vec3::new(0.0, 1.0, 0.0),
-        )
-        .ok_or("plane top")?;
-        let outer_wire_top = Wire::new(vec![
-            OrientedEdge::forward(et01.clone()),
-            OrientedEdge::forward(et12.clone()),
-            OrientedEdge::forward(et23.clone()),
-            OrientedEdge::forward(et30.clone()),
-        ]);
-        // 内側穴ループは外周ループと逆回りでなければ、穴がくり抜かれない
-        let inner_wire_top = Wire::new(vec![
-            OrientedEdge::reversed(arc_ht30.clone()),
-            OrientedEdge::reversed(arc_ht23.clone()),
-            OrientedEdge::reversed(arc_ht12.clone()),
-            OrientedEdge::reversed(arc_ht01.clone()),
-        ]);
-        faces.push(Face::new(
-            FaceGeometry::Plane(p_top),
-            outer_wire_top,
-            vec![inner_wire_top],
-            zenith_topo::Orientation::Forward,
-            1e-6,
-        ));
+            let s = NurbsSurface3::new(
+                1, 2,
+                vec![row0, row1],
+                KnotVector::clamped_uniform(2, 1),
+                KnotVector::clamped_uniform(3, 2),
+            )?;
+
+            // -Z 外向き法線から見てCCW:
+            // p_b[next_i] -> p_b[i] -> p_hb[prev_i] -> p_hb[i] -> p_b[next_i]
+            let wire = Wire::new(vec![
+                OrientedEdge::reversed(eb[i].clone()),
+                OrientedEdge::forward(diag_b[i].clone()),
+                OrientedEdge::forward(arc_hb[prev_i].clone()),
+                OrientedEdge::reversed(diag_b[next_i].clone()),
+            ]);
+            faces.push(Face::simple(FaceGeometry::Nurbs(s), wire));
+        }
+
+        // 9. 天面 4象限パッチ (法線 +Z: 外向き)
+        // U: 外側 -> 内側 (2点), V: 円弧 CCW (3点) -> 法線 +Z
+        for i in 0..4 {
+            let next_i = (i + 1) % 4;
+            let prev_i = (i + 3) % 4;
+            let corner_t = match prev_i {
+                0 => Point3::new(cx + r, cy + r, dz),
+                1 => Point3::new(cx - r, cy + r, dz),
+                2 => Point3::new(cx - r, cy - r, dz),
+                _ => Point3::new(cx + r, cy - r, dz),
+            };
+
+            let row0 = vec![
+                ControlPoint3::unweighted(p_ht[prev_i]),
+                ControlPoint3::new(corner_t, weight),
+                ControlPoint3::unweighted(p_ht[i]),
+            ];
+            let row1 = vec![
+                ControlPoint3::unweighted(p_t[i]),
+                ControlPoint3::unweighted(Point3::new((p_t[i].x + p_t[next_i].x)*0.5, (p_t[i].y + p_t[next_i].y)*0.5, dz)),
+                ControlPoint3::unweighted(p_t[next_i]),
+            ];
+
+            let s = NurbsSurface3::new(
+                1, 2,
+                vec![row0, row1],
+                KnotVector::clamped_uniform(2, 1),
+                KnotVector::clamped_uniform(3, 2),
+            )?;
+
+
+            // +Z 外向き法線から見てCCW:
+            // p_t[i] -> p_t[next_i] -> p_ht[i] -> p_ht[prev_i] -> p_t[i]
+            let wire = Wire::new(vec![
+                OrientedEdge::forward(et[i].clone()),
+                OrientedEdge::forward(diag_t[next_i].clone()),
+                OrientedEdge::reversed(arc_ht[prev_i].clone()),
+                OrientedEdge::reversed(diag_t[i].clone()),
+            ]);
+            faces.push(Face::simple(FaceGeometry::Nurbs(s), wire));
+        }
 
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)

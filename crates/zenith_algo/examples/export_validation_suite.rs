@@ -1,0 +1,292 @@
+//! Exports a fixed set of solids to STEP together with the numbers this kernel
+//! computes for them, so an independent kernel can be asked the same questions.
+//!
+//! Pairs with `tools/freecad_cross_validate.py`, which reads the manifest,
+//! re-reads every STEP through OpenCASCADE, and reports where the two kernels
+//! disagree.
+//!
+//! Run with: cargo run -p zenith_algo --example export_validation_suite
+
+use std::f64::consts::PI;
+use std::fs;
+use std::path::Path;
+
+use serde_json::{json, Value};
+use zenith_algo::{
+    GearBuilder, HelixBuilder, HoleBuilder, MassCalculator, PrimitiveBuilder, SectionSlicer,
+    ShellingBuilder, SweepBuilder,
+};
+use zenith_geom::NurbsCurve3;
+use zenith_io::StepExporter;
+use zenith_math::{Point3, Tolerance, Vec3};
+use zenith_tess::TessellationParams;
+use zenith_topo::{Edge, OrientedEdge, Solid, Vertex, Wire};
+
+struct Subject {
+    name: &'static str,
+    solid: Solid,
+    /// Closed-form volume, where one exists.
+    analytic_volume: Option<f64>,
+    /// A section plane worth cross-checking, with its closed-form area.
+    section: Option<(Point3, Vec3, Option<f64>)>,
+}
+
+fn main() {
+    let tol = Tolerance::default();
+    let out_dir = Path::new("target/validation");
+    fs::create_dir_all(out_dir).expect("create target/validation");
+
+    let subjects = build_subjects();
+    let mut entries: Vec<Value> = Vec::new();
+
+    let integration = TessellationParams {
+        u_divisions: 48,
+        v_divisions: 48,
+    };
+
+    for subject in &subjects {
+        let step_path = out_dir.join(format!("{}.step", subject.name));
+        StepExporter::export_solid_to_file(
+            &subject.solid,
+            step_path.to_str().unwrap(),
+            &subject.name.to_uppercase(),
+        )
+        .unwrap_or_else(|err| panic!("STEP export failed for {}: {err}", subject.name));
+
+        let mass = MassCalculator::compute_from_brep(&subject.solid, &integration);
+        let shell_report = subject.solid.outer_shell.validate_closed(&tol);
+
+        let section = subject.section.as_ref().map(|(origin, normal, expected)| {
+            match SectionSlicer::slice_solid(&subject.solid, *origin, *normal, &tol) {
+                Ok(result) => json!({
+                    "origin": [origin.x, origin.y, origin.z],
+                    "normal": [normal.x, normal.y, normal.z],
+                    "area": result.total_area,
+                    "perimeter": result.total_perimeter,
+                    "loop_count": result.section_wires.len(),
+                    "analytic_area": expected,
+                    "error": Value::Null,
+                }),
+                Err(err) => json!({
+                    "origin": [origin.x, origin.y, origin.z],
+                    "normal": [normal.x, normal.y, normal.z],
+                    "analytic_area": expected,
+                    "error": err,
+                }),
+            }
+        });
+
+        entries.push(json!({
+            "name": subject.name,
+            "step_file": step_path.to_string_lossy(),
+            "face_count": subject.solid.outer_shell.faces.len(),
+            "cavity_count": subject.solid.inner_shells.len(),
+            "kernel_volume": mass.volume,
+            "kernel_area": mass.surface_area,
+            "kernel_center_of_mass": [
+                mass.center_of_mass.x,
+                mass.center_of_mass.y,
+                mass.center_of_mass.z
+            ],
+            "analytic_volume": subject.analytic_volume,
+            "shell_valid": shell_report.is_valid(),
+            "shell_errors": shell_report.errors,
+            "section": section,
+        }));
+    }
+
+    let manifest = json!({
+        "generated_by": "zenith_algo::examples::export_validation_suite",
+        "integration_tessellation": {
+            "u_divisions": integration.u_divisions,
+            "v_divisions": integration.v_divisions,
+        },
+        "subjects": entries,
+    });
+
+    let manifest_path = out_dir.join("manifest.json");
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .expect("write manifest");
+
+    println!(
+        "wrote {} subject(s) and {}",
+        subjects.len(),
+        manifest_path.display()
+    );
+}
+
+fn build_subjects() -> Vec<Subject> {
+    let mut subjects = Vec::new();
+
+    subjects.push(Subject {
+        name: "box_20x30x40",
+        solid: PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap(),
+        analytic_volume: Some(24000.0),
+        section: Some((
+            Point3::new(0.0, 0.0, 20.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(600.0),
+        )),
+    });
+
+    subjects.push(Subject {
+        name: "box_diagonal_section",
+        solid: PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap(),
+        analytic_volume: Some(24000.0),
+        section: Some((
+            Point3::new(10.0, 15.0, 20.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Some(575.0 * 3.0_f64.sqrt()),
+        )),
+    });
+
+    subjects.push(Subject {
+        name: "cylinder_r10_h40",
+        solid: PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
+        analytic_volume: Some(PI * 100.0 * 40.0),
+        section: Some((
+            Point3::new(0.0, 0.0, 20.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 100.0),
+        )),
+    });
+
+    subjects.push(Subject {
+        name: "sphere_r10",
+        solid: PrimitiveBuilder::make_sphere(10.0).unwrap(),
+        analytic_volume: Some(4.0 / 3.0 * PI * 1000.0),
+        section: Some((
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 100.0),
+        )),
+    });
+
+    subjects.push(Subject {
+        name: "cone_r10_r4_h20",
+        solid: PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap(),
+        analytic_volume: Some(PI * 20.0 / 3.0 * (100.0 + 40.0 + 16.0)),
+        section: None,
+    });
+
+    subjects.push(Subject {
+        name: "torus_R12_r4",
+        solid: PrimitiveBuilder::make_torus(12.0, 4.0).unwrap(),
+        analytic_volume: Some(2.0 * PI * PI * 12.0 * 16.0),
+        section: None,
+    });
+
+    subjects.push(Subject {
+        name: "drilled_box_30x30x15_r5",
+        solid: HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).unwrap(),
+        analytic_volume: Some(30.0 * 30.0 * 15.0 - PI * 25.0 * 15.0),
+        section: Some((
+            Point3::new(0.0, 0.0, 7.5),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(900.0 - PI * 25.0),
+        )),
+    });
+
+    if let Ok(solid) = ShellingBuilder::make_open_box(40.0, 30.0, 20.0, 2.0) {
+        subjects.push(Subject {
+            name: "shelled_open_box",
+            solid,
+            analytic_volume: None,
+            section: None,
+        });
+    }
+
+    // 直線経路の掃引は厳密に円柱になるので、解析解で決着がつけられる。
+    if let Ok(straight) = NurbsCurve3::bspline_from_points(
+        3,
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 10.0),
+            Point3::new(0.0, 0.0, 20.0),
+            Point3::new(0.0, 0.0, 30.0),
+        ],
+    ) {
+        if let Ok(solid) = SweepBuilder::sweep_circle_along_curve(&straight, 5.0, 16) {
+            subjects.push(Subject {
+                name: "swept_straight_pipe",
+                solid,
+                analytic_volume: Some(PI * 25.0 * 30.0),
+                section: None,
+            });
+        }
+    }
+
+    if let Ok(path) = NurbsCurve3::bspline_from_points(
+        3,
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 10.0),
+            Point3::new(20.0, 20.0, 25.0),
+            Point3::new(30.0, 20.0, 40.0),
+        ],
+    ) {
+        if let Ok(solid) = SweepBuilder::sweep_circle_along_curve(&path, 3.5, 16) {
+            subjects.push(Subject {
+                name: "swept_pipe",
+                solid,
+                analytic_volume: None,
+                section: None,
+            });
+        }
+    }
+
+    // 螺旋スイープは断面ワイヤを要求するので、一辺 2.0 の正方形断面を組む。
+    let tol = Tolerance::default();
+    let profile_points = [
+        Point3::new(9.0, -1.0, 0.0),
+        Point3::new(11.0, -1.0, 0.0),
+        Point3::new(11.0, 1.0, 0.0),
+        Point3::new(9.0, 1.0, 0.0),
+    ];
+    let profile_vertices: Vec<Vertex> = profile_points.into_iter().map(Vertex::from_point).collect();
+    let profile_edges: Vec<OrientedEdge> = (0..4)
+        .filter_map(|index| {
+            let edge = Edge::line_between(
+                profile_vertices[index].clone(),
+                profile_vertices[(index + 1) % 4].clone(),
+            )
+            .ok()?;
+            Some(OrientedEdge::forward(edge))
+        })
+        .collect();
+
+    if profile_edges.len() == 4 {
+        let profile = Wire::new(profile_edges);
+        if let Ok(solid) = HelixBuilder::sweep_wire_along_helix(
+            &profile,
+            10.0,
+            6.0,
+            2.0,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            64,
+            &tol,
+        ) {
+            subjects.push(Subject {
+                name: "helix_spring",
+                solid,
+                analytic_volume: None,
+                section: None,
+            });
+        }
+    }
+
+    if let Ok(solid) = GearBuilder::make_spur_gear(2.0, 18, 20.0, 8.0, 6.0) {
+        subjects.push(Subject {
+            name: "spur_gear_m2_z18",
+            solid,
+            analytic_volume: None,
+            section: None,
+        });
+    }
+
+    subjects
+}

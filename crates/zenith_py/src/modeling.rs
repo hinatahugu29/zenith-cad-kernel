@@ -1135,5 +1135,85 @@ pub fn check_boxes_interference(
     Ok((status_str.to_string(), report.min_distance, report.overlap_volume, report.message))
 }
 
+/// インボリュート平歯車（Spur Gear）B-Rep Solid生成（STEP出力対応）
+#[pyfunction]
+#[pyo3(signature = (module = 2.0, teeth = 18, pressure_angle = 20.0, thickness = 10.0, bore_radius = 5.0, u_divisions = 8, v_divisions = 8, step_path = None))]
+pub fn make_spur_gear(
+    module: f64,
+    teeth: usize,
+    pressure_angle: f64,
+    thickness: f64,
+    bore_radius: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::gear::GearBuilder::make_spur_gear(
+        module,
+        teeth,
+        pressure_angle,
+        thickness,
+        bore_radius,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Spur gear creation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_SPUR_GEAR")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 直交直方体同士の厳密 B-Rep ブーリアン演算（Union/Difference/Intersection・STEP出力対応）
+#[pyfunction]
+#[pyo3(signature = (dx1, dy1, dz1, offset1, dx2, dy2, dz2, offset2, op_type = 1, u_divisions = 8, v_divisions = 8, step_path = None))]
+pub fn make_exact_box_boolean(
+    dx1: f64, dy1: f64, dz1: f64, offset1: [f64; 3],
+    dx2: f64, dy2: f64, dz2: f64, offset2: [f64; 3],
+    op_type: u8,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let tol = Tolerance::default();
+    let box1 = zenith_algo::PrimitiveBuilder::make_box(dx1, dy1, dz1)
+        .map_err(|e| PyValueError::new_err(format!("Box1 creation failed: {}", e)))?;
+    let box2 = zenith_algo::PrimitiveBuilder::make_box(dx2, dy2, dz2)
+        .map_err(|e| PyValueError::new_err(format!("Box2 creation failed: {}", e)))?;
+
+    let s1 = zenith_algo::BrepTransform::translate_solid(&box1, Vec3::new(offset1[0], offset1[1], offset1[2]));
+    let s2 = zenith_algo::BrepTransform::translate_solid(&box2, Vec3::new(offset2[0], offset2[1], offset2[2]));
+
+    let op = match op_type {
+        0 => zenith_algo::BooleanOpType::Union,
+        1 => zenith_algo::BooleanOpType::Difference,
+        2 => zenith_algo::BooleanOpType::Intersection,
+        _ => return Err(PyValueError::new_err("Invalid op_type: 0=Union, 1=Difference, 2=Intersection")),
+    };
+
+    let result_solid = zenith_algo::BooleanEngine::boolean_solids_exact(&s1, &s2, op, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Exact B-Rep boolean failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&result_solid, path, "ZENITH_EXACT_BOOLEAN")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&result_solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+
+
 
 

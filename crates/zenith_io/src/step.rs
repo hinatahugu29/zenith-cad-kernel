@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
-use zenith_geom::{NurbsCurve2, NurbsCurve3, NurbsSurface3};
-use zenith_math::{Point2, Point3, Tolerance};
+use zenith_geom::{NurbsCurve3, NurbsSurface3};
+use zenith_math::Point3;
 use zenith_topo::{
-    Face, FaceGeometry, FacePcurveLoop, FacePcurveSegment, Shape, Shell, Solid, Wire,
+    Face, FaceGeometry, Shape, Shell, Solid, Wire,
 };
 
 /// ISO 10303-21 (STEP AP214 / AP203 / AP242) 完全共有マニホールド B-Rep エクスポーター
@@ -16,7 +16,6 @@ struct StepContext {
     lines: Vec<String>,
     vertex_map: HashMap<u64, u64>, // Vertex ID -> STEP Vertex ID
     edge_map: HashMap<u64, u64>,   // Edge ID -> STEP EdgeCurve ID
-    pcurve_context_id: Option<u64>,
 }
 
 impl StepContext {
@@ -26,7 +25,6 @@ impl StepContext {
             lines: Vec::new(),
             vertex_map: HashMap::new(),
             edge_map: HashMap::new(),
-            pcurve_context_id: None,
         }
     }
 
@@ -140,16 +138,14 @@ impl StepExporter {
         let solid_angle_unit_id =
             ctx.add_entity("( NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT() )");
         let uncertainty_id = ctx.add_entity(&format!(
-            "UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-07),#{},'distance_accuracy_value','confusion accuracy')",
+            "UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(1.E-05),#{},'distance_accuracy_value','confusion accuracy')",
             length_unit_id
         ));
+
 
         let geom_context_id = ctx.add_entity(&format!(
             "GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{})) GLOBAL_UNIT_ASSIGNED_CONTEXT((#{},#{},#{})) REPRESENTATION_CONTEXT('Context #1','3D Context with UNIT and UNCERTAINTY')",
             uncertainty_id, length_unit_id, plane_angle_unit_id, solid_angle_unit_id
-        ));
-        ctx.pcurve_context_id = Some(ctx.add_entity(
-            "GEOMETRIC_REPRESENTATION_CONTEXT(2) REPRESENTATION_CONTEXT('Parametric Context','2D p-curve Context')",
         ));
 
         // 原点と座標軸
@@ -267,11 +263,6 @@ impl StepExporter {
         ctx.add_entity(&format!("CLOSED_SHELL('',({}))", face_list_str))
     }
 
-    fn write_point2(ctx: &mut StepContext, p: Point2) -> u64 {
-        let p_str = format!("CARTESIAN_POINT('',({:.12},{:.12}))", p.x, p.y);
-        ctx.add_entity(&p_str)
-    }
-
     fn get_or_create_vertex(ctx: &mut StepContext, v: &zenith_topo::Vertex) -> u64 {
         if let Some(&id) = ctx.vertex_map.get(&v.id) {
             return id;
@@ -362,7 +353,7 @@ impl StepExporter {
 
         if is_rational {
             ctx.add_entity(&format!(
-                "( BOUNDED_CURVE() B_SPLINE_CURVE({},{},.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS({},{},.UNSPECIFIED.) GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE({}) REPRESENTATION_ITEM('') )",
+                "( BOUNDED_CURVE() B_SPLINE_CURVE({},{},.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS({},{},.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE({}) REPRESENTATION_ITEM('') )",
                 nurbs.degree, pts_str, mult_str, knot_str, weights_str
             ))
         } else {
@@ -373,120 +364,32 @@ impl StepExporter {
         }
     }
 
-    fn write_nurbs_curve2(ctx: &mut StepContext, nurbs: &NurbsCurve2) -> u64 {
-        let mut is_rational = false;
-        let mut pt_ids = Vec::with_capacity(nurbs.control_points.len());
-        let mut weights = Vec::with_capacity(nurbs.control_points.len());
+    /// Writes a wire as an EDGE_LOOP of shared ORIENTED_EDGEs.
+    ///
+    /// No p-curves are emitted. That was checked rather than assumed: OCC's own
+    /// STEP writer emits none either, and a plane trimmed by rational spline
+    /// arcs round-trips through OpenCASCADE exactly without them. What the
+    /// reader does need is the complete complex entity declaration on the
+    /// curves themselves - see `write_edge_curve_geometry`.
+    fn write_edge_loop(ctx: &mut StepContext, wire: &Wire) -> u64 {
+        let mut oriented_edge_ids = Vec::with_capacity(wire.edges.len());
 
-        for cp in &nurbs.control_points {
-            if (cp.weight - 1.0).abs() > 1e-6 {
-                is_rational = true;
-            }
-            pt_ids.push(format!("#{}", Self::write_point2(ctx, cp.point)));
-            weights.push(format!("{:.12}", cp.weight));
-        }
-
-        let pts_str = format!("({})", pt_ids.join(","));
-        let weights_str = format!("({})", weights.join(","));
-
-        let (mults, knots) = Self::compress_knots(&nurbs.knots.knots);
-        let mult_str = format!(
-            "({})",
-            mults
-                .iter()
-                .map(|m| m.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        let knot_str = format!(
-            "({})",
-            knots
-                .iter()
-                .map(|k| format!("{:.12}", k))
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-
-        if is_rational {
-            ctx.add_entity(&format!(
-                "( BOUNDED_CURVE() B_SPLINE_CURVE({},{},.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS({},{},.UNSPECIFIED.) GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE({}) REPRESENTATION_ITEM('') )",
-                nurbs.degree, pts_str, mult_str, knot_str, weights_str
-            ))
-        } else {
-            ctx.add_entity(&format!(
-                "B_SPLINE_CURVE_WITH_KNOTS('',{},{},.UNSPECIFIED.,.F.,.F.,{},{},.UNSPECIFIED.)",
-                nurbs.degree, pts_str, mult_str, knot_str
-            ))
-        }
-    }
-
-    fn write_pcurve(
-        ctx: &mut StepContext,
-        surface_id: u64,
-        segment: &FacePcurveSegment,
-    ) -> Option<u64> {
-        let pcurve_context_id = ctx.pcurve_context_id?;
-        let curve2d_id = Self::write_nurbs_curve2(ctx, &segment.curve);
-        let rep_id = ctx.add_entity(&format!(
-            "DEFINITIONAL_REPRESENTATION('',(#{}),#{})",
-            curve2d_id, pcurve_context_id
-        ));
-        Some(ctx.add_entity(&format!("PCURVE('',#{},#{})", surface_id, rep_id)))
-    }
-
-    fn write_edge_loop_on_surface(
-        ctx: &mut StepContext,
-        wire: &Wire,
-        pcurve_loop: Option<&FacePcurveLoop>,
-        surface_id: u64,
-    ) -> u64 {
-        let mut oriented_edge_ids = Vec::new();
-        let pcurve_segments =
-            pcurve_loop.filter(|loop_data| loop_data.segments.len() == wire.edges.len());
-
-        for (edge_index, oe) in wire.edges.iter().enumerate() {
-            let oriented_id = if let Some(loop_data) = pcurve_segments {
-                Self::write_oriented_edge_on_surface(
-                    ctx,
-                    oe,
-                    &loop_data.segments[edge_index],
-                    surface_id,
-                )
+        for oe in wire.edges.iter() {
+            let edge_curve_id = Self::get_or_create_edge_curve(ctx, &oe.edge);
+            let same_sense = if oe.orientation.is_forward() {
+                ".T."
             } else {
-                let edge_curve_id = Self::get_or_create_edge_curve(ctx, &oe.edge);
-                let same_sense = if oe.orientation.is_forward() {
-                    ".T."
-                } else {
-                    ".F."
-                };
-                ctx.add_entity(&format!(
-                    "ORIENTED_EDGE('',*,*,#{},{})",
-                    edge_curve_id, same_sense
-                ))
+                ".F."
             };
+            let oriented_id = ctx.add_entity(&format!(
+                "ORIENTED_EDGE('',*,*,#{},{})",
+                edge_curve_id, same_sense
+            ));
             oriented_edge_ids.push(format!("#{}", oriented_id));
         }
 
         let edge_list_str = oriented_edge_ids.join(",");
         ctx.add_entity(&format!("EDGE_LOOP('',({}))", edge_list_str))
-    }
-
-    fn write_oriented_edge_on_surface(
-        ctx: &mut StepContext,
-        oe: &zenith_topo::OrientedEdge,
-        _pcurve_segment: &FacePcurveSegment,
-        _surface_id: u64,
-    ) -> u64 {
-        let edge_curve_id = Self::get_or_create_edge_curve(ctx, &oe.edge);
-        let orientation_str = if oe.orientation.is_forward() {
-            ".T."
-        } else {
-            ".F."
-        };
-        ctx.add_entity(&format!(
-            "ORIENTED_EDGE('',*,*,#{},{})",
-            edge_curve_id, orientation_str
-        ))
     }
 
 
@@ -516,29 +419,17 @@ impl StepExporter {
 
         // B-Rep EDGE_LOOP トポロジーの構築
         let mut bound_ids = Vec::new();
-        let pcurves = face.pcurves(&Tolerance::default()).ok();
 
         // 1. 外側境界 (FACE_OUTER_BOUND)
-        let outer_loop_id = Self::write_edge_loop_on_surface(
-            ctx,
-            &face.outer_wire,
-            pcurves.as_ref().map(|p| &p.outer_loop),
-            surface_id,
-        );
+        let outer_loop_id = Self::write_edge_loop(ctx, &face.outer_wire);
         let outer_bound_id =
             ctx.add_entity(&format!("FACE_OUTER_BOUND('',#{},.T.)", outer_loop_id));
+
         bound_ids.push(format!("#{}", outer_bound_id));
 
         // 2. 内側穴境界群 (FACE_BOUND)
-        for (inner_index, inner_wire) in face.inner_wires.iter().enumerate() {
-            let inner_loop_id = Self::write_edge_loop_on_surface(
-                ctx,
-                inner_wire,
-                pcurves
-                    .as_ref()
-                    .and_then(|p| p.inner_loops.get(inner_index)),
-                surface_id,
-            );
+        for inner_wire in face.inner_wires.iter() {
+            let inner_loop_id = Self::write_edge_loop(ctx, inner_wire);
             let inner_bound_id = ctx.add_entity(&format!("FACE_BOUND('',#{},.T.)", inner_loop_id));
             bound_ids.push(format!("#{}", inner_bound_id));
         }
@@ -608,6 +499,14 @@ impl StepExporter {
         let grid_str = format!("({})", row_ids.join(","));
         let weights_str = format!("({})", weights.join(","));
 
+        // 閉フラグを実際の制御網から判定する。閉じている曲面を .F. と宣言すると
+        // 読み手がシームを別々の境界として扱い、トーラス・球のように自己閉包する
+        // 面で体積計算が破綻する。
+        let u_closed = Self::control_grid_closed_in_u(nurbs);
+        let v_closed = Self::control_grid_closed_in_v(nurbs);
+        let u_closed_flag = if u_closed { ".T." } else { ".F." };
+        let v_closed_flag = if v_closed { ".T." } else { ".F." };
+
         let (u_mults, u_knots) = Self::compress_knots(&nurbs.knots_u.knots);
         let (v_mults, v_knots) = Self::compress_knots(&nurbs.knots_v.knots);
 
@@ -646,17 +545,57 @@ impl StepExporter {
 
         if is_rational {
             ctx.add_entity(&format!(
-                "( BOUNDED_SURFACE() B_SPLINE_SURFACE({},{},{},.UNSPECIFIED.,.F.,.F.,.F.) B_SPLINE_SURFACE_WITH_KNOTS({},{},{},{},.UNSPECIFIED.) GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_SURFACE({}) REPRESENTATION_ITEM('') SURFACE() )",
+                "( BOUNDED_SURFACE() B_SPLINE_SURFACE({},{},{},.UNSPECIFIED.,{},{},.F.) B_SPLINE_SURFACE_WITH_KNOTS({},{},{},{},.UNSPECIFIED.) GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_SURFACE({}) REPRESENTATION_ITEM('') SURFACE() )",
                 nurbs.degree_u, nurbs.degree_v, grid_str,
+                u_closed_flag, v_closed_flag,
                 u_mult_str, v_mult_str, u_knots_str, v_knots_str,
                 weights_str
             ))
         } else {
             ctx.add_entity(&format!(
-                "B_SPLINE_SURFACE_WITH_KNOTS('',{},{},{},.UNSPECIFIED.,.F.,.F.,.F.,{},{},{},{},.UNSPECIFIED.)",
+                "B_SPLINE_SURFACE_WITH_KNOTS('',{},{},{},.UNSPECIFIED.,{},{},.F.,{},{},{},{},.UNSPECIFIED.)",
                 nurbs.degree_u, nurbs.degree_v, grid_str,
+                u_closed_flag, v_closed_flag,
                 u_mult_str, v_mult_str, u_knots_str, v_knots_str
             ))
         }
     }
+
+    /// A control grid whose first and last rows coincide describes a surface
+    /// that wraps around in u.
+    fn control_grid_closed_in_u(nurbs: &NurbsSurface3) -> bool {
+        let rows = &nurbs.control_points;
+        if rows.len() < 3 {
+            return false;
+        }
+        let first = &rows[0];
+        let last = &rows[rows.len() - 1];
+        if first.len() != last.len() {
+            return false;
+        }
+        first
+            .iter()
+            .zip(last.iter())
+            .all(|(a, b)| (a.point - b.point).norm() <= CLOSED_SURFACE_TOLERANCE)
+    }
+
+    fn control_grid_closed_in_v(nurbs: &NurbsSurface3) -> bool {
+        let rows = &nurbs.control_points;
+        if rows.is_empty() || rows[0].len() < 3 {
+            return false;
+        }
+        rows.iter().all(|row| {
+            let Some(first) = row.first() else {
+                return false;
+            };
+            let Some(last) = row.last() else {
+                return false;
+            };
+            (first.point - last.point).norm() <= CLOSED_SURFACE_TOLERANCE
+        })
+    }
 }
+
+/// 制御点の一致で「閉じている」と判定する距離。STEP の既定不確かさ 1.E-05 より
+/// 一桁厳しくとってある。
+const CLOSED_SURFACE_TOLERANCE: f64 = 1e-6;
