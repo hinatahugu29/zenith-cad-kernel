@@ -29,11 +29,14 @@ impl ExtrudeBuilder {
         }
 
         // 2. 天面エッジ群と天面ワイヤの構築
+        //    プロファイル曲線をそのまま平行移動する。直線で張り直すと、
+        //    円弧プロファイルの天面が弦の多角形になり、側面の曲面と食い違う。
         let mut top_edges = Vec::with_capacity(num_edges);
-        for i in 0..num_edges {
-            let next_i = (i + 1) % num_edges;
-            let edge = Edge::line_between(top_vertices[i].clone(), top_vertices[next_i].clone())?;
-            top_edges.push(OrientedEdge::forward(edge));
+        for oriented in &bottom_wire.edges {
+            top_edges.push(OrientedEdge::new(
+                crate::BrepTransform::translate_edge(&oriented.edge, dir),
+                oriented.orientation,
+            ));
         }
         let top_wire = Wire::new(top_edges);
 
@@ -92,19 +95,18 @@ impl ExtrudeBuilder {
         let degree_u = curve.degree;
         let degree_v = 1;
 
-        let mut row0 = Vec::with_capacity(n_u);
-        let mut row1 = Vec::with_capacity(n_u);
-
+        // control_points[u][v] なので、u はプロファイル曲線、v は押し出し方向。
+        // 転置すると法線が裏返り、円弧プロファイル（制御点3点）では
+        // u 方向の制御点数が次数に足りず構築自体が失敗する。
+        let mut control_points = Vec::with_capacity(n_u);
         for cp in &curve.control_points {
-            row0.push(*cp);
-            let top_pt = cp.point + dir;
-            row1.push(ControlPoint3::new(top_pt, cp.weight));
+            control_points.push(vec![*cp, ControlPoint3::new(cp.point + dir, cp.weight)]);
         }
 
         let knots_u = curve.knots.clone();
         let knots_v = KnotVector::clamped_uniform(2, 1);
 
-        NurbsSurface3::new(degree_u, degree_v, vec![row0, row1], knots_u, knots_v)
+        NurbsSurface3::new(degree_u, degree_v, control_points, knots_u, knots_v)
     }
 
     /// 平面キャップFaceの生成

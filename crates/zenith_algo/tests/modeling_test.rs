@@ -1816,6 +1816,120 @@ fn test_revolved_surface_keeps_on_axis_profile_points_exact() {
     }
 }
 
+#[test]
+fn test_extrude_produces_analytic_solids_for_straight_and_curved_profiles() {
+    let tol = Tolerance::default();
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+
+    // 直線プロファイル: 押し出しは角柱になる
+    let (width, depth, height) = (40.0_f64, 20.0_f64, 25.0_f64);
+    let corners = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(width, 0.0, 0.0),
+        Point3::new(width, depth, 0.0),
+        Point3::new(0.0, depth, 0.0),
+    ];
+    let vertices: Vec<Vertex> = corners
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let profile = Wire::new(
+        (0..4)
+            .map(|i| {
+                OrientedEdge::forward(
+                    Edge::line_between(vertices[i].clone(), vertices[(i + 1) % 4].clone()).unwrap(),
+                )
+            })
+            .collect(),
+    );
+    let prism = ExtrudeBuilder::extrude_wire(&profile, Vec3::new(0.0, 0.0, height), &tol).unwrap();
+    assert!(prism.is_topologically_valid(&tol));
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&prism, &params);
+    let expected = width * depth * height;
+    assert!(
+        (mass.volume - expected).abs() < expected * 1e-9,
+        "prism volume {} vs analytic {expected}",
+        mass.volume
+    );
+
+    // 円弧プロファイル: 押し出しは厳密な円柱になる
+    let radius = 10.0_f64;
+    let weight = std::f64::consts::FRAC_1_SQRT_2;
+    let ring = [
+        Point3::new(radius, 0.0, 0.0),
+        Point3::new(0.0, radius, 0.0),
+        Point3::new(-radius, 0.0, 0.0),
+        Point3::new(0.0, -radius, 0.0),
+    ];
+    let handles = [
+        Point3::new(radius, radius, 0.0),
+        Point3::new(-radius, radius, 0.0),
+        Point3::new(-radius, -radius, 0.0),
+        Point3::new(radius, -radius, 0.0),
+    ];
+    let ring_vertices: Vec<Vertex> = ring
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let circle = Wire::new(
+        (0..4)
+            .map(|i| {
+                let next = (i + 1) % 4;
+                let curve = NurbsCurve3::new(
+                    2,
+                    vec![
+                        ControlPoint3::unweighted(ring[i]),
+                        ControlPoint3::new(handles[i], weight),
+                        ControlPoint3::unweighted(ring[next]),
+                    ],
+                    KnotVector::clamped_uniform(3, 2),
+                )
+                .unwrap();
+                OrientedEdge::forward(Edge::new(
+                    curve,
+                    ring_vertices[i].clone(),
+                    ring_vertices[next].clone(),
+                    1e-6,
+                ))
+            })
+            .collect(),
+    );
+
+    let extruded_height = 30.0_f64;
+    let cylinder =
+        ExtrudeBuilder::extrude_wire(&circle, Vec3::new(0.0, 0.0, extruded_height), &tol)
+            .expect("extruding an arc profile should build a solid");
+    assert!(cylinder.is_topologically_valid(&tol));
+    assert_eq!(cylinder.outer_shell.faces.len(), 6);
+
+    // 天面は弦の多角形ではなく、プロファイルの円弧が保たれていなければならない
+    let top_arc_uses = cylinder
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.edges.iter())
+        .filter(|edge| {
+            edge.edge.curve.degree == 2
+                && (edge.edge.start_vertex.point.z - extruded_height).abs() < 1e-9
+        })
+        .count();
+    assert!(
+        top_arc_uses >= 4,
+        "the extruded top loop lost its arcs: {top_arc_uses} arc uses"
+    );
+
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&cylinder, &params);
+    let expected = std::f64::consts::PI * radius * radius * extruded_height;
+    assert!(
+        (mass.volume - expected).abs() < expected * 1e-9,
+        "extruded cylinder volume {} vs analytic {expected}",
+        mass.volume
+    );
+}
+
 /// The modeling operations get the same treatment as the primitives: each result
 /// must be a valid solid whose exact volume matches the analytic answer. A face
 /// left inside-out still tessellates and still validates topologically, so the
