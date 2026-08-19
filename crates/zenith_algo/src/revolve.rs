@@ -41,9 +41,12 @@ impl RevolveBuilder {
             let radius = v_radial.norm();
 
             if radius < 1e-12 {
-                // 軸上の特異点
-                for _ in 0..num_v {
-                    ctrl_pts_grid[i].push(ControlPoint3::new(p, cp.weight));
+                // 軸上の特異点。位置は回転で動かないが、重みは他の行と同じ
+                // 円弧パターン (1, cos(dtheta/2), 1, ...) を保たなければ
+                // テンソル積の分母が分離できなくなり、曲面全体が歪む。
+                for column in 0..num_v {
+                    let arc_weight = if column % 2 == 1 { wm } else { 1.0 };
+                    ctrl_pts_grid[i].push(ControlPoint3::new(p, cp.weight * arc_weight));
                 }
                 continue;
             }

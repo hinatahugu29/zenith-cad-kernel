@@ -1589,6 +1589,91 @@ fn test_brep_intersection_skips_vertical_plane_missing_cylinder_quadrant() {
 }
 
 #[test]
+fn test_sphere_primitive_is_an_exact_rational_sphere() {
+    let radius: f64 = 15.0;
+    let sphere = zenith_algo::PrimitiveBuilder::make_sphere(radius).unwrap();
+
+    // 曲面上の点が解析球から外れないこと（回転体構築の厳密性）
+    for face in &sphere.outer_shell.faces {
+        let FaceGeometry::Nurbs(surface) = &face.geometry else {
+            panic!("sphere face should be a NURBS patch");
+        };
+        let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+        for i in 0..=16 {
+            for j in 0..=16 {
+                let u = u_min + (u_max - u_min) * (i as f64 / 16.0);
+                let v = v_min + (v_max - v_min) * (j as f64 / 16.0);
+                let point = surface.evaluate(u, v);
+                assert!(
+                    (point.coords.norm() - radius).abs() < 1e-9,
+                    "sphere surface drifted to radius {} at ({u}, {v})",
+                    point.coords.norm()
+                );
+            }
+        }
+    }
+
+    // 厳密積分でも解析値と一致する
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&sphere, &params);
+    let expected_volume = 4.0 / 3.0 * std::f64::consts::PI * radius.powi(3);
+    let expected_area = 4.0 * std::f64::consts::PI * radius * radius;
+    assert!(
+        (mass.volume - expected_volume).abs() < expected_volume * 1e-6,
+        "sphere volume {} should match analytic {expected_volume}",
+        mass.volume
+    );
+    assert!(
+        (mass.surface_area - expected_area).abs() < expected_area * 1e-6,
+        "sphere area {} should match analytic {expected_area}",
+        mass.surface_area
+    );
+    for axis in 0..3 {
+        assert!(mass.center_of_mass[axis].abs() < 1e-6);
+    }
+}
+
+#[test]
+fn test_revolved_surface_keeps_on_axis_profile_points_exact() {
+    let tol = Tolerance::default();
+    let radius: f64 = 8.0;
+
+    // 軸上の点を含むプロファイル（円錐の母線）を1回転させる
+    let profile = NurbsCurve3::bspline_from_points(
+        1,
+        vec![Point3::new(0.0, 0.0, 12.0), Point3::new(radius, 0.0, 0.0)],
+    )
+    .unwrap();
+    let surface = zenith_algo::RevolveBuilder::revolve_curve(
+        &profile,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        std::f64::consts::TAU,
+        &tol,
+    )
+    .unwrap();
+
+    // 円錐面上では半径が高さに線形比例する
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    for i in 0..=12 {
+        for j in 0..=12 {
+            let u = u_min + (u_max - u_min) * (i as f64 / 12.0);
+            let v = v_min + (v_max - v_min) * (j as f64 / 12.0);
+            let point = surface.evaluate(u, v);
+            let expected = radius * (1.0 - point.z / 12.0);
+            let actual = (point.x * point.x + point.y * point.y).sqrt();
+            assert!(
+                (actual - expected).abs() < 1e-9,
+                "revolved cone radius {actual} should be {expected} at ({u}, {v})"
+            );
+        }
+    }
+}
+
+#[test]
 fn test_brep_mass_properties_are_analytic_for_a_box() {
     let params = TessellationParams {
         u_divisions: 8,

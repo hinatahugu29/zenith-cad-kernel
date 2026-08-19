@@ -247,19 +247,17 @@ Replacement target:
 - rebuild analytic curves as analytic curves, not lines
 - for general edits, solve adjacent surface extensions and re-trim
 
-### 7b. The sphere primitive is not an exact sphere
+### 7b. Surfaces of revolution were distorted near the axis
 
-`make_sphere()` builds a single NURBS patch whose points drift up to 0.2 mm from the true sphere at radius 15, about 1.3 percent. Exact B-Rep integration measures its volume as 13922 against an analytic 14137, so the error is in the geometry, not in the integration.
+Status: fixed.
 
-Impact:
+`make_sphere()` built a patch whose points drifted up to 0.2 mm from the true sphere at radius 15, about 1.3 percent, and exact B-Rep integration measured its volume as 13922 against an analytic 14137. The profile curve and the boundary iso-curves were exact; only the interior was wrong.
 
-- volume, area, and inertia are wrong by over one percent for any model containing a sphere
-- STEP export carries the approximation to other systems
+The cause was in `RevolveBuilder::revolve_curve()`. A profile control point sitting on the rotation axis does not move when revolved, and the code gave every column of that row the same weight. Every other row carries the rational arc's alternating weights `(1, cos(dtheta/2), 1, ...)`. That mismatch makes the tensor-product denominator non-separable, so the surface stops being the revolved profile anywhere the on-axis row has influence - which is exactly the region near each pole.
 
-Replacement target:
+On-axis rows now carry the same arc weight pattern as the rest. The sphere is exact to 1e-9 across its parameter range, its integrated volume, area, and centroid match the analytic values, and a revolved cone keeps radius exactly proportional to height.
 
-- build the sphere as an exact rational surface of revolution, the same way circles and cylinders already are
-- add a regression asserting sampled surface points stay on the analytic sphere
+This affected every surface of revolution whose profile touches its axis, not only spheres.
 
 ### 7. Cone apex is approximated as a tiny frustum
 
