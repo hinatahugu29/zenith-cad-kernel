@@ -41,13 +41,21 @@ pub enum FeatureOp {
         dir: [f64; 3],
         draft_angle_rad: f64,
     },
-    /// 閉断面ワイヤの回転体閉ソリッド
+    /// 閉断面ワイヤの回転体閉ソリッド（360度全周）
     RevolveSolid {
         profile_points: Vec<[f64; 3]>,
         axis_origin: [f64; 3],
         axis_dir: [f64; 3],
     },
+    /// 閉断面ワイヤの部分角度回転体閉ソリッド（端面キャップ付き）
+    RevolvePartialSolid {
+        profile_points: Vec<[f64; 3]>,
+        axis_origin: [f64; 3],
+        axis_dir: [f64; 3],
+        angle_rad: f64,
+    },
     /// 任意閉断面ワイヤの3Dパススイープソリッド
+
     SweepWire {
 
         profile_points: Vec<[f64; 3]>,
@@ -220,7 +228,20 @@ impl FeatureTree {
                         &tol,
                     )?);
                 }
+                FeatureOp::RevolvePartialSolid { profile_points, axis_origin, axis_dir, angle_rad } => {
+                    let wire = make_wire(profile_points)?;
+                    let origin = Point3::new(axis_origin[0], axis_origin[1], axis_origin[2]);
+                    let dir_vec = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
+                    current_solid = Some(crate::RevolveBuilder::revolve_wire_partial_solid(
+                        &wire,
+                        origin,
+                        dir_vec,
+                        *angle_rad,
+                        &tol,
+                    )?);
+                }
                 FeatureOp::SweepWire { profile_points, path_points, num_sections } => {
+
 
                     let profile_wire = make_wire(profile_points)?;
                     let n_path = path_points.len();

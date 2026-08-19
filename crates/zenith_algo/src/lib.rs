@@ -15,7 +15,9 @@ pub mod loft;
 pub mod mass_properties;
 mod orthogonal_boolean;
 pub mod patch_builder;
+pub mod pattern;
 pub mod primitive;
+
 pub mod revolve;
 pub mod shell;
 pub mod sketch_solver;
@@ -47,7 +49,9 @@ pub use hole::HoleBuilder;
 pub use loft::LoftBuilder;
 pub use mass_properties::{MassCalculator, MassProperties};
 pub use patch_builder::CurvePatchBuilder;
+pub use pattern::PatternBuilder;
 pub use primitive::PrimitiveBuilder;
+
 pub use revolve::RevolveBuilder;
 pub use shell::ShellBuilder;
 pub use sketch_solver::{
