@@ -55,14 +55,28 @@ pub enum FeatureOp {
         angle_rad: f64,
     },
     /// 任意閉断面ワイヤの3Dパススイープソリッド
-
     SweepWire {
-
         profile_points: Vec<[f64; 3]>,
         path_points: Vec<[f64; 3]>,
         num_sections: usize,
     },
+    /// 閉断面ワイヤの3D螺旋（ヘリカル）スイープソリッド（スプリング・ネジ等）
+    SweepHelix {
+        profile_points: Vec<[f64; 3]>,
+        radius: f64,
+        pitch: f64,
+        turns: f64,
+        axis_origin: [f64; 3],
+        axis_dir: [f64; 3],
+        num_sections: usize,
+    },
+    /// 任意対称平面に対するソリッドの鏡像反転複製
+    MirrorSolid {
+        plane_origin: [f64; 3],
+        plane_normal: [f64; 3],
+    },
     /// 面 Push-Pull（押し出し移動）
+
     PushPullFace {
         target_signature: GeometricSignature,
         distance: f64,
@@ -259,7 +273,45 @@ impl FeatureTree {
                         &tol,
                     )?);
                 }
+                FeatureOp::SweepHelix {
+                    profile_points,
+                    radius,
+                    pitch,
+                    turns,
+                    axis_origin,
+                    axis_dir,
+                    num_sections,
+                } => {
+                    let profile_wire = make_wire(profile_points)?;
+                    let origin = Point3::new(axis_origin[0], axis_origin[1], axis_origin[2]);
+                    let dir_vec = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
+                    current_solid = Some(crate::HelixBuilder::sweep_wire_along_helix(
+                        &profile_wire,
+                        *radius,
+                        *pitch,
+                        *turns,
+                        origin,
+                        dir_vec,
+                        *num_sections,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::MirrorSolid {
+                    plane_origin,
+                    plane_normal,
+                } => {
+                    let solid = current_solid.ok_or("No base solid for mirror")?;
+                    let orig = Point3::new(plane_origin[0], plane_origin[1], plane_origin[2]);
+                    let norm = Vec3::new(plane_normal[0], plane_normal[1], plane_normal[2]);
+                    current_solid = Some(crate::MirrorBuilder::mirror_solid(
+                        &solid,
+                        orig,
+                        norm,
+                        &tol,
+                    )?);
+                }
                 FeatureOp::PushPullFace {
+
                     target_signature,
                     distance,
                 } => {

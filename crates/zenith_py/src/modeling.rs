@@ -564,7 +564,106 @@ pub fn make_partial_revolve_solid(
     Ok(PyMesh { mesh })
 }
 
+/// 閉断面ワイヤの3D螺旋（ヘリカル）スイープSolid生成（スプリング・ネジ山・STEP対応）
+#[pyfunction]
+#[pyo3(signature = (profile, radius = 15.0, pitch = 10.0, turns = 2.0, axis_origin = [0.0, 0.0, 0.0], axis_dir = [0.0, 0.0, 1.0], num_sections = 32, u_divisions = 8, v_divisions = 8, step_path = None))]
+pub fn make_helix_solid(
+    profile: Vec<[f64; 3]>,
+    radius: f64,
+    pitch: f64,
+    turns: f64,
+    axis_origin: [f64; 3],
+    axis_dir: [f64; 3],
+    num_sections: usize,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let n = profile.len();
+    if n < 3 {
+        return Err(PyValueError::new_err("Profile requires at least 3 points"));
+    }
+
+    let tol = Tolerance::default();
+    let vertices: Vec<zenith_topo::Vertex> = profile
+        .iter()
+        .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+        .collect();
+
+    let mut edges = Vec::with_capacity(n);
+    for i in 0..n {
+        let next_i = (i + 1) % n;
+        let edge = zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
+            .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+        edges.push(zenith_topo::OrientedEdge::forward(edge));
+    }
+    let wire = zenith_topo::Wire::new(edges);
+    let orig = Point3::new(axis_origin[0], axis_origin[1], axis_origin[2]);
+    let dir = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
+
+    let solid = zenith_algo::HelixBuilder::sweep_wire_along_helix(
+        &wire,
+        radius,
+        pitch,
+        turns,
+        orig,
+        dir,
+        num_sections,
+        &tol,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Helix sweep failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_HELIX_SOLID")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 任意対称平面に対する直方体のミラー反転複製Solid生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (dx, dy, dz, plane_origin = [0.0, 0.0, 0.0], plane_normal = [1.0, 0.0, 0.0], u_divisions = 4, v_divisions = 4, step_path = None))]
+pub fn make_mirror_box(
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    plane_origin: [f64; 3],
+    plane_normal: [f64; 3],
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let tol = Tolerance::default();
+    let base_box = zenith_algo::PrimitiveBuilder::make_box(dx, dy, dz)
+        .map_err(|e| PyValueError::new_err(format!("Box creation failed: {}", e)))?;
+
+    let orig = Point3::new(plane_origin[0], plane_origin[1], plane_origin[2]);
+    let norm = Vec3::new(plane_normal[0], plane_normal[1], plane_normal[2]);
+
+    let mirrored = zenith_algo::MirrorBuilder::mirror_solid(&base_box, orig, norm, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Mirror solid failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&mirrored, path, "ZENITH_MIRRORED_BOX")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&mirrored, &params);
+    Ok(PyMesh { mesh })
+}
+
 /// シェル化・肉厚中空ソリッド（容器・ケーシング）の生成
+
 
 
 
