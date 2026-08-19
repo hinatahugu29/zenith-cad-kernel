@@ -117,30 +117,24 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
                 return TriangleMesh::new();
             }
 
-            // 三角形の向きはトリムループの周り方が決める。face.orientation と
-            // 周り方が食い違っている場合だけ反転させ、実効法線に揃える。
-            let loop_is_ccw = signed_area_uv(&outer_uvs) > 0.0;
-            let keep_loop_winding = loop_is_ccw == face.orientation.is_forward();
+            // 三角形の向きは面の実効法線で決める。トリムループの周り方にも
+            // 三角化ライブラリの出力順にも依存させない。
+            let norm = if face.orientation.is_forward() {
+                plane.normal
+            } else {
+                -plane.normal
+            };
 
             // 穴がない単純凸多角形（3〜4頂点）の場合は最速ファン三角化
             if face.inner_wires.is_empty() && outer_uvs.len() <= 4 {
                 let mut mesh = TriangleMesh::new();
-                let norm = if face.orientation.is_forward() {
-                    plane.normal
-                } else {
-                    -plane.normal
-                };
                 for uv in &outer_uvs {
                     mesh.positions.push(plane.evaluate(uv.x, uv.y));
                     mesh.normals.push(norm);
                     mesh.uvs.push(Vec2::new(uv.x, uv.y));
                 }
                 for i in 1..outer_uvs.len() - 1 {
-                    if keep_loop_winding {
-                        mesh.indices.push([0, i as u32, (i + 1) as u32]);
-                    } else {
-                        mesh.indices.push([0, (i + 1) as u32, i as u32]);
-                    }
+                    push_oriented_triangle(&mut mesh, [0, i as u32, (i + 1) as u32], norm);
                 }
                 return mesh;
             }
@@ -174,12 +168,6 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
                 earcutr::earcut(&flat_coords, &hole_indices, 2).unwrap_or_default();
 
             let mut mesh = TriangleMesh::new();
-            let norm = if face.orientation.is_forward() {
-                plane.normal
-            } else {
-                -plane.normal
-            };
-
             for pt in all_positions {
                 mesh.positions.push(pt);
                 mesh.normals.push(norm);
@@ -187,13 +175,11 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
             }
 
             for chunk in triangle_indices.chunks_exact(3) {
-                if keep_loop_winding {
-                    mesh.indices
-                        .push([chunk[0] as u32, chunk[1] as u32, chunk[2] as u32]);
-                } else {
-                    mesh.indices
-                        .push([chunk[0] as u32, chunk[2] as u32, chunk[1] as u32]);
-                }
+                push_oriented_triangle(
+                    &mut mesh,
+                    [chunk[0] as u32, chunk[1] as u32, chunk[2] as u32],
+                    norm,
+                );
             }
 
             mesh
@@ -647,12 +633,19 @@ fn flip_mesh_orientation(mesh: &mut TriangleMesh) {
     }
 }
 
-fn signed_area_uv(polygon: &[Point2]) -> f64 {
-    let mut area = 0.0;
-    for i in 0..polygon.len() {
-        let a = polygon[i];
-        let b = polygon[(i + 1) % polygon.len()];
-        area += a.x * b.y - b.x * a.y;
+/// Appends a triangle wound so its facet normal agrees with `expected`.
+///
+/// Triangulation libraries are free to emit whatever winding they like, and a
+/// reversed face keeps its surface normal while flipping its trim loop, so the
+/// winding has to be decided against the face's effective normal rather than
+/// inherited from either of them.
+fn push_oriented_triangle(mesh: &mut TriangleMesh, triangle: [u32; 3], expected: Vec3) {
+    let a = mesh.positions[triangle[0] as usize];
+    let b = mesh.positions[triangle[1] as usize];
+    let c = mesh.positions[triangle[2] as usize];
+    if (b - a).cross(&(c - a)).dot(&expected) >= 0.0 {
+        mesh.indices.push(triangle);
+    } else {
+        mesh.indices.push([triangle[0], triangle[2], triangle[1]]);
     }
-    area * 0.5
 }

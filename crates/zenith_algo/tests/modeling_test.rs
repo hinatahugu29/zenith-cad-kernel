@@ -1652,6 +1652,83 @@ fn test_exact_brep_boolean_cuts_cylinder_lengthwise_with_box() {
 }
 
 #[test]
+fn test_exact_brep_boolean_cuts_cylinder_with_an_oblique_plane() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height = 30.0;
+    let cut_z = 15.0;
+    let tilt = 20.0_f64.to_radians();
+
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+
+    // 底面が傾いた平面になるカッターで、円柱の上部を斜めに削ぎ落とす
+    let pivot = Vec3::new(0.0, 0.0, cut_z);
+    let rotation = zenith_math::Transform3::from_translation(pivot)
+        .compose(&zenith_math::Transform3::from_axis_angle(
+            &Vec3::new(1.0, 0.0, 0.0),
+            tilt,
+        ))
+        .compose(&zenith_math::Transform3::from_translation(-pivot));
+    let cutter = zenith_algo::BrepTransform::transform_solid(
+        &zenith_algo::BrepTransform::translate_solid(
+            &zenith_algo::PrimitiveBuilder::make_box(60.0, 60.0, 60.0).unwrap(),
+            Vec3::new(-30.0, -30.0, cut_z),
+        ),
+        &rotation,
+    )
+    .unwrap();
+
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+        &cylinder,
+        &cutter,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("an oblique cut should return an exact solid");
+    assert_eq!(result.len(), 1);
+
+    let solid = &result.solids[0];
+    assert!(solid.is_topologically_valid(&tol));
+    assert_eq!(solid.outer_shell.faces.len(), 6);
+    assert_eq!(
+        solid
+            .outer_shell
+            .faces
+            .iter()
+            .filter(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+            .count(),
+        4
+    );
+
+    // 切断面より上に材料が残っていないこと（平面は z = cut_z + y*tan(tilt)）
+    for face in &solid.outer_shell.faces {
+        for point in face.outer_wire.sample_points(8) {
+            let plane_z = cut_z + point.y * tilt.tan();
+            assert!(
+                point.z <= plane_z + 1e-6,
+                "material left above the cut plane"
+            );
+        }
+    }
+
+    // 傾いた平面は軸上の cut_z を通るので、残る体積は円柱の下半分ちょうど
+    let expected = std::f64::consts::PI * radius * radius * cut_z;
+    let mesh = tessellate_solid(
+        solid,
+        &TessellationParams {
+            u_divisions: 96,
+            v_divisions: 16,
+        },
+    );
+    let mass = zenith_algo::MassCalculator::compute_from_mesh(&mesh);
+    assert!(
+        (mass.volume - expected).abs() < expected * 5e-3,
+        "volume {} should match analytic {expected}",
+        mass.volume
+    );
+}
+
+#[test]
 fn test_exact_brep_boolean_cuts_rotated_cylinder_lengthwise() {
     let tol = Tolerance::default();
     let radius: f64 = 10.0;
@@ -1878,6 +1955,146 @@ fn signed_mesh_volume(mesh: &zenith_tess::TriangleMesh) -> f64 {
             a.coords.dot(&b.coords.cross(&c.coords)) / 6.0
         })
         .sum()
+}
+
+#[test]
+fn test_oblique_plane_cylinder_intersection_is_an_exact_ellipse_arc() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+    let (cut_face, plane) = oblique_cut_face(15.0, 20.0_f64.to_radians());
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_face_pair_candidates(
+        &[cut_face],
+        std::slice::from_ref(&side_face),
+        &tol,
+    );
+    let edge = candidates
+        .iter()
+        .find_map(|candidate| match &candidate.kind {
+            zenith_algo::FaceIntersectionKind::Curve { edge } => Some(edge),
+            _ => None,
+        })
+        .expect("an oblique plane should cut the cylinder in an elliptical arc");
+
+    // 有理2次のまま、円弧と同じ重み構造で楕円弧を厳密表現している
+    assert_eq!(edge.curve.degree, 2);
+    assert_eq!(edge.curve.control_points.len(), 3);
+
+    let (t_min, t_max) = edge.curve.param_range();
+    let mut min_z: f64 = f64::INFINITY;
+    let mut max_z: f64 = f64::NEG_INFINITY;
+    for step in 0..=32 {
+        let t = t_min + (t_max - t_min) * (step as f64 / 32.0);
+        let point = edge.curve.evaluate(t);
+
+        // 円柱面上にあること
+        let radial = (point.x * point.x + point.y * point.y).sqrt();
+        assert!(
+            (radial - radius).abs() < 1e-9,
+            "ellipse arc left the cylinder: {radial}"
+        );
+
+        // 切断平面上にあること
+        let offset = (point - plane.origin).dot(&plane.normal);
+        assert!(
+            offset.abs() < 1e-9,
+            "ellipse arc left the cut plane: {offset}"
+        );
+
+        min_z = min_z.min(point.z);
+        max_z = max_z.max(point.z);
+    }
+
+    // 水平断面（円）ではなく本当に傾いていること
+    assert!(
+        max_z - min_z > 1.0,
+        "the section should be tilted, not a horizontal circle"
+    );
+}
+
+#[test]
+fn test_cylinder_side_face_splits_along_an_elliptical_section() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height = 30.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+    let (cut_face, _) = oblique_cut_face(15.0, 20.0_f64.to_radians());
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        &[cut_face],
+        std::slice::from_ref(&side_face),
+        &tol,
+    );
+    let split_edge = candidates
+        .first()
+        .expect("elliptical edge candidate")
+        .edge
+        .clone();
+
+    let pieces =
+        zenith_algo::BrepIntersectionBuilder::split_face_by_edge(&side_face, &split_edge, &tol)
+            .expect("a cylinder patch should split along an elliptical section");
+    assert_eq!(pieces.len(), 2);
+
+    for piece in &pieces {
+        assert!(piece.outer_wire.is_closed(&tol));
+        let report = piece.validate_pcurves(&tol, 8).unwrap();
+        assert!(report.is_valid(), "split piece p-curves must stay valid");
+        for point in piece.outer_wire.sample_points(8) {
+            let radial = (point.x * point.x + point.y * point.y).sqrt();
+            assert!((radial - radius).abs() < 1e-6, "boundary left the cylinder");
+        }
+    }
+
+    // 面積が保存される（元の1/4パッチ）
+    let params = TessellationParams {
+        u_divisions: 64,
+        v_divisions: 16,
+    };
+    let original_area = triangle_mesh_area(&tessellate_face(&side_face, &params));
+    let split_area: f64 = pieces
+        .iter()
+        .map(|piece| triangle_mesh_area(&tessellate_face(piece, &params)))
+        .sum();
+    assert!(
+        (split_area - original_area).abs() < original_area * 2e-3,
+        "split area {split_area} should match original {original_area}"
+    );
+}
+
+/// Builds a large cutting face on a plane tilted about the X axis by `tilt`,
+/// passing through `height` on the cylinder axis.
+fn oblique_cut_face(height: f64, tilt: f64) -> (Face, PlaneSurface3) {
+    let origin = Point3::new(0.0, 0.0, height);
+    let u_axis = Vec3::new(1.0, 0.0, 0.0);
+    let v_axis = Vec3::new(0.0, tilt.cos(), -tilt.sin());
+    let plane = PlaneSurface3::new(origin, u_axis, v_axis).unwrap();
+
+    let corners = [
+        origin - u_axis * 20.0 - v_axis * 20.0,
+        origin + u_axis * 20.0 - v_axis * 20.0,
+        origin + u_axis * 20.0 + v_axis * 20.0,
+        origin - u_axis * 20.0 + v_axis * 20.0,
+    ];
+    let vertices: Vec<Vertex> = corners
+        .iter()
+        .map(|point| Vertex::from_point(*point))
+        .collect();
+    let edges: Vec<OrientedEdge> = (0..4)
+        .map(|i| {
+            OrientedEdge::forward(
+                Edge::line_between(vertices[i].clone(), vertices[(i + 1) % 4].clone()).unwrap(),
+            )
+        })
+        .collect();
+
+    (
+        Face::simple(FaceGeometry::Plane(plane), Wire::new(edges)),
+        plane,
+    )
 }
 
 #[test]

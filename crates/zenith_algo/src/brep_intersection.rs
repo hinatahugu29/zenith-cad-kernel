@@ -1229,22 +1229,23 @@ fn split_cylinder_side_face_by_horizontal_edge(
     }
 
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
-    let split_axial = patch.axial_coordinate(split_edge.start_vertex.point);
-    if (patch.axial_coordinate(split_edge.end_vertex.point) - split_axial).abs() > tol.linear {
-        return Err("Cylinder-side split edge must follow a section of the patch".to_string());
-    }
-    let split_alpha = split_axial / patch.height;
-    if split_axial <= tol.linear || split_axial >= patch.height - tol.linear {
-        return Err("Cylinder-side split edge must cross the face interior".to_string());
-    }
-
-    let split_v = v_min + (v_max - v_min) * split_alpha;
     let bottom_start = surface.evaluate(u_min, v_min);
     let bottom_end = surface.evaluate(u_max, v_min);
-    let split_start = surface.evaluate(u_min, split_v);
-    let split_end = surface.evaluate(u_max, split_v);
     let top_start = surface.evaluate(u_min, v_max);
     let top_end = surface.evaluate(u_max, v_max);
+
+    // 分割エッジの端点は両側のルーリング上、かつパッチ内部の高さになければ
+    // ならない。両端の高さが同じなら水平断面、違えば斜め断面（楕円弧）。
+    let (split_start, split_end) =
+        ruling_boundary_endpoints(split_edge, bottom_start, bottom_end, &patch, tol).ok_or_else(
+            || "Split edge endpoints do not match cylinder side boundaries".to_string(),
+        )?;
+    for endpoint in [split_start, split_end] {
+        let axial = patch.axial_coordinate(endpoint);
+        if axial <= tol.linear || axial >= patch.height - tol.linear {
+            return Err("Cylinder-side split edge must cross the face interior".to_string());
+        }
+    }
 
     let split_forward = orient_edge_for_points(split_edge, split_start, split_end, tol)
         .ok_or_else(|| "Split edge endpoints do not match cylinder side boundaries".to_string())?;
@@ -1310,6 +1311,34 @@ fn split_cylinder_side_face_by_horizontal_edge(
     }
 
     Ok(vec![lower, upper])
+}
+
+/// Matches a split edge's endpoints to the patch's two boundary rulings.
+///
+/// Returns the endpoints ordered as (on the `u_min` ruling, on the `u_max`
+/// ruling), or `None` when either endpoint is not on a boundary ruling.
+fn ruling_boundary_endpoints(
+    split_edge: &Edge,
+    bottom_start: Point3,
+    bottom_end: Point3,
+    patch: &CylinderPatch,
+    tol: &Tolerance,
+) -> Option<(Point3, Point3)> {
+    let on_ruling = |point: Point3, ruling_base: Point3| {
+        let offset = point - ruling_base;
+        (offset - patch.axis * offset.dot(&patch.axis)).norm() <= tol.linear * 10.0
+    };
+
+    let start = split_edge.start_vertex.point;
+    let end = split_edge.end_vertex.point;
+    if on_ruling(start, bottom_start) && on_ruling(end, bottom_end) {
+        return Some((start, end));
+    }
+    if on_ruling(end, bottom_start) && on_ruling(start, bottom_end) {
+        return Some((end, start));
+    }
+
+    None
 }
 
 /// Splits a recognized cylinder-side patch along a vertical ruling edge.
@@ -2666,7 +2695,64 @@ fn intersect_plane_cylinder_patch(
         return intersect_ruling_plane_cylinder_patch(plane, normal, surface, &patch, tol);
     }
 
-    FaceIntersectionKind::Unsupported
+    intersect_oblique_plane_cylinder_patch(plane, normal, surface, &patch, tol)
+}
+
+/// Intersects a plane oblique to the cylinder axis, producing an elliptical arc.
+///
+/// Projecting the base section arc along the axis onto the cutting plane is an
+/// affine map, and rational NURBS are closed under affine maps, so the ellipse
+/// comes out exactly: same degree, same knots, same weights, control points
+/// moved along the axis. No approximation and no new curve class are needed.
+///
+/// The arc is only accepted when it stays inside the patch's axial band. Every
+/// control point of a rational Bezier bounds the curve for any affine functional,
+/// so checking the projected control points is a sound test; a plane that leaves
+/// the band would need the arc clipped, which the split stage cannot consume yet.
+fn intersect_oblique_plane_cylinder_patch(
+    plane: &PlaneSurface3,
+    plane_normal: Vec3,
+    surface: &NurbsSurface3,
+    patch: &CylinderPatch,
+    tol: &Tolerance,
+) -> FaceIntersectionKind {
+    let denominator = plane_normal.dot(&patch.axis);
+    if denominator.abs() <= tol.angular {
+        return FaceIntersectionKind::Unsupported;
+    }
+    let Some(base) = cylinder_section_curve(surface, 0.0) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+
+    let mut control_points = Vec::with_capacity(base.control_points.len());
+    for control_point in &base.control_points {
+        let shift = -plane_normal.dot(&(control_point.point - plane.origin)) / denominator;
+        let projected = control_point.point + patch.axis * shift;
+        let axial = patch.axial_coordinate(projected);
+        if axial < -tol.linear || axial > patch.height + tol.linear {
+            return FaceIntersectionKind::Unsupported;
+        }
+        control_points.push(ControlPoint3::new(projected, control_point.weight));
+    }
+
+    let Ok(curve) = NurbsCurve3::new(base.degree, control_points, base.knots.clone()) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+    let (t_min, t_max) = curve.param_range();
+    let start = curve.evaluate(t_min);
+    let end = curve.evaluate(t_max);
+    if !point_lies_on_plane(start, plane, tol) || !point_lies_on_plane(end, plane, tol) {
+        return FaceIntersectionKind::Unsupported;
+    }
+
+    FaceIntersectionKind::Curve {
+        edge: Edge::new(
+            curve,
+            Vertex::new(start, tol.linear),
+            Vertex::new(end, tol.linear),
+            tol.linear,
+        ),
+    }
 }
 
 fn intersect_section_plane_cylinder_patch(
