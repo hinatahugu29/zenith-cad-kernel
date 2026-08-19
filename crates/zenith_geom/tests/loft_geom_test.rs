@@ -83,3 +83,55 @@ fn test_circle3_to_nurbs_accuracy() {
     }
 }
 
+#[test]
+fn test_nurbs_curve_make_compatible() {
+    // 異なる次数・制御点数を持つ3本の曲線を定義
+    let c1 = zenith_geom::NurbsCurve3::bspline_from_points(
+        1,
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+        ],
+    )
+    .unwrap();
+
+    let c2 = zenith_geom::Circle3::new(
+        Point3::new(5.0, 0.0, 5.0),
+        5.0,
+        Vec3::new(0.0, 1.0, 0.0),
+        0.0,
+        std::f64::consts::PI,
+    )
+    .unwrap()
+    .to_nurbs()
+    .unwrap();
+
+    let c3 = zenith_geom::NurbsCurve3::bspline_from_points(
+        3,
+        vec![
+            Point3::new(0.0, 0.0, 10.0),
+            Point3::new(3.0, 2.0, 10.0),
+            Point3::new(7.0, -2.0, 10.0),
+            Point3::new(10.0, 0.0, 10.0),
+        ],
+    )
+    .unwrap();
+
+    // 互換化
+    let compatible = zenith_geom::NurbsCurve3::make_compatible(&[c1.clone(), c2.clone(), c3.clone()], Some(8))
+        .expect("make_compatible should succeed");
+
+    assert_eq!(compatible.len(), 3);
+    for curve in &compatible {
+        assert_eq!(curve.degree, 3);
+        assert_eq!(curve.control_points.len(), 8);
+    }
+
+    // 互換化後も端点が一致しているか
+    let p_start1 = compatible[0].evaluate(compatible[0].param_range().0);
+    let p_end1 = compatible[0].evaluate(compatible[0].param_range().1);
+    assert!((p_start1 - Point3::new(0.0, 0.0, 0.0)).norm() < 1e-10);
+    assert!((p_end1 - Point3::new(10.0, 0.0, 0.0)).norm() < 1e-10);
+}
+
+

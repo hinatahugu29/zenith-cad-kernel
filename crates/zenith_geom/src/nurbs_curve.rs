@@ -236,19 +236,69 @@ impl NurbsCurve3 {
         ders.get(1).and_then(|d1| d1.try_normalize_safe(1e-12))
     }
 
-    /// 曲線をN分割してサンプル点を生成
-    pub fn sample_points(&self, num_samples: usize) -> Vec<Point3> {
+    /// 曲線上の3次元同次座標ベクトル (wx, wy, wz, w) を評価
+    pub fn evaluate_homogeneous(&self, u: f64) -> nalgebra::Vector4<f64> {
+        let span = self
+            .knots
+            .find_span(self.control_points.len(), self.degree, u);
+        let basis = self.knots.basis_functions(span, self.degree, u);
+
+        let mut c_w = nalgebra::Vector4::zeros();
+        for (i, basis_value) in basis.iter().enumerate().take(self.degree + 1) {
+            let idx = span - self.degree + i;
+            let p_w = self.control_points[idx].to_homogeneous();
+            c_w += p_w * *basis_value;
+        }
+        c_w
+    }
+
+    /// 曲線を指定された制御点数と次数で滑らかに再サンプルし、統一されたNURBS曲線を生成
+    pub fn resample_clamped(&self, num_points: usize, target_degree: usize) -> Result<Self, String> {
+        let n = num_points.max(target_degree + 1);
         let (u_min, u_max) = self.param_range();
-        let n = num_samples.max(2);
-        let mut pts = Vec::with_capacity(n);
+
+        let mut ctrl_pts = Vec::with_capacity(n);
         for i in 0..n {
             let t = i as f64 / (n - 1) as f64;
             let u = u_min + t * (u_max - u_min);
-            pts.push(self.evaluate(u));
+            let h_pt = self.evaluate_homogeneous(u);
+            ctrl_pts.push(ControlPoint3::from_homogeneous(&h_pt));
         }
-        pts
+
+        let knots = KnotVector::clamped_uniform(n, target_degree);
+        Self::new(target_degree, ctrl_pts, knots)
+    }
+
+    /// 複数のNURBS曲線の次数と制御点数を互換化（統一）する
+    pub fn make_compatible(
+        curves: &[NurbsCurve3],
+        num_control_points: Option<usize>,
+    ) -> Result<Vec<NurbsCurve3>, String> {
+        if curves.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let max_degree = curves.iter().map(|c| c.degree).max().unwrap_or(3).max(3);
+        let max_points = curves
+            .iter()
+            .map(|c| c.control_points.len())
+            .max()
+            .unwrap_or(max_degree + 1);
+        let target_points = num_control_points.unwrap_or(max_points).max(max_degree + 1);
+
+        let mut compatible = Vec::with_capacity(curves.len());
+        for c in curves {
+            if c.degree == max_degree && c.control_points.len() == target_points {
+                compatible.push(c.clone());
+            } else {
+                compatible.push(c.resample_clamped(target_points, max_degree)?);
+            }
+        }
+
+        Ok(compatible)
     }
 }
+
 
 #[cfg(test)]
 mod tests {
