@@ -121,6 +121,31 @@ fn main() {
             ],
         },
         Case {
+            name: "box x cylinder (off-centre through hole)",
+            a: boxa.clone(),
+            b: {
+                // 中心 (8, 12)、半径5。箱の面には触れず完全に内側を通る。
+                let drill = PrimitiveBuilder::make_cylinder(5.0, 40.0).unwrap();
+                shifted(&drill, 8.0, 12.0, -10.0)
+            },
+            expected: [
+                Some(8000.0 + std::f64::consts::PI * 25.0 * 40.0
+                    - std::f64::consts::PI * 25.0 * 20.0),
+                Some(8000.0 - std::f64::consts::PI * 25.0 * 20.0),
+                Some(std::f64::consts::PI * 25.0 * 20.0),
+            ],
+        },
+        Case {
+            name: "box x cylinder (tangent to a side face)",
+            a: boxa.clone(),
+            b: {
+                // 半径6を中心 (6, 10) に置くと、x=0 面にちょうど接する。
+                let drill = PrimitiveBuilder::make_cylinder(6.0, 40.0).unwrap();
+                shifted(&drill, 6.0, 10.0, -10.0)
+            },
+            expected: [None, None, None],
+        },
+        Case {
             name: "box x sphere",
             a: boxa.clone(),
             b: shifted(&sphere, 20.0, 10.0, 10.0),

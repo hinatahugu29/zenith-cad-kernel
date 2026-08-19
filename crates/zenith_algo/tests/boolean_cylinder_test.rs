@@ -202,6 +202,29 @@ fn test_through_hole_along_x_matches_the_closed_form() {
 }
 
 #[test]
+fn test_off_centre_hole_matches_the_closed_form() {
+    // 実際の部品で穴が中央にあることはまずない。面に接しない限り、
+    // 位置によらず同じ精度で通ること。
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
+    let drill = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(5.0, 40.0).unwrap(),
+        Vec3::new(8.0, 12.0, -10.0),
+    );
+
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&block, &drill, BooleanOpType::Difference, &tol)
+            .expect("an off-centre hole should succeed");
+
+    let expected = 8000.0 - PI * 25.0 * 20.0;
+    let volume = result_volume(&result.solids);
+    assert!(
+        (volume - expected).abs() / expected < 1e-9,
+        "off-centre hole volume {volume} should equal {expected}"
+    );
+}
+
+#[test]
 fn test_disjoint_union_returns_both_solids() {
     let tol = Tolerance::default();
     let a = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
