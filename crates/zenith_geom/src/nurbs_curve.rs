@@ -111,6 +111,60 @@ impl NurbsCurve3 {
         }
     }
 
+    /// 単一ベジエ区間（内部ノットなしのクランプ曲線）をパラメータ `t` で2分割する。
+    ///
+    /// 同次座標系での有理 de Casteljau 分割なので、真円弧などの有理曲線も
+    /// 重みを保ったまま厳密に分割される。内部ノットを持つ曲線や範囲外の `t`
+    /// では `None` を返す。
+    pub fn split_bezier_at(&self, t: f64) -> Option<(Self, Self)> {
+        let order = self.degree + 1;
+        if self.control_points.len() != order || self.knots.knots.len() != order * 2 {
+            return None;
+        }
+
+        let (t_min, t_max) = self.param_range();
+        if t_max - t_min <= f64::EPSILON {
+            return None;
+        }
+        let alpha = (t - t_min) / (t_max - t_min);
+        if !(f64::EPSILON..=1.0 - f64::EPSILON).contains(&alpha) {
+            return None;
+        }
+
+        let mut level: Vec<nalgebra::Vector4<f64>> = self
+            .control_points
+            .iter()
+            .map(|point| point.to_homogeneous())
+            .collect();
+        let mut left = vec![level[0]];
+        let mut right = vec![level[order - 1]];
+
+        while level.len() > 1 {
+            level = level
+                .windows(2)
+                .map(|pair| pair[0] * (1.0 - alpha) + pair[1] * alpha)
+                .collect();
+            left.push(level[0]);
+            right.push(level[level.len() - 1]);
+        }
+        right.reverse();
+
+        let build = |points: Vec<nalgebra::Vector4<f64>>| {
+            let control_points = points
+                .iter()
+                .map(ControlPoint3::from_homogeneous)
+                .collect::<Vec<_>>();
+            Self::new(
+                self.degree,
+                control_points,
+                KnotVector::clamped_uniform(order, self.degree),
+            )
+            .ok()
+        };
+
+        Some((build(left)?, build(right)?))
+    }
+
     /// パラメータ有効範囲 [u_min, u_max]
     pub fn param_range(&self) -> (f64, f64) {
         (

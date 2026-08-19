@@ -26,7 +26,18 @@ pub fn tessellate_surface<S: Surface3>(
     params: &TessellationParams,
     orientation: Orientation,
 ) -> TriangleMesh {
-    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let (u_range, v_range) = surface.param_range();
+    tessellate_surface_range(surface, params, orientation, u_range, v_range)
+}
+
+/// UVパラメータ部分範囲に限定したグリッドテッセレーション
+pub fn tessellate_surface_range<S: Surface3>(
+    surface: &S,
+    params: &TessellationParams,
+    orientation: Orientation,
+    (u_min, u_max): (f64, f64),
+    (v_min, v_max): (f64, f64),
+) -> TriangleMesh {
     let num_u = params.u_divisions.max(2);
     let num_v = params.v_divisions.max(2);
 
@@ -85,9 +96,17 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
     match &face.geometry {
         FaceGeometry::Nurbs(nurbs) => {
             if should_tessellate_nurbs_from_pcurves(face, nurbs) {
-                tessellate_nurbs_from_pcurves(face, nurbs, params)
-            } else {
-                tessellate_surface(nurbs, params, face.orientation)
+                return tessellate_nurbs_from_pcurves(face, nurbs, params);
+            }
+            match face
+                .pcurves
+                .as_ref()
+                .and_then(|pcurves| outer_loop_uv_subrect(&pcurves.outer_loop, nurbs))
+            {
+                Some((u_range, v_range)) => {
+                    tessellate_surface_range(nurbs, params, face.orientation, u_range, v_range)
+                }
+                None => tessellate_surface(nurbs, params, face.orientation),
             }
         }
         FaceGeometry::Coons(coons) => tessellate_surface(coons, params, face.orientation),
@@ -186,6 +205,72 @@ fn should_tessellate_nurbs_from_pcurves(face: &Face, _surface: &impl Surface3) -
         return false;
     };
     !pcurves.inner_loops.is_empty()
+}
+
+/// 外側p-curveループがUVパラメータ矩形の一部だけを覆う軸平行な部分矩形なら、
+/// その範囲を返す。
+///
+/// ブーリアン分割で切り詰められた面は支持曲面を共有したまま境界だけが狭くなる。
+/// これを検出せずに矩形全体へ一様グリッドを張ると、分割前のパッチ全体が出力
+/// されてしまう。軸平行な部分矩形と確認できた場合だけ範囲を絞り、それ以外
+/// （球の極や一般トリムなど）は従来どおり全体グリッドにフォールバックする。
+fn outer_loop_uv_subrect(
+    outer_loop: &FacePcurveLoop,
+    surface: &impl Surface3,
+) -> Option<((f64, f64), (f64, f64))> {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let u_extent = u_max - u_min;
+    let v_extent = v_max - v_min;
+    if u_extent <= 0.0 || v_extent <= 0.0 {
+        return None;
+    }
+
+    let samples: Vec<Point2> = outer_loop
+        .segments
+        .iter()
+        .flat_map(|segment| segment.curve.sample_points(4))
+        .collect();
+    if samples.len() < 3 {
+        return None;
+    }
+
+    let mut loop_u = (f64::INFINITY, f64::NEG_INFINITY);
+    let mut loop_v = (f64::INFINITY, f64::NEG_INFINITY);
+    for uv in &samples {
+        if !uv.x.is_finite() || !uv.y.is_finite() {
+            return None;
+        }
+        loop_u = (loop_u.0.min(uv.x), loop_u.1.max(uv.x));
+        loop_v = (loop_v.0.min(uv.y), loop_v.1.max(uv.y));
+    }
+
+    const COVERAGE_EPSILON: f64 = 1e-4;
+    let covers_full_u = (loop_u.1 - loop_u.0) >= u_extent * (1.0 - COVERAGE_EPSILON);
+    let covers_full_v = (loop_v.1 - loop_v.0) >= v_extent * (1.0 - COVERAGE_EPSILON);
+    if covers_full_u && covers_full_v {
+        return None;
+    }
+
+    let sub_u_extent = loop_u.1 - loop_u.0;
+    let sub_v_extent = loop_v.1 - loop_v.0;
+    if sub_u_extent <= u_extent * COVERAGE_EPSILON || sub_v_extent <= v_extent * COVERAGE_EPSILON {
+        return None;
+    }
+
+    // 全サンプルが部分矩形の外周上にあることを確認できて初めて軸平行トリムとみなす
+    let u_tol = sub_u_extent * COVERAGE_EPSILON;
+    let v_tol = sub_v_extent * COVERAGE_EPSILON;
+    let on_border = samples.iter().all(|uv| {
+        (uv.x - loop_u.0).abs() <= u_tol
+            || (uv.x - loop_u.1).abs() <= u_tol
+            || (uv.y - loop_v.0).abs() <= v_tol
+            || (uv.y - loop_v.1).abs() <= v_tol
+    });
+    if !on_border {
+        return None;
+    }
+
+    Some(((loop_u.0, loop_u.1), (loop_v.0, loop_v.1)))
 }
 
 fn tessellate_nurbs_from_pcurves(

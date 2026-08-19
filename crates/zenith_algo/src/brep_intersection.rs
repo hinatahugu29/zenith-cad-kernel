@@ -663,9 +663,13 @@ impl BrepIntersectionBuilder {
     ) -> Result<Vec<Face>, String> {
         match &face.geometry {
             FaceGeometry::Plane(_) => Self::split_planar_face_by_edge(face, split_edge, tol),
-            FaceGeometry::Nurbs(surface) => {
-                split_cylinder_side_face_by_horizontal_edge(face, surface, split_edge, tol)
-            }
+            FaceGeometry::Nurbs(surface) => split_cylinder_side_face_by_horizontal_edge(
+                face, surface, split_edge, tol,
+            )
+            .or_else(|horizontal_error| {
+                split_cylinder_side_face_by_vertical_edge(face, surface, split_edge, tol)
+                    .map_err(|vertical_error| format!("{horizontal_error}; {vertical_error}"))
+            }),
             _ => Err("Face splitting is not implemented for this geometry".to_string()),
         }
     }
@@ -1142,6 +1146,191 @@ fn split_cylinder_side_face_by_horizontal_edge(
     Ok(vec![lower, upper])
 }
 
+/// Splits a recognized cylinder-side patch along a vertical ruling edge.
+///
+/// The ruling corresponds to a `u = const` iso-line, so both halves reuse the
+/// original NURBS support surface and are trimmed by narrowed boundary wires
+/// whose horizontal arcs are exact rational Bezier sub-arcs.
+fn split_cylinder_side_face_by_vertical_edge(
+    face: &Face,
+    surface: &NurbsSurface3,
+    split_edge: &Edge,
+    tol: &Tolerance,
+) -> Result<Vec<Face>, String> {
+    if !face.inner_wires.is_empty() {
+        return Err("NURBS face splitting with inner wires is not implemented yet".to_string());
+    }
+    let Some((center, _radius, z_min, z_max)) = cylinder_patch_axis_circle(surface, tol) else {
+        return Err("Only recognized cylinder-side NURBS patches can be split".to_string());
+    };
+    if !edge_lies_on_recognized_cylinder_patch(split_edge, surface, tol) {
+        return Err("Split edge must lie on the NURBS face".to_string());
+    }
+
+    let edge_start = split_edge.start_vertex.point;
+    let edge_end = split_edge.end_vertex.point;
+    if (Point2::new(edge_start.x, edge_start.y) - Point2::new(edge_end.x, edge_end.y)).norm()
+        > tol.linear * 10.0
+    {
+        return Err("Cylinder-side split edge must be a vertical ruling".to_string());
+    }
+    let edge_z_low = edge_start.z.min(edge_end.z);
+    let edge_z_high = edge_start.z.max(edge_end.z);
+    if (edge_z_low - z_min).abs() > tol.linear * 10.0
+        || (edge_z_high - z_max).abs() > tol.linear * 10.0
+    {
+        return Err("Cylinder-side ruling split must span the full patch height".to_string());
+    }
+
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let split_xy = Point2::new(edge_start.x, edge_start.y);
+    let u_split = cylinder_patch_u_for_point(surface, split_xy, center, v_min, tol)
+        .ok_or_else(|| "Split ruling does not lie on the patch angular span".to_string())?;
+    if u_split <= u_min + tol.parametric || u_split >= u_max - tol.parametric {
+        return Err("Cylinder-side ruling split must cross the face interior".to_string());
+    }
+
+    let bottom_curve = horizontal_section_curve(surface, z_min, z_min, z_max, tol)
+        .ok_or_else(|| "Failed to build cylinder bottom section curve".to_string())?;
+    let top_curve = horizontal_section_curve(surface, z_max, z_min, z_max, tol)
+        .ok_or_else(|| "Failed to build cylinder top section curve".to_string())?;
+    let (bottom_left_curve, bottom_right_curve) = bottom_curve
+        .split_bezier_at(u_split)
+        .ok_or_else(|| "Cylinder bottom arc is not a single splittable Bezier span".to_string())?;
+    let (top_left_curve, top_right_curve) = top_curve
+        .split_bezier_at(u_split)
+        .ok_or_else(|| "Cylinder top arc is not a single splittable Bezier span".to_string())?;
+
+    let bottom_start = surface.evaluate(u_min, v_min);
+    let bottom_split = surface.evaluate(u_split, v_min);
+    let bottom_end = surface.evaluate(u_max, v_min);
+    let top_start = surface.evaluate(u_min, v_max);
+    let top_split = surface.evaluate(u_split, v_max);
+    let top_end = surface.evaluate(u_max, v_max);
+
+    // The incoming candidate ruling may carry broad-phase clipping slack on its
+    // endpoints, so the shared edge is rebuilt exactly from the patch iso-line
+    // after confirming the candidate matches it.
+    if orient_edge_for_points(split_edge, bottom_split, top_split, tol).is_none() {
+        return Err("Split ruling endpoints do not match the patch height".to_string());
+    }
+    let split_ruling = Edge::line_between(
+        Vertex::new(bottom_split, tol.linear),
+        Vertex::new(top_split, tol.linear),
+    )?;
+    let split_forward = OrientedEdge::forward(split_ruling.clone());
+    let split_reversed = OrientedEdge::reversed(split_ruling);
+
+    let bottom_left = curve_edge(bottom_left_curve, bottom_start, bottom_split, tol);
+    let bottom_right = curve_edge(bottom_right_curve, bottom_split, bottom_end, tol);
+    let top_left = curve_edge(top_left_curve, top_start, top_split, tol);
+    let top_right = curve_edge(top_right_curve, top_split, top_end, tol);
+    let left_ruling = Edge::line_between(
+        Vertex::new(bottom_start, tol.linear),
+        Vertex::new(top_start, tol.linear),
+    )?;
+    let right_ruling = Edge::line_between(
+        Vertex::new(bottom_end, tol.linear),
+        Vertex::new(top_end, tol.linear),
+    )?;
+
+    let left = Face::new(
+        face.geometry.clone(),
+        Wire::new(vec![
+            OrientedEdge::forward(bottom_left),
+            split_forward,
+            OrientedEdge::reversed(top_left),
+            OrientedEdge::reversed(left_ruling),
+        ]),
+        Vec::new(),
+        face.orientation,
+        face.tolerance,
+    );
+    let right = Face::new(
+        face.geometry.clone(),
+        Wire::new(vec![
+            OrientedEdge::forward(bottom_right),
+            OrientedEdge::forward(right_ruling),
+            OrientedEdge::reversed(top_right),
+            split_reversed,
+        ]),
+        Vec::new(),
+        face.orientation,
+        face.tolerance,
+    );
+
+    for split_face in [&left, &right] {
+        if !split_face.outer_wire.is_closed(tol) {
+            return Err("Cylinder-side ruling split produced an open wire".to_string());
+        }
+        let report = split_face.validate_pcurves(tol, 8)?;
+        if !report.is_valid() {
+            return Err(format!(
+                "Cylinder-side ruling split p-curves are invalid with {} mismatches",
+                report.mismatch_count
+            ));
+        }
+    }
+
+    Ok(vec![left, right])
+}
+
+fn curve_edge(curve: NurbsCurve3, start: Point3, end: Point3, tol: &Tolerance) -> Edge {
+    Edge::new(
+        curve,
+        Vertex::new(start, tol.linear),
+        Vertex::new(end, tol.linear),
+        tol.linear,
+    )
+}
+
+/// Finds the `u` parameter whose patch point matches `target` in XY.
+///
+/// The angle around the axis is monotonic in `u` over a sub-half-turn rational
+/// arc, so a bisection on the swept-angle ratio converges without needing a
+/// closed form for the rational quadratic parameterization.
+fn cylinder_patch_u_for_point(
+    surface: &NurbsSurface3,
+    target: Point2,
+    center: Point2,
+    v: f64,
+    tol: &Tolerance,
+) -> Option<f64> {
+    let ((u_min, u_max), _) = surface.param_range();
+    let angle_at = |u: f64| {
+        let point = surface.evaluate(u, v);
+        angle_at_center(Point2::new(point.x, point.y), center)
+    };
+
+    let start_angle = angle_at(u_min);
+    let sweep = wrap_signed_angle(angle_at(u_max) - start_angle);
+    if sweep.abs() <= tol.angular {
+        return None;
+    }
+
+    let target_ratio = wrap_signed_angle(angle_at_center(target, center) - start_angle) / sweep;
+    let margin = tol.angular / sweep.abs();
+    if !(-margin..=1.0 + margin).contains(&target_ratio) {
+        return None;
+    }
+
+    let mut low = u_min;
+    let mut high = u_max;
+    for _ in 0..100 {
+        let mid = 0.5 * (low + high);
+        let ratio = wrap_signed_angle(angle_at(mid) - start_angle) / sweep;
+        if ratio < target_ratio {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+
+    let u = 0.5 * (low + high);
+    let point = surface.evaluate(u, v);
+    ((Point2::new(point.x, point.y) - target).norm() <= tol.linear * 10.0).then_some(u)
+}
+
 fn horizontal_section_edge(
     surface: &NurbsSurface3,
     z: f64,
@@ -1186,17 +1375,14 @@ fn edge_lies_on_recognized_cylinder_patch(
     surface: &NurbsSurface3,
     tol: &Tolerance,
 ) -> bool {
-    let Some((z_min, z_max)) = cylinder_patch_z_span(surface, tol) else {
+    let Some((center, radius, z_min, z_max)) = cylinder_patch_axis_circle(surface, tol) else {
         return false;
     };
-    let radius = (surface.control_points[0][0].point.x.powi(2)
-        + surface.control_points[0][0].point.y.powi(2))
-    .sqrt();
     let (t_min, t_max) = edge.curve.param_range();
     (0..=8).all(|i| {
         let t = t_min + (t_max - t_min) * (i as f64 / 8.0);
         let point = edge.curve.evaluate(t);
-        let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
+        let radial_distance = (Point2::new(point.x, point.y) - center).norm();
         point.z >= z_min - tol.linear * 10.0
             && point.z <= z_max + tol.linear * 10.0
             && (radial_distance - radius).abs() <= tol.linear * 10.0

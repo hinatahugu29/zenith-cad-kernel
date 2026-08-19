@@ -1580,6 +1580,211 @@ fn test_brep_intersection_skips_vertical_plane_missing_cylinder_quadrant() {
     );
 }
 
+#[test]
+fn test_cylinder_side_face_splits_along_vertical_ruling() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height = 30.0;
+    let plane_x: f64 = 6.0;
+    let expected_y = (radius * radius - plane_x * plane_x).sqrt();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+    let cut_face = vertical_cut_face(plane_x);
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        &[cut_face],
+        std::slice::from_ref(&side_face),
+        &tol,
+    );
+    let split_edge = candidates
+        .first()
+        .expect("vertical ruling edge candidate")
+        .edge
+        .clone();
+
+    let pieces =
+        zenith_algo::BrepIntersectionBuilder::split_face_by_edge(&side_face, &split_edge, &tol)
+            .expect("cylinder side face should split along a vertical ruling");
+    assert_eq!(pieces.len(), 2);
+
+    for piece in &pieces {
+        assert!(matches!(piece.geometry, FaceGeometry::Nurbs(_)));
+        assert!(piece.outer_wire.is_closed(&tol));
+        assert_eq!(piece.outer_wire.edges.len(), 4);
+        let report = piece.validate_pcurves(&tol, 8).unwrap();
+        assert!(report.is_valid(), "split piece p-curves must stay valid");
+
+        // 分割後も境界は解析円柱面上に乗り続ける
+        for point in piece.outer_wire.sample_points(8) {
+            let radial = (point.x * point.x + point.y * point.y).sqrt();
+            assert!((radial - radius).abs() < 1e-6, "boundary left the cylinder");
+            assert!(point.z >= -1e-6 && point.z <= height + 1e-6);
+        }
+    }
+
+    // 分割線は両ピースが共有し、切断平面上にある
+    let shared: Vec<Point3> = pieces[0]
+        .outer_wire
+        .sample_points(1)
+        .into_iter()
+        .filter(|point| (point.x - plane_x).abs() < 1e-6)
+        .collect();
+    assert!(
+        shared.len() >= 2,
+        "the split piece must carry the ruling at the cut plane"
+    );
+    for point in shared {
+        assert!((point.y - expected_y).abs() < 1e-6);
+    }
+
+    // 面積が保存される（もとの1/4パッチ = 半径 * 掃引角 * 高さ）
+    let params = TessellationParams {
+        u_divisions: 64,
+        v_divisions: 8,
+    };
+    let original_area = triangle_mesh_area(&tessellate_face(&side_face, &params));
+    let split_area: f64 = pieces
+        .iter()
+        .map(|piece| triangle_mesh_area(&tessellate_face(piece, &params)))
+        .sum();
+    assert!(
+        (split_area - original_area).abs() < original_area * 1e-3,
+        "split area {split_area} should match original {original_area}"
+    );
+}
+
+#[test]
+fn test_cylinder_side_face_rejects_ruling_split_outside_patch() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    // 第4象限のルーリングは第1象限パッチを横切らない
+    let outside_ruling = Edge::line_between(
+        Vertex::from_point(Point3::new(6.0, -8.0, 0.0)),
+        Vertex::from_point(Point3::new(6.0, -8.0, 30.0)),
+    )
+    .unwrap();
+    assert!(zenith_algo::BrepIntersectionBuilder::split_face_by_edge(
+        &side_face,
+        &outside_ruling,
+        &tol
+    )
+    .is_err());
+
+    // パッチ高さの一部しか覆わないルーリングはまだ対象外
+    let partial_ruling = Edge::line_between(
+        Vertex::from_point(Point3::new(6.0, 8.0, 5.0)),
+        Vertex::from_point(Point3::new(6.0, 8.0, 20.0)),
+    )
+    .unwrap();
+    assert!(zenith_algo::BrepIntersectionBuilder::split_face_by_edge(
+        &side_face,
+        &partial_ruling,
+        &tol
+    )
+    .is_err());
+
+    // パッチ境界そのものに一致するルーリングは内部を横切らない
+    let boundary_ruling = Edge::line_between(
+        Vertex::from_point(Point3::new(10.0, 0.0, 0.0)),
+        Vertex::from_point(Point3::new(10.0, 0.0, 30.0)),
+    )
+    .unwrap();
+    assert!(zenith_algo::BrepIntersectionBuilder::split_face_by_edge(
+        &side_face,
+        &boundary_ruling,
+        &tol
+    )
+    .is_err());
+}
+
+#[test]
+fn test_horizontally_split_cylinder_side_faces_tessellate_their_own_band() {
+    let tol = Tolerance::default();
+    let radius = 10.0;
+    let height = 30.0;
+    let split_z = 12.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+    let FaceGeometry::Nurbs(surface) = &side_face.geometry else {
+        panic!("cylinder side face should be a NURBS patch");
+    };
+
+    let section = zenith_geom::NurbsCurve3::new(
+        surface.degree_u,
+        surface
+            .control_points
+            .iter()
+            .map(|row| {
+                let alpha = split_z / height;
+                let bottom = row[0].to_homogeneous();
+                let top = row[1].to_homogeneous();
+                zenith_geom::ControlPoint3::from_homogeneous(
+                    &(bottom * (1.0 - alpha) + top * alpha),
+                )
+            })
+            .collect(),
+        KnotVector::new(surface.knots_u.knots.clone()),
+    )
+    .unwrap();
+    let (t_min, t_max) = section.param_range();
+    let split_edge = Edge::new(
+        section.clone(),
+        Vertex::from_point(section.evaluate(t_min)),
+        Vertex::from_point(section.evaluate(t_max)),
+        tol.linear,
+    );
+
+    let pieces =
+        zenith_algo::BrepIntersectionBuilder::split_face_by_edge(&side_face, &split_edge, &tol)
+            .expect("cylinder side face should split along a horizontal arc");
+    assert_eq!(pieces.len(), 2);
+
+    // 分割された帯はそれぞれ自分の高さ範囲だけをテッセレートする
+    let params = TessellationParams {
+        u_divisions: 64,
+        v_divisions: 16,
+    };
+    let original_area = triangle_mesh_area(&tessellate_face(&side_face, &params));
+    let mut piece_areas = Vec::new();
+    for piece in &pieces {
+        let mesh = tessellate_face(piece, &params);
+        assert!(mesh.num_triangles() > 0);
+        let z_low = mesh
+            .positions
+            .iter()
+            .fold(f64::INFINITY, |acc, p| acc.min(p.z));
+        let z_high = mesh
+            .positions
+            .iter()
+            .fold(f64::NEG_INFINITY, |acc, p| acc.max(p.z));
+        assert!(
+            z_high - z_low < height - 1e-6,
+            "piece still spans the full patch"
+        );
+        piece_areas.push(triangle_mesh_area(&mesh));
+    }
+
+    let split_area: f64 = piece_areas.iter().sum();
+    assert!(
+        (split_area - original_area).abs() < original_area * 1e-3,
+        "split area {split_area} should match original {original_area}"
+    );
+}
+
+fn triangle_mesh_area(mesh: &zenith_tess::TriangleMesh) -> f64 {
+    mesh.indices
+        .iter()
+        .map(|triangle| {
+            let a = mesh.positions[triangle[0] as usize];
+            let b = mesh.positions[triangle[1] as usize];
+            let c = mesh.positions[triangle[2] as usize];
+            (b - a).cross(&(c - a)).norm() * 0.5
+        })
+        .sum()
+}
+
 /// Builds an axis-parallel vertical cutting face at `plane_x`, spanning the full
 /// height and diameter of the 10 x 30 test cylinder.
 fn vertical_cut_face(plane_x: f64) -> Face {

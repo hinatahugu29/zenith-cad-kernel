@@ -100,6 +100,8 @@ Current hardening:
 - Added a multi-solid exact boolean result API so middle cylinder-slab differences can return two valid disjoint cylinder solids while the legacy single-solid API reports that callers should use the multi-solid path.
 - STEP export can now write multi-solid exact boolean results as multiple B-Rep representation items in one file, so compound outputs do not have to collapse back to the legacy single-solid API at the first interchange boundary.
 - STEP import now exposes multi-solid file/string APIs, resolves ordered B-Rep items from `ADVANCED_BREP_SHAPE_REPRESENTATION`, and round-trips the two-cylinder middle slab difference with NURBS faces, topology validation, z-spans, and volume checks intact.
+- Cylinder-side patches can now be split along a vertical ruling edge, not only along horizontal section arcs. The two halves share the original NURBS support surface and are trimmed by narrowed wires whose horizontal arcs are exact rational Bezier sub-arcs, so a plane cutting a cylinder lengthwise now reaches the classification stage instead of being reported as a skipped split. Shell reconstruction for that case is still open: the half-cylinder difference reports unmatched edge uses because the planar cap builder cannot yet close a loop that mixes arcs and lines.
+- Added `NurbsCurve3::split_bezier_at()`: exact rational de Casteljau subdivision of a single-span Bezier curve, keeping weights so true-circle arcs stay true circles after splitting. This is the first curve-trimming primitive available to the boolean and trimming pipelines.
 - Plane/cylinder support intersection is no longer limited to horizontal section arcs: a plane parallel to the cylinder axis now produces the vertical ruling line where it meets a recognized cylinder-side patch, clipped to the patch Z span and rejected when the ruling falls outside the patch angular span, when the plane misses the radius, or when one plane would cut the same patch twice.
 - `Shape::Compound` is now connected to exact boolean and STEP boundaries: boolean results can become `Shape`, shape trees can expose/flatten contained solids, and STEP import/export can round-trip compound solids without forcing callers back through the legacy single-solid path.
 - NURBS face tessellation now switches to p-curve trim loops when inner loops are present, preventing trimmed NURBS holes from being filled by the old full-surface grid path while preserving existing cylinder, sphere, torus, and other full-surface grid paths.
@@ -269,6 +271,8 @@ Replacement target:
 ### Surface tessellation is still mostly uniform
 
 `TessellationParams` exposes only `u_divisions` and `v_divisions`. Planar trimmed-face boundaries now use adaptive p-curve subdivision internally, but NURBS/Coons/Gordon/Triangular surface interiors still use uniform parameter grids. Large parts, small radii, high curvature, and very flat surfaces therefore still need a real deflection policy.
+
+A NURBS face whose stored outer p-curve loop forms an axis-aligned UV sub-rectangle is now tessellated over that sub-range instead of the full parameter rectangle, so boolean-split cylinder patches no longer render as the whole pre-split patch. The recognition is deliberately narrow: anything that is not a confirmed axis-aligned sub-rectangle (sphere poles, general trims) still falls back to the full-range grid, which remains wrong for general trimmed NURBS faces.
 
 Target:
 

@@ -613,3 +613,64 @@ fn test_extremum_point_to_curve_and_surface() {
     assert!((surf_proj.closest_point.y - 8.0).abs() < 1e-4);
     assert!((surf_proj.closest_point.z - 0.0).abs() < 1e-4);
 }
+
+#[test]
+fn test_rational_bezier_split_preserves_exact_circle() {
+    let radius = 10.0;
+    let weight = std::f64::consts::FRAC_1_SQRT_2;
+    let arc = NurbsCurve3::new(
+        2,
+        vec![
+            ControlPoint3::unweighted(Point3::new(radius, 0.0, 0.0)),
+            ControlPoint3::new(Point3::new(radius, radius, 0.0), weight),
+            ControlPoint3::unweighted(Point3::new(0.0, radius, 0.0)),
+        ],
+        KnotVector::clamped_uniform(3, 2),
+    )
+    .unwrap();
+
+    let (t_min, t_max) = arc.param_range();
+    let split_t = t_min + (t_max - t_min) * 0.35;
+    let split_point = arc.evaluate(split_t);
+    let (left, right) = arc.split_bezier_at(split_t).expect("bezier split");
+
+    // 分割点と両端が厳密に一致する
+    for (curve, expected_start, expected_end) in [
+        (&left, arc.evaluate(t_min), split_point),
+        (&right, split_point, arc.evaluate(t_max)),
+    ] {
+        let (c_min, c_max) = curve.param_range();
+        assert!((curve.evaluate(c_min) - expected_start).norm() < 1e-12);
+        assert!((curve.evaluate(c_max) - expected_end).norm() < 1e-12);
+    }
+
+    // 有理重みが保たれ、両半分とも真円上に乗り続ける
+    for curve in [&left, &right] {
+        let (c_min, c_max) = curve.param_range();
+        for step in 0..=20 {
+            let t = c_min + (c_max - c_min) * (step as f64 / 20.0);
+            let point = curve.evaluate(t);
+            let radial = (point.x * point.x + point.y * point.y).sqrt();
+            assert!(
+                (radial - radius).abs() < 1e-12,
+                "split arc left the exact circle: {radial}"
+            );
+            assert!(point.z.abs() < 1e-12);
+        }
+    }
+
+    // 内部ノットを持つ曲線はベジエ分割の対象外
+    let spline = NurbsCurve3::bspline_from_points(
+        2,
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(3.0, 1.0, 0.0),
+        ],
+    )
+    .unwrap();
+    assert!(spline.split_bezier_at(0.5).is_none());
+    assert!(arc.split_bezier_at(t_min).is_none());
+    assert!(arc.split_bezier_at(t_max).is_none());
+}
