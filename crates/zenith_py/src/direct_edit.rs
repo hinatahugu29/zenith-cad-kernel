@@ -29,6 +29,36 @@ pub fn fillet_box_single_edge(
     Ok(PyMesh { mesh })
 }
 
+/// 単一垂直エッジを指定して45度面取りを適用（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (dx, dy, dz, edge_index, distance, u_divisions = 4, v_divisions = 4, step_path = None))]
+pub fn chamfer_box_single_edge(
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    edge_index: usize,
+    distance: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = DirectModeling::chamfer_box_single_edge(dx, dy, dz, edge_index, distance)
+        .map_err(|e| PyValueError::new_err(format!("Single chamfer failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        zenith_io::StepExporter::export_solid_to_file(&solid, path, "ZENITH_CHAMFER_BOX")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+
 /// 直方体の特定面を法線方向にPush-Pull押し出し
 #[pyfunction]
 #[pyo3(signature = (dx, dy, dz, face_index, distance, u_divisions = 4, v_divisions = 4))]

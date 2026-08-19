@@ -28,6 +28,7 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::make_chamfered_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_drilled_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_hollow_box, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_hollow_extrusion, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_sweep_pipe, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_sweep_wire, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_revolve, m)?)?;
@@ -38,6 +39,7 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Direct Modeling
     m.add_function(wrap_pyfunction!(direct_edit::fillet_box_single_edge, m)?)?;
+    m.add_function(wrap_pyfunction!(direct_edit::chamfer_box_single_edge, m)?)?;
     m.add_function(wrap_pyfunction!(direct_edit::push_pull_box, m)?)?;
     m.add_function(wrap_pyfunction!(direct_edit::taper_box, m)?)?;
     m.add_function(wrap_pyfunction!(direct_edit::cap_planar_wire, m)?)?;

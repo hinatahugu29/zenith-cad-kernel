@@ -8,69 +8,47 @@ pub struct ExtrudeBuilder;
 impl ExtrudeBuilder {
     /// 閉じた平坦なワイヤ（底面）と押し出し方向ベクトルから、閉じたSolid（側面Face群 + 底面Face + 天面Face）を構築
     pub fn extrude_wire(bottom_wire: &Wire, dir: Vec3, tol: &Tolerance) -> Result<Solid, String> {
-        if !bottom_wire.is_closed(tol) {
-            return Err("Extrude requires a closed wire".to_string());
+        Self::extrude_face_with_holes(bottom_wire, &[], dir, tol)
+    }
+
+    /// 外側境界ワイヤと複数の内側境界（穴）ワイヤを持つ平坦なプロファイルから中空・穴あき押し出しSolidを構築
+    pub fn extrude_face_with_holes(
+        outer_wire: &Wire,
+        inner_wires: &[Wire],
+        dir: Vec3,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if !outer_wire.is_closed(tol) {
+            return Err("Extrude requires a closed outer wire".to_string());
+        }
+        if outer_wire.edges.len() < 3 {
+            return Err("Extrude requires at least 3 edges in outer wire".to_string());
         }
 
-        let num_edges = bottom_wire.edges.len();
-        if num_edges < 3 {
-            return Err("Extrude requires at least 3 edges in the wire".to_string());
+        for (idx, hole) in inner_wires.iter().enumerate() {
+            if !hole.is_closed(tol) {
+                return Err(format!("Inner wire {} must be closed", idx));
+            }
+            if hole.edges.len() < 3 {
+                return Err(format!("Inner wire {} must have at least 3 edges", idx));
+            }
         }
 
-        // 1. 底面頂点と天面頂点の生成
-        let mut top_vertices = Vec::with_capacity(num_edges);
-        let mut bottom_vertices = Vec::with_capacity(num_edges);
+        let mut faces = Vec::new();
 
-        for oe in &bottom_wire.edges {
-            let v_bot = oe.start_vertex();
-            bottom_vertices.push(v_bot.clone());
-            let top_pt = v_bot.point + dir;
-            top_vertices.push(Vertex::new(top_pt, tol.linear));
+        // 1. 外壁側面Face群（Outer Wall Faces）の生成 (is_hole: false)
+        let (top_outer_wire, outer_side_faces) = Self::extrude_loop(outer_wire, dir, false, tol)?;
+        faces.extend(outer_side_faces);
+
+        // 2. 内壁側面Face群（Inner Hole Wall Faces）の生成 (is_hole: true)
+        let mut top_inner_wires = Vec::with_capacity(inner_wires.len());
+        for hole_wire in inner_wires {
+            let (top_hole_wire, hole_side_faces) = Self::extrude_loop(hole_wire, dir, true, tol)?;
+            faces.extend(hole_side_faces);
+            top_inner_wires.push(top_hole_wire);
         }
 
-        // 2. 天面エッジ群と天面ワイヤの構築
-        //    プロファイル曲線をそのまま平行移動する。直線で張り直すと、
-        //    円弧プロファイルの天面が弦の多角形になり、側面の曲面と食い違う。
-        let mut top_edges = Vec::with_capacity(num_edges);
-        for oriented in &bottom_wire.edges {
-            top_edges.push(OrientedEdge::new(
-                crate::BrepTransform::translate_edge(&oriented.edge, dir),
-                oriented.orientation,
-            ));
-        }
-        let top_wire = Wire::new(top_edges);
-
-        // 3. 側面エッジ群（縦方向エッジ柱）の生成
-        let mut pillar_edges = Vec::with_capacity(num_edges);
-        for i in 0..num_edges {
-            let edge = Edge::line_between(bottom_vertices[i].clone(), top_vertices[i].clone())?;
-            pillar_edges.push(edge);
-        }
-
-        // 4. 各側面Face（Side Faces）の構築 (底辺、右柱、天辺(rev)、左柱(rev))
-        let mut faces = Vec::with_capacity(num_edges + 2);
-
-        for i in 0..num_edges {
-            let next_i = (i + 1) % num_edges;
-
-            let bot_edge = bottom_wire.edges[i].edge.clone();
-            let right_pillar = pillar_edges[next_i].clone();
-            let top_edge = top_wire.edges[i].edge.clone();
-            let left_pillar = pillar_edges[i].clone();
-
-            let side_wire = Wire::new(vec![
-                OrientedEdge::forward(bot_edge.clone()),
-                OrientedEdge::forward(right_pillar),
-                OrientedEdge::reversed(top_edge),
-                OrientedEdge::reversed(left_pillar),
-            ]);
-
-            // 側面のNURBSルールド曲面（底辺カーブから天辺カーブへの押し出し）
-            let surf = Self::make_ruled_surface(&bot_edge.curve, dir)?;
-            faces.push(Face::simple(FaceGeometry::Nurbs(surf), side_wire));
-        }
-
-        // 5. 底面Faceと天面Faceの生成
+        // 3. 底面キャップFace（-dir 法線）
         let bot_normal = -dir
             .try_normalize_safe(1e-12)
             .unwrap_or_else(|| Vec3::new(0.0, 0.0, -1.0));
@@ -78,15 +56,105 @@ impl ExtrudeBuilder {
             .try_normalize_safe(1e-12)
             .unwrap_or_else(|| Vec3::new(0.0, 0.0, 1.0));
 
-        let bottom_cap_wire = Self::reversed_wire(bottom_wire);
-        let bot_face = Self::make_cap_face(&bottom_cap_wire, bottom_vertices[0].point, bot_normal)?;
-        let top_face = Self::make_cap_face(&top_wire, top_vertices[0].point, top_normal)?;
+        let bot_outer_wire = Self::reversed_wire(outer_wire);
+        let bot_inner_wires = inner_wires.to_vec();
 
+        let bot_face = Self::make_cap_face_with_holes(
+            &bot_outer_wire,
+            &bot_inner_wires,
+            outer_wire.edges[0].start_vertex().point,
+            bot_normal,
+        )?;
         faces.push(bot_face);
+
+        // 4. 天面キャップFace（+dir 法線）
+        let top_inner_reversed: Vec<Wire> = top_inner_wires.iter().map(Self::reversed_wire).collect();
+        let top_face = Self::make_cap_face_with_holes(
+            &top_outer_wire,
+            &top_inner_reversed,
+            top_outer_wire.edges[0].start_vertex().point,
+            top_normal,
+        )?;
         faces.push(top_face);
 
         let shell = Shell::closed(faces);
+        let report = shell.validate_closed(tol);
+        if !report.is_valid() {
+            return Err(format!("Extrude hollow validation failed: {:?}", report.errors));
+        }
         crate::validated_solid(shell)
+    }
+
+    /// 単一ループ（外側または穴）から天面ワイヤと側面Face群を構築
+    fn extrude_loop(
+        wire: &Wire,
+        dir: Vec3,
+        is_hole: bool,
+        tol: &Tolerance,
+    ) -> Result<(Wire, Vec<Face>), String> {
+        let num_edges = wire.edges.len();
+
+        let mut bottom_vertices = Vec::with_capacity(num_edges);
+        let mut top_vertices = Vec::with_capacity(num_edges);
+
+        for oe in &wire.edges {
+            let v_bot = oe.start_vertex();
+            bottom_vertices.push(v_bot.clone());
+            let top_pt = v_bot.point + dir;
+            top_vertices.push(Vertex::new(top_pt, tol.linear));
+        }
+
+        let mut top_edges = Vec::with_capacity(num_edges);
+        for oriented in &wire.edges {
+            top_edges.push(OrientedEdge::new(
+                crate::BrepTransform::translate_edge(&oriented.edge, dir),
+                oriented.orientation,
+            ));
+        }
+        let top_wire = Wire::new(top_edges);
+
+        let mut pillar_edges = Vec::with_capacity(num_edges);
+        for i in 0..num_edges {
+            let edge = Edge::line_between(bottom_vertices[i].clone(), top_vertices[i].clone())?;
+            pillar_edges.push(edge);
+        }
+
+        let mut side_faces = Vec::with_capacity(num_edges);
+        for i in 0..num_edges {
+            let next_i = (i + 1) % num_edges;
+
+            let bot_edge = wire.edges[i].edge.clone();
+            let right_pillar = pillar_edges[next_i].clone();
+            let top_edge = top_wire.edges[i].edge.clone();
+            let left_pillar = pillar_edges[i].clone();
+
+            let (side_wire, surf) = if !is_hole {
+                // 外壁: 外向き法線
+                let w = Wire::new(vec![
+                    OrientedEdge::forward(bot_edge.clone()),
+                    OrientedEdge::forward(right_pillar),
+                    OrientedEdge::reversed(top_edge),
+                    OrientedEdge::reversed(left_pillar),
+                ]);
+                let s = Self::make_ruled_surface(&bot_edge.curve, dir)?;
+                (w, s)
+            } else {
+                // 穴内壁: 穴の中心向き法線（曲線を反転して法線を内向きにする）
+                let w = Wire::new(vec![
+                    OrientedEdge::reversed(bot_edge.clone()),
+                    OrientedEdge::forward(left_pillar),
+                    OrientedEdge::forward(top_edge),
+                    OrientedEdge::reversed(right_pillar),
+                ]);
+                let rev_curve = bot_edge.curve.reversed();
+                let s = Self::make_ruled_surface(&rev_curve, dir)?;
+                (w, s)
+            };
+
+            side_faces.push(Face::simple(FaceGeometry::Nurbs(surf), side_wire));
+        }
+
+        Ok((top_wire, side_faces))
     }
 
     /// 底辺カーブから押し出し方向へのルールドNURBS曲面を生成
@@ -95,9 +163,6 @@ impl ExtrudeBuilder {
         let degree_u = curve.degree;
         let degree_v = 1;
 
-        // control_points[u][v] なので、u はプロファイル曲線、v は押し出し方向。
-        // 転置すると法線が裏返り、円弧プロファイル（制御点3点）では
-        // u 方向の制御点数が次数に足りず構築自体が失敗する。
         let mut control_points = Vec::with_capacity(n_u);
         for cp in &curve.control_points {
             control_points.push(vec![*cp, ControlPoint3::new(cp.point + dir, cp.weight)]);
@@ -109,8 +174,13 @@ impl ExtrudeBuilder {
         NurbsSurface3::new(degree_u, degree_v, control_points, knots_u, knots_v)
     }
 
-    /// 平面キャップFaceの生成
-    fn make_cap_face(wire: &Wire, origin: Point3, normal: Vec3) -> Result<Face, String> {
+    /// 平面キャップFace（穴あき対応）の生成
+    fn make_cap_face_with_holes(
+        outer_wire: &Wire,
+        inner_wires: &[Wire],
+        origin: Point3,
+        normal: Vec3,
+    ) -> Result<Face, String> {
         let arb = if normal.x.abs() < 0.9 {
             Vec3::new(1.0, 0.0, 0.0)
         } else {
@@ -126,7 +196,13 @@ impl ExtrudeBuilder {
             .ok_or("Failed v_axis")?;
 
         let plane = PlaneSurface3::new(origin, u_axis, v_axis).ok_or("Failed to create plane")?;
-        Ok(Face::simple(FaceGeometry::Plane(plane), wire.clone()))
+        Ok(Face::new(
+            FaceGeometry::Plane(plane),
+            outer_wire.clone(),
+            inner_wires.to_vec(),
+            zenith_topo::Orientation::Forward,
+            1e-6,
+        ))
     }
 
     fn reversed_wire(wire: &Wire) -> Wire {

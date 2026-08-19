@@ -572,6 +572,171 @@ impl DirectModeling {
         }
     }
 
+    /// 直方体の指定した単一垂直エッジ（0: X=0,Y=0; 1: X=dx,Y=0; 2: X=dx,Y=dy; 3: X=0,Y=dy）に距離 distance の45度面取りを適用
+    pub fn chamfer_box_single_edge(
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        edge_index: usize,
+        distance: f64,
+    ) -> Result<Solid, String> {
+        let c = distance;
+        if c <= 0.0 || c >= dx || c >= dy {
+            return Err(
+                "Chamfer distance must be positive and smaller than box dimensions".to_string(),
+            );
+        }
+
+        // 4隅のいずれかの垂直エッジを面取り
+        let (pb_pts, pt_pts) = match edge_index {
+            0 => {
+                // 角 (0, 0) を面取り: (c, 0) -> (dx, 0) -> (dx, dy) -> (0, dy) -> (0, c)
+                let b = vec![
+                    Point3::new(c, 0.0, 0.0),
+                    Point3::new(dx, 0.0, 0.0),
+                    Point3::new(dx, dy, 0.0),
+                    Point3::new(0.0, dy, 0.0),
+                    Point3::new(0.0, c, 0.0),
+                ];
+                let t = vec![
+                    Point3::new(c, 0.0, dz),
+                    Point3::new(dx, 0.0, dz),
+                    Point3::new(dx, dy, dz),
+                    Point3::new(0.0, dy, dz),
+                    Point3::new(0.0, c, dz),
+                ];
+                (b, t)
+            }
+            1 => {
+                // 角 (dx, 0) を面取り: (0, 0) -> (dx - c, 0) -> (dx, c) -> (dx, dy) -> (0, dy)
+                let b = vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(dx - c, 0.0, 0.0),
+                    Point3::new(dx, c, 0.0),
+                    Point3::new(dx, dy, 0.0),
+                    Point3::new(0.0, dy, 0.0),
+                ];
+                let t = vec![
+                    Point3::new(0.0, 0.0, dz),
+                    Point3::new(dx - c, 0.0, dz),
+                    Point3::new(dx, c, dz),
+                    Point3::new(dx, dy, dz),
+                    Point3::new(0.0, dy, dz),
+                ];
+                (b, t)
+            }
+            2 => {
+                // 角 (dx, dy) を面取り: (0, 0) -> (dx, 0) -> (dx, dy - c) -> (dx - c, dy) -> (0, dy)
+                let b = vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(dx, 0.0, 0.0),
+                    Point3::new(dx, dy - c, 0.0),
+                    Point3::new(dx - c, dy, 0.0),
+                    Point3::new(0.0, dy, 0.0),
+                ];
+                let t = vec![
+                    Point3::new(0.0, 0.0, dz),
+                    Point3::new(dx, 0.0, dz),
+                    Point3::new(dx, dy - c, dz),
+                    Point3::new(dx - c, dy, dz),
+                    Point3::new(0.0, dy, dz),
+                ];
+                (b, t)
+            }
+            3 => {
+                // 角 (0, dy) を面取り: (0, 0) -> (dx, 0) -> (dx, dy) -> (c, dy) -> (0, dy - c)
+                let b = vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(dx, 0.0, 0.0),
+                    Point3::new(dx, dy, 0.0),
+                    Point3::new(c, dy, 0.0),
+                    Point3::new(0.0, dy - c, 0.0),
+                ];
+                let t = vec![
+                    Point3::new(0.0, 0.0, dz),
+                    Point3::new(dx, 0.0, dz),
+                    Point3::new(dx, dy, dz),
+                    Point3::new(c, dy, dz),
+                    Point3::new(0.0, dy - c, dz),
+                ];
+                (b, t)
+            }
+            _ => return Err("Edge index must be 0, 1, 2, or 3 for vertical box chamfer".to_string()),
+        };
+
+        let vb: Vec<Vertex> = pb_pts.into_iter().map(Vertex::from_point).collect();
+        let vt: Vec<Vertex> = pt_pts.into_iter().map(Vertex::from_point).collect();
+
+        // 垂直エッジ 5本
+        let mut ev = Vec::with_capacity(5);
+        for i in 0..5 {
+            ev.push(Edge::line_between(vb[i].clone(), vt[i].clone())?);
+        }
+
+        // 底面・天面エッジ 5本（一周）
+        let mut eb = Vec::with_capacity(5);
+        let mut et = Vec::with_capacity(5);
+        for i in 0..5 {
+            let next_i = (i + 1) % 5;
+            eb.push(Edge::line_between(vb[i].clone(), vb[next_i].clone())?);
+            et.push(Edge::line_between(vt[i].clone(), vt[next_i].clone())?);
+        }
+
+        let mut faces = Vec::with_capacity(7);
+
+        // 1. 側面 5面（4つの元の側面 + 1つの面取り斜め面）
+        for i in 0..5 {
+            let next_i = (i + 1) % 5;
+            let p_orig = vb[i].point;
+            let u = vb[next_i].point - vb[i].point;
+            let v = vt[i].point - vb[i].point;
+            let plane = PlaneSurface3::new(p_orig, u, v).ok_or("plane creation failed")?;
+            let wire = Wire::new(vec![
+                OrientedEdge::forward(eb[i].clone()),
+                OrientedEdge::forward(ev[next_i].clone()),
+                OrientedEdge::reversed(et[i].clone()),
+                OrientedEdge::reversed(ev[i].clone()),
+            ]);
+            faces.push(Face::simple(FaceGeometry::Plane(plane), wire));
+        }
+
+        // 2. 底面 (-Z PLANE, 5角形, 逆順ワイヤ)
+        let p_bot = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .ok_or("bot plane creation failed")?;
+        let wire_bot = Wire::new(vec![
+            OrientedEdge::reversed(eb[4].clone()),
+            OrientedEdge::reversed(eb[3].clone()),
+            OrientedEdge::reversed(eb[2].clone()),
+            OrientedEdge::reversed(eb[1].clone()),
+            OrientedEdge::reversed(eb[0].clone()),
+        ]);
+        faces.push(Face::simple(FaceGeometry::Plane(p_bot), wire_bot));
+
+        // 3. 天面 (+Z PLANE, 5角形, 正順ワイヤ)
+        let p_top = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, dz),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .ok_or("top plane creation failed")?;
+        let wire_top = Wire::new(vec![
+            OrientedEdge::forward(et[0].clone()),
+            OrientedEdge::forward(et[1].clone()),
+            OrientedEdge::forward(et[2].clone()),
+            OrientedEdge::forward(et[3].clone()),
+            OrientedEdge::forward(et[4].clone()),
+        ]);
+        faces.push(Face::simple(FaceGeometry::Plane(p_top), wire_top));
+
+        let shell = Shell::closed(faces);
+        crate::validated_solid(shell)
+    }
+
+
     /// 複数面の同時オフセット変形（Move / Offset Multiple Faces）
     pub fn offset_multiple_faces(solid: &Solid, offsets: &[(usize, f64)]) -> Result<Solid, String> {
         let mut current_solid = solid.clone();
