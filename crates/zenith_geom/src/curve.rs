@@ -111,7 +111,51 @@ impl Curve3 for Circle3 {
     }
 
     fn to_nurbs(&self) -> Option<NurbsCurve3> {
-        // 円弧の正確な9制御点NURBS表現（有理B-Spline）などを今後追加可能
-        None
+        let delta = self.end_angle - self.start_angle;
+        if delta.abs() < 1e-12 {
+            return None;
+        }
+
+        let y_axis = self.normal.cross(&self.x_axis);
+        let num_segments = ((delta.abs() / (std::f64::consts::FRAC_PI_2 - 1e-6)).ceil() as usize).max(1);
+        let d_theta = delta / num_segments as f64;
+        let wm = (d_theta / 2.0).cos();
+
+        let mut control_points = Vec::with_capacity(2 * num_segments + 1);
+
+        // 始点制御点
+        let p0 = self.center + (self.x_axis * self.start_angle.cos() + y_axis * self.start_angle.sin()) * self.radius;
+        control_points.push(crate::nurbs_curve::ControlPoint3::unweighted(p0));
+
+        for seg in 0..num_segments {
+            let theta_start = self.start_angle + seg as f64 * d_theta;
+            let theta_mid = theta_start + d_theta / 2.0;
+            let theta_end = theta_start + d_theta;
+
+            // 中間制御点 (重み wm)
+            let p_mid = self.center + (self.x_axis * theta_mid.cos() + y_axis * theta_mid.sin()) * (self.radius / wm);
+            control_points.push(crate::nurbs_curve::ControlPoint3::new(p_mid, wm));
+
+            // 終点制御点 (重み 1.0)
+            let p_end = self.center + (self.x_axis * theta_end.cos() + y_axis * theta_end.sin()) * self.radius;
+            control_points.push(crate::nurbs_curve::ControlPoint3::unweighted(p_end));
+        }
+
+        // ノットベクトルの構築: [0, 0, 0, 1, 1, 2, 2, ..., N, N, N]
+        let mut knots = Vec::with_capacity(control_points.len() + 3);
+        knots.push(0.0);
+        knots.push(0.0);
+        knots.push(0.0);
+        for i in 1..num_segments {
+            knots.push(i as f64);
+            knots.push(i as f64);
+        }
+        let end_k = num_segments as f64;
+        knots.push(end_k);
+        knots.push(end_k);
+        knots.push(end_k);
+
+        NurbsCurve3::new(2, control_points, crate::bspline_basis::KnotVector::new(knots)).ok()
     }
 }
+
