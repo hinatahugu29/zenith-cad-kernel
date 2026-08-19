@@ -357,6 +357,8 @@ The next best engineering target is a `TrimmedFace`/p-curve layer plus adaptive 
 
 Every primitive is now covered by one table-driven test asserting it is a valid solid, that exact B-Rep integration reproduces its analytic volume and area, and that a STEP round-trip returns a valid solid with the same volume. Box, cylinder, sphere, cone, frustum, and torus all pass to within 1e-8 relative; the residual is quadrature error on the doubly curved surfaces, not geometry error.
 
+The same sweep over the modeling operations - hollow box, drilled box, filleted box, single-edge fillet, chamfered box, thickened face - found that `make_drilled_box()` built the hole's cylindrical wall with its normal pointing away from the axis. A hole has its material outside the wall, so the normal must point toward the axis. The solid still validated, because topological validation only checks that each edge is used once in each direction and only ties orientation to loop winding for planar faces; it took an exact integral to see it. The drilled box measured 13892 where the analytic answer is 12321 - larger than the undrilled box. The wall patches are now parameterized with `u` reversed, which turns the normal inward while leaving the wire winding, and therefore every edge pairing, untouched.
+
 Building the sweep found that STEP export wrote reals with `{:.6}`, six decimal places. That capped interchange fidelity at roughly 1e-7 relative and was the dominant round-trip error for every curved primitive. Reals are now written with twelve decimals, which drops the round-trip volume error from about 5e-8 to about 1e-13.
 
 ## Current Kernel Hardening Queue

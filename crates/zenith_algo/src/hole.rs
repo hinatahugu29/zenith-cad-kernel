@@ -243,10 +243,12 @@ impl HoleBuilder {
                 ControlPoint3::unweighted(p_e),
                 ControlPoint3::unweighted(Point3::new(p_e.x, p_e.y, dz)),
             ];
+            // 穴の壁面は材料が外側にあるため、法線は軸へ向かなければならない。
+            // u 方向を逆に張ることで、ワイヤの回り方はそのままに法線を内向きにする。
             let s = NurbsSurface3::new(
                 2,
                 1,
-                vec![row0, row1, row2],
+                vec![row2, row1, row0],
                 KnotVector::clamped_uniform(3, 2),
                 KnotVector::clamped_uniform(2, 1),
             )?;

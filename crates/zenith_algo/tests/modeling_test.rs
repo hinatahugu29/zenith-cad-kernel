@@ -1816,6 +1816,78 @@ fn test_revolved_surface_keeps_on_axis_profile_points_exact() {
     }
 }
 
+/// The modeling operations get the same treatment as the primitives: each result
+/// must be a valid solid whose exact volume matches the analytic answer. A face
+/// left inside-out still tessellates and still validates topologically, so the
+/// integral is what catches it.
+#[test]
+fn test_modeling_operations_produce_analytic_volumes() {
+    let tol = Tolerance::default();
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let pi = std::f64::consts::PI;
+
+    let (dx, dy, dz) = (30.0_f64, 40.0_f64, 25.0_f64);
+    let thickness = 2.5_f64;
+    let hollow = zenith_algo::ShellBuilder::make_hollow_box(dx, dy, dz, thickness, 1).unwrap();
+
+    let (bx, by, bz, hole_radius) = (30.0_f64, 30.0_f64, 15.0_f64, 5.0_f64);
+    let drilled = zenith_algo::HoleBuilder::make_drilled_box(bx, by, bz, hole_radius).unwrap();
+
+    let (fx, fy, fz) = (20.0_f64, 30.0_f64, 40.0_f64);
+    let fillet_radius = 4.0_f64;
+    let filleted =
+        zenith_algo::FilletBuilder::fillet_box_z_edges(fx, fy, fz, fillet_radius, &tol).unwrap();
+    let single_fillet =
+        zenith_algo::DirectModeling::fillet_box_single_edge(fx, fy, fz, 0, fillet_radius).unwrap();
+    let chamfer = 3.0_f64;
+    let chamfered =
+        zenith_algo::ChamferBuilder::chamfer_box_z_edges(fx, fy, fz, chamfer, &tol).unwrap();
+
+    let plate = zenith_algo::PrimitiveBuilder::make_box(10.0, 20.0, 30.0).unwrap();
+    let thickened =
+        zenith_algo::ThickenBuilder::thicken_face(&plate.outer_shell.faces[0], 5.0, &tol).unwrap();
+
+    // 角を半径 r で丸めると、角ごとに (r^2 - pi r^2 / 4) だけ体積が減る
+    let corner_loss = fillet_radius * fillet_radius * (1.0 - pi / 4.0) * fz;
+
+    let cases: Vec<(&str, zenith_topo::Solid, f64)> = vec![
+        (
+            "hollow box",
+            hollow,
+            dx * dy * dz - (dx - 2.0 * thickness) * (dy - 2.0 * thickness) * (dz - thickness),
+        ),
+        (
+            "drilled box",
+            drilled,
+            bx * by * bz - pi * hole_radius * hole_radius * bz,
+        ),
+        ("filleted box", filleted, fx * fy * fz - 4.0 * corner_loss),
+        ("single fillet", single_fillet, fx * fy * fz - corner_loss),
+        (
+            "chamfered box",
+            chamfered,
+            fx * fy * fz - 4.0 * (chamfer * chamfer / 2.0) * fz,
+        ),
+        ("thickened face", thickened, 10.0 * 20.0 * 5.0),
+    ];
+
+    for (name, solid, expected) in cases {
+        assert!(
+            solid.is_topologically_valid(&tol),
+            "{name} is not a valid solid"
+        );
+        let mass = zenith_algo::MassCalculator::compute_from_brep(&solid, &params);
+        assert!(
+            (mass.volume - expected).abs() < expected * 1e-9,
+            "{name} volume {} vs analytic {expected}",
+            mass.volume
+        );
+    }
+}
+
 /// Every primitive must be a valid solid, measure its analytic volume and area,
 /// and come back from STEP unchanged. One table keeps a new primitive - or a
 /// regression in an existing one - from slipping through with only its own test.
