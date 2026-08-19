@@ -1661,6 +1661,33 @@ fn test_cone_primitive_has_a_true_apex() {
 }
 
 #[test]
+fn test_true_cone_survives_a_step_roundtrip() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height: f64 = 20.0;
+    let cone = zenith_algo::PrimitiveBuilder::make_cone(radius, 0.0, height).unwrap();
+
+    let step = zenith_io::StepExporter::export_solid_to_string(&cone, "cone");
+    let imported = zenith_io::StepImporter::import_solid_from_str(&step)
+        .expect("a cone with a true apex should round-trip through STEP");
+
+    assert!(imported.is_topologically_valid(&tol));
+    assert_eq!(imported.outer_shell.faces.len(), 5);
+
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&imported, &params);
+    let expected = std::f64::consts::PI * radius * radius * height / 3.0;
+    assert!(
+        (mass.volume - expected).abs() < expected * 1e-6,
+        "imported cone volume {} vs analytic {expected}",
+        mass.volume
+    );
+}
+
+#[test]
 fn test_frustum_primitive_stays_analytic() {
     let params = TessellationParams {
         u_divisions: 32,
