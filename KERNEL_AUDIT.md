@@ -369,6 +369,12 @@ The same sweep over the modeling operations - hollow box, drilled box, filleted 
 
 Building the sweep found that STEP export wrote reals with `{:.6}`, six decimal places. That capped interchange fidelity at roughly 1e-7 relative and was the dominant round-trip error for every curved primitive. Reals are now written with twelve decimals, which drops the round-trip volume error from about 5e-8 to about 1e-13.
 
+## Input Robustness
+
+STEP import was fuzzed with empty, truncated, and garbage files, dangling and self-referencing entities, mutually recursive entities, unbalanced parentheses, duplicated files, and non-finite coordinates. Nothing panicked or hung: structural damage is refused with a message, cycles are refused rather than followed, and non-finite geometry is caught by solid validation. That behaviour is now pinned by a test that requires every malformed case to either error or return a solid that still validates.
+
+The builders were less careful. `fillet_box_z_edges()`, `chamfer_box_z_edges()`, and `make_drilled_box()` silently clamped their radius to 0.45 or 0.49 of the shorter side, so asking for a 20 mm fillet on a 10 mm box returned a valid-looking solid built with a 4.9 mm fillet, and a hole wider than its box came back as a plausible shape with the wrong volume. `make_box()` accepted negative sides and mirrored the box instead. All four now refuse out-of-range parameters and say why; a radius of exactly half the shorter side is refused too, because that is the degenerate limit where the flat faces vanish. Valid ranges are unchanged.
+
 ## Current Kernel Hardening Queue
 
 1. Replace projected degree-1 UV polylines with fitted/interpolated p-curves where exact curve class is needed.

@@ -14,9 +14,20 @@ impl ChamferBuilder {
         chamfer_dist: f64,
         _tol: &Tolerance,
     ) -> Result<Solid, String> {
-        let c = chamfer_dist.min(dx * 0.45).min(dy * 0.45);
+        if chamfer_dist < 0.0 {
+            return Err(format!(
+                "Chamfer distance must not be negative, got {chamfer_dist}"
+            ));
+        }
+        let c = chamfer_dist;
         if c <= 1e-6 {
             return crate::primitive::PrimitiveBuilder::make_box(dx, dy, dz);
+        }
+        if 2.0 * c >= dx.min(dy) {
+            return Err(format!(
+                "Chamfer distance {c} must be smaller than half the shorter side ({})",
+                dx.min(dy) * 0.5
+            ));
         }
 
         // 1. 底面 (z=0) の8頂点（反時計回り）

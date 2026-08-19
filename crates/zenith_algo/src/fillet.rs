@@ -14,9 +14,20 @@ impl FilletBuilder {
         radius: f64,
         _tol: &Tolerance,
     ) -> Result<Solid, String> {
-        let r = radius.min(dx * 0.49).min(dy * 0.49);
+        // 要求された半径を黙って詰めない。丸めきれない指定は、それらしい
+        // 別形状を返すのではなく理由を返す。
+        if radius < 0.0 {
+            return Err(format!("Fillet radius must not be negative, got {radius}"));
+        }
+        let r = radius;
         if r <= 1e-6 {
             return crate::primitive::PrimitiveBuilder::make_box(dx, dy, dz);
+        }
+        if 2.0 * r >= dx.min(dy) {
+            return Err(format!(
+                "Fillet radius {r} must be smaller than half the shorter side ({})",
+                dx.min(dy) * 0.5
+            ));
         }
 
         // 下面 (z=0) の8頂点

@@ -8,9 +8,20 @@ pub struct HoleBuilder;
 impl HoleBuilder {
     /// 直方体にZ軸方向の貫通円形穴を開けたソリッドを生成（内側穴ループ FACE_BOUND 完全対応）
     pub fn make_drilled_box(dx: f64, dy: f64, dz: f64, hole_radius: f64) -> Result<Solid, String> {
-        let r = hole_radius.min(dx * 0.45).min(dy * 0.45);
+        if hole_radius < 0.0 {
+            return Err(format!(
+                "Hole radius must not be negative, got {hole_radius}"
+            ));
+        }
+        let r = hole_radius;
         if r <= 1e-6 {
             return crate::primitive::PrimitiveBuilder::make_box(dx, dy, dz);
+        }
+        if 2.0 * r >= dx.min(dy) {
+            return Err(format!(
+                "Hole radius {r} must be smaller than half the shorter side ({})",
+                dx.min(dy) * 0.5
+            ));
         }
 
         let cx = dx * 0.5;

@@ -1859,6 +1859,181 @@ fn test_shell_validation_rejects_an_inside_out_curved_face() {
     );
 }
 
+/// Degenerate or out-of-range parameters must be refused with a reason, never
+/// quietly clamped into a different shape and never returned as a solid that
+/// merely passes topological checks.
+#[test]
+fn test_builders_refuse_degenerate_parameters() {
+    let tol = Tolerance::default();
+
+    let cases: Vec<(
+        &str,
+        Box<dyn Fn() -> Result<zenith_topo::Solid, String> + '_>,
+    )> = vec![
+        (
+            "box with a zero side",
+            Box::new(|| zenith_algo::PrimitiveBuilder::make_box(0.0, 10.0, 10.0)),
+        ),
+        (
+            "box with a negative side",
+            Box::new(|| zenith_algo::PrimitiveBuilder::make_box(-10.0, 10.0, 10.0)),
+        ),
+        (
+            "cylinder with no radius",
+            Box::new(|| zenith_algo::PrimitiveBuilder::make_cylinder(0.0, 10.0)),
+        ),
+        (
+            "cylinder with negative height",
+            Box::new(|| zenith_algo::PrimitiveBuilder::make_cylinder(5.0, -1.0)),
+        ),
+        (
+            "sphere with no radius",
+            Box::new(|| zenith_algo::PrimitiveBuilder::make_sphere(0.0)),
+        ),
+        (
+            "torus whose tube swallows the ring",
+            Box::new(|| zenith_algo::PrimitiveBuilder::make_torus(5.0, 5.0)),
+        ),
+        (
+            "fillet exactly half the side",
+            Box::new(|| {
+                zenith_algo::FilletBuilder::fillet_box_z_edges(10.0, 10.0, 10.0, 5.0, &tol)
+            }),
+        ),
+        (
+            "fillet larger than the box",
+            Box::new(|| {
+                zenith_algo::FilletBuilder::fillet_box_z_edges(10.0, 10.0, 10.0, 20.0, &tol)
+            }),
+        ),
+        (
+            "chamfer larger than the box",
+            Box::new(|| {
+                zenith_algo::ChamferBuilder::chamfer_box_z_edges(10.0, 10.0, 10.0, 20.0, &tol)
+            }),
+        ),
+        (
+            "hole wider than the box",
+            Box::new(|| zenith_algo::HoleBuilder::make_drilled_box(10.0, 10.0, 10.0, 8.0)),
+        ),
+        (
+            "shell thicker than half",
+            Box::new(|| zenith_algo::ShellBuilder::make_hollow_box(10.0, 10.0, 10.0, 5.0, 1)),
+        ),
+        (
+            "push-pull that inverts the solid",
+            Box::new(|| {
+                zenith_algo::DirectModeling::push_pull_face(
+                    &zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap(),
+                    1,
+                    -20.0,
+                )
+            }),
+        ),
+    ];
+
+    for (name, build) in cases {
+        let result = build();
+        assert!(
+            result.is_err(),
+            "{name} should have been refused, but a solid came back"
+        );
+        assert!(
+            !result.unwrap_err().is_empty(),
+            "{name} was refused without a reason"
+        );
+    }
+
+    // 有効な範囲では従来どおり作れること（拒否が広がりすぎていないか）
+    assert!(zenith_algo::FilletBuilder::fillet_box_z_edges(10.0, 10.0, 10.0, 4.9, &tol).is_ok());
+    assert!(zenith_algo::HoleBuilder::make_drilled_box(10.0, 10.0, 10.0, 4.9).is_ok());
+    assert!(zenith_algo::PrimitiveBuilder::make_box(1e9, 1e9, 1e9).is_ok());
+}
+
+/// A kernel must never panic, hang, or hand back a corrupt solid because a file
+/// was malformed. Every case here must either be refused with an error or come
+/// back as a solid that still passes validation.
+#[test]
+fn test_step_import_survives_malformed_files() {
+    let tol = Tolerance::default();
+    let good = zenith_io::StepExporter::export_solid_to_string(
+        &zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap(),
+        "box",
+    );
+
+    let line_with = |needle: &str| -> String {
+        good.lines()
+            .find(|line| line.contains(needle))
+            .unwrap_or_default()
+            .to_string()
+    };
+    let face_line = line_with("ADVANCED_FACE");
+    let shell_line = line_with("CLOSED_SHELL");
+    let edge_line = line_with("EDGE_CURVE");
+    let vertex_line = line_with("VERTEX_POINT");
+    let vertex_id: String = vertex_line.chars().take_while(|c| *c != '=').collect();
+    let point_line = line_with("CARTESIAN_POINT");
+    let point_id: String = point_line.chars().take_while(|c| *c != '=').collect();
+
+    let cases: Vec<(&str, String)> = vec![
+        ("empty", String::new()),
+        ("garbage", "not a step file at all".to_string()),
+        ("truncated", good[..good.len() / 2].to_string()),
+        ("no terminator", good.replace("END-ISO-10303-21;", "")),
+        ("no semicolons", good.replace(';', "")),
+        // 使用中の実体への参照切れ
+        (
+            "face with missing refs",
+            good.replace(&face_line, &face_line.replacen('#', "#888888", 2)),
+        ),
+        (
+            "shell with missing face",
+            good.replace(&shell_line, &shell_line.replacen('#', "#777777", 1)),
+        ),
+        (
+            "edge with missing vertex",
+            good.replace(&edge_line, &edge_line.replacen('#', "#666666", 1)),
+        ),
+        // 循環参照でループやスタック溢れを起こさないこと
+        (
+            "self-referencing vertex",
+            good.replace(
+                &vertex_line,
+                &format!("{vertex_id}=VERTEX_POINT('',{vertex_id});"),
+            ),
+        ),
+        (
+            "mutually recursive entities",
+            good.replace(
+                &point_line,
+                &format!("{point_id}=CARTESIAN_POINT('',{vertex_id});"),
+            )
+            .replace(
+                &vertex_line,
+                &format!("{vertex_id}=VERTEX_POINT('',{point_id});"),
+            ),
+        ),
+        // 非有限座標は受け入れてはならない
+        ("nan coordinate", good.replacen("10.000000000000", "NaN", 1)),
+        (
+            "infinite coordinate",
+            good.replacen("10.000000000000", "1E400", 1),
+        ),
+        ("unbalanced parens", good.replacen("))", ")", 1)),
+        ("duplicated file", format!("{good}\n{good}")),
+    ];
+
+    for (name, content) in cases {
+        match zenith_io::StepImporter::import_solid_from_str(&content) {
+            Ok(solid) => assert!(
+                solid.is_topologically_valid(&tol),
+                "{name} was imported as an invalid solid"
+            ),
+            Err(error) => assert!(!error.is_empty(), "{name} was refused without a reason"),
+        }
+    }
+}
+
 #[test]
 fn test_boundary_validation_rejects_a_chord_across_a_curved_face() {
     let tol = Tolerance::default();

@@ -8,6 +8,12 @@ pub struct PrimitiveBuilder;
 impl PrimitiveBuilder {
     /// 直方体ソリッド（Box）の生成（外向き法線・閉マニホールドB-Rep）
     pub fn make_box(dx: f64, dy: f64, dz: f64) -> Result<Solid, String> {
+        if dx <= 1e-9 || dy <= 1e-9 || dz <= 1e-9 {
+            return Err(format!(
+                "Box dimensions must be positive, got ({dx}, {dy}, {dz})"
+            ));
+        }
+
         let p0 = Point3::new(0.0, 0.0, 0.0);
         let p1 = Point3::new(dx, 0.0, 0.0);
         let p2 = Point3::new(dx, dy, 0.0);
