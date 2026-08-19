@@ -252,12 +252,14 @@ impl HoleBuilder {
                 KnotVector::clamped_uniform(3, 2),
                 KnotVector::clamped_uniform(2, 1),
             )?;
-            // 穴側面ワイヤ: p_s -> p_e -> p_e(top) -> p_s(top)
+            // 穴側面ワイヤ。穴は材料が外側にあるので、外側円筒とは逆回りに
+            // たどる。これで UV 上のループが反転した u 方向と整合し、面の
+            // 向きと巻き方向が一致する。
             let wire = Wire::new(vec![
-                OrientedEdge::forward(arc_b),
-                OrientedEdge::forward(ev_e),
-                OrientedEdge::reversed(arc_t),
-                OrientedEdge::reversed(ev_s),
+                OrientedEdge::forward(ev_s),
+                OrientedEdge::forward(arc_t),
+                OrientedEdge::reversed(ev_e),
+                OrientedEdge::reversed(arc_b),
             ]);
             Ok(Face::simple(FaceGeometry::Nurbs(s), wire))
         };
@@ -317,12 +319,12 @@ impl HoleBuilder {
             OrientedEdge::reversed(eb12.clone()),
             OrientedEdge::reversed(eb01.clone()),
         ]);
-        // 内側穴ループ（外向き法線 -Z に対して時計回り、すなわち反転順）
+        // 内側穴ループは外周ループと逆回りでなければ、穴がくり抜かれない
         let inner_wire_bot = Wire::new(vec![
-            OrientedEdge::reversed(arc_hb30.clone()),
-            OrientedEdge::reversed(arc_hb23.clone()),
-            OrientedEdge::reversed(arc_hb12.clone()),
-            OrientedEdge::reversed(arc_hb01.clone()),
+            OrientedEdge::forward(arc_hb01.clone()),
+            OrientedEdge::forward(arc_hb12.clone()),
+            OrientedEdge::forward(arc_hb23.clone()),
+            OrientedEdge::forward(arc_hb30.clone()),
         ]);
         faces.push(Face::new(
             FaceGeometry::Plane(p_bot),
@@ -346,12 +348,12 @@ impl HoleBuilder {
             OrientedEdge::forward(et23.clone()),
             OrientedEdge::forward(et30.clone()),
         ]);
-        // 内側穴ループ（外向き法線 +Z に対して時計回り＝穴をくり抜く向き）
+        // 内側穴ループは外周ループと逆回りでなければ、穴がくり抜かれない
         let inner_wire_top = Wire::new(vec![
-            OrientedEdge::forward(arc_ht01.clone()),
-            OrientedEdge::forward(arc_ht12.clone()),
-            OrientedEdge::forward(arc_ht23.clone()),
-            OrientedEdge::forward(arc_ht30.clone()),
+            OrientedEdge::reversed(arc_ht30.clone()),
+            OrientedEdge::reversed(arc_ht23.clone()),
+            OrientedEdge::reversed(arc_ht12.clone()),
+            OrientedEdge::reversed(arc_ht01.clone()),
         ]);
         faces.push(Face::new(
             FaceGeometry::Plane(p_top),

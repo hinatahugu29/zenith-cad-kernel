@@ -423,13 +423,22 @@ fn validate_planar_face_orientation(
     report: &mut ShellValidationReport,
     tol: &Tolerance,
 ) {
-    let FaceGeometry::Plane(_) = &face.geometry else {
-        return;
+    // NURBS面も同じ規約に従う: 外側トリムループの回り方と face.orientation が
+    // 一致していなければ、面の外向き法線が材料の反対を向いてしまう。
+    // ただし縫い目だけで構成されるループ（球・トーラスの1面表現）は
+    // UV 上で面積を囲まないので対象外。
+    let seam_only_loop_allowed = match &face.geometry {
+        FaceGeometry::Plane(_) => false,
+        FaceGeometry::Nurbs(_) => true,
+        _ => return,
     };
     let Ok(pcurves) = face.pcurves(tol) else {
         return;
     };
     let area = pcurve_loop_signed_area(&pcurves.outer_loop.segments, 8);
+    if seam_only_loop_allowed && area.abs() <= tol.parametric {
+        return;
+    }
     if area.abs() <= tol.parametric {
         report.degenerate_face_count += 1;
         report.min_planar_face_area = report.min_planar_face_area.min(area.abs());

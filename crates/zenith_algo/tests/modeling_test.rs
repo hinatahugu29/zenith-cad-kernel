@@ -1817,6 +1817,49 @@ fn test_revolved_surface_keeps_on_axis_profile_points_exact() {
 }
 
 #[test]
+fn test_shell_validation_rejects_an_inside_out_curved_face() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    assert!(
+        cylinder
+            .outer_shell
+            .validate_closed(&tol)
+            .planar_face_orientation_mismatch_count
+            == 0
+    );
+
+    // 側面パッチのワイヤだけを反転すると、面の外向き法線が内側を向く。
+    // トポロジーの辺の対応だけでは検出できないので、巻き方向で判定する。
+    let mut faces = cylinder.outer_shell.faces.clone();
+    let side = faces
+        .iter()
+        .position(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+        .expect("side patch");
+    let reversed_wire = Wire::new(
+        faces[side]
+            .outer_wire
+            .edges
+            .iter()
+            .rev()
+            .map(|edge| OrientedEdge::new(edge.edge.clone(), edge.orientation.reversed()))
+            .collect(),
+    );
+    faces[side] = Face::new(
+        faces[side].geometry.clone(),
+        reversed_wire,
+        Vec::new(),
+        faces[side].orientation,
+        faces[side].tolerance,
+    );
+
+    let report = Shell::closed(faces).validate_closed(&tol);
+    assert!(
+        report.planar_face_orientation_mismatch_count > 0,
+        "an inside-out NURBS face must be reported as an orientation mismatch"
+    );
+}
+
+#[test]
 fn test_boundary_validation_rejects_a_chord_across_a_curved_face() {
     let tol = Tolerance::default();
     let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
