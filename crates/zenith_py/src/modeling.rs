@@ -179,40 +179,42 @@ pub fn make_revolve(
     Ok(PyMesh { mesh })
 }
 
-/// 断面曲線群からロフト曲面を生成
+/// 断面曲線群からロフト曲面を生成（不揃いな点数のプロファイルも自動対応）
 #[pyfunction]
-#[pyo3(signature = (profiles, degree_v = 2, u_divisions = 24, v_divisions = 24))]
+#[pyo3(signature = (profiles, degree_v = 2, u_divisions = 24, v_divisions = 24, step_path = None))]
 pub fn make_loft(
     profiles: Vec<Vec<[f64; 3]>>,
     degree_v: usize,
     u_divisions: usize,
     v_divisions: usize,
+    step_path: Option<&str>,
 ) -> PyResult<PyMesh> {
     if profiles.len() < 2 {
         return Err(PyValueError::new_err("Loft requires at least 2 profiles"));
     }
-    let num_u = profiles[0].len();
-    let degree_u = (num_u - 1).min(3);
 
     let mut curves = Vec::with_capacity(profiles.len());
     for p_pts in profiles {
-        if p_pts.len() != num_u {
+        if p_pts.len() < 2 {
             return Err(PyValueError::new_err(
-                "All profiles must have identical point count",
+                "Each profile must contain at least 2 points",
             ));
         }
-        let ctrl_pts = p_pts
+        let degree = (p_pts.len() - 1).min(3);
+        let pts: Vec<Point3> = p_pts
             .into_iter()
-            .map(|p| ControlPoint3::unweighted(Point3::new(p[0], p[1], p[2])))
+            .map(|p| Point3::new(p[0], p[1], p[2]))
             .collect();
-        let knots = KnotVector::clamped_uniform(num_u, degree_u);
-        let c = NurbsCurve3::new(degree_u, ctrl_pts, knots).map_err(PyValueError::new_err)?;
+        let c = NurbsCurve3::bspline_from_points(degree, pts)
+            .map_err(PyValueError::new_err)?;
         curves.push(c);
     }
 
     let tol = Tolerance::default();
     let surf = LoftBuilder::loft_curves(&curves, degree_v, &tol)
         .map_err(|e| PyValueError::new_err(format!("Loft failed: {}", e)))?;
+
+    let _ = step_path; // 将来のSTEPサーフェス出力用
 
     let params = TessellationParams {
         u_divisions,
@@ -221,6 +223,66 @@ pub fn make_loft(
     let mesh = tessellate_surface(&surf, &params, zenith_topo::Orientation::Forward);
     Ok(PyMesh { mesh })
 }
+
+/// 閉じた断面ポリライン群から完全閉B-Repロフトソリッドを生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (sections, degree_v = 2, u_divisions = 24, v_divisions = 24, step_path = None))]
+pub fn make_loft_solid(
+    sections: Vec<Vec<[f64; 3]>>,
+    degree_v: usize,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    if sections.len() < 2 {
+        return Err(PyValueError::new_err("Loft solid requires at least 2 sections"));
+    }
+
+    let tol = Tolerance::default();
+    let mut wires = Vec::with_capacity(sections.len());
+
+    for sec in sections {
+        let n = sec.len();
+        if n < 3 {
+            return Err(PyValueError::new_err(
+                "Each section must have at least 3 vertices to form a closed wire",
+            ));
+        }
+
+        let vertices: Vec<zenith_topo::Vertex> = sec
+            .iter()
+            .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+            .collect();
+
+        let mut edges = Vec::with_capacity(n);
+        for i in 0..n {
+            let next_i = (i + 1) % n;
+            let edge = zenith_topo::Edge::line_between(
+                vertices[i].clone(),
+                vertices[next_i].clone(),
+            )
+            .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+            edges.push(zenith_topo::OrientedEdge::forward(edge));
+        }
+        wires.push(zenith_topo::Wire::new(edges));
+    }
+
+    let solid = LoftBuilder::loft_solid(&wires, degree_v, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Loft solid failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_LOFT_SOLID")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
 
 /// シェル化・肉厚中空ソリッド（容器・ケーシング）の生成
 #[pyfunction]
