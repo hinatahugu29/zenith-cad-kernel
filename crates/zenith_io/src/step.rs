@@ -321,50 +321,10 @@ impl StepExporter {
             return ctx.add_entity(&format!("LINE('',#{},#{})", p_id, vec_id));
         }
 
-        // 2次有理円弧の場合: 円弧（TRIMMED_CURVE of CIRCLE）として判定・出力可能か確認
-        if nurbs.degree == 2
-            && nurbs.control_points.len() == 3
-            && (nurbs.control_points[1].weight - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-4
-        {
-            let p0 = nurbs.control_points[0].point;
-            let p1 = nurbs.control_points[1].point;
-            let p2 = nurbs.control_points[2].point;
-            // コーナー制御点 p1 から中心 C を復元: C = p0 + p2 - p1
-            let center = Point3::new(p0.x + p2.x - p1.x, p0.y + p2.y - p1.y, p0.z);
-            let r0 = (p0 - center).norm();
-            let r2 = (p2 - center).norm();
-            if (r0 - r2).abs() < 1e-4 && r0 > 1e-6 {
-                let v0 = (p0 - center).normalize();
-                let v2 = (p2 - center).normalize();
-                let normal = v0.cross(&v2).normalize();
-                if normal.norm() > 0.5 {
-                    let center_id = Self::write_point(ctx, center);
-                    let norm_id = ctx.add_entity(&format!(
-                        "DIRECTION('',({:.12},{:.12},{:.12}))",
-                        normal.x, normal.y, normal.z
-                    ));
-                    let ref_id = ctx.add_entity(&format!(
-                        "DIRECTION('',({:.12},{:.12},{:.12}))",
-                        v0.x, v0.y, v0.z
-                    ));
-                    let axis_id = ctx.add_entity(&format!(
-                        "AXIS2_PLACEMENT_3D('',#{},#{},#{})",
-                        center_id, norm_id, ref_id
-                    ));
-                    let circle_id = ctx.add_entity(&format!("CIRCLE('',#{},{:.12})", axis_id, r0));
-                    let p0_id = Self::write_point(ctx, p0);
-                    let p2_id = Self::write_point(ctx, p2);
-                    return ctx.add_entity(&format!(
-                        "TRIMMED_CURVE('',#{},(#{},PARAMETER_VALUE(0.0)),(#{},PARAMETER_VALUE(1.570796326795)),.T.,.PARAMETER.)",
-                        circle_id, p0_id, p2_id
-                    ));
-                }
-            }
-        }
-
-        // 一般のNURBS曲線（B_SPLINE_CURVE_WITH_KNOTS）
+        // 一般のNURBS曲線 / 有理2次円弧（B_SPLINE_CURVE_WITH_KNOTS / RATIONAL_B_SPLINE_CURVE）
         Self::write_nurbs_curve(ctx, nurbs)
     }
+
 
     fn write_nurbs_curve(ctx: &mut StepContext, nurbs: &NurbsCurve3) -> u64 {
         let mut is_rational = false;

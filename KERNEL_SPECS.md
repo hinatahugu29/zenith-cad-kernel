@@ -60,16 +60,21 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | 機能名 | 実装クラス | スペック・能力 |
 | :--- | :--- | :--- |
 | **直方体 (Box)** | `PrimitiveBuilder::make_box` | 幅・奥行・高さから6枚の完全平面Faceを持つB-Repソリッドを生成。 |
-| **円柱 (Cylinder)** | `PrimitiveBuilder::make_cylinder` | 4枚の有理NURBS円筒面＋上下円形端面（全6面）の完全閉ソリッド。 |
-| **螺旋（ヘリカル）スイープ** | `HelixBuilder` | 3D有理NURBS螺旋パス ＆ 任意閉断面ワイヤのRMFヘリカルスイープ閉ソリッド（スプリング・ネジ山）。 |
-| **3Dポリライン配管・フレーム** | `PolylineBuilder` | 3D点列折れ線 ＆ 指定コーナー半径 $R$ の自動円弧フィレット挿入（$G^1$ 連続）による配管パイプ・角形フレーム掃引ソリッド。 |
+| **スイープ (Sweep)** | `sweep` | 3D曲線パスに沿った円形パイプスイープ（RMF標架、4象限NURBS＋4扇形NURBS完全円形端面キャップ）、任意閉ワイヤスイープ。 |
+| **3D角丸めポリライン (Polyline)** | `polyline` | 3D折れ線パスの自動コーナフィレット＆パイプ/任意断面スイープ。 |
+| **薄肉シェル化 (Shelling)** | `shelling` | 任意ソリッドからの開口面除去および均一肉厚 $t$ での中空容器（Open-Top Box）自動構築。 |
+| **断面スライス (Section Slicing)** | `slice` | 任意3D平面によるB-Repソリッド切断、閉じた断面ワイヤループ抽出、断面積・周長厳密計算。 |
+| **アセンブリ干渉判定 (Clash)** | `interference` | 2ソリッド間の空間干渉判定（Clearance / Touching / Clash）、最小距離、干渉体積推定。 |
+| **ヘリックス (Helix)** | `helix` | リード角・ピッチ・巻数指定の3次元螺旋・スプリングソリッド。 |
+| **パターン＆ミラー (Pattern / Mirror)** | `pattern`, `mirror` | 線形/円形パターン、任意平面に対する幾何ミラー反転＆Compound対称ケーシング。 |
+| **フィレット / 面取り** | `fillet`, `chamfer` | 単一エッジおよび直方体コーナーエッジの連続丸め・C面取り。 |
+| **ダイレクトモデリング** | `direct_edit` | プッシュプル（面オフセット移動）、テーパー（抜き勾配傾斜）、ドーム/平面ワイヤキャッピング。 |
 | **球体 (Sphere)** | `PrimitiveBuilder::make_sphere` | 4枚の有理NURBS球面パッチによる完全真球ソリッド。 |
 | **円錐 / 円錐台 (Cone)** | `PrimitiveBuilder::make_cone` | 底面半径 $R_1$、天面半径 $R_2$、高さ $H$ の有理NURBS円錐台ソリッド（全6面）。 |
 | **トーラス (Torus)** | `PrimitiveBuilder::make_torus` | 主半径 $R$、断面半径 $r$ の有理NURBS真円回転ドーナツ立体。 |
 | **ミラー（鏡像反転複製）** | `MirrorBuilder` | 任意の対称平面（点 $P_0$, 法線 $\vec{N}$）に対するB-Repソリッド反転。右手系整合・オイラー閉シェル100%維持。原本＋反転のCompound Solid Pair対応。 |
 | **多角形押し出し (Extrude)** | `ExtrudeBuilder::extrude_wire` | 任意2D多角形ワイヤを指定ベクトル方向に掃引してソリッド化。 |
 | **有理回転体 (Revolve)** | `RevolveBuilder::revolve_curve` | 2D曲線を回転軸まわりに $360^\circ$（または任意角）回転したな有理NURBSソリッド。 |
-| **複数断面ロフト (Loft)** | `LoftBuilder::loft_profiles` | 複数の断面ワイヤ間を滑らかに補間通過する自由曲面ソリッド。 |
 | **3Dスプライン・スイープ (Sweep)** | `SweepBuilder::sweep_circle_along_curve` | 3Dパスに沿って最小回転標架（RMF）でねじれなく掃引したパイプソリッド。 |
 | **4隅エッジフィレット (Fillet)** | `FilletBuilder::fillet_box_z_edges` | 直方体の垂直4角に半径 $R$ の有理NURBS円弧面を適用したソリッド化。 |
 | **エッジ面取り (Chamfer)** | `ChamferBuilder::chamfer_box_z_edges` | エッジに距離 $C$ mm の面取り平面を適用した完全閉多面体。 |

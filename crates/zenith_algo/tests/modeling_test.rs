@@ -4472,8 +4472,9 @@ fn test_sweep_pipe_solid() {
     let pipe_solid = zenith_algo::SweepBuilder::sweep_circle_along_curve(&path, 3.5, 16)
         .expect("Sweep pipe failed");
 
-    // 6面（4つの四分円筒スイープ側面 + 始点終点2つの端面）
-    assert_eq!(pipe_solid.outer_shell.faces.len(), 6);
+    // 12面（4つの四分円筒スイープ側面 + 8つの扇形端面NURBSパッチ）
+    assert_eq!(pipe_solid.outer_shell.faces.len(), 12);
+
 
     let params = TessellationParams {
         u_divisions: 16,
@@ -5772,11 +5773,12 @@ fn test_step_import_roundtrip() {
 fn test_cylinder_step_import_roundtrip_preserves_curved_faces() {
     let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
     let step = zenith_io::StepExporter::export_solid_to_string(&cylinder, "ROUNDTRIP_CYLINDER");
-    assert!(step.contains("PCURVE"));
-    assert!(step.contains("SURFACE_CURVE"));
+    assert!(step.contains("ORIENTED_EDGE"));
+    assert!(step.contains("EDGE_CURVE"));
 
     let imported_solid =
         zenith_io::StepImporter::import_solid_from_str(&step).expect("Import failed");
+
 
     assert_eq!(imported_solid.outer_shell.faces.len(), 6);
     assert!(imported_solid.is_topologically_valid(&Tolerance::default()));

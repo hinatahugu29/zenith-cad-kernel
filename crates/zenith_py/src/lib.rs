@@ -44,12 +44,14 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::make_mirror_compound_casing, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_polyline_pipe, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_polyline_sweep, m)?)?;
-
-
-
+    m.add_function(wrap_pyfunction!(modeling::make_open_box, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::slice_box_by_plane, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::compute_box_mass_properties, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::check_boxes_interference, m)?)?;
 
     m.add_function(wrap_pyfunction!(modeling::make_boolean, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::thicken_surface_patch, m)?)?;
+
 
     // Direct Modeling
     m.add_function(wrap_pyfunction!(direct_edit::fillet_box_single_edge, m)?)?;

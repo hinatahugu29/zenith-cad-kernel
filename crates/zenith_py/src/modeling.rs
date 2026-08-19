@@ -1022,3 +1022,118 @@ pub fn make_polyline_sweep(
     Ok(PyMesh { mesh })
 }
 
+/// 天面が開口した均一肉厚の薄肉直方体容器（Open-Top Box）の生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (dx, dy, dz, thickness, u_divisions = 8, v_divisions = 8, step_path = None))]
+pub fn make_open_box(
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    thickness: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::ShellingBuilder::make_open_box(dx, dy, dz, thickness)
+        .map_err(|e| PyValueError::new_err(format!("Open box creation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_OPEN_BOX")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 直方体を任意平面で切断し、断面積、外周長、および断面多角形頂点列を算出
+#[pyfunction]
+#[pyo3(signature = (dx, dy, dz, plane_origin, plane_normal))]
+pub fn slice_box_by_plane(
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    plane_origin: [f64; 3],
+    plane_normal: [f64; 3],
+) -> PyResult<(f64, f64, Vec<Vec<[f64; 3]>>)> {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::PrimitiveBuilder::make_box(dx, dy, dz)
+        .map_err(|e| PyValueError::new_err(format!("Box creation failed: {}", e)))?;
+
+    let p_orig = Point3::new(plane_origin[0], plane_origin[1], plane_origin[2]);
+    let p_norm = Vec3::new(plane_normal[0], plane_normal[1], plane_normal[2]);
+
+    let res = zenith_algo::SectionSlicer::slice_solid(&solid, p_orig, p_norm, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Section slicing failed: {}", e)))?;
+
+    let mut loops = Vec::new();
+    for wire in res.section_wires {
+        let mut loop_pts = Vec::new();
+        for oe in wire.edges {
+            let p = oe.start_vertex().point;
+            loop_pts.push([p.x, p.y, p.z]);
+        }
+        loops.push(loop_pts);
+    }
+
+    Ok((res.total_area, res.total_perimeter, loops))
+}
+
+/// 直方体の高精度物理特性・重心・慣性モーメントを計算
+#[pyfunction]
+#[pyo3(signature = (dx, dy, dz, _density = 1.0))]
+pub fn compute_box_mass_properties(
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    _density: f64,
+) -> PyResult<(f64, f64, [f64; 3], [f64; 3])> {
+    let solid = zenith_algo::PrimitiveBuilder::make_box(dx, dy, dz)
+        .map_err(|e| PyValueError::new_err(format!("Box creation failed: {}", e)))?;
+
+    let params = TessellationParams {
+        u_divisions: 8,
+        v_divisions: 8,
+    };
+    let props = zenith_algo::MassCalculator::compute_from_brep(&solid, &params);
+
+    let center = [props.center_of_mass.x, props.center_of_mass.y, props.center_of_mass.z];
+    let inertia = [props.inertia_diagonal.x, props.inertia_diagonal.y, props.inertia_diagonal.z];
+
+    Ok((props.volume, props.surface_area, center, inertia))
+}
+
+/// 2つの直方体間の干渉・クリアランスを判定
+#[pyfunction]
+#[pyo3(signature = (dx1, dy1, dz1, offset1, dx2, dy2, dz2, offset2))]
+pub fn check_boxes_interference(
+    dx1: f64, dy1: f64, dz1: f64, offset1: [f64; 3],
+    dx2: f64, dy2: f64, dz2: f64, offset2: [f64; 3],
+) -> PyResult<(String, f64, f64, String)> {
+    let tol = Tolerance::default();
+    let box1 = zenith_algo::PrimitiveBuilder::make_box(dx1, dy1, dz1)
+        .map_err(|e| PyValueError::new_err(format!("Box1 creation failed: {}", e)))?;
+    let box2 = zenith_algo::PrimitiveBuilder::make_box(dx2, dy2, dz2)
+        .map_err(|e| PyValueError::new_err(format!("Box2 creation failed: {}", e)))?;
+
+    // 移動トランスフォーム適用
+    let s1 = zenith_algo::BrepTransform::translate_solid(&box1, Vec3::new(offset1[0], offset1[1], offset1[2]));
+    let s2 = zenith_algo::BrepTransform::translate_solid(&box2, Vec3::new(offset2[0], offset2[1], offset2[2]));
+
+    let report = zenith_algo::InterferenceChecker::check(&s1, &s2, &tol);
+
+    let status_str = match report.status {
+        zenith_algo::ClashStatus::Clearance => "Clearance",
+        zenith_algo::ClashStatus::Touching => "Touching",
+        zenith_algo::ClashStatus::Clash => "Clash",
+    };
+
+    Ok((status_str.to_string(), report.min_distance, report.overlap_volume, report.message))
+}
+
+
+

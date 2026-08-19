@@ -13,6 +13,7 @@ pub mod fillet;
 pub mod helix;
 pub mod hole;
 
+pub mod interference;
 pub mod loft;
 pub mod mass_properties;
 pub mod mirror;
@@ -26,7 +27,9 @@ pub mod primitive;
 
 pub mod revolve;
 pub mod shell;
+pub mod shelling;
 pub mod sketch_solver;
+pub mod slice;
 pub mod sweep;
 pub mod thicken;
 
@@ -53,6 +56,7 @@ pub use feature_tree::{FeatureNode, FeatureOp, FeatureTree};
 pub use fillet::FilletBuilder;
 pub use helix::HelixBuilder;
 pub use hole::HoleBuilder;
+pub use interference::{ClashStatus, InterferenceChecker, InterferenceReport};
 
 pub use loft::LoftBuilder;
 pub use mass_properties::{MassCalculator, MassProperties};
@@ -65,11 +69,14 @@ pub use primitive::PrimitiveBuilder;
 
 pub use revolve::RevolveBuilder;
 pub use shell::ShellBuilder;
+pub use shelling::ShellingBuilder;
 pub use sketch_solver::{
     CircleId, Constraint, LineId, PointId, SketchCircle, SketchLine, SketchPoint, SketchSolver,
 };
+pub use slice::{SectionSliceResult, SectionSlicer};
 pub use sweep::SweepBuilder;
 pub use thicken::ThickenBuilder;
+
 
 pub(crate) fn validated_solid(shell: Shell) -> Result<Solid, String> {
     Solid::try_simple(shell, &Tolerance::default()).map_err(|err| err.to_string())
