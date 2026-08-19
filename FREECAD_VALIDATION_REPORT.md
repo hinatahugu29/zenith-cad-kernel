@@ -2,9 +2,9 @@
 
 **文書管理番号**: ZENITH-REP-2026-0819-V2  
 **対象システム**: Zenith CAD Kernel (Rust) v2.0.0 / FreeCAD 1.1 (OpenCASCADE 7.x)  
-**作成日時**: 2026年8月19日  
+**作成日時**: 2026年8月19日（2026年8月20日 改訂）  
 **作成者**: Zenith CAD Core Kernel Development Team  
-**ステータス**: 完了・全方位検証済み (Fully Validated & Closed)
+**ステータス**: 継続検証中。書き出し・読み込みとも実測で確認した範囲を第5〜7章に記載
 
 ---
 
@@ -104,29 +104,23 @@ graph LR
 ## 4. 🔍 技術的課題の深掘りと修正内容
 
 ### 4.1 EDGE_CURVE 共有化の確立 ([`crates/zenith_io/src/step.rs`](file:///e:/CAD-Kernel/crates/zenith_io/src/step.rs))
-```rust
-fn write_oriented_edge_on_surface(
-    ctx: &mut StepContext,
-    oe: &zenith_topo::OrientedEdge,
-    _pcurve_segment: &FacePcurveSegment,
-    _surface_id: u64,
-) -> u64 {
-    // 常に get_or_create_edge_curve を使用して EDGE_CURVE エンティティを全Face間で完全共有
-    let edge_curve_id = Self::get_or_create_edge_curve(ctx, &oe.edge);
-    let orientation_str = if oe.orientation.is_forward() { ".T." } else { ".F." };
+`get_or_create_edge_curve` により、隣接面が同一の `EDGE_CURVE` エンティティを
+Forward / Reversed として共有します。出力された STEP では `ORIENTED_EDGE` の数が
+`EDGE_CURVE` の**ちょうど2倍**になり、これは閉多様体の必要条件です。
+`step_conformance_test` と `boolean_cylinder_test` で常時検証しています。
 
-    ctx.add_entity(&format!(
-        "ORIENTED_EDGE('',*,*,#{},{})",
-        edge_curve_id, orientation_str
-    ))
-}
-```
+> ※ 初版にはここに `write_oriented_edge_on_surface` のコードが載っていましたが、
+> この関数は p-curve 出力のスタブとともに削除しました。OpenCASCADE 自身も
+> p-curve を出力せず、無くても厳密に往復することを実測で確認したためです。
 
-### 4.2 貫通穴あけの 4 象限パッチマニホールド化 ([`crates/zenith_algo/src/hole.rs`](file:///e:/CAD-Kernel/crates/zenith_algo/src/hole.rs))
-OpenCASCADE が `PLANE` 上の有理円弧 `FACE_BOUND` をドロップする問題を回避するため、上下面を 4 枚の平面四角形パッチに分割。
-- 斜め境界直線 4 本（`diag_b` / `diag_t`）を隣接パッチ間で Forward/Reversed 対向結線。
-- 内側円弧 4 本を円筒内壁面の 4 象限パッチと対向結線。
-- これにより、`FACE_BOUND` を一切使わずに 16 面の完全閉ソリッド（`Solid, isClosed: True, Volume: 34973.45 mm³`）を構築。
+### 4.2 貫通穴あけの 4 象限パッチ化 ([`crates/zenith_algo/src/hole.rs`](file:///e:/CAD-Kernel/crates/zenith_algo/src/hole.rs))
+`PLANE` 上の `FACE_BOUND` を避けるため、上下面を 4 枚の平面四角形パッチに分割する
+専用ビルダーです（16 面、`Volume = 34973.45 mm³`）。
+
+> ※ この回避策が必要だった真因は後に判明しました。複合エンティティの `CURVE()` 欠落で、
+> スプライン円弧で囲まれた**平面そのもの**が OpenCASCADE で読めていなかったのです。
+> 現在は `FACE_BOUND` を使う形状も正しく読まれ、汎用の `BooleanEngine` で開けた穴
+> （内側ループを使う）が Solid として認識されます。専用ビルダーは互換のため残しています。
 
 ---
 
@@ -186,18 +180,50 @@ cargo run --release -p zenith_algo --example export_validation_suite
 
 ---
 
-## 6. 🎯 まとめと到達水準
+## 6. 📥 読み込み側の検証（STEP インポート）
 
-STEP 経由の相互運用について、**12 対象すべてが OpenCASCADE で Solid・`isValid`・`isClosed` として読まれ、
-体積・表面積・断面積が両カーネルで一致する**ことを確認しました。
-解析解を持つケースでは本カーネルが 1e-12 以下で一致しています。
+書き出しは早くから検証していましたが、読み込みは長らく測っていませんでした。
+測った時点で、**他カーネルが書いたファイルを1つも開けない**ことが判明しています。
 
-ブーリアン演算は、軸平行ボックス同士に加えて**円柱による貫通穴・止まり穴（任意軸）**に対応し、
-いずれも解析解と完全一致します。ブーリアンで生成したソリッドも OpenCASCADE で Solid として読まれ、
-体積が 1e-13 台で一致します。曲面同士の交差（円柱×円柱、球×球など）は未対応ですが、
-範囲外は誤答ではなくエラーを返すよう検証ゲートが入っています。
-実測は 42 ケース中 20 成功・誤答ゼロで、`cargo run -p zenith_algo --example boolean_envelope` で
-いつでも確認できます。
+| 症状 | 原因 | 状態 |
+| :--- | :--- | :--- |
+| すべての面が "No outer bound" で拒否 | `FACE_OUTER_BOUND` を必須扱いしていた。規格上は `FACE_BOUND` のサブタイプであって任意で、OpenCASCADE は全境界を素の `FACE_BOUND` で書く | 修正済み |
+| 面の境界が曲面から 39 も離れる | 円柱の縁は始終点が同一頂点の完全円。端点から掃引角を推測して 0 を得て、直線フォールバックに落ちていた | 修正済み |
+| 境界が曲面に乗らない | `CYLINDRICAL_SURFACE` を高さ1・90度の固定パッチとして読んでいた。解析曲面は無限に伸びた形で書かれ、範囲は面の境界だけが決める | 修正済み（円柱のみ） |
+| 円形の平面が 1.4% 過大 | 境界に沿った面積積分を p-curve 全体に一括で適用していた。B-spline はノット区間の内側でしか滑らかでない | 修正済み |
+
+現在の到達点:
+
+- 自前ファイルは面数・シェル妥当性・体積を保って往復（多面体は厳密、曲面系は 1e-13）
+- **OpenCASCADE の解析曲面円柱を厳密に読める**（体積 12566.3706 = $\pi r^2 h$）
+- B-spline 曲面＋曲線トリムのファイルは読めるが、トリム境界のポリゴン近似で数%の誤差
+- 円錐・球・トーラスの解析曲面は固定パッチのまま（未対応）
+
+```bash
+cargo run --release -p zenith_algo --example step_import_audit
+```
+
+---
+
+## 7. 🎯 まとめと到達水準
+
+STEP 経由の相互運用について、**15 対象すべてが OpenCASCADE で Solid・`isValid`・`isClosed` として読まれ、
+体積・表面積・断面積が両カーネルで一致**します。代表16形状のショーケースも全数が Solid として読めます。
+解析解を持つケースでは本カーネルが 1e-12 以下で一致し、多スパンB-スプライン曲面の体積積分では
+本カーネルの方が高精度です（直線掃引の円柱で 3.5e-14 対 1.1e-05）。
+
+ブーリアン演算は**任意角度の多面体同士（同一平面の重なりを含む）**と、
+**円柱による貫通穴・止まり穴・偏心穴（任意軸）およびその連鎖・座ぐり**に対応します。
+いずれも解析解と完全一致し、$V(A \cup B) + V(A \cap B) = V(A) + V(B)$ と
+$V(A - B) + V(A \cap B) = V(A)$ が最終桁まで成立します。
+ブーリアンで生成したソリッドも OpenCASCADE で Solid として読まれ、体積が 1e-13 台で一致します。
+
+曲面同士の交差（円柱×円柱、球×球など）は未対応です。ただし範囲外は誤答ではなくエラーを返すよう
+検証ゲート（`BooleanResultVerifier`）が入っており、実測は **45 ケース中 25 成功・誤答ゼロ**です。
+
+```bash
+cargo run --release -p zenith_algo --example boolean_envelope
+```
 
 ---
 *End of Report.*
