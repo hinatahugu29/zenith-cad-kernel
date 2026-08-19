@@ -281,7 +281,9 @@ Replacement target:
 
 `TessellationParams` exposes only `u_divisions` and `v_divisions`. Planar trimmed-face boundaries now use adaptive p-curve subdivision internally, but NURBS/Coons/Gordon/Triangular surface interiors still use uniform parameter grids. Large parts, small radii, high curvature, and very flat surfaces therefore still need a real deflection policy.
 
-A NURBS face whose stored outer p-curve loop forms an axis-aligned UV sub-rectangle is now tessellated over that sub-range instead of the full parameter rectangle, so boolean-split cylinder patches no longer render as the whole pre-split patch. The recognition is deliberately narrow: anything that is not a confirmed axis-aligned sub-rectangle (sphere poles, general trims) still falls back to the full-range grid, which remains wrong for general trimmed NURBS faces.
+NURBS face tessellation now follows the stored p-curve trim loops in general, not only for holes or axis-aligned sub-rectangles. The loops are triangulated in UV, then refined by Rivara longest-edge bisection until every triangle is no coarser than the requested parameter grid and its 3D chord stays inside a deflection target derived from the patch size. A single shared midpoint table means refinement never leaves T-junction cracks, and triangles are oriented by the face's effective surface normal instead of by the trim-loop winding. Faces whose p-curves cannot be triangulated - sphere poles, for instance - still fall back to the full-range grid.
+
+Interiors are therefore adaptive for trimmed NURBS faces, but `TessellationParams` still exposes only `u_divisions` and `v_divisions`: the deflection target is derived from them rather than requested directly, and Coons/Gordon/Triangular patches remain on the uniform grid.
 
 Target:
 
@@ -331,4 +333,4 @@ The next best engineering target is a `TrimmedFace`/p-curve layer plus adaptive 
 5. Split mesh booleans from exact B-Rep booleans and start the exact intersection/classification pipeline.
 6. Add a broader invalid-B-Rep test suite around imported and edited topology.
 7. Extend exact boolean coverage beyond the recognised cases. Plane/cylinder support intersection still only handles planes perpendicular or parallel to the cylinder axis - an oblique plane cuts an ellipse that no current curve class represents - NURBS/NURBS pairs are unsupported, and a plane that cuts one patch twice is rejected rather than producing two rulings.
-8. Make trimmed NURBS face tessellation general. Only an axis-aligned UV sub-rectangle is recognised today; a face trimmed by a diagonal or curved loop still meshes over its full parameter rectangle.
+8. Expose real tessellation controls. Trimmed NURBS interiors are adaptive now, but chordal deflection, angular deflection, and min/max segment counts are still derived from `u_divisions`/`v_divisions` instead of being requested, and Coons/Gordon/Triangular patches still use uniform grids with no trim awareness.

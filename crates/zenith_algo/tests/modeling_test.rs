@@ -4026,6 +4026,108 @@ fn test_nurbs_projected_pcurve_for_non_boundary_iso_edge() {
 }
 
 #[test]
+fn test_trimmed_nurbs_tessellation_follows_a_diagonal_loop() {
+    let radius: f64 = 10.0;
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, 30.0).unwrap();
+    let FaceGeometry::Nurbs(surface) = cylinder.outer_shell.faces[0].geometry.clone() else {
+        panic!("cylinder side face should be a NURBS patch");
+    };
+
+    // UV上の三角形トリム。軸平行な部分矩形ではないので、以前は矩形全体を
+    // 貼るか、境界だけの1三角形にしかならなかった領域。
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let uv_at = |u: f64, v: f64| {
+        zenith_math::Point2::new(u_min + (u_max - u_min) * u, v_min + (v_max - v_min) * v)
+    };
+    let loop_uv = [uv_at(0.1, 0.1), uv_at(0.9, 0.25), uv_at(0.35, 0.9)];
+
+    let mut edges = Vec::new();
+    let mut segments = Vec::new();
+    for i in 0..3 {
+        let (start_uv, end_uv) = (loop_uv[i], loop_uv[(i + 1) % 3]);
+        let edge = Edge::line_between(
+            Vertex::from_point(surface.evaluate(start_uv.x, start_uv.y)),
+            Vertex::from_point(surface.evaluate(end_uv.x, end_uv.y)),
+        )
+        .unwrap();
+        let pcurve = NurbsCurve2::new(
+            1,
+            vec![
+                ControlPoint2::unweighted(start_uv),
+                ControlPoint2::unweighted(end_uv),
+            ],
+            KnotVector::clamped_uniform(2, 1),
+        )
+        .unwrap();
+        segments.push(FacePcurveSegment {
+            edge_id: edge.id,
+            orientation: Orientation::Forward,
+            curve: pcurve,
+        });
+        edges.push(OrientedEdge::forward(edge));
+    }
+
+    let mut face = Face::new(
+        FaceGeometry::Nurbs(surface.clone()),
+        Wire::new(edges),
+        Vec::new(),
+        Orientation::Forward,
+        1e-6,
+    );
+    face.pcurves = Some(FacePcurves {
+        outer_loop: FacePcurveLoop { segments },
+        inner_loops: Vec::new(),
+    });
+
+    let mesh = tessellate_face(
+        &face,
+        &TessellationParams {
+            u_divisions: 32,
+            v_divisions: 32,
+        },
+    );
+
+    // 境界だけの三角化なら1枚で終わる。内部が細分されていることを要求する。
+    assert!(
+        mesh.num_triangles() > 200,
+        "trimmed NURBS interior was not refined: {} triangles",
+        mesh.num_triangles()
+    );
+
+    // 全頂点がトリム三角形の内側に留まる（矩形全体を貼っていない）
+    let inside = |point: zenith_math::Point2| {
+        let sign = |a: zenith_math::Point2, b: zenith_math::Point2| {
+            (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x)
+        };
+        let s0 = sign(loop_uv[0], loop_uv[1]);
+        let s1 = sign(loop_uv[1], loop_uv[2]);
+        let s2 = sign(loop_uv[2], loop_uv[0]);
+        let tolerance = 1e-9;
+        (s0 >= -tolerance && s1 >= -tolerance && s2 >= -tolerance)
+            || (s0 <= tolerance && s1 <= tolerance && s2 <= tolerance)
+    };
+    for uv in &mesh.uvs {
+        assert!(
+            inside(zenith_math::Point2::new(uv.x, uv.y)),
+            "tessellation escaped the trim loop at {uv:?}"
+        );
+    }
+
+    // 内部が平面で埋められていないこと: 三角形の重心も解析円柱の近くにある
+    for triangle in &mesh.indices {
+        let a = mesh.positions[triangle[0] as usize];
+        let b = mesh.positions[triangle[1] as usize];
+        let c = mesh.positions[triangle[2] as usize];
+        let centroid = Point3::from((a.coords + b.coords + c.coords) / 3.0);
+        let radial = (centroid.x * centroid.x + centroid.y * centroid.y).sqrt();
+        assert!(
+            (radial - radius).abs() < 0.05,
+            "interior triangle centroid drifted off the cylinder: {radial}"
+        );
+    }
+}
+
+#[test]
 fn test_nurbs_face_tessellation_respects_inner_pcurve_trim_loop() {
     let surface = NurbsSurface3::new(
         1,

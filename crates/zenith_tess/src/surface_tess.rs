@@ -1,7 +1,8 @@
 use crate::mesh::TriangleMesh;
 use rayon::prelude::*;
+use std::collections::{HashMap, HashSet};
 use zenith_geom::Surface3;
-use zenith_math::{Point2, Vec2, Vec3};
+use zenith_math::{Point2, Point3, Vec2, Vec3};
 use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, Orientation, Shell, Solid};
 
 /// 曲面テッセレーション設定パラメータ
@@ -95,18 +96,13 @@ pub fn tessellate_surface_range<S: Surface3>(
 pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh {
     match &face.geometry {
         FaceGeometry::Nurbs(nurbs) => {
-            if should_tessellate_nurbs_from_pcurves(face, nurbs) {
-                return tessellate_nurbs_from_pcurves(face, nurbs, params);
-            }
-            match face
-                .pcurves
-                .as_ref()
-                .and_then(|pcurves| outer_loop_uv_subrect(&pcurves.outer_loop, nurbs))
-            {
-                Some((u_range, v_range)) => {
-                    tessellate_surface_range(nurbs, params, face.orientation, u_range, v_range)
-                }
-                None => tessellate_surface(nurbs, params, face.orientation),
+            // トリムループが使えるならそれに従い、扱えない面（球の極など）は
+            // 従来どおりパラメータ矩形全体の一様グリッドに落とす
+            let trimmed = tessellate_nurbs_from_pcurves(face, nurbs, params);
+            if trimmed.indices.is_empty() {
+                tessellate_surface(nurbs, params, face.orientation)
+            } else {
+                trimmed
             }
         }
         FaceGeometry::Coons(coons) => tessellate_surface(coons, params, face.orientation),
@@ -205,79 +201,12 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
     }
 }
 
-fn should_tessellate_nurbs_from_pcurves(face: &Face, _surface: &impl Surface3) -> bool {
-    let Some(pcurves) = &face.pcurves else {
-        return false;
-    };
-    !pcurves.inner_loops.is_empty()
-}
-
-/// 外側p-curveループがUVパラメータ矩形の一部だけを覆う軸平行な部分矩形なら、
-/// その範囲を返す。
+/// Tessellates a NURBS face inside its p-curve trim loops.
 ///
-/// ブーリアン分割で切り詰められた面は支持曲面を共有したまま境界だけが狭くなる。
-/// これを検出せずに矩形全体へ一様グリッドを張ると、分割前のパッチ全体が出力
-/// されてしまう。軸平行な部分矩形と確認できた場合だけ範囲を絞り、それ以外
-/// （球の極や一般トリムなど）は従来どおり全体グリッドにフォールバックする。
-fn outer_loop_uv_subrect(
-    outer_loop: &FacePcurveLoop,
-    surface: &impl Surface3,
-) -> Option<((f64, f64), (f64, f64))> {
-    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
-    let u_extent = u_max - u_min;
-    let v_extent = v_max - v_min;
-    if u_extent <= 0.0 || v_extent <= 0.0 {
-        return None;
-    }
-
-    let samples: Vec<Point2> = outer_loop
-        .segments
-        .iter()
-        .flat_map(|segment| segment.curve.sample_points(4))
-        .collect();
-    if samples.len() < 3 {
-        return None;
-    }
-
-    let mut loop_u = (f64::INFINITY, f64::NEG_INFINITY);
-    let mut loop_v = (f64::INFINITY, f64::NEG_INFINITY);
-    for uv in &samples {
-        if !uv.x.is_finite() || !uv.y.is_finite() {
-            return None;
-        }
-        loop_u = (loop_u.0.min(uv.x), loop_u.1.max(uv.x));
-        loop_v = (loop_v.0.min(uv.y), loop_v.1.max(uv.y));
-    }
-
-    const COVERAGE_EPSILON: f64 = 1e-4;
-    let covers_full_u = (loop_u.1 - loop_u.0) >= u_extent * (1.0 - COVERAGE_EPSILON);
-    let covers_full_v = (loop_v.1 - loop_v.0) >= v_extent * (1.0 - COVERAGE_EPSILON);
-    if covers_full_u && covers_full_v {
-        return None;
-    }
-
-    let sub_u_extent = loop_u.1 - loop_u.0;
-    let sub_v_extent = loop_v.1 - loop_v.0;
-    if sub_u_extent <= u_extent * COVERAGE_EPSILON || sub_v_extent <= v_extent * COVERAGE_EPSILON {
-        return None;
-    }
-
-    // 全サンプルが部分矩形の外周上にあることを確認できて初めて軸平行トリムとみなす
-    let u_tol = sub_u_extent * COVERAGE_EPSILON;
-    let v_tol = sub_v_extent * COVERAGE_EPSILON;
-    let on_border = samples.iter().all(|uv| {
-        (uv.x - loop_u.0).abs() <= u_tol
-            || (uv.x - loop_u.1).abs() <= u_tol
-            || (uv.y - loop_v.0).abs() <= v_tol
-            || (uv.y - loop_v.1).abs() <= v_tol
-    });
-    if !on_border {
-        return None;
-    }
-
-    Some(((loop_u.0, loop_u.1), (loop_v.0, loop_v.1)))
-}
-
+/// The trim loops are triangulated in UV, then the triangulation is refined
+/// until every triangle is no coarser than the requested parameter grid and its
+/// 3D chord stays within the deflection target. Refinement splits shared edges
+/// through one midpoint table, so the mesh never develops T-junction cracks.
 fn tessellate_nurbs_from_pcurves(
     face: &Face,
     surface: &impl Surface3,
@@ -292,23 +221,23 @@ fn tessellate_nurbs_from_pcurves(
     }
 
     let mut flat_coords = Vec::new();
-    let mut all_uvs = Vec::new();
+    let mut uvs = Vec::new();
     let mut hole_indices = Vec::new();
 
     for uv in &outer_uvs {
         flat_coords.push(uv.x);
         flat_coords.push(uv.y);
-        all_uvs.push(*uv);
+        uvs.push(*uv);
     }
 
     for pcurve_loop in &pcurves.inner_loops {
         let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params);
         if hole_uvs.len() >= 3 {
-            hole_indices.push(all_uvs.len());
+            hole_indices.push(uvs.len());
             for uv in &hole_uvs {
                 flat_coords.push(uv.x);
                 flat_coords.push(uv.y);
-                all_uvs.push(*uv);
+                uvs.push(*uv);
             }
         }
     }
@@ -317,9 +246,217 @@ fn tessellate_nurbs_from_pcurves(
     if triangle_indices.is_empty() {
         return TriangleMesh::new();
     }
+    let mut triangles: Vec<[usize; 3]> = triangle_indices
+        .chunks_exact(3)
+        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
+        .collect();
 
+    refine_uv_triangulation(surface, params, &mut uvs, &mut triangles);
+    build_trimmed_mesh(face, surface, &uvs, &triangles)
+}
+
+/// Upper bound on triangles produced by trimmed refinement, so a pathological
+/// surface degrades into a coarse mesh instead of exhausting memory.
+const MAX_REFINED_TRIANGLES: usize = 200_000;
+const MAX_REFINEMENT_PASSES: usize = 24;
+
+fn refine_uv_triangulation(
+    surface: &impl Surface3,
+    params: &TessellationParams,
+    uvs: &mut Vec<Point2>,
+    triangles: &mut Vec<[usize; 3]>,
+) {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let cell_u = (u_max - u_min) / params.u_divisions.max(2) as f64;
+    let cell_v = (v_max - v_min) / params.v_divisions.max(2) as f64;
+    let deflection = surface_deflection_target(surface, params);
+
+    // 一度基準を満たした三角形は、隣が辺を割らない限り再評価しない
+    let mut settled = vec![false; triangles.len()];
+
+    for _ in 0..MAX_REFINEMENT_PASSES {
+        if triangles.len() * 2 > MAX_REFINED_TRIANGLES {
+            return;
+        }
+
+        // 最長辺だけを割る（Rivara の最長辺二分）。四分割にすると異方な
+        // グリッド指定でも等方に細かくなり、必要のない方向まで倍々に増える。
+        let mut split_edges: HashSet<(usize, usize)> = HashSet::new();
+        for (index, triangle) in triangles.iter().enumerate() {
+            if settled[index] {
+                continue;
+            }
+            if !triangle_needs_refinement(surface, uvs, triangle, cell_u, cell_v, deflection) {
+                settled[index] = true;
+                continue;
+            }
+            let longest = (0..3)
+                .max_by(|left, right| {
+                    scaled_edge_length(uvs, triangle, *left, cell_u, cell_v)
+                        .total_cmp(&scaled_edge_length(uvs, triangle, *right, cell_u, cell_v))
+                })
+                .unwrap_or(0);
+            split_edges.insert(edge_key(triangle[longest], triangle[(longest + 1) % 3]));
+        }
+        if split_edges.is_empty() {
+            return;
+        }
+
+        let mut midpoints: HashMap<(usize, usize), usize> = HashMap::new();
+        for edge in split_edges {
+            let midpoint = Point2::from((uvs[edge.0].coords + uvs[edge.1].coords) * 0.5);
+            midpoints.insert(edge, uvs.len());
+            uvs.push(midpoint);
+        }
+
+        let mut refined = Vec::with_capacity(triangles.len());
+        let mut refined_settled = Vec::with_capacity(triangles.len());
+        for (index, triangle) in triangles.iter().enumerate() {
+            let pieces = subdivide_triangle(triangle, &midpoints);
+            let unchanged = pieces.len() == 1;
+            refined_settled.extend(std::iter::repeat_n(
+                unchanged && settled[index],
+                pieces.len(),
+            ));
+            refined.extend(pieces);
+        }
+        *triangles = refined;
+        settled = refined_settled;
+    }
+}
+
+fn scaled_edge_length(
+    uvs: &[Point2],
+    triangle: &[usize; 3],
+    corner: usize,
+    cell_u: f64,
+    cell_v: f64,
+) -> f64 {
+    let offset = uvs[triangle[(corner + 1) % 3]] - uvs[triangle[corner]];
+    ((offset.x / cell_u).powi(2) + (offset.y / cell_v).powi(2)).sqrt()
+}
+
+fn edge_key(a: usize, b: usize) -> (usize, usize) {
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
+fn triangle_needs_refinement(
+    surface: &impl Surface3,
+    uvs: &[Point2],
+    triangle: &[usize; 3],
+    cell_u: f64,
+    cell_v: f64,
+    deflection: f64,
+) -> bool {
+    let corners = [uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]];
+    let u_extent = corners
+        .iter()
+        .fold(f64::NEG_INFINITY, |acc, uv| acc.max(uv.x))
+        - corners.iter().fold(f64::INFINITY, |acc, uv| acc.min(uv.x));
+    let v_extent = corners
+        .iter()
+        .fold(f64::NEG_INFINITY, |acc, uv| acc.max(uv.y))
+        - corners.iter().fold(f64::INFINITY, |acc, uv| acc.min(uv.y));
+    if u_extent > cell_u || v_extent > cell_v {
+        return true;
+    }
+
+    let positions = corners.map(|uv| surface.evaluate(uv.x, uv.y));
+    (0..3).any(|corner| {
+        let next = (corner + 1) % 3;
+        let mid_uv = Point2::from((corners[corner].coords + corners[next].coords) * 0.5);
+        let chord = Point3::from((positions[corner].coords + positions[next].coords) * 0.5);
+        (surface.evaluate(mid_uv.x, mid_uv.y) - chord).norm() > deflection
+    })
+}
+
+/// Splits one triangle according to which of its edges carry a midpoint.
+///
+/// Handling the one and two edge cases, not only the full four-way split, is
+/// what keeps a refined triangle from leaving a T-junction against a neighbour
+/// that did not need refining.
+fn subdivide_triangle(
+    triangle: &[usize; 3],
+    midpoints: &HashMap<(usize, usize), usize>,
+) -> Vec<[usize; 3]> {
+    let splits: Vec<Option<usize>> = (0..3)
+        .map(|corner| {
+            midpoints
+                .get(&edge_key(triangle[corner], triangle[(corner + 1) % 3]))
+                .copied()
+        })
+        .collect();
+    let split_count = splits.iter().filter(|split| split.is_some()).count();
+
+    match split_count {
+        0 => vec![*triangle],
+        3 => {
+            let (a, b, c) = (triangle[0], triangle[1], triangle[2]);
+            let (ab, bc, ca) = (splits[0].unwrap(), splits[1].unwrap(), splits[2].unwrap());
+            vec![[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]
+        }
+        1 => {
+            let corner = splits.iter().position(|split| split.is_some()).unwrap();
+            let a = triangle[corner];
+            let b = triangle[(corner + 1) % 3];
+            let c = triangle[(corner + 2) % 3];
+            let mid = splits[corner].unwrap();
+            vec![[a, mid, c], [mid, b, c]]
+        }
+        _ => {
+            // 分割されていない辺を (c, a) に回して正規形にする
+            let unsplit = splits.iter().position(|split| split.is_none()).unwrap();
+            let corner = (unsplit + 1) % 3;
+            let a = triangle[corner];
+            let b = triangle[(corner + 1) % 3];
+            let c = triangle[(corner + 2) % 3];
+            let ab = splits[corner].unwrap();
+            let bc = splits[(corner + 1) % 3].unwrap();
+            vec![[a, ab, bc], [ab, b, bc], [a, bc, c]]
+        }
+    }
+}
+
+/// Chord deflection target in model units, derived from the requested grid
+/// density over the patch's own 3D size.
+fn surface_deflection_target(surface: &impl Surface3, params: &TessellationParams) -> f64 {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for i in 0..=4 {
+        for j in 0..=4 {
+            let point = surface.evaluate(
+                u_min + (u_max - u_min) * (i as f64 / 4.0),
+                v_min + (v_max - v_min) * (j as f64 / 4.0),
+            );
+            min = Point3::new(min.x.min(point.x), min.y.min(point.y), min.z.min(point.z));
+            max = Point3::new(max.x.max(point.x), max.y.max(point.y), max.z.max(point.z));
+        }
+    }
+
+    let diagonal = (max - min).norm();
+    if !diagonal.is_finite() || diagonal <= 1e-9 {
+        return 1e-3;
+    }
+
+    let divisions = params.u_divisions.max(params.v_divisions).max(2) as f64;
+    (diagonal / (divisions * 8.0)).max(1e-6)
+}
+
+/// Emits the refined UV triangulation, orienting every triangle by the face's
+/// effective surface normal rather than by the trim loop winding.
+fn build_trimmed_mesh(
+    face: &Face,
+    surface: &impl Surface3,
+    uvs: &[Point2],
+    triangles: &[[usize; 3]],
+) -> TriangleMesh {
     let mut mesh = TriangleMesh::new();
-    for uv in &all_uvs {
+    for uv in uvs {
         let mut normal = surface
             .normal(uv.x, uv.y)
             .unwrap_or_else(|| Vec3::new(0.0, 0.0, 1.0));
@@ -331,13 +468,31 @@ fn tessellate_nurbs_from_pcurves(
         mesh.uvs.push(Vec2::new(uv.x, uv.y));
     }
 
-    for chunk in triangle_indices.chunks_exact(3) {
-        if face.orientation.is_forward() {
+    for triangle in triangles {
+        let a = mesh.positions[triangle[0]];
+        let b = mesh.positions[triangle[1]];
+        let c = mesh.positions[triangle[2]];
+        let facet = (b - a).cross(&(c - a));
+        if facet.norm() <= 1e-18 {
+            continue;
+        }
+
+        let centroid = Point2::from(
+            (uvs[triangle[0]].coords + uvs[triangle[1]].coords + uvs[triangle[2]].coords) / 3.0,
+        );
+        let mut expected = surface
+            .normal(centroid.x, centroid.y)
+            .unwrap_or_else(|| mesh.normals[triangle[0]]);
+        if !face.orientation.is_forward() {
+            expected = -expected;
+        }
+
+        if facet.dot(&expected) >= 0.0 {
             mesh.indices
-                .push([chunk[0] as u32, chunk[1] as u32, chunk[2] as u32]);
+                .push([triangle[0] as u32, triangle[1] as u32, triangle[2] as u32]);
         } else {
             mesh.indices
-                .push([chunk[0] as u32, chunk[2] as u32, chunk[1] as u32]);
+                .push([triangle[0] as u32, triangle[2] as u32, triangle[1] as u32]);
         }
     }
 
