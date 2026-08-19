@@ -128,6 +128,44 @@ fn test_a_drilled_block_keeps_its_hole_through_a_round_trip() {
 }
 
 #[test]
+fn test_a_planar_face_bounded_by_one_full_circle_has_the_circle_area() {
+    // 完全円1本で囲まれた平面は、他カーネルが書く円柱の端面そのもの。
+    // 面積を1つの求積則で曲線全体にあてると、4区間の円で 1.4% ずれる。
+    let step = "ISO-10303-21;\nHEADER;\nENDSEC;\nDATA;\n\
+         #1 = CARTESIAN_POINT('',(0.0,0.0,0.0));\n\
+         #2 = DIRECTION('',(0.0,0.0,1.0));\n\
+         #3 = DIRECTION('',(1.0,0.0,0.0));\n\
+         #4 = AXIS2_PLACEMENT_3D('',#1,#2,#3);\n\
+         #5 = CIRCLE('',#4,10.0);\n\
+         #6 = CARTESIAN_POINT('',(10.0,0.0,0.0));\n\
+         #7 = VERTEX_POINT('',#6);\n\
+         #8 = EDGE_CURVE('',#7,#7,#5,.T.);\n\
+         #9 = ORIENTED_EDGE('',*,*,#8,.T.);\n\
+         #10 = EDGE_LOOP('',(#9));\n\
+         #11 = FACE_BOUND('',#10,.T.);\n\
+         #12 = PLANE('',#4);\n\
+         #13 = ADVANCED_FACE('',(#11),#12,.T.);\n\
+         ENDSEC;\nEND-ISO-10303-21;\n";
+
+    let face = StepImporter::import_face_from_str(step, 13)
+        .expect("a plane bounded by one circle should be readable");
+
+    let (area, _volume) = MassCalculator::compute_face_integral(
+        &face,
+        &TessellationParams {
+            u_divisions: 32,
+            v_divisions: 32,
+        },
+    );
+
+    let expected = PI * 100.0;
+    assert!(
+        (area - expected).abs() / expected < 1e-9,
+        "a disc of radius 10 has area {expected}, got {area}"
+    );
+}
+
+#[test]
 fn test_a_full_circle_edge_is_read_as_a_circle() {
     // 円柱の縁は完全円として書かれる。始点と終点が一致するので、端点から
     // 掃引角を推測すると長さ0の弧になってしまう。

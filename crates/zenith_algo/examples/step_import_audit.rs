@@ -77,6 +77,26 @@ fn read_foreign(path: &Path) {
                 "{name:<44} {} solid(s), {faces} face(s), volume {total:.4}",
                 solids.len()
             );
+            for solid in &solids {
+                let tol = Tolerance::default();
+                let report = solid.outer_shell.validate_closed(&tol);
+                if !report.is_valid() {
+                    println!(
+                        "        shell invalid: {}",
+                        report.errors.first().cloned().unwrap_or_default()
+                    );
+                }
+                for (index, face) in solid.outer_shell.faces.iter().enumerate() {
+                    let (area, contribution) = MassCalculator::compute_face_integral(
+                        face,
+                        &TessellationParams {
+                            u_divisions: 64,
+                            v_divisions: 64,
+                        },
+                    );
+                    println!("        face {index}: area {area:.4}, volume share {contribution:.4}");
+                }
+            }
         }
         Err(err) => println!("{name:<44} FAILED: {}", err.chars().take(400).collect::<String>()),
     }

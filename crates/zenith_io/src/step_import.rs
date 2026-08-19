@@ -84,6 +84,14 @@ impl StepImporter {
         Self::get_edge(&mut ctx, edge_id)
     }
 
+    /// Reads one ADVANCED_FACE out of a STEP text, without needing a shell
+    /// around it. Diagnostic counterpart to [`Self::import_edge_from_str`].
+    pub fn import_face_from_str(content: &str, face_id: u64) -> Result<Face, String> {
+        let mut ctx = ImportContext::new();
+        Self::parse_data_section(content, &mut ctx)?;
+        Self::resolve_face(&mut ctx, face_id)
+    }
+
     /// STEPテキストから複数の Solid（B-Repソリッド）をインポート
     pub fn import_solids_from_str(content: &str) -> Result<Vec<Solid>, String> {
         let mut ctx = ImportContext::new();
@@ -717,6 +725,46 @@ impl StepImporter {
         Err(format!("Invalid ORIENTED_EDGE #{}", id))
     }
 
+    /// Builds the surface a face sits on, sized to that face.
+    ///
+    /// STEP's analytic surfaces are unbounded: a CYLINDRICAL_SURFACE states an
+    /// axis and a radius and nothing about how far it runs, and the face's
+    /// bounds are what pick out the piece in use. Building a fixed patch and
+    /// hoping it covers the boundary does not work, so the extent is taken from
+    /// the boundary itself. Surfaces that are already bounded, such as
+    /// B-splines, ignore the boundary and go through the ordinary path.
+    fn get_surface_for_boundary(
+        ctx: &mut ImportContext,
+        id: u64,
+        boundary_points: &[Point3],
+    ) -> Result<FaceGeometry, String> {
+        let raw = ctx
+            .raw_entities
+            .get(&id)
+            .ok_or_else(|| format!("Entity #{} not found", id))?
+            .clone();
+
+        if raw.name == "CYLINDRICAL_SURFACE" && !boundary_points.is_empty() {
+            let parts = Self::split_top_level_args(&raw.args);
+            if parts.len() >= 3 {
+                if let (Some(axis2_id), Ok(radius)) = (
+                    Self::parse_entity_ref(parts[1]),
+                    parts[2].trim().parse::<f64>(),
+                ) {
+                    if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
+                        if let Some(nurbs) =
+                            cylinder_patch_for_boundary(origin, z_dir, x_dir, radius, boundary_points)
+                        {
+                            return Ok(FaceGeometry::Nurbs(nurbs));
+                        }
+                    }
+                }
+            }
+        }
+
+        Self::get_surface(ctx, id)
+    }
+
     fn get_surface(ctx: &mut ImportContext, id: u64) -> Result<FaceGeometry, String> {
         if let Some(s) = ctx.surfaces.get(&id) {
             return Ok(s.clone());
@@ -1136,7 +1184,6 @@ impl StepImporter {
 
             let surface_id =
                 Self::parse_entity_ref(parts[2]).ok_or("Invalid surface ref in ADVANCED_FACE")?;
-            let geom = Self::get_surface(ctx, surface_id)?;
 
             // 2. Bounds の取得
             //
@@ -1187,6 +1234,16 @@ impl StepImporter {
 
             let outer =
                 outer_wire.ok_or_else(|| format!("No outer bound for face #{}", face_id))?;
+
+            // 曲面は境界が決まってから組む。STEP の解析曲面（円柱・円錐など）は
+            // 無限に伸びた形で書かれ、どこを使うかは面の境界だけが決めるので、
+            // 境界を見ずに固定サイズのパッチを作ると境界が曲面から外れる。
+            let mut boundary_points = outer.sample_points(24);
+            for wire in &inner_wires {
+                boundary_points.extend(wire.sample_points(12));
+            }
+            let geom = Self::get_surface_for_boundary(ctx, surface_id, &boundary_points)?;
+
             let orientation = if same_sense {
                 Orientation::Forward
             } else {
@@ -1968,4 +2025,109 @@ fn rational_arc(
     knots.extend([1.0, 1.0, 1.0]);
 
     NurbsCurve3::new(2, control_points, KnotVector::new(knots))
+}
+
+/// A cylindrical patch covering the angular and axial span a face occupies.
+///
+/// Returns `None` when the boundary does not sit on the cylinder, so a
+/// mismatch is refused rather than approximated.
+fn cylinder_patch_for_boundary(
+    origin: Point3,
+    z_dir: Vec3,
+    x_dir: Vec3,
+    radius: f64,
+    boundary_points: &[Point3],
+) -> Option<NurbsSurface3> {
+    let axis = z_dir.try_normalize(1e-12)?;
+    let x_axis = (x_dir - axis * x_dir.dot(&axis)).try_normalize(1e-12)?;
+    let y_axis = axis.cross(&x_axis);
+
+    let mut axial_min = f64::INFINITY;
+    let mut axial_max = f64::NEG_INFINITY;
+    let mut angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
+
+    for point in boundary_points {
+        let offset = *point - origin;
+        let axial = offset.dot(&axis);
+        let radial = offset - axis * axial;
+        if (radial.norm() - radius).abs() > radius.abs().max(1.0) * 1e-3 {
+            return None;
+        }
+        axial_min = axial_min.min(axial);
+        axial_max = axial_max.max(axial);
+        angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)));
+    }
+
+    if !axial_min.is_finite() || !axial_max.is_finite() {
+        return None;
+    }
+    if (axial_max - axial_min).abs() <= 1e-12 {
+        return None;
+    }
+
+    // 角度の被覆。最大の隙間の外側が使われている範囲になる。境界が一周
+    // していれば隙間は無く、360度パッチになる。
+    angles.sort_by(f64::total_cmp);
+    let full_turn = std::f64::consts::PI * 2.0;
+    let mut widest_gap = angles[0] + full_turn - angles[angles.len() - 1];
+    let mut gap_start = angles[angles.len() - 1];
+    for window in angles.windows(2) {
+        let gap = window[1] - window[0];
+        if gap > widest_gap {
+            widest_gap = gap;
+            gap_start = window[0];
+        }
+    }
+
+    // 隙間が僅かならサンプル間隔にすぎない。一周とみなす。
+    let sample_spacing = full_turn / angles.len().max(2) as f64;
+    let (start_angle, sweep) = if widest_gap <= sample_spacing * 3.0 {
+        (0.0, full_turn)
+    } else {
+        (gap_start + widest_gap, full_turn - widest_gap)
+    };
+
+    let span_count = (((sweep / std::f64::consts::FRAC_PI_2) - 1e-9).ceil() as usize).max(1);
+    let span_angle = sweep / span_count as f64;
+    let weight = (span_angle * 0.5).cos();
+
+    let bottom = origin + axis * axial_min;
+    let height = axis * (axial_max - axial_min);
+
+    let ring_point = |angle: f64, scale: f64| {
+        bottom + x_axis * (radius * scale * angle.cos()) + y_axis * (radius * scale * angle.sin())
+    };
+
+    let mut rows: Vec<Vec<ControlPoint3>> = Vec::with_capacity(span_count * 2 + 1);
+    let push_row = |point: Point3, w: f64, rows: &mut Vec<Vec<ControlPoint3>>| {
+        rows.push(vec![
+            ControlPoint3::new(point, w),
+            ControlPoint3::new(point + height, w),
+        ]);
+    };
+
+    push_row(ring_point(start_angle, 1.0), 1.0, &mut rows);
+    for span in 0..span_count {
+        let angle = start_angle + span_angle * span as f64;
+        let middle = angle + span_angle * 0.5;
+        push_row(ring_point(middle, 1.0 / weight), weight, &mut rows);
+        push_row(ring_point(angle + span_angle, 1.0), 1.0, &mut rows);
+    }
+
+    let mut knots_u = vec![0.0, 0.0, 0.0];
+    for span in 1..span_count {
+        let value = span as f64 / span_count as f64;
+        knots_u.push(value);
+        knots_u.push(value);
+    }
+    knots_u.extend([1.0, 1.0, 1.0]);
+
+    NurbsSurface3::new(
+        2,
+        1,
+        rows,
+        KnotVector::new(knots_u),
+        KnotVector::clamped_uniform(2, 1),
+    )
+    .ok()
 }

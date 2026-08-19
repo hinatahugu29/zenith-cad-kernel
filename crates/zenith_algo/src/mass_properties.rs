@@ -398,35 +398,65 @@ fn loop_uv_moments(pcurve_loop: &FacePcurveLoop) -> [f64; 10] {
 
     for segment in &pcurve_loop.segments {
         let (t_min, t_max) = segment.curve.param_range();
-        let half_span = 0.5 * (t_max - t_min);
-        let midpoint = 0.5 * (t_min + t_max);
-        if half_span.abs() <= f64::EPSILON {
+        if (t_max - t_min).abs() <= f64::EPSILON {
             continue;
         }
 
-        for (node, weight) in GAUSS_LEGENDRE_10 {
-            let t = midpoint + half_span * node;
-            let point = segment.curve.evaluate(t);
-            let slope = segment.curve.evaluate_derivative(t);
-            let scale = weight * half_span * slope.y;
+        // ノット区間ごとに積む。B-spline はノットをまたぐと滑らかでなくなるので、
+        // 曲線全体に一つの求積則をあてると、たとえば4区間で書かれた完全円の
+        // 面積が 1.4% ずれる。単一区間の曲線ではこの分割は何も変えない。
+        for (span_start, span_end) in knot_spans(&segment.curve, t_min, t_max) {
+            let half_span = 0.5 * (span_end - span_start);
+            let midpoint = 0.5 * (span_start + span_end);
+            if half_span.abs() <= f64::EPSILON {
+                continue;
+            }
 
-            let u_powers = [
-                1.0,
-                point.x,
-                point.x * point.x,
-                point.x.powi(3),
-                point.x.powi(4),
-            ];
-            let v_powers = [1.0, point.y, point.y * point.y, point.y.powi(3)];
+            for (node, weight) in GAUSS_LEGENDRE_10 {
+                let t = midpoint + half_span * node;
+                let point = segment.curve.evaluate(t);
+                let slope = segment.curve.evaluate_derivative(t);
+                let scale = weight * half_span * slope.y;
 
-            for p in 0..4 {
-                for q in 0..(4 - p) {
-                    moments[index_uv(p, q)] +=
-                        u_powers[p + 1] / (p as f64 + 1.0) * v_powers[q] * scale;
+                let u_powers = [
+                    1.0,
+                    point.x,
+                    point.x * point.x,
+                    point.x.powi(3),
+                    point.x.powi(4),
+                ];
+                let v_powers = [1.0, point.y, point.y * point.y, point.y.powi(3)];
+
+                for p in 0..4 {
+                    for q in 0..(4 - p) {
+                        moments[index_uv(p, q)] +=
+                            u_powers[p + 1] / (p as f64 + 1.0) * v_powers[q] * scale;
+                    }
                 }
             }
         }
     }
 
     moments
+}
+
+/// The curve's distinct knot spans inside `[t_min, t_max]`.
+///
+/// A single-span curve yields exactly one interval, so callers that only ever
+/// see Bezier segments are unaffected.
+fn knot_spans(curve: &zenith_geom::NurbsCurve2, t_min: f64, t_max: f64) -> Vec<(f64, f64)> {
+    let mut breaks: Vec<f64> = vec![t_min];
+    for knot in &curve.knots.knots {
+        if *knot > t_min + f64::EPSILON && *knot < t_max - f64::EPSILON {
+            breaks.push(*knot);
+        }
+    }
+    breaks.push(t_max);
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup_by(|a, b| (*a - *b).abs() <= (t_max - t_min).abs() * 1e-12);
+
+    breaks
+        .windows(2)
+        .map(|window| (window[0], window[1]))
+        .collect()
 }
