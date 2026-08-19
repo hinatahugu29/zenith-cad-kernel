@@ -1773,6 +1773,68 @@ fn test_horizontally_split_cylinder_side_faces_tessellate_their_own_band() {
     );
 }
 
+#[test]
+fn test_trim_clipping_lands_exactly_on_circular_face_boundary() {
+    let tol = Tolerance::default();
+    let radius: f64 = 10.0;
+    let height = 30.0;
+    let plane_x: f64 = 6.0;
+    let expected_y = (radius * radius - plane_x * plane_x).sqrt();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height).unwrap();
+    let cut_face = vertical_cut_face(plane_x);
+
+    let candidates = zenith_algo::BrepIntersectionBuilder::collect_face_pair_candidates(
+        &[cut_face],
+        &cylinder.outer_shell.faces,
+        &tol,
+    );
+
+    // 円形キャップ面を横切る弦は、サンプリング折れ線ではなく厳密な円弧上で止まる
+    let mut chord_count = 0;
+    for candidate in &candidates {
+        let zenith_algo::FaceIntersectionKind::Line {
+            segment_start,
+            segment_end,
+            ..
+        } = &candidate.kind
+        else {
+            continue;
+        };
+        if !matches!(
+            cylinder.outer_shell.faces[candidate.face_b_index].geometry,
+            FaceGeometry::Plane(_)
+        ) {
+            continue;
+        }
+
+        chord_count += 1;
+        for point in [segment_start, segment_end] {
+            let radial = (point.x * point.x + point.y * point.y).sqrt();
+            assert!(
+                (radial - radius).abs() < 1e-9,
+                "chord endpoint {radial} should sit on the exact circle, not a sampled chord"
+            );
+            assert!((point.y.abs() - expected_y).abs() < 1e-9);
+        }
+    }
+    assert_eq!(chord_count, 2, "both cylinder caps should yield a chord");
+
+    // 側面のルーリングは面のZ範囲を越えてはみ出さない
+    for candidate in &candidates {
+        let zenith_algo::FaceIntersectionKind::Line {
+            segment_start,
+            segment_end,
+            ..
+        } = &candidate.kind
+        else {
+            continue;
+        };
+        for point in [segment_start, segment_end] {
+            assert!(point.z >= -1e-9 && point.z <= height + 1e-9);
+        }
+    }
+}
+
 fn triangle_mesh_area(mesh: &zenith_tess::TriangleMesh) -> f64 {
     mesh.indices
         .iter()

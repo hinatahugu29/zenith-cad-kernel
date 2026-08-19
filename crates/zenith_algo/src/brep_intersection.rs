@@ -1676,8 +1676,16 @@ fn clip_candidate_to_face_bboxes(
         } => {
             let bbox_a = bbox_a?;
             let bbox_b = bbox_b?;
-            let overlap = bbox_overlap(bbox_a, bbox_b, tol.linear)?;
-            let (t_min, t_max) = clip_line_to_bbox(point, direction, &overlap, tol.linear)?;
+            // 存在判定には公差ぶんの余裕を持たせるが、区間そのものは余裕なしの
+            // 重なりで切る。余裕を残したままだと交線が面の外へわずかにはみ出し、
+            // 後段のループ組み立てで端点が一致しなくなる。
+            let padded = bbox_overlap(bbox_a, bbox_b, tol.linear)?;
+            let exact = bbox_overlap(bbox_a, bbox_b, 0.0);
+            let (t_min, t_max) = exact
+                .as_ref()
+                .and_then(|overlap| clip_line_to_bbox(point, direction, overlap, tol.linear))
+                .filter(|(t_min, t_max)| t_max - t_min > tol.linear)
+                .or_else(|| clip_line_to_bbox(point, direction, &padded, tol.linear))?;
             Some(FaceIntersectionKind::Line {
                 point,
                 direction,
@@ -1794,15 +1802,157 @@ fn clip_segment_to_planar_face_trim(
     let Ok(pcurves) = face.pcurves(tol) else {
         return Some(current_interval);
     };
-    let polygon = sample_pcurve_loop(&pcurves.outer_loop, 10);
-    if polygon.len() < 3 {
-        return Some(current_interval);
-    }
-
     let uv_start = project_to_plane_uv(segment_start, plane);
     let uv_end = project_to_plane_uv(segment_end, plane);
-    let intervals = segment_inside_polygon_intervals(uv_start, uv_end, &polygon, tol.parametric);
+    // 評価できないループはこれまでどおりクリップ対象外として素通しする
+    let Some(intervals) =
+        segment_inside_pcurve_loop_intervals(uv_start, uv_end, &pcurves.outer_loop, tol)
+    else {
+        return Some(current_interval);
+    };
     intersect_interval_set(current_interval, &intervals, tol.parametric)
+}
+
+/// Trim-clips a UV segment against a p-curve loop.
+///
+/// Interval endpoints come from solving the segment against each p-curve span
+/// analytically, so a straight cut across a circular face stops exactly on the
+/// arc rather than on a sampled chord that sits a sagitta short of it. Only the
+/// inside/outside classification between two crossings still uses a densely
+/// sampled polygon, where the test points are far from the boundary.
+fn segment_inside_pcurve_loop_intervals(
+    start: Point2,
+    end: Point2,
+    loop_data: &FacePcurveLoop,
+    tol: &Tolerance,
+) -> Option<Vec<(f64, f64)>> {
+    const CLASSIFICATION_SAMPLES: usize = 32;
+
+    let direction = end - start;
+    if direction.norm() <= tol.parametric.max(1e-12) {
+        return None;
+    }
+    let polygon = sample_pcurve_loop(loop_data, CLASSIFICATION_SAMPLES);
+    if polygon.len() < 3 {
+        return None;
+    }
+
+    let mut cuts = vec![0.0, 1.0];
+    for segment in &loop_data.segments {
+        match pcurve_segment_crossings(&segment.curve, start, direction) {
+            Some(crossings) => cuts.extend(crossings),
+            None => {
+                // 高次スパンは従来どおり折れ線近似で交差位置を求める
+                let points = segment.curve.sample_points(CLASSIFICATION_SAMPLES);
+                for pair in points.windows(2) {
+                    if let Some(t) =
+                        segment_segment_intersection_t(start, end, pair[0], pair[1], tol.parametric)
+                    {
+                        cuts.push(t);
+                    }
+                }
+            }
+        }
+    }
+
+    let cut_tol = tol.parametric.max(1e-9);
+    cuts.retain(|t| (-cut_tol..=1.0 + cut_tol).contains(t));
+    for t in cuts.iter_mut() {
+        *t = t.clamp(0.0, 1.0);
+    }
+    cuts.sort_by(|a, b| a.total_cmp(b));
+    cuts.dedup_by(|a, b| (*a - *b).abs() <= cut_tol);
+
+    let mut intervals = Vec::new();
+    for pair in cuts.windows(2) {
+        let (t0, t1) = (pair[0], pair[1]);
+        if t1 - t0 <= cut_tol {
+            continue;
+        }
+        let mid = start + direction * ((t0 + t1) * 0.5);
+        if point_in_polygon_2d(mid, &polygon, tol.parametric) {
+            intervals.push((t0, t1));
+        }
+    }
+
+    Some(merge_intervals(intervals, cut_tol))
+}
+
+/// Solves a single-span rational p-curve against an infinite UV line.
+///
+/// The signed distance to the line is a Bernstein polynomial in the homogeneous
+/// numerator, so degree 1 and 2 spans (lines and exact conic arcs) have closed
+/// form roots. Returns `None` for spans this solver does not cover.
+fn pcurve_segment_crossings(
+    curve: &zenith_geom::NurbsCurve2,
+    start: Point2,
+    direction: Vec2,
+) -> Option<Vec<f64>> {
+    let order = curve.degree + 1;
+    if curve.control_points.len() != order || curve.knots.knots.len() != order * 2 {
+        return None;
+    }
+    if curve.degree == 0 || curve.degree > 2 {
+        return None;
+    }
+
+    let normal = Vec2::new(-direction.y, direction.x);
+    let offset = normal.dot(&start.coords);
+    let bernstein: Vec<f64> = curve
+        .control_points
+        .iter()
+        .map(|control_point| {
+            let homogeneous = control_point.to_homogeneous();
+            normal.x * homogeneous.x + normal.y * homogeneous.y - offset * homogeneous.z
+        })
+        .collect();
+
+    let roots = match curve.degree {
+        1 => solve_linear_bernstein(bernstein[0], bernstein[1]),
+        _ => solve_quadratic_bernstein(bernstein[0], bernstein[1], bernstein[2]),
+    };
+
+    let (t_min, t_max) = curve.param_range();
+    let direction_norm_sq = direction.norm_squared();
+    Some(
+        roots
+            .into_iter()
+            .map(|local| {
+                let point = curve.evaluate(t_min + (t_max - t_min) * local);
+                (point - start).dot(&direction) / direction_norm_sq
+            })
+            .collect(),
+    )
+}
+
+fn solve_linear_bernstein(b0: f64, b1: f64) -> Vec<f64> {
+    let slope = b1 - b0;
+    if slope.abs() <= f64::EPSILON {
+        return Vec::new();
+    }
+    let t = -b0 / slope;
+    (0.0..=1.0).contains(&t).then_some(t).into_iter().collect()
+}
+
+fn solve_quadratic_bernstein(b0: f64, b1: f64, b2: f64) -> Vec<f64> {
+    let a = b0 - 2.0 * b1 + b2;
+    let b = 2.0 * (b1 - b0);
+    let c = b0;
+
+    if a.abs() <= f64::EPSILON {
+        return solve_linear_bernstein(c, c + b);
+    }
+
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < 0.0 {
+        return Vec::new();
+    }
+
+    let root = discriminant.sqrt();
+    [(-b - root) / (2.0 * a), (-b + root) / (2.0 * a)]
+        .into_iter()
+        .filter(|t| (0.0..=1.0).contains(t))
+        .collect()
 }
 
 fn sample_pcurve_loop(loop_data: &FacePcurveLoop, samples_per_segment: usize) -> Vec<Point2> {
@@ -1818,52 +1968,6 @@ fn sample_pcurve_loop(loop_data: &FacePcurveLoop, samples_per_segment: usize) ->
     }
 
     points
-}
-
-fn segment_inside_polygon_intervals(
-    start: Point2,
-    end: Point2,
-    polygon: &[Point2],
-    tol: f64,
-) -> Vec<(f64, f64)> {
-    let dir = end - start;
-    if dir.norm() <= tol.max(1e-12) {
-        return Vec::new();
-    }
-
-    let mut cuts = vec![0.0, 1.0];
-    for i in 0..polygon.len() {
-        let a = polygon[i];
-        let b = polygon[(i + 1) % polygon.len()];
-        if let Some(t) = segment_segment_intersection_t(start, end, a, b, tol) {
-            cuts.push(t.clamp(0.0, 1.0));
-        }
-    }
-    cuts.sort_by(|a, b| a.total_cmp(b));
-    cuts.dedup_by(|a, b| (*a - *b).abs() <= tol.max(1e-9));
-
-    let mut intervals = Vec::new();
-    for pair in cuts.windows(2) {
-        let t0 = pair[0];
-        let t1 = pair[1];
-        if t1 - t0 <= tol.max(1e-9) {
-            continue;
-        }
-        let mid_t = (t0 + t1) * 0.5;
-        let mid = start + dir * mid_t;
-        if point_in_polygon_2d(mid, polygon, tol) {
-            intervals.push((t0, t1));
-        }
-    }
-
-    for &t in &cuts {
-        let point = start + dir * t;
-        if point_on_polygon_boundary(point, polygon, tol) {
-            intervals.push((t, t));
-        }
-    }
-
-    merge_intervals(intervals, tol.max(1e-9))
 }
 
 fn intersect_interval_set(
