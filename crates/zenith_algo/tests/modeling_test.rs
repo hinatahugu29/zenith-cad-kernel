@@ -4831,6 +4831,52 @@ fn test_sphere_solid() {
 }
 
 #[test]
+fn test_taper_face_produces_a_valid_tilted_solid() {
+    let tol = Tolerance::default();
+    let (dx, dy, dz) = (10.0_f64, 20.0_f64, 30.0_f64);
+    let angle = 10.0_f64;
+    let solid = zenith_algo::PrimitiveBuilder::make_box(dx, dy, dz).unwrap();
+
+    // 天面を、その稜線 (y = 0, z = dz) まわりに傾ける
+    let tapered = zenith_algo::DirectModeling::taper_face(
+        &solid,
+        1,
+        Point3::new(0.0, 0.0, dz),
+        Vec3::new(1.0, 0.0, 0.0),
+        angle,
+    )
+    .expect("tapering a box top face should produce a valid solid");
+
+    assert!(tapered.is_topologically_valid(&tol));
+    let report = tapered.outer_shell.validate_closed(&tol);
+    assert_eq!(report.unmatched_edge_use_count, 0);
+    assert_eq!(report.same_direction_edge_use_count, 0);
+    assert!(report.errors.is_empty(), "{:?}", report.errors);
+
+    // 回転軸上の頂点は動かない
+    for face in &tapered.outer_shell.faces {
+        for point in face.outer_wire.sample_points(2) {
+            assert!(point.z >= -1e-9);
+        }
+    }
+
+    // 体積は YZ 断面（台形）× dx と一致する
+    let radians = angle.to_radians();
+    let cross_section = 0.5 * (dy * (dz + dy * radians.sin()) + dy * radians.cos() * dz);
+    let params = TessellationParams {
+        u_divisions: 8,
+        v_divisions: 8,
+    };
+    let mass = zenith_algo::MassCalculator::compute_from_brep(&tapered, &params);
+    assert!(
+        (mass.volume - cross_section * dx).abs() < 1e-6,
+        "taper volume {} vs analytic {}",
+        mass.volume,
+        cross_section * dx
+    );
+}
+
+#[test]
 fn test_push_pull_keeps_a_cylinder_exact() {
     let tol = Tolerance::default();
     let radius: f64 = 10.0;

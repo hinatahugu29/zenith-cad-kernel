@@ -88,6 +88,12 @@ impl BrepTransform {
         translate_edge(edge, offset)
     }
 
+    /// 単一エッジの剛体変換（曲線の次数・重みを保ったまま移す）
+    pub fn transform_edge(edge: &Edge, transform: &Transform3) -> Result<Edge, String> {
+        ensure_rigid(transform)?;
+        Ok(transform_edge(edge, transform))
+    }
+
     pub fn reverse_shell_orientation(shell: &Shell) -> Shell {
         Shell::new(
             shell

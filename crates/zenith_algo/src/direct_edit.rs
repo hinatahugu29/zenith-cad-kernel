@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use zenith_geom::{ControlPoint3, NurbsSurface3, PlaneSurface3};
-use zenith_math::{Point3, Vec3};
+use zenith_math::{Point3, Transform3, Vec3};
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Shell, Solid, Vertex, Wire};
 
 /// 面・辺の幾何情報クエリ結果
@@ -269,7 +269,11 @@ impl DirectModeling {
         crate::validated_solid(Shell::closed(new_faces))
     }
 
-    /// 選択されたFaceを特定の回転軸エッジまわりに角度 angle_deg だけ傾斜（Taper / Draft）
+    /// 選択されたFaceを回転軸まわりに angle_deg だけ傾斜（Taper / Draft）
+    ///
+    /// 回転は剛体変換なので、対象面と一緒に動く曲線はそのまま変換される。
+    /// 片側だけが動く隣接面は境界から平面を張り直し、非平面になる編集や
+    /// 曲面をまたぐ編集は近似せずに失敗する。
     pub fn taper_face(
         solid: &Solid,
         face_index: usize,
@@ -282,51 +286,115 @@ impl DirectModeling {
         }
 
         let faces = &solid.outer_shell.faces;
-        if face_index >= faces.len() {
-            return Err("Invalid face index".to_string());
+        let target_face = faces.get(face_index).ok_or("Invalid face index")?;
+        let axis = axis_dir
+            .try_normalize(1e-12)
+            .ok_or("Taper axis direction is zero")?;
+
+        let rotation = Transform3::from_translation(axis_origin.coords)
+            .compose(&Transform3::from_axis_angle(&axis, angle_deg.to_radians()))
+            .compose(&Transform3::from_translation(-axis_origin.coords));
+
+        let mut moved_points = Vec::new();
+        for edge in &target_face.outer_wire.edges {
+            moved_points.push(edge.start_vertex().point);
+            moved_points.push(edge.end_vertex().point);
+        }
+        let is_moved = |point: Point3| -> bool {
+            moved_points
+                .iter()
+                .any(|moved| (point - *moved).norm() < 1e-5)
+        };
+
+        let mut rebuilt: BTreeMap<u64, Edge> = BTreeMap::new();
+        for face in faces {
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oriented in &wire.edges {
+                    let edge = &oriented.edge;
+                    if rebuilt.contains_key(&edge.id) {
+                        continue;
+                    }
+                    let start_moved = is_moved(edge.start_vertex.point);
+                    let end_moved = is_moved(edge.end_vertex.point);
+                    let new_edge = match (start_moved, end_moved) {
+                        (false, false) => edge.clone(),
+                        (true, true) => crate::BrepTransform::transform_edge(edge, &rotation)?,
+                        _ => {
+                            if edge.curve.degree != 1 || edge.curve.control_points.len() != 2 {
+                                return Err(
+                                    "Taper would have to rebuild a curved side edge; extending the adjacent surfaces is not implemented"
+                                        .to_string(),
+                                );
+                            }
+                            let start = if start_moved {
+                                rotation.transform_point(&edge.start_vertex.point)
+                            } else {
+                                edge.start_vertex.point
+                            };
+                            let end = if end_moved {
+                                rotation.transform_point(&edge.end_vertex.point)
+                            } else {
+                                edge.end_vertex.point
+                            };
+                            Edge::line_between(Vertex::from_point(start), Vertex::from_point(end))?
+                        }
+                    };
+                    rebuilt.insert(edge.id, new_edge);
+                }
+            }
         }
 
-        let rad = angle_deg.to_radians();
-        let u_axis = axis_dir.normalize();
-        let c = rad.cos();
-        let s = rad.sin();
-
-        let rotate_pt = |p: Point3| -> Point3 {
-            let v = p - axis_origin;
-            let v_rot = v * c + u_axis.cross(&v) * s + u_axis * (u_axis.dot(&v) * (1.0 - c));
-            axis_origin + v_rot
+        let rebuild_wire = |wire: &Wire| -> Wire {
+            Wire::new(
+                wire.edges
+                    .iter()
+                    .map(|oriented| {
+                        OrientedEdge::new(rebuilt[&oriented.edge.id].clone(), oriented.orientation)
+                    })
+                    .collect(),
+            )
         };
 
-        let mut new_faces = faces.clone();
-        let target_face = &faces[face_index];
-
-        let updated_face = match &target_face.geometry {
-            FaceGeometry::Plane(p) => {
-                let new_origin = rotate_pt(p.origin);
-                let new_u = p.u_axis * c
-                    + u_axis.cross(&p.u_axis) * s
-                    + u_axis * (u_axis.dot(&p.u_axis) * (1.0 - c));
-                let new_v = p.v_axis * c
-                    + u_axis.cross(&p.v_axis) * s
-                    + u_axis * (u_axis.dot(&p.v_axis) * (1.0 - c));
-                let new_p =
-                    PlaneSurface3::new(new_origin, new_u, new_v).ok_or("taper plane fail")?;
-
-                let mut new_edges = Vec::new();
-                for oe in &target_face.outer_wire.edges {
-                    let vs = Vertex::from_point(rotate_pt(oe.start_vertex().point));
-                    let ve = Vertex::from_point(rotate_pt(oe.end_vertex().point));
-                    let e = Edge::line_between(vs, ve)?;
-                    new_edges.push(OrientedEdge::forward(e));
+        let mut new_faces = Vec::with_capacity(faces.len());
+        for face in faces {
+            let mut moved_count = 0;
+            let mut vertex_count = 0;
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oriented in &wire.edges {
+                    vertex_count += 1;
+                    if is_moved(oriented.start_vertex().point) {
+                        moved_count += 1;
+                    }
                 }
-                Face::simple(FaceGeometry::Plane(new_p), Wire::new(new_edges))
             }
-            _ => return Err("Taper currently supports planar faces".to_string()),
-        };
 
-        new_faces[face_index] = updated_face;
-        let shell = Shell::closed(new_faces);
-        crate::validated_solid(shell)
+            if moved_count == 0 {
+                new_faces.push(face.clone());
+                continue;
+            }
+
+            let outer_wire = rebuild_wire(&face.outer_wire);
+            let geometry = if moved_count == vertex_count {
+                crate::BrepTransform::transform_face(face, &rotation)?.geometry
+            } else {
+                let FaceGeometry::Plane(plane) = &face.geometry else {
+                    return Err(
+                        "Taper across a curved adjacent face is not implemented".to_string()
+                    );
+                };
+                FaceGeometry::Plane(refit_plane(&outer_wire.sample_points(4), plane)?)
+            };
+
+            new_faces.push(Face::new(
+                geometry,
+                outer_wire,
+                face.inner_wires.iter().map(rebuild_wire).collect(),
+                face.orientation,
+                face.tolerance,
+            ));
+        }
+
+        crate::validated_solid(Shell::closed(new_faces))
     }
 
     /// 直方体の指定した単一垂直エッジ（0: X=0,Y=0; 1: X=dx,Y=0; 2: X=dx,Y=dy; 3: X=0,Y=dy）に半径 radius のフィレットを適用
@@ -630,4 +698,66 @@ fn extend_ruled_surface(
     }
 
     Some(extended)
+}
+
+/// Rebuilds the plane of a face whose boundary moved.
+///
+/// The original plane is kept when the new boundary still lies on it. Otherwise
+/// a plane is fitted through the boundary with Newell's method, oriented to
+/// agree with the original normal so the face keeps its outward sense, and every
+/// boundary point is checked against it - an edit that leaves the boundary
+/// non-planar is refused rather than silently approximated.
+fn refit_plane(points: &[Point3], original: &PlaneSurface3) -> Result<PlaneSurface3, String> {
+    const PLANARITY_TOLERANCE: f64 = 1e-9;
+
+    if points.len() < 3 {
+        return Err("A planar face needs at least three boundary points".to_string());
+    }
+    let extent = points
+        .iter()
+        .map(|point| (point - points[0]).norm())
+        .fold(0.0, f64::max)
+        .max(1.0);
+    let tolerance = PLANARITY_TOLERANCE * extent;
+
+    if points
+        .iter()
+        .all(|point| (point - original.origin).dot(&original.normal).abs() <= tolerance)
+    {
+        return Ok(*original);
+    }
+
+    let mut normal = Vec3::zeros();
+    for (index, current) in points.iter().enumerate() {
+        let next = points[(index + 1) % points.len()];
+        normal += Vec3::new(
+            (current.y - next.y) * (current.z + next.z),
+            (current.z - next.z) * (current.x + next.x),
+            (current.x - next.x) * (current.y + next.y),
+        );
+    }
+    let mut normal = normal
+        .try_normalize(1e-12)
+        .ok_or("Edited face boundary is degenerate")?;
+    if normal.dot(&original.normal) < 0.0 {
+        normal = -normal;
+    }
+
+    let origin = points[0];
+    let in_plane = points
+        .iter()
+        .map(|point| point - origin)
+        .find_map(|offset| (offset - normal * offset.dot(&normal)).try_normalize(1e-12))
+        .ok_or("Edited face boundary is degenerate")?;
+    let plane = PlaneSurface3::new(origin, in_plane, normal.cross(&in_plane))
+        .ok_or("Failed to rebuild the edited face plane")?;
+
+    if points
+        .iter()
+        .any(|point| (point - plane.origin).dot(&plane.normal).abs() > tolerance)
+    {
+        return Err("Taper left an adjacent face non-planar".to_string());
+    }
+
+    Ok(plane)
 }

@@ -250,6 +250,8 @@ Shared edges are rebuilt once and keyed by their original id, so faces keep shar
 
 Pulling a cylinder's cap now yields an exact taller cylinder: all four side patches stay NURBS, all sixteen circular arc uses survive, the boundary stays on the analytic cylinder to 1e-9, and the volume matches the analytic value.
 
+`taper_face()` had a worse version of the same problem: it rotated only the target face and left every neighbour referencing the old edges, so it failed shell validation on every input - the operation could not succeed at all, and nothing exercised it. It now shares the push-pull machinery: the rotation is applied as a rigid transform to whatever moves with the face, shared edges are rebuilt once by id, and a partly-moved planar neighbour has its plane refitted through the new boundary with Newell's method, oriented to keep its outward sense. An edit that leaves a neighbour non-planar, or that crosses a curved face, is refused. Tapering a box top face now returns a valid solid whose volume matches the analytic trapezoidal prism.
+
 Remaining target:
 
 - for general edits, solve adjacent surface extensions and re-trim
