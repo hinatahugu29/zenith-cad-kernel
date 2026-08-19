@@ -120,6 +120,22 @@ fn main() {
         BooleanOpType::Intersection,
     );
 
+    // 面が接しているだけで重なりがない配置。差は A そのものになるはず。
+    let boxa = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
+    let flush = BrepTransform::translate_solid(&boxa, Vec3::new(20.0, 0.0, 0.0));
+    probe("flush boxes", &boxa, &flush, BooleanOpType::Difference);
+
+    // 任意角度で重なるボックス同士。平面同士だけで済むのに未対応。
+    let rotated = BrepTransform::transform_solid(
+        &BrepTransform::translate_solid(&boxa, Vec3::new(10.0, 10.0, 0.0)),
+        &zenith_math::Transform3::from_axis_angle(
+            &Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        ),
+    )
+    .unwrap();
+    probe("rotated boxes", &boxa, &rotated, BooleanOpType::Union);
+
     let cyl_a = PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap();
     let cyl_b = BrepTransform::transform_solid(
         &BrepTransform::translate_solid(&cyl_a, Vec3::new(0.0, -20.0, 20.0)),

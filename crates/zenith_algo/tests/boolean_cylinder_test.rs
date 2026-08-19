@@ -216,6 +216,24 @@ fn test_disjoint_union_returns_both_solids() {
 }
 
 #[test]
+fn test_difference_of_touching_solids_leaves_the_first_untouched() {
+    let tol = Tolerance::default();
+    let a = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
+    // 面でぴったり接しているが、中身は重なっていない。
+    let b = BrepTransform::translate_solid(&a, Vec3::new(20.0, 0.0, 0.0));
+
+    let result = BooleanEngine::boolean_solids_exact_result(&a, &b, BooleanOpType::Difference, &tol)
+        .expect("subtracting a solid that only touches should succeed");
+
+    assert_eq!(result.solids.len(), 1);
+    let volume = result_volume(&result.solids);
+    assert!(
+        (volume - 8000.0).abs() / 8000.0 < 1e-12,
+        "nothing overlaps, so the volume should be unchanged, got {volume}"
+    );
+}
+
+#[test]
 fn test_drilled_result_exports_as_a_manifold_solid() {
     let tol = Tolerance::default();
     let (block, drill) = block_and_drill();

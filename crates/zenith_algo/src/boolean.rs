@@ -184,6 +184,13 @@ impl BooleanEngine {
             return Ok(ExactBooleanResult::single(solid));
         }
 
+        // 面で接しているだけで中身が重なっていない場合、差は A そのもの。
+        // 一般経路に流すと、B の同一平面が Boundary として採られて A の面と
+        // 重複し、非多様体になる。
+        if matches!(op, BooleanOpType::Difference) && !Self::interiors_overlap(solid_a, solid_b) {
+            return Ok(ExactBooleanResult::single(solid_a.clone()));
+        }
+
         let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
             solid_a, solid_b, op, tol,
         );
@@ -223,6 +230,76 @@ impl BooleanEngine {
             report.selected_with_caps_non_manifold_edge_use_count,
             report.selected_with_caps_same_direction_edge_use_count
         ))
+    }
+
+    /// True when the two solids share interior volume, as opposed to merely
+    /// touching along a face or an edge.
+    ///
+    /// Touching solids still produce face-pair candidates, so the presence of
+    /// candidates says nothing about whether there is anything to cut away.
+    fn interiors_overlap(solid_a: &Solid, solid_b: &Solid) -> bool {
+        let params = TessellationParams {
+            u_divisions: 12,
+            v_divisions: 12,
+        };
+        let mesh_a = tessellate_solid(solid_a, &params);
+        let mesh_b = tessellate_solid(solid_b, &params);
+        if mesh_a.positions.is_empty() || mesh_b.positions.is_empty() {
+            return false;
+        }
+
+        let bounds = |mesh: &TriangleMesh| {
+            let mut min_pt = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+            let mut max_pt = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for point in &mesh.positions {
+                min_pt.x = min_pt.x.min(point.x);
+                min_pt.y = min_pt.y.min(point.y);
+                min_pt.z = min_pt.z.min(point.z);
+                max_pt.x = max_pt.x.max(point.x);
+                max_pt.y = max_pt.y.max(point.y);
+                max_pt.z = max_pt.z.max(point.z);
+            }
+            (min_pt, max_pt)
+        };
+
+        // 共通のバウンディングボックス内だけを見れば十分。
+        let (min_a, max_a) = bounds(&mesh_a);
+        let (min_b, max_b) = bounds(&mesh_b);
+        let min_pt = Point3::new(
+            min_a.x.max(min_b.x),
+            min_a.y.max(min_b.y),
+            min_a.z.max(min_b.z),
+        );
+        let max_pt = Point3::new(
+            max_a.x.min(max_b.x),
+            max_a.y.min(max_b.y),
+            max_a.z.min(max_b.z),
+        );
+        if min_pt.x >= max_pt.x || min_pt.y >= max_pt.y || min_pt.z >= max_pt.z {
+            return false;
+        }
+
+        let span = Vec3::new(
+            max_pt.x - min_pt.x,
+            max_pt.y - min_pt.y,
+            max_pt.z - min_pt.z,
+        );
+
+        const SAMPLES: usize = 512;
+        for index in 1..=SAMPLES {
+            let point = Point3::new(
+                min_pt.x + span.x * halton(index, 2),
+                min_pt.y + span.y * halton(index, 3),
+                min_pt.z + span.z * halton(index, 5),
+            );
+            if Self::is_point_inside_mesh(point, &mesh_a)
+                && Self::is_point_inside_mesh(point, &mesh_b)
+            {
+                return true;
+            }
+        }
+
+        false
     }
 
     fn has_face_pair_candidates(solid_a: &Solid, solid_b: &Solid, tol: &Tolerance) -> bool {
@@ -518,4 +595,17 @@ impl BooleanEngine {
             }
         }
     }
+}
+
+/// Halton sequence, so the overlap samples spread evenly without a random
+/// source and stay identical between runs.
+fn halton(mut index: usize, base: usize) -> f64 {
+    let mut result = 0.0;
+    let mut fraction = 1.0 / base as f64;
+    while index > 0 {
+        result += (index % base) as f64 * fraction;
+        index /= base;
+        fraction /= base as f64;
+    }
+    result
 }
