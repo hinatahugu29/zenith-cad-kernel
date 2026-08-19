@@ -167,8 +167,7 @@ impl BooleanEngine {
         }
 
         if !Self::has_face_pair_candidates(solid_a, solid_b, tol) {
-            return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol)
-                .map(ExactBooleanResult::single);
+            return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol);
         }
         if let Some(result) =
             crate::cylinder_boolean::CylinderBoolean::boolean_axis_cylinder_and_slab_exact_result(
@@ -240,25 +239,30 @@ impl BooleanEngine {
         solid_b: &Solid,
         op: BooleanOpType,
         tol: &Tolerance,
-    ) -> Result<Solid, String> {
+    ) -> Result<ExactBooleanResult, String> {
         let a_inside_b = Self::solid_is_inside_or_on_boundary(solid_a, solid_b, tol);
         let b_inside_a = Self::solid_is_inside_or_on_boundary(solid_b, solid_a, tol);
 
         match op {
             BooleanOpType::Union => {
                 if a_inside_b {
-                    Ok(solid_b.clone())
+                    Ok(ExactBooleanResult::single(solid_b.clone()))
                 } else if b_inside_a {
-                    Ok(solid_a.clone())
+                    Ok(ExactBooleanResult::single(solid_a.clone()))
                 } else {
-                    Err("Exact B-Rep boolean union of disjoint solids requires compound result support".to_string())
+                    // 交わらない2立体の和は、1つの立体にはならないが、
+                    // 2つの立体からなる結果としては正しく表せる。
+                    Ok(ExactBooleanResult::from_solids(vec![
+                        solid_a.clone(),
+                        solid_b.clone(),
+                    ]))
                 }
             }
             BooleanOpType::Intersection => {
                 if a_inside_b {
-                    Ok(solid_a.clone())
+                    Ok(ExactBooleanResult::single(solid_a.clone()))
                 } else if b_inside_a {
-                    Ok(solid_b.clone())
+                    Ok(ExactBooleanResult::single(solid_b.clone()))
                 } else {
                     Err("Exact B-Rep boolean intersection is empty for disjoint solids".to_string())
                 }
@@ -272,9 +276,10 @@ impl BooleanEngine {
                         vec![solid_b.outer_shell.clone()],
                         tol,
                     )
+                    .map(ExactBooleanResult::single)
                     .map_err(|err| err.to_string())
                 } else {
-                    Ok(solid_a.clone())
+                    Ok(ExactBooleanResult::single(solid_a.clone()))
                 }
             }
         }

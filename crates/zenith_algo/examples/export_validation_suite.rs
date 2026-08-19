@@ -345,6 +345,29 @@ fn build_subjects() -> Vec<Subject> {
         }
     }
 
+    // 止まり穴。円柱の底が立体の内部で終わるので、穴が抜ける面は1枚だけ。
+    if let (Ok(block), Ok(drill)) = (
+        PrimitiveBuilder::make_box(40.0, 40.0, 20.0),
+        PrimitiveBuilder::make_cylinder(6.0, 40.0),
+    ) {
+        let drill = zenith_algo::BrepTransform::translate_solid(&drill, Vec3::new(20.0, 20.0, 8.0));
+        if let Ok(result) = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+            &block,
+            &drill,
+            zenith_algo::BooleanOpType::Difference,
+            &Tolerance::default(),
+        ) {
+            if let Some(solid) = result.solids.into_iter().next() {
+                subjects.push(Subject {
+                    name: "boolean_blind_hole",
+                    solid,
+                    analytic_volume: Some(40.0 * 40.0 * 20.0 - PI * 36.0 * 12.0),
+                    section: None,
+                });
+            }
+        }
+    }
+
     if let Ok(solid) = GearBuilder::make_spur_gear(2.0, 18, 20.0, 8.0, 6.0) {
         subjects.push(Subject {
             name: "spur_gear_m2_z18",

@@ -143,6 +143,79 @@ fn test_difference_and_intersection_partition_the_block() {
 }
 
 #[test]
+fn test_blind_hole_matches_the_closed_form() {
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    // 下端が箱の内部 (z=8) で止まる円柱。天面から深さ12の止まり穴。
+    let drill = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(6.0, 40.0).unwrap(),
+        Vec3::new(20.0, 20.0, 8.0),
+    );
+
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&block, &drill, BooleanOpType::Difference, &tol)
+            .expect("a blind hole should succeed");
+
+    let expected = 40.0 * 40.0 * 20.0 - PI * 36.0 * 12.0;
+    let volume = result_volume(&result.solids);
+    assert!(
+        (volume - expected).abs() / expected < 1e-9,
+        "blind hole volume {volume} should equal {expected}"
+    );
+
+    // 止まり穴なので、穴が抜けている面は天面だけ。
+    let holed_faces = result.solids[0]
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| !face.inner_wires.is_empty())
+        .count();
+    assert_eq!(holed_faces, 1, "a blind hole breaks through only one face");
+}
+
+#[test]
+fn test_through_hole_along_x_matches_the_closed_form() {
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
+
+    let rotation = zenith_math::Transform3::from_axis_angle(
+        &Vec3::new(0.0, 1.0, 0.0),
+        std::f64::consts::FRAC_PI_2,
+    );
+    let along_x = BrepTransform::transform_solid(
+        &PrimitiveBuilder::make_cylinder(5.0, 40.0).unwrap(),
+        &rotation,
+    )
+    .unwrap();
+    let drill = BrepTransform::translate_solid(&along_x, Vec3::new(-10.0, 10.0, 10.0));
+
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&block, &drill, BooleanOpType::Difference, &tol)
+            .expect("a hole along X should succeed");
+
+    let expected = 8000.0 - PI * 25.0 * 20.0;
+    let volume = result_volume(&result.solids);
+    assert!(
+        (volume - expected).abs() / expected < 1e-9,
+        "X-axis hole volume {volume} should equal {expected}"
+    );
+}
+
+#[test]
+fn test_disjoint_union_returns_both_solids() {
+    let tol = Tolerance::default();
+    let a = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
+    let b = BrepTransform::translate_solid(&a, Vec3::new(100.0, 0.0, 0.0));
+
+    let result = BooleanEngine::boolean_solids_exact_result(&a, &b, BooleanOpType::Union, &tol)
+        .expect("the union of two disjoint solids is a two-solid result, not an error");
+
+    assert_eq!(result.solids.len(), 2);
+    let volume = result_volume(&result.solids);
+    assert!((volume - 16000.0).abs() / 16000.0 < 1e-12);
+}
+
+#[test]
 fn test_drilled_result_exports_as_a_manifold_solid() {
     let tol = Tolerance::default();
     let (block, drill) = block_and_drill();

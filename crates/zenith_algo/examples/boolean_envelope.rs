@@ -82,6 +82,45 @@ fn main() {
             ],
         },
         Case {
+            name: "box x cylinder (blind hole from the top)",
+            a: boxa.clone(),
+            b: {
+                // 半径6・高さ25の円柱を z=10..35 に置く。下端が箱の内部
+                // (z=10) で止まるので、天面から深さ10の止まり穴になる。
+                let drill = PrimitiveBuilder::make_cylinder(6.0, 25.0).unwrap();
+                shifted(&drill, 10.0, 10.0, 10.0)
+            },
+            // 差 = 8000 - pi*36*10、積 = pi*36*10
+            expected: [
+                Some(8000.0 + std::f64::consts::PI * 36.0 * 25.0
+                    - std::f64::consts::PI * 36.0 * 10.0),
+                Some(8000.0 - std::f64::consts::PI * 36.0 * 10.0),
+                Some(std::f64::consts::PI * 36.0 * 10.0),
+            ],
+        },
+        Case {
+            name: "box x cylinder (through hole along X)",
+            a: boxa.clone(),
+            b: {
+                let rotation = zenith_math::Transform3::from_axis_angle(
+                    &Vec3::new(0.0, 1.0, 0.0),
+                    std::f64::consts::FRAC_PI_2,
+                );
+                let along_x = BrepTransform::transform_solid(
+                    &PrimitiveBuilder::make_cylinder(5.0, 40.0).unwrap(),
+                    &rotation,
+                )
+                .unwrap();
+                shifted(&along_x, -10.0, 10.0, 10.0)
+            },
+            expected: [
+                Some(8000.0 + std::f64::consts::PI * 25.0 * 40.0
+                    - std::f64::consts::PI * 25.0 * 20.0),
+                Some(8000.0 - std::f64::consts::PI * 25.0 * 20.0),
+                Some(std::f64::consts::PI * 25.0 * 20.0),
+            ],
+        },
+        Case {
             name: "box x sphere",
             a: boxa.clone(),
             b: shifted(&sphere, 20.0, 10.0, 10.0),
@@ -89,13 +128,20 @@ fn main() {
         },
         Case {
             name: "cylinder x cylinder (perpendicular cross)",
-            a: cyl.clone(),
+            a: PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
             b: {
-                let t = zenith_math::Transform3::from_axis_angle(
-                    &Vec3::new(1.0, 0.0, 0.0),
+                // +Z 向きの円柱を Y 軸まわりに90度回して +X 向きにし、
+                // 相手の中ほど (z = 20) を貫くように置く。
+                let rotation = zenith_math::Transform3::from_axis_angle(
+                    &Vec3::new(0.0, 1.0, 0.0),
                     std::f64::consts::FRAC_PI_2,
                 );
-                BrepTransform::transform_solid(&shifted(&cyl, 0.0, 20.0, 20.0), &t).unwrap()
+                let along_x = BrepTransform::transform_solid(
+                    &PrimitiveBuilder::make_cylinder(6.0, 40.0).unwrap(),
+                    &rotation,
+                )
+                .unwrap();
+                shifted(&along_x, -20.0, 0.0, 20.0)
             },
             expected: [None, None, None],
         },
