@@ -185,9 +185,9 @@ impl SweepBuilder {
             faces.push(Face::simple(FaceGeometry::Nurbs(s), wire));
         }
 
-        // 6. 始点端面 (Start Cap: PLANE, 外向き法線 -t0)
+        // 6. 始点端面 (Start Cap: PLANE, 外向き法線 -t0, U=n0, V=-b0 で角度0から反時計回り)
         let (ctr0, _t0, n0, b0) = frames[0];
-        let p_start_cap = PlaneSurface3::new(ctr0, b0, n0).ok_or("start cap plane")?;
+        let p_start_cap = PlaneSurface3::new(ctr0, n0, -b0).ok_or("start cap plane")?;
         let wire_start_cap = Wire::new(vec![
             OrientedEdge::reversed(bottom_ring_edges[3].clone()),
             OrientedEdge::reversed(bottom_ring_edges[2].clone()),
@@ -199,7 +199,7 @@ impl SweepBuilder {
             wire_start_cap,
         ));
 
-        // 7. 終点端面 (End Cap: PLANE, 外向き法線 +t1)
+        // 7. 終点端面 (End Cap: PLANE, 外向き法線 +t1, U=n1, V=b1 で角度0から反時計回り)
         let (ctr1, _t1, n1, b1) = frames[n_sec - 1];
         let p_end_cap = PlaneSurface3::new(ctr1, n1, b1).ok_or("end cap plane")?;
         let wire_end_cap = Wire::new(vec![
@@ -209,6 +209,7 @@ impl SweepBuilder {
             OrientedEdge::forward(top_ring_edges[3].clone()),
         ]);
         faces.push(Face::simple(FaceGeometry::Plane(p_end_cap), wire_end_cap));
+
 
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)
