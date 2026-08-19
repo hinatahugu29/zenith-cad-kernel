@@ -185,65 +185,79 @@ impl SweepBuilder {
             faces.push(Face::simple(FaceGeometry::Nurbs(s), wire));
         }
 
-        // 6. 始点端面 (Start Cap: 平面 NURBS パッチ, 外向き法線 -t0)
-        let (ctr0, _t0, n0, b0) = frames[0];
-        let r_bound = radius * 1.5;
-        let u_vec0 = n0 * r_bound;
-        let v_vec0 = -b0 * r_bound;
-        let s_start_cap = NurbsSurface3::new(
-            1,
-            1,
-            vec![
-                vec![
-                    ControlPoint3::unweighted(ctr0 - u_vec0 - v_vec0),
-                    ControlPoint3::unweighted(ctr0 - u_vec0 + v_vec0),
-                ],
-                vec![
-                    ControlPoint3::unweighted(ctr0 + u_vec0 - v_vec0),
-                    ControlPoint3::unweighted(ctr0 + u_vec0 + v_vec0),
-                ],
-            ],
-            KnotVector::clamped_uniform(2, 1),
-            KnotVector::clamped_uniform(2, 1),
-        )?;
-        let wire_start_cap = Wire::new(vec![
-            OrientedEdge::reversed(bottom_ring_edges[3].clone()),
-            OrientedEdge::reversed(bottom_ring_edges[2].clone()),
-            OrientedEdge::reversed(bottom_ring_edges[1].clone()),
-            OrientedEdge::reversed(bottom_ring_edges[0].clone()),
-        ]);
-        faces.push(Face::simple(
-            FaceGeometry::Nurbs(s_start_cap),
-            wire_start_cap,
-        ));
+        // 6. 始点端面 (Start Cap: 4つの扇形有理NURBSパッチ, 外向き法線 -t0)
+        let (ctr0, _t0, _n0, _b0) = frames[0];
+        let center_v_bot = Vertex::from_point(ctr0);
+        let mut rad_b = Vec::with_capacity(4);
+        for quad in 0..4 {
+            rad_b.push(Edge::line_between(center_v_bot.clone(), vb[quad].clone())?);
+        }
 
-        // 7. 終点端面 (End Cap: 平面 NURBS パッチ, 外向き法線 +t1)
-        let (ctr1, _t1, n1, b1) = frames[n_sec - 1];
-        let u_vec1 = n1 * r_bound;
-        let v_vec1 = b1 * r_bound;
-        let s_end_cap = NurbsSurface3::new(
-            1,
-            1,
-            vec![
-                vec![
-                    ControlPoint3::unweighted(ctr1 - u_vec1 - v_vec1),
-                    ControlPoint3::unweighted(ctr1 - u_vec1 + v_vec1),
-                ],
-                vec![
-                    ControlPoint3::unweighted(ctr1 + u_vec1 - v_vec1),
-                    ControlPoint3::unweighted(ctr1 + u_vec1 + v_vec1),
-                ],
-            ],
-            KnotVector::clamped_uniform(2, 1),
-            KnotVector::clamped_uniform(2, 1),
-        )?;
-        let wire_end_cap = Wire::new(vec![
-            OrientedEdge::forward(top_ring_edges[0].clone()),
-            OrientedEdge::forward(top_ring_edges[1].clone()),
-            OrientedEdge::forward(top_ring_edges[2].clone()),
-            OrientedEdge::forward(top_ring_edges[3].clone()),
-        ]);
-        faces.push(Face::simple(FaceGeometry::Nurbs(s_end_cap), wire_end_cap));
+        for quad in 0..4 {
+            let next_q = (quad + 1) % 4;
+            let (ref r0, ref r1, ref r2) = quad_rows[quad];
+
+            // 外周円弧 (r2[0] -> r1[0] -> r0[0]) と 中心点 ctr0
+            let grid = vec![
+                vec![r2[0].clone(), ControlPoint3::new(ctr0, 1.0)],
+                vec![r1[0].clone(), ControlPoint3::new(ctr0, weight)],
+                vec![r0[0].clone(), ControlPoint3::new(ctr0, 1.0)],
+            ];
+
+            let s_cap = NurbsSurface3::new(
+                2,
+                1,
+                grid,
+                KnotVector::clamped_uniform(3, 2),
+                KnotVector::clamped_uniform(2, 1),
+            )?;
+
+            let wire_cap = Wire::new(vec![
+                OrientedEdge::reversed(bottom_ring_edges[quad].clone()),
+                OrientedEdge::reversed(rad_b[quad].clone()),
+                OrientedEdge::forward(rad_b[next_q].clone()),
+            ]);
+
+            faces.push(Face::simple(FaceGeometry::Nurbs(s_cap), wire_cap));
+        }
+
+        // 7. 終点端面 (End Cap: 4つの扇形有理NURBSパッチ, 外向き法線 +t1)
+        let (ctr1, _t1, _n1, _b1) = frames[n_sec - 1];
+        let center_v_top = Vertex::from_point(ctr1);
+        let mut rad_t = Vec::with_capacity(4);
+        for quad in 0..4 {
+            rad_t.push(Edge::line_between(center_v_top.clone(), vt[quad].clone())?);
+        }
+
+        for quad in 0..4 {
+            let next_q = (quad + 1) % 4;
+            let (ref r0, ref r1, ref r2) = quad_rows[quad];
+
+            // 外周円弧 (r0[n-1] -> r1[n-1] -> r2[n-1]) と 中心点 ctr1
+            let grid = vec![
+                vec![r0[n_sec - 1].clone(), ControlPoint3::new(ctr1, 1.0)],
+                vec![r1[n_sec - 1].clone(), ControlPoint3::new(ctr1, weight)],
+                vec![r2[n_sec - 1].clone(), ControlPoint3::new(ctr1, 1.0)],
+            ];
+
+            let s_cap = NurbsSurface3::new(
+                2,
+                1,
+                grid,
+                KnotVector::clamped_uniform(3, 2),
+                KnotVector::clamped_uniform(2, 1),
+            )?;
+
+            let wire_cap = Wire::new(vec![
+                OrientedEdge::forward(top_ring_edges[quad].clone()),
+                OrientedEdge::reversed(rad_t[next_q].clone()),
+                OrientedEdge::forward(rad_t[quad].clone()),
+            ]);
+
+            faces.push(Face::simple(FaceGeometry::Nurbs(s_cap), wire_cap));
+        }
+
+
 
 
 
