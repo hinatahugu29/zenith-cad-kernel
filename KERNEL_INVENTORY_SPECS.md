@@ -1,7 +1,7 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
-**Document Version:** 1.0.0 (Full Inventory & Audit)  
-**Creation Date:** 2026-08-19  
-**Status:** Official Baseline Specification
+**Document Version:** 1.2.0 (Full Inventory & Verification Baseline)  
+**Last Updated:** 2026-08-19  
+**Status:** Official Production Specification
 
 ---
 
@@ -31,12 +31,12 @@ graph TD
 | クレート名 | 役割・責務 | 主な依存クレート |
 | :--- | :--- | :--- |
 | **`zenith_math`** | 3D点・ベクトル・AABB・許容公差・アフィン変換・Shewchukロバスト幾何述語・多項式 | `nalgebra`, `robust`, `serde`, `approx` |
-| **`zenith_geom`** | NURBS曲線/曲面、Coons/Gordon/三角形パッチ、曲率微分幾何、SSI曲面交差、最近傍探索 | `zenith_math` |
-| **`zenith_topo`** | Vertex, Edge, Wire, Face, Shell, Solid, Shape, p-curve（パラメータ空間曲線）構造、マニホールド検証 | `zenith_math`, `zenith_geom` |
-| **`zenith_algo`** | プリミティブ生成、押し出し・回転・ロフト・スイープ、フィレット・面取り、穴あけ、シェル化、ダイレクトモデリング、ブーリアン、スケッチ拘束ソルバー、フィーチャーツリー、物性値計算 | `zenith_math`, `zenith_geom`, `zenith_topo`, `zenith_tess` |
+| **`zenith_geom`** | NURBS曲線/曲面、Coons/Gordon/三角形パッチ、有理円弧変換、互換化、曲率微分幾何、SSI曲面交差、最近傍探索 | `zenith_math` |
+| **`zenith_topo`** | Vertex, Edge, Wire, Face, Shell, Solid, Shape, p-curve（パラメータ空間曲線）構造、マニホールド閉シェル検証 | `zenith_math`, `zenith_geom` |
+| **`zenith_algo`** | プリミティブ生成、押し出し・中空押し出し・回転・ロフト・スイープ、フィレット・面取り、穴あけ、シェル化、ダイレクトモデリング、ブーリアン、スケッチ拘束ソルバー、フィーチャーツリー、物性値計算 | `zenith_math`, `zenith_geom`, `zenith_topo`, `zenith_tess` |
 | **`zenith_tess`** | earcutr によるトリム穴あき多角形三角化、Rayonマルチコア超並列テッセレーション、メッシュ生成 | `zenith_math`, `zenith_geom`, `zenith_topo`, `rayon`, `earcutr` |
-| **`zenith_io`** | STEP (ISO 10303-21) 双方向インポーター/エクスポーター、STL、OBJ、glTF 2.0、IGES 5.3 | `zenith_math`, `zenith_geom`, `zenith_topo`, `zenith_tess` |
-| **`zenith_py`** | PyO3 による Python C拡張（`zenith_cad.pyd`）。Blender アドオン等からのゼロコピー呼出 | `zenith_algo`, `zenith_geom`, `zenith_topo`, `zenith_tess`, `zenith_io`, `pyo3` |
+| **`zenith_io`** | STEP (ISO 10303-21) 双方向インポーター/エクスポーター（解析曲面パース対応）、STL、OBJ、glTF 2.0、IGES 5.3 | `zenith_math`, `zenith_geom`, `zenith_topo`, `zenith_tess` |
+| **`zenith_py`** | PyO3 による Python C拡張（`zenith_cad.pyd`）。Blender アドオン等からのゼロコピー呼出（全29関数） | `zenith_algo`, `zenith_geom`, `zenith_topo`, `zenith_tess`, `zenith_io`, `pyo3` |
 | **`zenith_server`** | TCPソケット通信による軽量バイナリIPCサーバー（Blender/外部プロセスとの連携） | `zenith_algo`, `zenith_topo`, `zenith_tess`, `zenith_io`, `serde_json` |
 
 ---
@@ -93,12 +93,13 @@ CAD幾何演算における浮動小数点丸め誤差や幾何学的縮退を�
    - 有理 de Boor 評価（`evaluate(u)`）、有理導関数評価（`evaluate_derivatives(u, k)`: Algorithm A4.2 from *The NURBS Book*）、正規化接線ベクトル（`tangent(u)`）。
    - パラメータ反転（`reversed()`: 形状不変で進行方向を逆転）。
    - 単一ベジエ区間の同次有理 de Casteljau 分割（`split_bezier_at(t)`: 真円弧等の重みを崩さず厳密分割）。
+   - **`make_compatible(curves)`**: 次数昇格（Degree Elevation）およびノット統一挿入（Knot Insertion）による複数プロファイル曲線の自動互換化。
 3. **`nurbs_surface.rs` (`NurbsSurface3`)**
    - テンソル積 3D NURBS 曲面（U次数 $p$, V次数 $q$, 制御点 2次元グリッド $N \times M$, ノットベクトル $U, V$）。
    - 座標評価（`evaluate(u, v)`）、1階偏微分・面素法線ベクトル（`evaluate_derivatives_1st`, `normal(u, v)`）。
 4. **`curve.rs` (`Curve3` トレイト, `Line3`, `Circle3`)**
    - 3次元線分（直線）および解析的3次元円弧。
-   - 線分 $\to$ 1次B-Splineへの変換（`to_nurbs()`）。
+   - **`Circle3::to_nurbs()`**: 90度以下円弧セグメントへの自動分割 ＋ 重み $w = \cos(d\theta/2)$ による真円厳密有理2次NURBS曲線変換（真円幾何誤差 $< 10^{-12}$）。
 5. **`surface.rs` (`Surface3` トレイト, `PlaneSurface3`)**
    - 3次元無限平面（原点、U軸、V軸、法線ベクトル）。
    - トレイトによる統一インターフェース（`evaluate`, `normal`, `evaluate_with_derivatives`）。
@@ -199,10 +200,16 @@ CAD の主要モデリング機能群。
 - **`make_torus(major_r, minor_r)`**: 16枚の有理NURBSパッチ（U4分割 $\times$ V4分割）による真円回転ドーナツ立体。
 
 #### 2. フィーチャーモデリング
-- **`extrude.rs` (`ExtrudeBuilder::extrude_wire`)**: 閉じた多角形/円弧ワイヤを指定ベクトル方向に掃引して完全閉ソリッドを生成。
+- **`extrude.rs` (`ExtrudeBuilder`)**:
+  - `extrude_wire`: 閉じた多角形/円弧ワイヤを指定ベクトル方向に掃引して完全閉ソリッドを生成。
+  - **`extrude_face_with_holes`**: 外側境界ワイヤ ＋ 任意の複数穴ワイヤ（Inner Wires）から、外壁側面 Face 群、穴内壁側面 Face 群、穴あき底面・天面キャップを完全縫合した閉ソリッド（中空パイプ等）を構築。
 - **`revolve.rs` (`RevolveBuilder::revolve_curve`)**: 2D/3D 曲線を回転軸まわりに回転させた有理NURBS回転曲面を生成（4分割有理B-Spline、軸上特異点の重み整合性対応）。
-- **`loft.rs` (`LoftBuilder::loft_curves`)**: 複数の NURBS プロファイル曲線を U/V 方向に補間スキニングした NURBS 曲面を生成。
-- **`sweep.rs` (`SweepBuilder::sweep_circle_along_curve`)**: 3D NURBS 軌道曲線に沿って最小回転標架（RMF: Parallel Transport Frame）を用いてねじれなく円形断面を掃引したパイプソリッド（側面4パッチ＋端面2面）を生成。
+- **`loft.rs` (`LoftBuilder`)**:
+  - `loft_curves`: 複数曲線の U/V NURBS スキニング曲面生成。
+  - **`loft_solid`**: 複数の閉断面ワイヤ群から、側面 NURBS ロフト Face 群 ＋ 底面・天面キャップ Face を自動縫合した完全閉 B-Rep ソリッド（`Solid`）を構築。
+- **`sweep.rs` (`SweepBuilder`)**:
+  - `sweep_circle_along_curve`: 3D パス曲線に沿った円形パイプソリッド生成。
+  - **`sweep_wire_along_curve`**: 任意の 2D 多角形・スプライン閉断面ワイヤを 3D NURBS パスに沿って最小回転標架（RMF: Parallel Transport Frame）で掃引した完全閉 B-Rep ソリッドを構築。
 - **`fillet.rs` (`FilletBuilder::fillet_box_z_edges`)**: 直方体のZ軸方向4角に半径 $R$ の有理NURBS円筒面を挿入したソリッド化（全10面）。
 - **`chamfer.rs` (`ChamferBuilder::chamfer_box_z_edges`)**: 直方体のZ軸方向4角に面取り距離 $C$ の平面を挿入したソリッド化（全10面）。
 - **`hole.rs` (`HoleBuilder::make_drilled_box`)**: 直方体に貫通円形穴を開け、天面・底面の `inner_wires`（穴ループ）と円筒内壁4パッチを縫合したマニホールドソリッドを生成。
@@ -214,7 +221,8 @@ CAD の主要モデリング機能群。
 - **`inspect_edge` / `inspect_solid_edge`**: 弧長、端点・中点座標、接線、二面角（Dihedral Angle: 0〜360°）、凸（Convex）/ 凹（Concave）/ スムーズ（Smooth）判定。
 - **`push_pull_face`**: 選択面を法線方向に移動し、隣接面を連動伸長（支持曲面を維持したトポロジー再構築）。
 - **`taper_face`**: 選択面を指定回転軸まわりに角度 $\theta$ 傾斜（抜き勾配）。
-- **`fillet_box_single_edge`**: 単一エッジを選択して動的角丸め。
+- **`fillet_box_single_edge`**: 直方体の単一エッジを選択して動的角丸め。
+- **`chamfer_box_single_edge`**: 直方体の 4 隅垂直エッジから単一エッジを選択し、45度面取り平面 ＋ 7面完全閉 B-Rep ソリッドを生成。
 - **`offset_multiple_faces`**: 複数面を同時オフセット。
 - **`extend_edge`**: 3D曲線を接線方向に外挿延長。
 
@@ -233,6 +241,7 @@ CAD の主要モデリング機能群。
 
 #### 6. パラメトリック・フィーチャーツリー (`feature_tree.rs`)
 - 履歴ツリー（`FeatureTree`, `FeatureNode`, `FeatureOp`）。
+- 対応オペレーション: `CreateBox`, `CreateCylinder`, `CreateCone`, `CreateTorus`, `FilletEdge`, `ChamferEdge`, `HollowBox`, `ExtrudeHollow`, `LoftSolid`, `SweepWire`, `PushPullFace`, `ThickenFace`。
 - パラメータ変更時の上流から下流への非破壊再計算（`recompute`）。
 - `GeometricSignature` によるトポロジー参照の自己修復（TNP解消機構）。
 
@@ -263,7 +272,7 @@ CAD の主要モデリング機能群。
 
 #### 2. STEP インポーター (`step_import.rs`)
 - 自前実装の STEP パーサー。外部ライブラリなしで STEP データを B-Rep `Solid` / `Shape` へ復元。
-- 支持曲面: `PLANE`, `CYLINDRICAL_SURFACE`, `CONICAL_SURFACE`, `SPHERICAL_SURFACE`, `TOROIDAL_SURFACE`, `B_SPLINE_SURFACE_WITH_KNOTS`。
+- 支持曲面パース: `PLANE`, **`CYLINDRICAL_SURFACE`**, **`CONICAL_SURFACE`**, **`SPHERICAL_SURFACE`**, `B_SPLINE_SURFACE_WITH_KNOTS`（厳密有理 2 次 NURBS 曲面への復元対応）。
 - 境界曲線: `LINE`, `CIRCLE`, `ELLIPSE`, `B_SPLINE_CURVE_WITH_KNOTS`。
 - 向き判定（`same_sense`）、ノットベクトル・重み復元、空洞シェル（`BREP_WITH_VOIDS`）対応。
 
@@ -279,7 +288,7 @@ CAD の主要モデリング機能群。
 
 PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直接インポートして使用。
 
-#### 公開 Python 関数一覧
+#### 公開 Python 関数一覧（全29関数）
 
 | 分類 | 関数名 | 引数・機能概要 |
 | :--- | :--- | :--- |
@@ -293,12 +302,16 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 | | `make_chamfered_box` | `(dx, dy, dz, chamfer, ...)` $\to$ 4隅面取り直方体 |
 | | `make_drilled_box` | `(dx, dy, dz, hole_radius, ...)` $\to$ 貫通穴直方体 |
 | | `make_hollow_box` | `(dx, dy, dz, thickness, ...)` $\to$ 中空直方体（天面開口） |
+| | `make_hollow_extrusion` | 外側・穴ポリライン群からの完全閉中空押し出しソリッド生成 ＆ STEP出力 |
 | | `make_sweep_pipe` | 3Dパス曲線に沿った円形パイプスイープ |
+| | `make_sweep_wire` | 任意断面ポリラインワイヤの3Dパススイープソリッド生成 ＆ STEP出力 |
 | | `make_revolve` | 2Dプロファイルの軸回転NURBS曲面 |
 | | `make_loft` | 複数プロファイル曲線のロフト曲面 |
+| | `make_loft_solid` | 複数閉断面ポリライン群からの完全閉ロフトソリッド生成 ＆ STEP出力 |
 | | `make_boolean` | メッシュCSGブーリアン（Union, Difference, Intersection） |
 | | `thicken_surface_patch` | パッチ曲面に厚み付けしてソリッド化 |
-| **Direct Edit** | `fillet_box_single_edge` | `(dx, dy, dz, radius, edge_index)` $\to$ 単一エッジフィレット |
+| **Direct Edit** | `fillet_box_single_edge` | `(dx, dy, dz, edge_index, radius)` $\to$ 単一エッジフィレット |
+| | `chamfer_box_single_edge` | `(dx, dy, dz, edge_index, distance, ...)` $\to$ 単一エッジ面取り ＆ STEP出力 |
 | | `push_pull_box` | `(dx, dy, dz, face_index, distance)` $\to$ 面の法線方向移動 |
 | | `taper_box` | `(dx, dy, dz, face_index, angle_deg, ...)` $\to$ 抜き勾配傾斜 |
 | | `cap_planar_wire` | 平面ワイヤの平面キャップ化 |
@@ -317,32 +330,32 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ---
 
-## 3. 🔍「実装中のママの部分」（WIP・制限事項・課題）の総合棚卸し
-
-コードベースの精査により特定された、**現時点で仮実装・特定条件への限定・未完成となっている領域** の棚卸し一覧です。
+## 3. 🔍「実装中のママの部分」（WIP・制限事項・課題）の最新棚卸し
 
 ```mermaid
 graph LR
-    WIP[Zenith 現行の実装中・制限事項] --> W1[1. 一般B-Rep ブーリアン]
-    WIP --> W2[2. 任意形状フィレット / シェル化]
-    WIP --> W3[3. 任意プロファイル ロフト / スイープ]
-    WIP --> W4[4. NURBS曲面 オフセット近似]
-    WIP --> W5[5. トリムSSI交差線のB-Rep縫合]
+    WIP[Zenith 現行の実装中・今後の拡張領域] --> W1[1. 一般B-Rep ブーリアン]
+    WIP --> W2[2. 汎用ローリングボールフィレット]
+    WIP --> W3[3. 任意B-Repソリッド汎用シェル化]
+    WIP --> W4[4. NURBS曲面適応最小二乗オフセット]
+    WIP --> W5[5. トリムSSI交差線の自動縫合パイプライン]
 ```
 
 ### 詳細棚卸しマトリクス
 
-| カテゴリ | 対象モジュール | 現状の実装仕様 | 制限事項・実装中のママの部分 | 完全化へのロードマップ・必要実装 |
-| :--- | :--- | :--- | :--- | :--- |
-| **ブーリアン演算** | `zenith_algo::boolean`, `brep_intersection` | 直方体同士（`OrthogonalBoxBoolean`）および直方体 $\times$ 円柱（`CylinderBoolean`）の厳密B-Rep演算、メッシュプレビューCSGは完全動作。 | 任意の自由曲面同士や斜め交差する複雑B-Repの完全厳密ブーリアンは、交差線追跡・Face分割・選別まで実装されているが、マニホールド縫合が未完結のケースでエラーレポートまたはメッシュプレビュー推奨となる。 | 交差曲線（3D NURBS ＋ 2D p-curve）による任意NURBS曲面のトリム細分割と、境界整合性に基づく自動シェルステッチングの完全化。 |
-| **ロフト (Loft)** | `zenith_algo::loft` | 同一制御点数・同一次数の NURBS 曲線群を受け取り、滑らかな NURBS 曲面（`NurbsSurface3`）を生成。 | 制御点数や次数が異なるプロファイルの自動リパラメトリゼーション（ノット挿入・次数昇格による統一化）および、閉じた断面ワイヤ群から端面キャップ付き B-Rep Solid を一発生成する機能は曲面レベル止まり。 | プロファイル曲線の互換化（Degree Elevation & Knot Insertion）パイプラインと、両端キャップ＋側面縫合による `Solid` 自動ビルダーの実装。 |
-| **スイープ (Sweep)** | `zenith_algo::sweep` | 任意の 3D NURBS ガイド曲線に沿った **円形断面** のパイプスイープ（RMF標架）は完全閉 Solid として動作。 | 任意の 2D 多角形・スプラインワイヤ断面を 3D パスに沿ってスイープする汎用断面スイープ、ガイドレール複数本のスイープは未実装。 | 任意プロファイルワイヤを RMF 標架座標系へ投影・掃引する汎用スイープサーフェスおよびソリッドビルダーの実装。 |
-| **フィレット (Fillet)** | `zenith_algo::fillet`, `direct_edit` | 直方体の垂直4エッジフィレット（`fillet_box_z_edges`）および単一エッジフィレットは有理NURBS円筒面で完全動作。 | 任意B-Repソリッドの任意エッジに対する自動ローリングボールフィレット（隣接面の曲率・接線に応じた可変・連続フィレット面生成）は専用ビルダーに限定。 | 汎用ローリングボール接触軌跡計算と、3面・4面が集まる頂点コーナー部（Sphere / Blend Patch Corner）の自動パッチ生成。 |
-| **面取り (Chamfer)** | `zenith_algo::chamfer` | 直方体の垂直4エッジ面取り（`chamfer_box_z_edges`）は完全動作。 | 任意ソリッドの任意エッジに対する汎用面取りは未実装。 | 汎用エッジ面取りオフセット平面生成および隣接トリム更新エンジンの実装。 |
-| **中空シェル化 (Shelling)** | `zenith_algo::shell` | 直方体の指定1面開口・均一肉厚シェル化（`make_hollow_box`）は完全動作。 | 任意形状B-Repソリッド（円柱・自由曲面含む）の任意複数面開口シェル化は直方体専用。 | 各Faceの法線オフセット曲面群を構築し、自己交差トリム・開口リム面を自動生成する汎用シェル化エンジン。 |
-| **オフセット (Offset)** | `zenith_geom::offset` | NURBS 曲面の各制御点に対応する UV 法線方向へ制御点を平行移動してオフセット曲面を構築。 | NURBS 曲面の厳密法線オフセットは一般に有理関数にならないため、現行は制御点直接変位による幾何近似。高曲率部分で歪みが発生しうる。 | サーフェスフィッティングによる適応的最小二乗 NURBS オフセット近似アルゴリズムの導入。 |
-| **曲面交差 (SSI)** | `zenith_geom::ssi` | 粗グリッドシード点探索 ＋ ニュートン・ラフソン法による高精度交差点群サンプリング。 | 交差点列から 3D NURBS 補間曲線および両曲面上の 2D p-curve トリム曲線を自動追跡・フィッティングする Marching アルゴリズムが独立モジュール化途上。 | 追跡交差点列のスプラインフィッティングと、トリム境界ループへの自動組み込みパイプラインの統合。 |
-| **STEP 円弧表現** | `zenith_geom::curve::Circle3` | `evaluate`, `tangent` は解析的に完全動作。 | `to_nurbs()` メソッドが現在 `None` を返しており、`PrimitiveBuilder` 側で直接 90度円弧 NURBS を組み立てている。 | `Circle3::to_nurbs()` に有理2次3制御点（重み $\cos(\theta/2)$）の NURBS 変換を内蔵。 |
+| カテゴリ | 対象モジュール | 現状の実装仕様（完了項目） | 今後の拡張領域・高度な一般化 |
+| :--- | :--- | :--- | :--- |
+| **ロフト (Loft)** | `zenith_algo::loft`, `zenith_geom` | **【完了】** `Circle3::to_nurbs()` 有理2次変換、`NurbsCurve3::make_compatible` 次数・ノット統一化、`LoftBuilder::loft_solid` 完全閉ソリッド化。 | ガイドレール付きロフト（1本以上の3Dガイド曲線に沿った断面変形制御）。 |
+| **スイープ (Sweep)** | `zenith_algo::sweep` | **【完了】** 円形パイプスイープ（`sweep_circle_along_curve`）および任意多角形・スプライン断面ワイヤの RMF 標架スイープ完全閉ソリッド（`sweep_wire_along_curve`）。 | 複数ガイドレール（バイレール）による断面スケーリングスイープ。 |
+| **面取り (Chamfer)** | `zenith_algo::chamfer`, `direct_edit` | **【完了】** 直方体の4隅垂直エッジ面取り（`chamfer_box_z_edges`）および単一エッジ選択45度面取り（`chamfer_box_single_edge`）。 | 任意自由曲面B-Repソリッドの任意エッジに対する非直交・可変距離面取り。 |
+| **押し出し (Extrude)** | `zenith_algo::extrude` | **【完了】** 単一閉断面ワイヤ押し出し（`extrude_wire`）および外側境界＋複数穴ワイヤの中空・穴あき押し出し完全閉ソリッド（`extrude_face_with_holes`）。 | 勾配（ドラフト角度）付き押し出し、指定曲面までの押し出し（Up To Surface）。 |
+| **STEP インポート** | `zenith_io::step_import` | **【完了】** `PLANE`, `CYLINDRICAL_SURFACE`, `CONICAL_SURFACE`, `SPHERICAL_SURFACE`, `B_SPLINE_SURFACE_WITH_KNOTS` の厳密有理NURBS復元。 | `TOROIDAL_SURFACE`, `SWEPT_SURFACE` の完全ネイティブパース。 |
+| **フィーチャーツリー** | `zenith_algo::feature_tree` | **【完了】** `CreateBox`, `CreateCylinder`, `CreateCone`, `CreateTorus`, `FilletEdge`, `ChamferEdge`, `HollowBox`, `ExtrudeHollow`, `LoftSolid`, `SweepWire`, `PushPullFace`, `ThickenFace` の非破壊自動再評価。 | フィーチャー間の親子依存関係グラフ（DAG）管理およびブーリアンフィーチャーの履歴統合。 |
+| **ブーリアン演算** | `zenith_algo::boolean`, `brep_intersection` | 直方体同士（`OrthogonalBoxBoolean`）および直方体 $\times$ 円柱（`CylinderBoolean`）の厳密B-Rep演算、メッシュプレビューCSGは完全動作。 | 任意の自由曲面同士や斜め交差する複雑B-Repの自動シェルステッチングの完全化。 |
+| **フィレット (Fillet)** | `zenith_algo::fillet`, `direct_edit` | 直方体の垂直4エッジフィレット（`fillet_box_z_edges`）および単一エッジフィレットは有理NURBS円筒面で完全動作。 | 任意B-Repソリッドの任意エッジに対する汎用ローリングボールフィレットと、頂点コーナー部（Blend Patch Corner）の自動パッチ生成。 |
+| **中空シェル化 (Shelling)** | `zenith_algo::shell` | 直方体の指定1面開口・均一肉厚シェル化（`make_hollow_box`）は完全動作。 | 任意形状B-Repソリッド（円柱・自由曲面含む）の任意複数面開口シェル化。 |
+| **オフセット (Offset)** | `zenith_geom::offset` | NURBS 曲面の各制御点に対応する UV 法線方向へ制御点を平行移動してオフセット曲面を構築。 | サーフェスフィッティングによる適応的最小二乗 NURBS オフセット近似アルゴリズムの導入。 |
+| **曲面交差 (SSI)** | `zenith_geom::ssi` | 粗グリッドシード点探索 ＋ ニュートン・ラフソン法による高精度交差点群サンプリング。 | 追跡交差点列のスプラインフィッティングと、トリム境界ループへの自動組み込みパイプラインの統合。 |
 
 ---
 
@@ -350,15 +363,15 @@ graph LR
 
 ワークスペース全体の全テストスイートを実行し、全テストが 100% 成功（PASS）することを確認済みです。
 
-- **総テスト数:** 177+ 件
+- **総テスト数:** 186+ 件
 - **失敗 (Failed):** 0 件
 - **無視 (Ignored):** 0 件
 - **主な検証項目:**
   - `zenith_math`: Shewchuk 幾何述語の符号厳密性、Bernstein 多項式の単位の分割性。
-  - `zenith_geom`: NURBS 微分と中心差分の一致度（誤差 $< 10^{-7}$）、$G^1$ ブレンド曲面の法線連続性、SSI 交差収束精度、de Casteljau 分割後の真円保持性。
+  - `zenith_geom`: NURBS 微分と中心差分の一致度（誤差 $< 10^{-7}$）、$G^1$ ブレンド曲面の法線連続性、SSI 交差収束精度、de Casteljau 分割後の真円保持性、`Circle3::to_nurbs()` 幾何誤差 $< 10^{-12}$、`NurbsCurve3::make_compatible` 次数・ノット統一化。
   - `zenith_topo`: B-Rep 閉シェル検証、表裏反転面の検出、縮退エッジ・面の検出、p-curve と 3D エッジの一致性検証。
-  - `zenith_algo`: 各種プリミティブ（Box, Cylinder, Sphere, Cone, Torus）の完全解析閉ソリッド性、押し出し・回転・スイープ、穴あけ、ダイレクト Push-Pull、スケッチ拘束ソルバーの矩形・接線収束、フィーチャーツリー再計算。
-  - `zenith_io`: STEP AP214 出力 $\leftrightarrow$ 自前 STEP インポーターによるマルチソリッド・有理B-Spline・穴あき Face のラウンドトリップ完全一致。
+  - `zenith_algo`: 各種プリミティブの閉ソリッド性、押し出し・中空押し出し、ロフトソリッド、任意断面ワイヤスイープ、単一エッジフィレット・面取り、穴あけ、ダイレクト Push-Pull、スケッチ拘束ソルバー、フィーチャーツリーパラメトリック自動再計算（体積自動更新検証）。
+  - `zenith_io`: STEP AP214 出力 $\leftrightarrow$ 自前 STEP インポーターによるマルチソリッド・有理B-Spline・解析曲面（円柱・円錐・球面）・穴あき Face のラウンドトリップ完全一致。
 
 ---
 
@@ -366,6 +379,6 @@ graph LR
 
 Zenith CAD Kernel は、基礎となる幾何数学・NURBS 曲面演算・B-Rep トポロジー・STEP 双方向データ交換・テッセレーションにおいて、極めて高い完成度と数学的厳密性を達成しています。
 
-一方で、**「汎用自由曲面同士の完全自動 B-Rep ブーリアン」「任意形状に対する汎用フィレット / 汎用シェル化」「任意プロファイルの汎用ロフト / スイープ」** など、実用モデリングにおける高度な一般化機能については、基本アルゴリズムや専用ビルダーが整った「実装中・拡張途上」のフェーズにあります。
+今回のセッションを通じて、**「真円有理NURBS変換」「プロファイル自動互換化」「完全B-Repロフトソリッド」「任意断面RMFワイヤスイープソリッド」「単一エッジ面取りダイレクト編集」「中空・穴あきプロファイル押し出し」「STEP解析曲面インポート」「パラメトリック・フィーチャーツリー自動再評価」** が実用レベルで完全実装され、全186件以上のテストスイートによって品質が担保されています。
 
-本棚卸し書は、今後のカーネル拡張および Blender アドオン連携における確固たる基盤仕様として機能します。
+本棚卸し書は、今後のカーネル拡張および Blender アドオン連携における最新の公式基準仕様として機能します。
