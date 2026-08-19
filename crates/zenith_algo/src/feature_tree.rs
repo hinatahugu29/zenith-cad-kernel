@@ -1,7 +1,11 @@
-use crate::{DirectModeling, PrimitiveBuilder, ThickenBuilder};
+use crate::{
+    DirectModeling, ExtrudeBuilder, LoftBuilder, PrimitiveBuilder, ShellBuilder, SweepBuilder,
+    ThickenBuilder,
+};
 use serde::{Deserialize, Serialize};
-use zenith_math::Tolerance;
-use zenith_topo::{GeometricMatcher, GeometricSignature, Solid};
+use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3};
+use zenith_math::{Point3, Tolerance, Vec3};
+use zenith_topo::{Edge, GeometricMatcher, GeometricSignature, OrientedEdge, Solid, Vertex, Wire};
 
 /// パラメトリック・フィーチャー操作の種別
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -15,7 +19,28 @@ pub enum FeatureOp {
     /// トーラスプリミティブ
     CreateTorus { major_r: f64, minor_r: f64 },
     /// 単一エッジ・フィレット
-    FilletEdge { edge_index: usize, radius: f64 },
+    FilletEdge { dx: f64, dy: f64, dz: f64, edge_index: usize, radius: f64 },
+    /// 単一エッジ・面取り
+    ChamferEdge { dx: f64, dy: f64, dz: f64, edge_index: usize, distance: f64 },
+    /// 中空ボックス・シェル化
+    HollowBox { dx: f64, dy: f64, dz: f64, thickness: f64, open_face_index: usize },
+    /// 中空・穴あきプロファイルの押し出し
+    ExtrudeHollow {
+        outer_points: Vec<[f64; 3]>,
+        inner_points: Vec<Vec<[f64; 3]>>,
+        dir: [f64; 3],
+    },
+    /// 閉断面群からのロフトソリッド
+    LoftSolid {
+        sections: Vec<Vec<[f64; 3]>>,
+        degree_v: usize,
+    },
+    /// 任意閉断面ワイヤの3Dパススイープソリッド
+    SweepWire {
+        profile_points: Vec<[f64; 3]>,
+        path_points: Vec<[f64; 3]>,
+        num_sections: usize,
+    },
     /// 面 Push-Pull（押し出し移動）
     PushPullFace {
         target_signature: GeometricSignature,
@@ -80,6 +105,21 @@ impl FeatureTree {
         let mut current_solid: Option<Solid> = None;
         let tol = Tolerance::default();
 
+        let make_wire = |pts: &[[f64; 3]]| -> Result<Wire, String> {
+            let n = pts.len();
+            let vertices: Vec<Vertex> = pts
+                .iter()
+                .map(|p| Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+                .collect();
+            let mut edges = Vec::with_capacity(n);
+            for i in 0..n {
+                let next_i = (i + 1) % n;
+                let edge = Edge::line_between(vertices[i].clone(), vertices[next_i].clone())?;
+                edges.push(OrientedEdge::forward(edge));
+            }
+            Ok(Wire::new(edges))
+        };
+
         for node in &self.nodes {
             if !node.enabled {
                 continue;
@@ -98,16 +138,69 @@ impl FeatureTree {
                 FeatureOp::CreateTorus { major_r, minor_r } => {
                     current_solid = Some(PrimitiveBuilder::make_torus(*major_r, *minor_r)?);
                 }
-                FeatureOp::FilletEdge { edge_index, radius } => {
-                    let _solid = current_solid.ok_or("No base solid for fillet")?;
-                    // 単一エッジフィレットの適用
-                    let (dx, dy, dz) = (25.0, 35.0, 20.0); // パラメータ引き継ぎ
+                FeatureOp::FilletEdge { dx, dy, dz, edge_index, radius } => {
                     current_solid = Some(DirectModeling::fillet_box_single_edge(
-                        dx,
-                        dy,
-                        dz,
+                        *dx,
+                        *dy,
+                        *dz,
                         *edge_index,
                         *radius,
+                    )?);
+                }
+                FeatureOp::ChamferEdge { dx, dy, dz, edge_index, distance } => {
+                    current_solid = Some(DirectModeling::chamfer_box_single_edge(
+                        *dx,
+                        *dy,
+                        *dz,
+                        *edge_index,
+                        *distance,
+                    )?);
+                }
+                FeatureOp::HollowBox { dx, dy, dz, thickness, open_face_index } => {
+                    current_solid = Some(ShellBuilder::make_hollow_box(
+                        *dx,
+                        *dy,
+                        *dz,
+                        *thickness,
+                        *open_face_index,
+                    )?);
+                }
+                FeatureOp::ExtrudeHollow { outer_points, inner_points, dir } => {
+                    let outer_wire = make_wire(outer_points)?;
+                    let mut inner_wires = Vec::with_capacity(inner_points.len());
+                    for hole in inner_points {
+                        inner_wires.push(make_wire(hole)?);
+                    }
+                    let dir_vec = Vec3::new(dir[0], dir[1], dir[2]);
+                    current_solid = Some(ExtrudeBuilder::extrude_face_with_holes(
+                        &outer_wire,
+                        &inner_wires,
+                        dir_vec,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::LoftSolid { sections, degree_v } => {
+                    let mut section_wires = Vec::with_capacity(sections.len());
+                    for sec in sections {
+                        section_wires.push(make_wire(sec)?);
+                    }
+                    current_solid = Some(LoftBuilder::loft_solid(&section_wires, *degree_v, &tol)?);
+                }
+                FeatureOp::SweepWire { profile_points, path_points, num_sections } => {
+                    let profile_wire = make_wire(profile_points)?;
+                    let n_path = path_points.len();
+                    let degree = (n_path - 1).min(3);
+                    let path_cps = path_points
+                        .iter()
+                        .map(|p| ControlPoint3::unweighted(Point3::new(p[0], p[1], p[2])))
+                        .collect();
+                    let knots = KnotVector::clamped_uniform(n_path, degree);
+                    let path = NurbsCurve3::new(degree, path_cps, knots)?;
+                    current_solid = Some(SweepBuilder::sweep_wire_along_curve(
+                        &profile_wire,
+                        &path,
+                        *num_sections,
+                        &tol,
                     )?);
                 }
                 FeatureOp::PushPullFace {
@@ -115,7 +208,6 @@ impl FeatureTree {
                     distance,
                 } => {
                     let solid = current_solid.ok_or("No base solid for push-pull")?;
-                    // TNP自己修復: 幾何シグネチャによるターゲットFaceの自動特定
                     let (matched_face_idx, score) = GeometricMatcher::find_best_matching_face(
                         target_signature,
                         &solid.outer_shell.faces,

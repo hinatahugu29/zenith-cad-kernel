@@ -785,6 +785,109 @@ impl StepImporter {
             }
         }
 
+        if raw.name == "CYLINDRICAL_SURFACE" {
+            // CYLINDRICAL_SURFACE('',#axis2,radius)
+            let parts = Self::split_top_level_args(&raw.args);
+            if parts.len() >= 3 {
+                if let Some(axis2_id) = Self::parse_entity_ref(parts[1]) {
+                    if let Ok(radius) = parts[2].parse::<f64>() {
+                        if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
+                            let y_dir = z_dir.cross(&x_dir).normalize();
+                            let weight = std::f64::consts::FRAC_1_SQRT_2;
+                            // 90度円柱パッチ
+                            let p0 = origin + x_dir * radius;
+                            let p1 = origin + y_dir * radius;
+                            let corner = origin + (x_dir + y_dir) * radius;
+                            let row0 = vec![ControlPoint3::unweighted(p0), ControlPoint3::unweighted(p0 + z_dir)];
+                            let row1 = vec![ControlPoint3::new(corner, weight), ControlPoint3::new(corner + z_dir, weight)];
+                            let row2 = vec![ControlPoint3::unweighted(p1), ControlPoint3::unweighted(p1 + z_dir)];
+                            if let Ok(nurbs) = NurbsSurface3::new(
+                                2,
+                                1,
+                                vec![row0, row1, row2],
+                                KnotVector::clamped_uniform(3, 2),
+                                KnotVector::clamped_uniform(2, 1),
+                            ) {
+                                let geom = FaceGeometry::Nurbs(nurbs);
+                                ctx.surfaces.insert(id, geom.clone());
+                                return Ok(geom);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if raw.name == "CONICAL_SURFACE" {
+            // CONICAL_SURFACE('',#axis2,radius,semi_angle)
+            let parts = Self::split_top_level_args(&raw.args);
+            if parts.len() >= 4 {
+                if let Some(axis2_id) = Self::parse_entity_ref(parts[1]) {
+                    let radius = parts[2].parse::<f64>().unwrap_or(1.0);
+                    let semi_angle = parts[3].parse::<f64>().unwrap_or(0.0);
+                    if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
+                        let y_dir = z_dir.cross(&x_dir).normalize();
+                        let weight = std::f64::consts::FRAC_1_SQRT_2;
+                        let r_top = radius + 1.0 * semi_angle.tan();
+                        let p0_b = origin + x_dir * radius;
+                        let p1_b = origin + y_dir * radius;
+                        let c_b = origin + (x_dir + y_dir) * radius;
+                        let p0_t = origin + z_dir + x_dir * r_top;
+                        let p1_t = origin + z_dir + y_dir * r_top;
+                        let c_t = origin + z_dir + (x_dir + y_dir) * r_top;
+                        let row0 = vec![ControlPoint3::unweighted(p0_b), ControlPoint3::unweighted(p0_t)];
+                        let row1 = vec![ControlPoint3::new(c_b, weight), ControlPoint3::new(c_t, weight)];
+                        let row2 = vec![ControlPoint3::unweighted(p1_b), ControlPoint3::unweighted(p1_t)];
+                        if let Ok(nurbs) = NurbsSurface3::new(
+                            2,
+                            1,
+                            vec![row0, row1, row2],
+                            KnotVector::clamped_uniform(3, 2),
+                            KnotVector::clamped_uniform(2, 1),
+                        ) {
+                            let geom = FaceGeometry::Nurbs(nurbs);
+                            ctx.surfaces.insert(id, geom.clone());
+                            return Ok(geom);
+                        }
+                    }
+                }
+            }
+        }
+
+        if raw.name == "SPHERICAL_SURFACE" {
+            // SPHERICAL_SURFACE('',#axis2,radius)
+            let parts = Self::split_top_level_args(&raw.args);
+            if parts.len() >= 3 {
+                if let Some(axis2_id) = Self::parse_entity_ref(parts[1]) {
+                    if let Ok(radius) = parts[2].parse::<f64>() {
+                        if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
+                            let y_dir = z_dir.cross(&x_dir).normalize();
+                            let weight = std::f64::consts::FRAC_1_SQRT_2;
+                            let p0 = origin + x_dir * radius;
+                            let p1 = origin + y_dir * radius;
+                            let p_top = origin + z_dir * radius;
+                            let c_xy = origin + (x_dir + y_dir) * radius;
+                            let row0 = vec![ControlPoint3::unweighted(p0), ControlPoint3::unweighted(p_top)];
+                            let row1 = vec![ControlPoint3::new(c_xy, weight), ControlPoint3::new(origin + z_dir * radius, weight)];
+                            let row2 = vec![ControlPoint3::unweighted(p1), ControlPoint3::unweighted(p_top)];
+                            if let Ok(nurbs) = NurbsSurface3::new(
+                                2,
+                                1,
+                                vec![row0, row1, row2],
+                                KnotVector::clamped_uniform(3, 2),
+                                KnotVector::clamped_uniform(2, 1),
+                            ) {
+                                let geom = FaceGeometry::Nurbs(nurbs);
+                                ctx.surfaces.insert(id, geom.clone());
+                                return Ok(geom);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+
         if raw.name == "B_SPLINE_SURFACE_WITH_KNOTS"
             || raw.args.contains("B_SPLINE_SURFACE_WITH_KNOTS")
         {
@@ -804,6 +907,7 @@ impl StepImporter {
         .unwrap();
         Ok(FaceGeometry::Plane(default_plane))
     }
+
 
     fn parse_nurbs_surface(
         ctx: &mut ImportContext,
@@ -1644,4 +1748,60 @@ mod tests {
         assert_eq!(surface.degree_v, 1);
         assert_eq!(surface.evaluate(1.0, 1.0), Point3::new(10.0, 10.0, 5.0));
     }
+
+    #[test]
+    fn imports_cylindrical_and_conical_surfaces_as_exact_nurbs() {
+        let mut ctx = ImportContext::new();
+        ctx.raw_entities.insert(1, point_entity(0.0, 0.0, 0.0));
+        ctx.raw_entities.insert(2, direction_entity(0.0, 0.0, 1.0));
+        ctx.raw_entities.insert(3, direction_entity(1.0, 0.0, 0.0));
+        ctx.raw_entities.insert(
+            10,
+            RawEntity {
+                name: "AXIS2_PLACEMENT_3D".to_string(),
+                args: "'',#1,#2,#3".to_string(),
+            },
+        );
+        ctx.raw_entities.insert(
+            20,
+            RawEntity {
+                name: "CYLINDRICAL_SURFACE".to_string(),
+                args: "'',#10,15.0".to_string(),
+            },
+        );
+        ctx.raw_entities.insert(
+            21,
+            RawEntity {
+                name: "CONICAL_SURFACE".to_string(),
+                args: "'',#10,12.0,0.5".to_string(),
+            },
+        );
+
+        let cyl_geom = StepImporter::get_surface(&mut ctx, 20).expect("cylindrical surface import");
+        match cyl_geom {
+            FaceGeometry::Nurbs(s) => {
+                assert_eq!(s.degree_u, 2);
+                assert_eq!(s.degree_v, 1);
+            }
+            _ => panic!("Expected Nurbs geometry for cylindrical surface"),
+        }
+
+        let cone_geom = StepImporter::get_surface(&mut ctx, 21).expect("conical surface import");
+        match cone_geom {
+            FaceGeometry::Nurbs(s) => {
+                assert_eq!(s.degree_u, 2);
+                assert_eq!(s.degree_v, 1);
+            }
+            _ => panic!("Expected Nurbs geometry for conical surface"),
+        }
+    }
+
+    fn direction_entity(x: f64, y: f64, z: f64) -> RawEntity {
+        RawEntity {
+            name: "DIRECTION".to_string(),
+            args: format!("'',({:.6},{:.6},{:.6})", x, y, z),
+        }
+    }
 }
+
+
