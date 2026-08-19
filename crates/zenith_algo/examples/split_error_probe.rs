@@ -28,13 +28,6 @@ fn attempt(label: &str, solid: &Solid, index: usize, edges: &[zenith_topo::Edge]
         }
     }
 
-    if edges.len() >= 2 {
-        match BrepIntersectionBuilder::split_planar_face_by_edge_chain(face, edges, tol) {
-            Ok(pieces) => println!("        chain of all: {} piece(s)", pieces.len()),
-            Err(err) => println!("        chain of all: {err}"),
-        }
-    }
-
     match BrepIntersectionBuilder::split_face_by_edges(face, edges, tol) {
         Ok(result) => println!(
             "        batch: {} piece(s), applied {}, skipped {}",

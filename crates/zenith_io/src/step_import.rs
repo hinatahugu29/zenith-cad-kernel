@@ -73,6 +73,17 @@ impl StepImporter {
             .ok_or("MANIFOLD_SOLID_BREP or BREP_WITH_VOIDS not found in STEP data".to_string())
     }
 
+    /// Reads one EDGE_CURVE out of a STEP text, without needing a whole solid
+    /// around it.
+    ///
+    /// Diagnostic entry point: a malformed curve is easier to pin down on its
+    /// own than through the shell that failed to validate because of it.
+    pub fn import_edge_from_str(content: &str, edge_id: u64) -> Result<Edge, String> {
+        let mut ctx = ImportContext::new();
+        Self::parse_data_section(content, &mut ctx)?;
+        Self::get_edge(&mut ctx, edge_id)
+    }
+
     /// STEPテキストから複数の Solid（B-Repソリッド）をインポート
     pub fn import_solids_from_str(content: &str) -> Result<Vec<Solid>, String> {
         let mut ctx = ImportContext::new();
@@ -614,7 +625,7 @@ impl StepImporter {
             Ok(r) if r > 1e-9 => r,
             _ => return Ok(None),
         };
-        let (center, normal, _) = Self::get_axis2_placement(ctx, axis_id)?;
+        let (center, normal, ref_dir) = Self::get_axis2_placement(ctx, axis_id)?;
 
         let v0 = p_start - center;
         let v1 = p_end - center;
@@ -622,47 +633,10 @@ impl StepImporter {
             return Ok(None);
         }
 
-        Self::make_circular_arc(center, normal, p_start, p_end)
-    }
-
-    fn make_circular_arc(
-        center: Point3,
-        normal: Vec3,
-        p_start: Point3,
-        p_end: Point3,
-    ) -> Result<Option<NurbsCurve3>, String> {
-        let v0 = p_start - center;
-        let v1 = p_end - center;
-        let r0 = v0.norm();
-        let r1 = v1.norm();
-        if r0 <= 1e-9 || r1 <= 1e-9 || (r0 - r1).abs() > 1e-3 {
-            return Ok(None);
-        }
-
-        let u0 = v0 / r0;
-        let u1 = v1 / r1;
-        let dot = u0.dot(&u1).clamp(-1.0, 1.0);
-        let angle = dot.acos();
-        if angle <= 1e-9 || angle > std::f64::consts::FRAC_PI_2 + 1e-6 {
-            return Ok(None);
-        }
-
-        let tangent0 = normal.cross(&u0);
-        let tangent1 = normal.cross(&u1);
-        let control = line_intersection_closest(p_start, tangent0, p_end, tangent1)
-            .unwrap_or_else(|| center + (v0 + v1));
-        let weight = (angle * 0.5).cos();
-
-        let curve = NurbsCurve3::new(
-            2,
-            vec![
-                ControlPoint3::unweighted(p_start),
-                ControlPoint3::new(control, weight),
-                ControlPoint3::unweighted(p_end),
-            ],
-            KnotVector::clamped_uniform(3, 2),
-        )?;
-        Ok(Some(curve))
+        // 円弧は円の自前の座標系から角度で組む。端点から幾何を推測すると、
+        // 始点と終点が同じ完全円（円柱の縁として必ず出てくる形）を角度0の
+        // 退化として捨ててしまう。
+        arc_from_angles(center, normal, ref_dir, radius, p_start, p_end).map(Some)
     }
 
     fn get_axis2_placement(
@@ -1165,6 +1139,12 @@ impl StepImporter {
             let geom = Self::get_surface(ctx, surface_id)?;
 
             // 2. Bounds の取得
+            //
+            // FACE_OUTER_BOUND は FACE_BOUND の subtype であって必須ではない。
+            // OpenCASCADE をはじめ多くの書き手はすべての境界を FACE_BOUND として
+            // 出すので、印が付いていなければ幾何から外周を決める必要がある。
+            // これを必須としていたため、他カーネルの STEP が一切読めなかった。
+            let mut unmarked_wires: Vec<Wire> = Vec::new();
             for b_id in Self::parse_ref_list(parts[1]) {
                 let bound_raw = ctx
                     .raw_entities
@@ -1178,8 +1158,30 @@ impl StepImporter {
                     if bound_raw.name == "FACE_OUTER_BOUND" {
                         outer_wire = Some(wire);
                     } else {
-                        inner_wires.push(wire);
+                        unmarked_wires.push(wire);
                     }
+                }
+            }
+
+            match outer_wire {
+                // 印付きの外周があるなら、残りはすべて穴。
+                Some(_) => inner_wires.extend(unmarked_wires),
+                None => {
+                    if unmarked_wires.is_empty() {
+                        return Err(format!("No bounds at all for face #{}", face_id));
+                    }
+                    // 外周は他のすべてを囲むループ。境界の広がりで選ぶ。
+                    let outer_index = unmarked_wires
+                        .iter()
+                        .enumerate()
+                        .max_by(|(_, left), (_, right)| {
+                            wire_extent(left).total_cmp(&wire_extent(right))
+                        })
+                        .map(|(index, _)| index)
+                        .unwrap_or(0);
+                    let chosen = unmarked_wires.remove(outer_index);
+                    outer_wire = Some(chosen);
+                    inner_wires.extend(unmarked_wires);
                 }
             }
 
@@ -1199,30 +1201,6 @@ impl StepImporter {
     }
 }
 
-fn line_intersection_closest(p0: Point3, d0: Vec3, p1: Point3, d1: Vec3) -> Option<Point3> {
-    let a = d0.dot(&d0);
-    let b = d0.dot(&d1);
-    let c = d1.dot(&d1);
-    let r = p0 - p1;
-    let d = d0.dot(&r);
-    let e = d1.dot(&r);
-    let denom = a * c - b * b;
-
-    if denom.abs() <= 1e-12 {
-        return None;
-    }
-
-    let s = (b * e - c * d) / denom;
-    let t = (a * e - b * d) / denom;
-    let q0 = p0 + d0 * s;
-    let q1 = p1 + d1 * t;
-
-    if (q0 - q1).norm() > 1e-4 {
-        return None;
-    }
-
-    Some(q0 + (q1 - q0) * 0.5)
-}
 
 fn extract_entity_args<'a>(text: &'a str, entity_name: &str) -> Option<&'a str> {
     let mut search_start = 0;
@@ -1874,3 +1852,120 @@ mod tests {
 }
 
 
+
+/// Diagonal of a wire's bounding box, as a cheap stand-in for how much of the
+/// face it encloses.
+///
+/// The outer bound is the one containing the others, and on a well-formed face
+/// that is also the one with the largest extent. Comparing extents avoids
+/// needing the surface's parameterisation, which is not always available at
+/// this point in the read.
+fn wire_extent(wire: &Wire) -> f64 {
+    let points = wire.sample_points(8);
+    if points.is_empty() {
+        return 0.0;
+    }
+
+    let mut min_pt = points[0];
+    let mut max_pt = points[0];
+    for point in &points {
+        min_pt.x = min_pt.x.min(point.x);
+        min_pt.y = min_pt.y.min(point.y);
+        min_pt.z = min_pt.z.min(point.z);
+        max_pt.x = max_pt.x.max(point.x);
+        max_pt.y = max_pt.y.max(point.y);
+        max_pt.z = max_pt.z.max(point.z);
+    }
+
+    (max_pt - min_pt).norm()
+}
+
+/// Builds the arc of a circle that runs from `p_start` to `p_end`, taking the
+/// circle's own frame as the authority.
+///
+/// Coincident endpoints mean the full circle, which is how every writer states
+/// the rim of a cylinder; inferring the sweep from the endpoints alone reads
+/// that as a zero-length arc.
+fn arc_from_angles(
+    center: Point3,
+    normal: Vec3,
+    ref_dir: Vec3,
+    radius: f64,
+    p_start: Point3,
+    p_end: Point3,
+) -> Result<NurbsCurve3, String> {
+    let axis = normal
+        .try_normalize(1e-12)
+        .ok_or_else(|| "Circle axis is degenerate".to_string())?;
+    let x_axis = {
+        let projected = ref_dir - axis * ref_dir.dot(&axis);
+        projected
+            .try_normalize(1e-12)
+            .ok_or_else(|| "Circle reference direction is parallel to its axis".to_string())?
+    };
+    let y_axis = axis.cross(&x_axis);
+
+    let angle_of = |point: Point3| {
+        let offset = point - center;
+        offset.dot(&y_axis).atan2(offset.dot(&x_axis))
+    };
+
+    let start_angle = angle_of(p_start);
+    let mut sweep = angle_of(p_end) - start_angle;
+    let full_turn = std::f64::consts::PI * 2.0;
+    while sweep <= 1e-9 {
+        sweep += full_turn;
+    }
+    // 端点が一致していれば完全円。上のループで 2*pi になっている。
+    if (p_end - p_start).norm() <= 1e-9 {
+        sweep = full_turn;
+    }
+
+    rational_arc(center, x_axis, y_axis, radius, start_angle, sweep)
+}
+
+/// A rational quadratic arc of any sweep, as a clamped multi-span NURBS.
+///
+/// Each span covers at most a quarter turn, which is the widest a single
+/// rational quadratic segment represents exactly.
+fn rational_arc(
+    center: Point3,
+    x_axis: Vec3,
+    y_axis: Vec3,
+    radius: f64,
+    start_angle: f64,
+    sweep: f64,
+) -> Result<NurbsCurve3, String> {
+    // ちょうど四半円のとき、除算の丸めで商が 1 をわずかに超えて 2 区間に
+    // 割れてしまう。許容差を引いてから切り上げる。
+    let span_count = (((sweep / std::f64::consts::FRAC_PI_2) - 1e-9).ceil() as usize).max(1);
+    let span_angle = sweep / span_count as f64;
+    let weight = (span_angle * 0.5).cos();
+
+    let point_at = |angle: f64| center + x_axis * (radius * angle.cos()) + y_axis * (radius * angle.sin());
+    // 接線の交点。半径 / cos(half) の距離に、区間の中央方向へ置く。
+    let shoulder_at = |angle: f64| {
+        let middle = angle + span_angle * 0.5;
+        center
+            + x_axis * (radius / weight * middle.cos())
+            + y_axis * (radius / weight * middle.sin())
+    };
+
+    let mut control_points = Vec::with_capacity(span_count * 2 + 1);
+    control_points.push(ControlPoint3::unweighted(point_at(start_angle)));
+    for span in 0..span_count {
+        let angle = start_angle + span_angle * span as f64;
+        control_points.push(ControlPoint3::new(shoulder_at(angle), weight));
+        control_points.push(ControlPoint3::unweighted(point_at(angle + span_angle)));
+    }
+
+    let mut knots = vec![0.0, 0.0, 0.0];
+    for span in 1..span_count {
+        let value = span as f64 / span_count as f64;
+        knots.push(value);
+        knots.push(value);
+    }
+    knots.extend([1.0, 1.0, 1.0]);
+
+    NurbsCurve3::new(2, control_points, KnotVector::new(knots))
+}
