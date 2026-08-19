@@ -278,7 +278,18 @@ impl NurbsCurve3 {
             return Ok(Vec::new());
         }
 
-        let max_degree = curves.iter().map(|c| c.degree).max().unwrap_or(3).max(3);
+        let first = &curves[0];
+        let all_same = curves.iter().all(|c| {
+            c.degree == first.degree
+                && c.control_points.len() == first.control_points.len()
+                && c.knots.knots == first.knots.knots
+        });
+
+        if all_same && num_control_points.is_none() {
+            return Ok(curves.to_vec());
+        }
+
+        let max_degree = curves.iter().map(|c| c.degree).max().unwrap_or(first.degree);
         let max_points = curves
             .iter()
             .map(|c| c.control_points.len())
@@ -297,6 +308,7 @@ impl NurbsCurve3 {
 
         Ok(compatible)
     }
+
 }
 
 
