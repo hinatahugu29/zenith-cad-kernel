@@ -73,7 +73,14 @@ pub enum FeatureOp {
         axis_dir: [f64; 3],
         num_sections: usize,
     },
+    /// 角丸めポリラインに沿ったパイプ掃引ソリッド
+    PolylinePipe {
+        path_points: Vec<[f64; 3]>,
+        pipe_radius: f64,
+        corner_radius: f64,
+    },
     /// 任意対称平面に対するソリッドの鏡像反転複製
+
     MirrorSolid {
         plane_origin: [f64; 3],
         plane_normal: [f64; 3],
@@ -305,6 +312,16 @@ impl FeatureTree {
                         origin,
                         dir_vec,
                         *num_sections,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::PolylinePipe { path_points, pipe_radius, corner_radius } => {
+
+                    let pts: Vec<_> = path_points.iter().map(|p| Point3::new(p[0], p[1], p[2])).collect();
+                    current_solid = Some(crate::PolylineBuilder::sweep_pipe_polyline(
+                        &pts,
+                        *pipe_radius,
+                        *corner_radius,
                         &tol,
                     )?);
                 }

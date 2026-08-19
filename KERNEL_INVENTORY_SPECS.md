@@ -1,5 +1,5 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
-**Document Version:** 1.6.0 (Full Inventory & Verification Baseline)  
+**Document Version:** 1.7.0 (Polyline Pipe & Frame Routing Baseline)  
 **Last Updated:** 2026-08-19  
 **Status:** Official Production Specification
 
@@ -33,11 +33,12 @@ graph TD
 | **`zenith_math`** | 3D点・ベクトル・AABB・許容公差・アフィン変換・Shewchukロバスト幾何述語・多項式 | `nalgebra`, `robust`, `serde`, `approx` |
 | **`zenith_geom`** | NURBS曲線/曲面、Coons/Gordon/三角形パッチ、有理円弧変換、互換化、曲率微分幾何、SSI曲面交差、最近傍探索 | `zenith_math` |
 | **`zenith_topo`** | Vertex, Edge, Wire, Face, Shell, Solid, Shape, p-curve（パラメータ空間曲線）構造、マニホールド閉シェル検証 | `zenith_math`, `zenith_geom` |
-| **`zenith_algo`** | プリミティブ生成、押し出し（直進・ドラフト・中空）、回転体閉ソリッド（360度・部分角度）、配列複写（直線・円形）、ミラー反転複写、3D螺旋（ヘリカル）スイープ、**ガイドレール付きロフト**、**両端開口角パイプシェル化**、フィレット・面取り、穴あけ、ダイレクトモデリング、ブーリアン、スケッチ拘束ソルバー、フィーチャーツリー、物性値計算 | `zenith_math`, `zenith_geom`, `zenith_topo`, `zenith_tess` |
+| **`zenith_algo`** | プリミティブ生成、押し出し（直進・ドラフト・中空）、回転体閉ソリッド（360度・部分角度）、配列複写（直線・円形）、ミラー反転複写、3D螺旋（ヘリカル）スイープ、**3Dポリライン配管・角丸めフレーム**、ガイドレール付きロフト、両端開口角パイプシェル化、フィレット・面取り、穴あけ、ダイレクトモデリング、ブーリアン、スケッチ拘束ソルバー、フィーチャーツリー、物性値計算 | `zenith_math`, `zenith_geom`, `zenith_topo`, `zenith_tess` |
 | **`zenith_tess`** | earcutr によるトリム穴あき多角形三角化、Rayonマルチコア超並列テッセレーション、メッシュ生成 | `zenith_math`, `zenith_geom`, `zenith_topo`, `rayon`, `earcutr` |
 | **`zenith_io`** | STEP (ISO 10303-21) 双方向インポーター/エクスポーター（円柱・円錐・球面・トーラス解析曲面パース対応）、STL、OBJ、glTF 2.0、IGES 5.3 | `zenith_math`, `zenith_geom`, `zenith_topo`, `zenith_tess` |
-| **`zenith_py`** | PyO3 による Python C拡張（`zenith_cad.pyd`）。Blender アドオン等からのゼロコピー呼出（全36関数） | `zenith_algo`, `zenith_geom`, `zenith_topo`, `zenith_tess`, `zenith_io`, `pyo3` |
+| **`zenith_py`** | PyO3 による Python C拡張（`zenith_cad.pyd`）。Blender アドオン等からのゼロコピー呼出（全39関数） | `zenith_algo`, `zenith_geom`, `zenith_topo`, `zenith_tess`, `zenith_io`, `pyo3` |
 | **`zenith_server`** | TCPソケット通信による軽量バイナリIPCサーバー（Blender/外部プロセスとの連携） | `zenith_algo`, `zenith_topo`, `zenith_tess`, `zenith_io`, `serde_json` |
+
 
 ---
 

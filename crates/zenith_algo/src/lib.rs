@@ -20,7 +20,9 @@ mod orthogonal_boolean;
 
 pub mod patch_builder;
 pub mod pattern;
+pub mod polyline;
 pub mod primitive;
+
 
 pub mod revolve;
 pub mod shell;
@@ -56,9 +58,10 @@ pub use loft::LoftBuilder;
 pub use mass_properties::{MassCalculator, MassProperties};
 pub use mirror::MirrorBuilder;
 pub use patch_builder::CurvePatchBuilder;
-
 pub use pattern::PatternBuilder;
+pub use polyline::{PathSegment, PolylineBuilder};
 pub use primitive::PrimitiveBuilder;
+
 
 pub use revolve::RevolveBuilder;
 pub use shell::ShellBuilder;

@@ -941,3 +941,84 @@ pub fn thicken_surface_patch(
     let mesh = tessellate_solid(&solid, &params);
     Ok(PyMesh { mesh })
 }
+
+/// 3Dポリライン（折れ線・角丸めフィレット付き）に沿った円形パイプソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (path_points, pipe_radius = 4.0, corner_radius = 0.0, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_polyline_pipe(
+    path_points: Vec<[f64; 3]>,
+    pipe_radius: f64,
+    corner_radius: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let tol = Tolerance::default();
+    let pts: Vec<_> = path_points
+        .into_iter()
+        .map(|p| Point3::new(p[0], p[1], p[2]))
+        .collect();
+
+    let solid = zenith_algo::PolylineBuilder::sweep_pipe_polyline(
+        &pts,
+        pipe_radius,
+        corner_radius,
+        &tol,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Polyline pipe failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_POLYLINE_PIPE")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 3Dポリライン（折れ線・角丸めフィレット付き）に沿った任意閉断面スイープソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (profile_points, path_points, corner_radius = 0.0, u_divisions = 12, v_divisions = 12, step_path = None))]
+pub fn make_polyline_sweep(
+    profile_points: Vec<[f64; 3]>,
+    path_points: Vec<[f64; 3]>,
+    corner_radius: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let tol = Tolerance::default();
+    let prof: Vec<_> = profile_points
+        .into_iter()
+        .map(|p| Point3::new(p[0], p[1], p[2]))
+        .collect();
+    let path: Vec<_> = path_points
+        .into_iter()
+        .map(|p| Point3::new(p[0], p[1], p[2]))
+        .collect();
+
+    let solid = zenith_algo::PolylineBuilder::sweep_wire_polyline(
+        &prof,
+        &path,
+        corner_radius,
+        &tol,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Polyline sweep failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_POLYLINE_SWEEP")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
