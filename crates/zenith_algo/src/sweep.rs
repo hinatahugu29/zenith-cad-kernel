@@ -80,14 +80,10 @@ impl SweepBuilder {
         let n_sec = num_sections.max(8);
         let frames = Self::compute_rmf_frames(path, n_sec);
 
-        // 3. 4つの四分円有理NURBSサーフェスパッチ（パイプの外周側面）の構築
+        // 1. 各象限 (quad 0..4) の制御点グリッド行を計算
         let weight = std::f64::consts::FRAC_1_SQRT_2;
-        let mut faces = Vec::new();
+        let mut quad_rows: Vec<(Vec<ControlPoint3>, Vec<ControlPoint3>, Vec<ControlPoint3>)> = Vec::with_capacity(4);
 
-        let mut bottom_ring_edges = Vec::new();
-        let mut top_ring_edges = Vec::new();
-
-        // 4象限 (0..4) の曲面パッチ
         for quad in 0..4 {
             let (ang0, ang1) = match quad {
                 0 => (0.0, std::f64::consts::FRAC_PI_2),
@@ -113,73 +109,83 @@ impl SweepBuilder {
                 row2.push(ControlPoint3::unweighted(p_e));
             }
 
-            let s = NurbsSurface3::new(
-                2,
-                1,
-                vec![row0.clone(), row1.clone(), row2.clone()],
-                KnotVector::clamped_uniform(3, 2),
-                KnotVector::clamped_uniform(n_sec, 1),
-            )?;
+            quad_rows.push((row0, row1, row2));
+        }
 
-            let p_start_bot = row0[0].point;
-            let p_end_bot = row2[0].point;
-            let p_start_top = row0[n_sec - 1].point;
-            let p_end_top = row2[n_sec - 1].point;
+        // 2. 始点・終点リングの共有頂点 (4頂点ずつ)
+        let mut vb = Vec::with_capacity(4);
+        let mut vt = Vec::with_capacity(4);
+        for quad in 0..4 {
+            vb.push(Vertex::from_point(quad_rows[quad].0[0].point));
+            vt.push(Vertex::from_point(quad_rows[quad].0[n_sec - 1].point));
+        }
 
-            let vb_s = Vertex::from_point(p_start_bot);
-            let vb_e = Vertex::from_point(p_end_bot);
-            let vt_s = Vertex::from_point(p_start_top);
-            let vt_e = Vertex::from_point(p_end_top);
+        // 3. 4本の縦シームエッジ（vb[q] -> vt[q]）
+        let seam_knots = KnotVector::clamped_uniform(n_sec, 1);
+        let mut ev = Vec::with_capacity(4);
+        for quad in 0..4 {
+            let curve = NurbsCurve3::new(1, quad_rows[quad].0.clone(), seam_knots.clone())?;
+            let edge = Edge::new(curve, vb[quad].clone(), vt[quad].clone(), 1e-6);
+            ev.push(edge);
+        }
+
+        // 4. 始点円弧エッジ (bottom_ring_edges) と 終点円弧エッジ (top_ring_edges)
+        let mut bottom_ring_edges = Vec::with_capacity(4);
+        let mut top_ring_edges = Vec::with_capacity(4);
+        for quad in 0..4 {
+            let next_q = (quad + 1) % 4;
+            let (ref r0, ref r1, ref r2) = quad_rows[quad];
 
             let arc_b = Edge::new(
                 NurbsCurve3::new(
                     2,
-                    vec![row0[0], row1[0], row2[0]],
+                    vec![r0[0], r1[0], r2[0]],
                     KnotVector::clamped_uniform(3, 2),
                 )?,
-                vb_s.clone(),
-                vb_e.clone(),
+                vb[quad].clone(),
+                vb[next_q].clone(),
                 1e-6,
             );
             let arc_t = Edge::new(
                 NurbsCurve3::new(
                     2,
-                    vec![row0[n_sec - 1], row1[n_sec - 1], row2[n_sec - 1]],
+                    vec![r0[n_sec - 1], r1[n_sec - 1], r2[n_sec - 1]],
                     KnotVector::clamped_uniform(3, 2),
                 )?,
-                vt_s.clone(),
-                vt_e.clone(),
+                vt[quad].clone(),
+                vt[next_q].clone(),
                 1e-6,
             );
 
-            let seam_knots = KnotVector::clamped_uniform(n_sec, 1);
-            let ev_s = Edge::new(
-                NurbsCurve3::new(1, row0.clone(), seam_knots.clone())?,
-                vb_s.clone(),
-                vt_s.clone(),
-                1e-6,
-            );
-            let ev_e = Edge::new(
-                NurbsCurve3::new(1, row2.clone(), seam_knots)?,
-                vb_e.clone(),
-                vt_e.clone(),
-                1e-6,
-            );
+            bottom_ring_edges.push(arc_b);
+            top_ring_edges.push(arc_t);
+        }
 
-            bottom_ring_edges.push(arc_b.clone());
-            top_ring_edges.push(arc_t.clone());
+        // 5. 4つの側面 NURBS Face の構築
+        let mut faces = Vec::with_capacity(6);
+        for quad in 0..4 {
+            let next_q = (quad + 1) % 4;
+            let (ref r0, ref r1, ref r2) = quad_rows[quad];
+
+            let s = NurbsSurface3::new(
+                2,
+                1,
+                vec![r0.clone(), r1.clone(), r2.clone()],
+                KnotVector::clamped_uniform(3, 2),
+                KnotVector::clamped_uniform(n_sec, 1),
+            )?;
 
             let wire = Wire::new(vec![
-                OrientedEdge::forward(arc_b),
-                OrientedEdge::forward(ev_e),
-                OrientedEdge::reversed(arc_t),
-                OrientedEdge::reversed(ev_s),
+                OrientedEdge::forward(bottom_ring_edges[quad].clone()),
+                OrientedEdge::forward(ev[next_q].clone()),
+                OrientedEdge::reversed(top_ring_edges[quad].clone()),
+                OrientedEdge::reversed(ev[quad].clone()),
             ]);
 
             faces.push(Face::simple(FaceGeometry::Nurbs(s), wire));
         }
 
-        // 4. 始点端面 (Start Cap: PLANE, 外向き法線 -t0)
+        // 6. 始点端面 (Start Cap: PLANE, 外向き法線 -t0)
         let (ctr0, _t0, n0, b0) = frames[0];
         let p_start_cap = PlaneSurface3::new(ctr0, b0, n0).ok_or("start cap plane")?;
         let wire_start_cap = Wire::new(vec![
@@ -193,7 +199,7 @@ impl SweepBuilder {
             wire_start_cap,
         ));
 
-        // 5. 終点端面 (End Cap: PLANE, 外向き法線 +t1)
+        // 7. 終点端面 (End Cap: PLANE, 外向き法線 +t1)
         let (ctr1, _t1, n1, b1) = frames[n_sec - 1];
         let p_end_cap = PlaneSurface3::new(ctr1, n1, b1).ok_or("end cap plane")?;
         let wire_end_cap = Wire::new(vec![
@@ -207,6 +213,7 @@ impl SweepBuilder {
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)
     }
+
 
     /// 任意の2D/3D閉断面ワイヤを3D NURBS軌道曲線（パス）に沿って掃引した完全閉B-Repソリッドを生成
     pub fn sweep_wire_along_curve(
