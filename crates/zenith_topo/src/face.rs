@@ -339,12 +339,17 @@ impl Face {
             errors: Vec::new(),
         };
 
+        // 直線エッジも内部点まで見る。端点だけを見ると、曲面を横切る弦が
+        // 「両端が面上にある」だけで通ってしまう。
         let mut loops = vec![(
             "outer".to_string(),
-            self.outer_wire.sample_points(samples_per_edge),
+            dense_loop_points(&self.outer_wire, samples_per_edge),
         )];
         for (idx, wire) in self.inner_wires.iter().enumerate() {
-            loops.push((format!("inner {idx}"), wire.sample_points(samples_per_edge)));
+            loops.push((
+                format!("inner {idx}"),
+                dense_loop_points(wire, samples_per_edge),
+            ));
         }
 
         for (loop_name, points) in loops {
@@ -674,4 +679,19 @@ fn sampled_surface_distance<S: Surface3>(point: Point3, surface: &S, samples: us
     }
 
     min_distance
+}
+
+/// Samples every edge of a loop at interior parameters as well as its ends.
+///
+/// `Wire::sample_points` shortcuts linear edges to their endpoints, which is
+/// right for display but hides a chord drawn across a curved face.
+fn dense_loop_points(wire: &Wire, samples_per_edge: usize) -> Vec<Point3> {
+    let steps = samples_per_edge.max(2);
+    let mut points = Vec::with_capacity(wire.edges.len() * (steps + 1));
+    for edge in &wire.edges {
+        for step in 0..=steps {
+            points.push(edge.evaluate_normalized(step as f64 / steps as f64));
+        }
+    }
+    points
 }

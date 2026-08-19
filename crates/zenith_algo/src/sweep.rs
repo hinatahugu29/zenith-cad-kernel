@@ -145,8 +145,21 @@ impl SweepBuilder {
                 1e-6,
             );
 
-            let ev_s = Edge::line_between(vb_s.clone(), vt_s.clone())?;
-            let ev_e = Edge::line_between(vb_e.clone(), vt_e.clone())?;
+            // 継ぎ目は曲面の u = const 等値線。直線で張ると、曲がった経路では
+            // 境界が側面から外れてしまう。
+            let seam_knots = KnotVector::clamped_uniform(n_sec, 1);
+            let ev_s = Edge::new(
+                NurbsCurve3::new(1, row0.clone(), seam_knots.clone())?,
+                vb_s.clone(),
+                vt_s.clone(),
+                1e-6,
+            );
+            let ev_e = Edge::new(
+                NurbsCurve3::new(1, row2.clone(), seam_knots)?,
+                vb_e.clone(),
+                vt_e.clone(),
+                1e-6,
+            );
 
             bottom_ring_edges.push(arc_b.clone());
             top_ring_edges.push(arc_t.clone());

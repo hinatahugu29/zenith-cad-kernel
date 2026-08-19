@@ -1817,6 +1817,50 @@ fn test_revolved_surface_keeps_on_axis_profile_points_exact() {
 }
 
 #[test]
+fn test_boundary_validation_rejects_a_chord_across_a_curved_face() {
+    let tol = Tolerance::default();
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
+    let side_face = cylinder.outer_shell.faces[0].clone();
+
+    // 上側の円弧を、同じ端点を結ぶ弦に差し替える。端点は面上にあるので、
+    // 端点しか見ない検証では素通りしてしまう。
+    let mut edges = side_face.outer_wire.edges.clone();
+    let arc_index = edges
+        .iter()
+        .position(|edge| {
+            edge.edge.curve.degree == 2
+                && (edge.start_vertex().point.z - 30.0).abs() < 1e-9
+                && (edge.end_vertex().point.z - 30.0).abs() < 1e-9
+        })
+        .expect("top arc");
+    let chord = Edge::line_between(
+        edges[arc_index].start_vertex().clone(),
+        edges[arc_index].end_vertex().clone(),
+    )
+    .unwrap();
+    edges[arc_index] = OrientedEdge::forward(chord);
+
+    let broken = Face::new(
+        side_face.geometry.clone(),
+        Wire::new(edges),
+        Vec::new(),
+        side_face.orientation,
+        side_face.tolerance,
+    );
+
+    let report = broken.validate_boundary_on_surface(&tol, 8);
+    assert!(
+        report.off_surface_point_count > 0,
+        "a chord drawn across a cylindrical face must be reported as off-surface"
+    );
+    assert!(
+        report.max_distance > 1.0,
+        "the chord deviates by about 2.9 mm, but the report says {}",
+        report.max_distance
+    );
+}
+
+#[test]
 fn test_extrude_produces_analytic_solids_for_straight_and_curved_profiles() {
     let tol = Tolerance::default();
     let params = TessellationParams {
