@@ -196,7 +196,7 @@ STEP 経由の相互運用について、**12 対象すべてが OpenCASCADE で
 いずれも解析解と完全一致します。ブーリアンで生成したソリッドも OpenCASCADE で Solid として読まれ、
 体積が 1e-13 台で一致します。曲面同士の交差（円柱×円柱、球×球など）は未対応ですが、
 範囲外は誤答ではなくエラーを返すよう検証ゲートが入っています。
-実測は 36 ケース中 16 成功・誤答ゼロで、`cargo run -p zenith_algo --example boolean_envelope` で
+実測は 42 ケース中 20 成功・誤答ゼロで、`cargo run -p zenith_algo --example boolean_envelope` で
 いつでも確認できます。
 
 ---
