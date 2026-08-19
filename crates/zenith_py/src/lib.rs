@@ -41,6 +41,8 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::make_loft_solid, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_guided_loft_solid, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_mirror_box, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_mirror_compound_casing, m)?)?;
+
 
 
     m.add_function(wrap_pyfunction!(modeling::make_boolean, m)?)?;

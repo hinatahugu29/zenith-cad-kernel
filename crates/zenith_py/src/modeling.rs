@@ -662,7 +662,78 @@ pub fn make_mirror_box(
     Ok(PyMesh { mesh })
 }
 
+/// 原本ソリッドとミラー反転ソリッドの左右対称ペア（Compound Solid Pair）の生成＆STEP出力
+#[pyfunction]
+#[pyo3(signature = (dx = 30.0, dy = 50.0, dz = 20.0, offset_x = 10.0, chamfer_dist = 6.0, plane_origin = [0.0, 0.0, 0.0], plane_normal = [1.0, 0.0, 0.0], u_divisions = 4, v_divisions = 4, step_path = None))]
+pub fn make_mirror_compound_casing(
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    offset_x: f64,
+    chamfer_dist: f64,
+    plane_origin: [f64; 3],
+    plane_normal: [f64; 3],
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let tol = Tolerance::default();
+    
+    // 1. 原本ソリッドの生成: +X 側に offset_x 離れた位置に配置し、単一エッジに面取りを施した非対称ケーシング
+    let base_box = zenith_algo::DirectModeling::chamfer_box_single_edge(dx, dy, dz, 0, chamfer_dist)
+        .map_err(|e| PyValueError::new_err(format!("Chamfer box failed: {}", e)))?;
+    
+    let base_solid = zenith_algo::BrepTransform::translate_solid(&base_box, Vec3::new(offset_x, 0.0, 0.0));
+
+    let orig = Point3::new(plane_origin[0], plane_origin[1], plane_origin[2]);
+    let norm = Vec3::new(plane_normal[0], plane_normal[1], plane_normal[2]);
+
+    // 2. ミラー反転ソリッドの生成
+    let mirrored_solid = zenith_algo::MirrorBuilder::mirror_solid(&base_solid, orig, norm, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Mirror solid failed: {}", e)))?;
+
+    // 3. 原本＋ミラー反転の Compound Shape として STEP 出力
+    if let Some(path) = step_path {
+        let compound = zenith_topo::Shape::compound_solids(vec![base_solid.clone(), mirrored_solid.clone()]);
+        StepExporter::export_shape_to_file(&compound, path, "ZENITH_MIRRORED_CASING_PAIR")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh1 = tessellate_solid(&base_solid, &params);
+    let mesh2 = tessellate_solid(&mirrored_solid, &params);
+    
+    // 2つのメッシュを合体してプレビュー返却
+    let mut combined_pos = mesh1.positions.clone();
+    let mut combined_normals = mesh1.normals.clone();
+    let mut combined_uvs = mesh1.uvs.clone();
+    let mut combined_indices = mesh1.indices.clone();
+    let n_v1 = mesh1.positions.len() as u32;
+
+    combined_pos.extend_from_slice(&mesh2.positions);
+    combined_normals.extend_from_slice(&mesh2.normals);
+    combined_uvs.extend_from_slice(&mesh2.uvs);
+    for tri in &mesh2.indices {
+        combined_indices.push([tri[0] + n_v1, tri[1] + n_v1, tri[2] + n_v1]);
+    }
+
+
+    let mesh = zenith_tess::TriangleMesh {
+        positions: combined_pos,
+        normals: combined_normals,
+        uvs: combined_uvs,
+        indices: combined_indices,
+    };
+
+    Ok(PyMesh { mesh })
+
+}
+
 /// 直方体の両端面（底面・天面）を開口した角パイプ中空ソリッドの生成（STEP対応）
+
 #[pyfunction]
 #[pyo3(signature = (dx, dy, dz, thickness, u_divisions = 4, v_divisions = 4, step_path = None))]
 pub fn make_through_hollow_box(

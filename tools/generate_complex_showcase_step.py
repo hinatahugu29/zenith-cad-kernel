@@ -40,14 +40,15 @@ def generate_showcase_models():
         f"  ✓ ドラフト押し出しボス: {mesh_draft.num_vertices} 頂点, 体積 = {mesh_draft.volume:.2f} mm^3"
     )
 
-    # ミラー反転直方体 (対称面 X=0, 法線 [1,0,0])
+    # ミラー反転左右対称ペア (面取り非対称ケーシングが対称平面 X=0 を挟んで左右対称に配置された複合ソリッドペア)
     path_1_mir = os.path.abspath("complex_mirrored_casing.step")
-    mesh_mir = zenith_cad.make_mirror_box(
-        30.0, 50.0, 20.0, [0, 0, 0], [1, 0, 0], 6, 6, path_1_mir
+    mesh_mir = zenith_cad.make_mirror_compound_casing(
+        30.0, 50.0, 20.0, 10.0, 6.0, [0, 0, 0], [1, 0, 0], 6, 6, path_1_mir
     )
     print(
-        f"  ✓ ミラー反転ケーシング: {mesh_mir.num_vertices} 頂点, 体積 = {mesh_mir.volume:.2f} mm^3"
+        f"  ✓ ミラー反転左右対称ペア: {mesh_mir.num_vertices} 頂点, 体積 = {mesh_mir.volume:.2f} mm^3"
     )
+
     output_files.extend([path_1, path_1_mir])
 
     # -------------------------------------------------------------
