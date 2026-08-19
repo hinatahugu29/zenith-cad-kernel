@@ -29,6 +29,7 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::make_drilled_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_hollow_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_sweep_pipe, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_sweep_wire, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_revolve, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_loft, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_loft_solid, m)?)?;

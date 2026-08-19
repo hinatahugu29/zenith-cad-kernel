@@ -139,6 +139,77 @@ pub fn make_sweep_pipe(
     Ok(PyMesh { mesh })
 }
 
+/// 任意の閉じた2D/3D断面ポリラインを3Dパス曲線に沿ってスイープした完全閉B-Repソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (profile_points, path_points, num_sections = 16, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_sweep_wire(
+    profile_points: Vec<[f64; 3]>,
+    path_points: Vec<[f64; 3]>,
+    num_sections: usize,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let k = profile_points.len();
+    if k < 3 {
+        return Err(PyValueError::new_err(
+            "Sweep profile wire requires at least 3 points",
+        ));
+    }
+    let n_path = path_points.len();
+    if n_path < 2 {
+        return Err(PyValueError::new_err(
+            "Sweep path requires at least 2 points",
+        ));
+    }
+
+    let tol = Tolerance::default();
+
+    // 断面ワイヤの構築
+    let vertices: Vec<zenith_topo::Vertex> = profile_points
+        .iter()
+        .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+        .collect();
+
+    let mut edges = Vec::with_capacity(k);
+    for i in 0..k {
+        let next_i = (i + 1) % k;
+        let edge = zenith_topo::Edge::line_between(
+            vertices[i].clone(),
+            vertices[next_i].clone(),
+        )
+        .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+        edges.push(zenith_topo::OrientedEdge::forward(edge));
+    }
+    let profile_wire = zenith_topo::Wire::new(edges);
+
+    // 3D パス曲線の構築
+    let degree = (n_path - 1).min(3);
+    let path_ctrl_pts = path_points
+        .into_iter()
+        .map(|p| ControlPoint3::unweighted(Point3::new(p[0], p[1], p[2])))
+        .collect();
+    let knots = KnotVector::clamped_uniform(n_path, degree);
+    let path = NurbsCurve3::new(degree, path_ctrl_pts, knots)
+        .map_err(|e| PyValueError::new_err(format!("Path curve creation failed: {}", e)))?;
+
+    let solid = SweepBuilder::sweep_wire_along_curve(&profile_wire, &path, num_sections, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Sweep wire failed: {}", e)))?;
+
+    if let Some(path_str) = step_path {
+        StepExporter::export_solid_to_file(&solid, path_str, "ZENITH_SWEEP_WIRE")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+
 /// 3次元NURBS曲線の回転体を生成
 #[pyfunction]
 #[pyo3(signature = (profile_points, axis_origin = [0.0, 0.0, 0.0], axis_dir = [0.0, 0.0, 1.0], angle_deg = 360.0, u_divisions = 32, v_divisions = 32))]
