@@ -514,37 +514,21 @@ impl StepExporter {
     fn write_oriented_edge_on_surface(
         ctx: &mut StepContext,
         oe: &zenith_topo::OrientedEdge,
-        pcurve_segment: &FacePcurveSegment,
-        surface_id: u64,
+        _pcurve_segment: &FacePcurveSegment,
+        _surface_id: u64,
     ) -> u64 {
-        let start_v_id = Self::get_or_create_vertex(ctx, oe.start_vertex());
-        let end_v_id = Self::get_or_create_vertex(ctx, oe.end_vertex());
-        let curve = if oe.orientation.is_forward() {
-            oe.edge.curve.clone()
+        let edge_curve_id = Self::get_or_create_edge_curve(ctx, &oe.edge);
+        let orientation_str = if oe.orientation.is_forward() {
+            ".T."
         } else {
-            oe.edge.curve.reversed()
+            ".F."
         };
-        let curve_3d_id = Self::write_edge_curve_geometry(
-            ctx,
-            &curve,
-            oe.start_vertex().point,
-            oe.end_vertex().point,
-        );
-        let surface_curve_id =
-            if let Some(pcurve_id) = Self::write_pcurve(ctx, surface_id, pcurve_segment) {
-                ctx.add_entity(&format!(
-                    "SURFACE_CURVE('',#{},(#{}),.PCURVE_S1.)",
-                    curve_3d_id, pcurve_id
-                ))
-            } else {
-                curve_3d_id
-            };
-        let edge_curve_id = ctx.add_entity(&format!(
-            "EDGE_CURVE('',#{},#{},#{},.T.)",
-            start_v_id, end_v_id, surface_curve_id
-        ));
-        ctx.add_entity(&format!("ORIENTED_EDGE('',*,*,#{},.T.)", edge_curve_id))
+        ctx.add_entity(&format!(
+            "ORIENTED_EDGE('',*,*,#{},{})",
+            edge_curve_id, orientation_str
+        ))
     }
+
 
     fn write_face(ctx: &mut StepContext, face: &Face) -> Option<u64> {
         let surface_id = match &face.geometry {
