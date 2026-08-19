@@ -74,15 +74,16 @@ def generate_showcase_models():
         f"  ✓ ヘリカルスプリング: {mesh_spring.num_vertices} 頂点, 体積 = {mesh_spring.volume:.2f} mm^3"
     )
 
-    # 90度部分回転エルボ管 (パイプエルボ)
+    # 90度部分回転エルボ管 (XZ断面をZ軸まわりに90度回転したパイプエルボ立体)
     path_2_elbow = os.path.abspath("complex_elbow_pipe.step")
     prof_elbow = [[15, 0, -3], [21, 0, -3], [21, 0, 3], [15, 0, 3]]
     mesh_elbow = zenith_cad.make_partial_revolve_solid(
-        prof_elbow, [0, 0, 0], [0, 1, 0], 90.0, 8, 8, path_2_elbow
+        prof_elbow, [0, 0, 0], [0, 0, 1], 90.0, 8, 8, path_2_elbow
     )
     print(
         f"  ✓ 90度部分回転エルボ: {mesh_elbow.num_vertices} 頂点, 体積 = {mesh_elbow.volume:.2f} mm^3"
     )
+
     output_files.extend([path_2, path_2_elbow])
 
     # -------------------------------------------------------------
