@@ -1213,6 +1213,107 @@ pub fn make_exact_box_boolean(
     Ok(PyMesh { mesh })
 }
 
+/// 直方体を円柱でくり抜く（貫通穴・止まり穴）厳密B-Repブーリアン。
+///
+/// `axis` は円柱の向き。既定の +Z 以外を指定すると、その向きに回してから
+/// `drill_offset` だけ平行移動する。円柱が立体を貫通すれば貫通穴に、内部で
+/// 止まれば止まり穴になる。演算が対応範囲外なら、もっともらしい形ではなく
+/// エラーを返す。
+#[pyfunction]
+#[pyo3(signature = (
+    dx, dy, dz, box_offset,
+    radius, height, drill_offset,
+    axis = [0.0, 0.0, 1.0],
+    op_type = 1,
+    u_divisions = 32,
+    v_divisions = 32,
+    step_path = None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn make_exact_drill_boolean(
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    box_offset: [f64; 3],
+    radius: f64,
+    height: f64,
+    drill_offset: [f64; 3],
+    axis: [f64; 3],
+    op_type: u8,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let tol = Tolerance::default();
+
+    let block = zenith_algo::PrimitiveBuilder::make_box(dx, dy, dz)
+        .map_err(|e| PyValueError::new_err(format!("Block creation failed: {}", e)))?;
+    let block = zenith_algo::BrepTransform::translate_solid(
+        &block,
+        Vec3::new(box_offset[0], box_offset[1], box_offset[2]),
+    );
+
+    let drill = zenith_algo::PrimitiveBuilder::make_cylinder(radius, height)
+        .map_err(|e| PyValueError::new_err(format!("Drill creation failed: {}", e)))?;
+
+    // 既定の +Z から指定軸へ回す。
+    let direction = Vec3::new(axis[0], axis[1], axis[2]);
+    let drill = match direction.try_normalize(1e-12) {
+        None => return Err(PyValueError::new_err("Drill axis must not be zero")),
+        Some(unit) => {
+            let z = Vec3::new(0.0, 0.0, 1.0);
+            let dot = unit.dot(&z).clamp(-1.0, 1.0);
+            if dot > 1.0 - 1e-12 {
+                drill
+            } else if dot < -1.0 + 1e-12 {
+                let flip = zenith_math::Transform3::from_axis_angle(
+                    &Vec3::new(1.0, 0.0, 0.0),
+                    std::f64::consts::PI,
+                );
+                zenith_algo::BrepTransform::transform_solid(&drill, &flip)
+                    .map_err(|e| PyValueError::new_err(format!("Drill orientation failed: {}", e)))?
+            } else {
+                let rotation_axis = z.cross(&unit);
+                let transform =
+                    zenith_math::Transform3::from_axis_angle(&rotation_axis, dot.acos());
+                zenith_algo::BrepTransform::transform_solid(&drill, &transform)
+                    .map_err(|e| PyValueError::new_err(format!("Drill orientation failed: {}", e)))?
+            }
+        }
+    };
+    let drill = zenith_algo::BrepTransform::translate_solid(
+        &drill,
+        Vec3::new(drill_offset[0], drill_offset[1], drill_offset[2]),
+    );
+
+    let op = match op_type {
+        0 => zenith_algo::BooleanOpType::Union,
+        1 => zenith_algo::BooleanOpType::Difference,
+        2 => zenith_algo::BooleanOpType::Intersection,
+        _ => {
+            return Err(PyValueError::new_err(
+                "Invalid op_type: 0=Union, 1=Difference, 2=Intersection",
+            ))
+        }
+    };
+
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(&block, &drill, op, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Exact B-Rep drill boolean failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solids_to_file(&result.solids, path, "ZENITH_DRILL_BOOLEAN")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    Ok(PyMesh {
+        mesh: result.tessellate(&params),
+    })
+}
+
 
 
 
