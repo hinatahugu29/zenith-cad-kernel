@@ -227,14 +227,52 @@ fn test_exact_brep_boolean_entry_is_separate_from_mesh_preview() {
     .expect("mesh preview boolean should remain available");
     assert!(preview_mesh.num_triangles() > 0);
 
-    let err = zenith_algo::BooleanEngine::boolean_solids_exact(
+    // 厳密ブーリアンは、検証を通ったソリッドを返すか、理由を添えて失敗するか
+    // のどちらかであって、メッシュに逃げることはない。この箱と円柱の組は
+    // 対応済みになったので、成功したなら解析解と一致していなければならない。
+    // 円柱は XY 原点中心なので、箱 [0,10]^2 に入るのは四分の一だけ。
+    // 和には残り四分の三が足される。
+    match zenith_algo::BooleanEngine::boolean_solids_exact(
         &solid_a,
         &solid_b,
         zenith_algo::BooleanOpType::Union,
         &tol,
-    )
-    .expect_err("exact B-Rep boolean must not silently fall back to mesh output");
-    assert!(err.contains("Exact B-Rep boolean is not implemented yet"));
+    ) {
+        Ok(solid) => {
+            let expected = 1000.0 + 0.75 * std::f64::consts::PI * 9.0 * 10.0;
+            let volume = zenith_algo::MassCalculator::compute_from_brep(
+                &solid,
+                &TessellationParams {
+                    u_divisions: 48,
+                    v_divisions: 48,
+                },
+            )
+            .volume;
+            assert!(
+                (volume - expected).abs() / expected < 1e-6,
+                "union volume {volume} should be {expected}"
+            );
+        }
+        Err(err) => assert!(
+            err.contains("not implemented yet") || err.contains("fails verification"),
+            "an unsupported case must say so, got: {err}"
+        ),
+    }
+
+    // 対応範囲外の組では、もっともらしいソリッドではなくエラーが返る。
+    let sphere = zenith_algo::PrimitiveBuilder::make_sphere(10.0).unwrap();
+    let offset_sphere =
+        zenith_algo::BrepTransform::translate_solid(&sphere, Vec3::new(10.0, 0.0, 0.0));
+    assert!(
+        zenith_algo::BooleanEngine::boolean_solids_exact(
+            &sphere,
+            &offset_sphere,
+            zenith_algo::BooleanOpType::Union,
+            &tol,
+        )
+        .is_err(),
+        "curved surface intersection is not supported and must not report success"
+    );
 }
 
 #[test]

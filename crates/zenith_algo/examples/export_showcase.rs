@@ -275,6 +275,62 @@ fn main() {
         ),
     });
 
+    // --- 任意角度の多面体ブーリアン ---
+    let base = PrimitiveBuilder::make_box(40.0, 40.0, 40.0).unwrap();
+    let turned = BrepTransform::translate_solid(
+        &BrepTransform::transform_solid(
+            &BrepTransform::translate_solid(&base, Vec3::new(20.0, 20.0, 0.0)),
+            &Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), std::f64::consts::FRAC_PI_4),
+        )
+        .unwrap(),
+        Vec3::new(0.0, 0.0, 14.0),
+    );
+
+    items.push(Item {
+        name: "14_boolean_rotated_union",
+        note: "two cubes at 45 degrees; the general polyhedral case",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &base,
+            &turned,
+            BooleanOpType::Union,
+            &tol,
+        )
+        .expect("rotated union")
+        .solids
+        .remove(0),
+        analytic_volume: None,
+    });
+
+    items.push(Item {
+        name: "15_boolean_rotated_difference",
+        note: "the same pair subtracted, leaving the bite the turned cube takes",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &base,
+            &turned,
+            BooleanOpType::Difference,
+            &tol,
+        )
+        .expect("rotated difference")
+        .solids
+        .remove(0),
+        analytic_volume: None,
+    });
+
+    items.push(Item {
+        name: "16_boolean_rotated_intersection",
+        note: "and intersected: the region the two cubes share",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &base,
+            &turned,
+            BooleanOpType::Intersection,
+            &tol,
+        )
+        .expect("rotated intersection")
+        .solids
+        .remove(0),
+        analytic_volume: None,
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

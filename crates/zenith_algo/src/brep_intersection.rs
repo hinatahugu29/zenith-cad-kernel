@@ -415,6 +415,10 @@ impl BrepIntersectionBuilder {
             tol,
         ));
 
+        // 同じ平面に重なって乗る面は、両オペランドから同じ領域が採られる。
+        // そのまま縫うと同じ稜を4回使うことになるので、ここで解消する。
+        resolve_coincident_face_pieces(&mut selected_face_pieces, tol);
+
         // 隣り合う面の片方だけが辺の途中で切られていると、辺の長さが食い違って
         // 縫合が合わない。相手が持つ頂点を境界辺へ刻み込んで対応させる。
         // 面の形は変わらず、境界に頂点が増えるだけ。
@@ -3625,4 +3629,135 @@ fn curve_parameter_of_point(
     }
 
     Some(t)
+}
+
+/// Removes the duplication that arises when both operands contribute the same
+/// patch of surface.
+///
+/// Where two solids share part of a plane, splitting produces the same region
+/// on both sides and the selection keeps both, so the shared region's edges end
+/// up used four times instead of twice. Which copy survives depends on how the
+/// two faces face:
+///
+/// - pointing the same way, the two describe one piece of the result's
+///   boundary, so one copy is kept
+/// - pointing opposite ways, the region is interior to the result and neither
+///   copy belongs to its boundary
+fn resolve_coincident_face_pieces(pieces: &mut Vec<SelectedBooleanFacePiece>, tol: &Tolerance) {
+    let mut drop_flags = vec![false; pieces.len()];
+
+    for left in 0..pieces.len() {
+        if drop_flags[left] {
+            continue;
+        }
+        for right in (left + 1)..pieces.len() {
+            if drop_flags[right] || pieces[left].operand == pieces[right].operand {
+                continue;
+            }
+            let Some(same_direction) =
+                coincident_face_direction(&pieces[left], &pieces[right], tol)
+            else {
+                continue;
+            };
+
+            if same_direction {
+                // 同じ向きなら、結果の境界に現れるのは1枚だけ。
+                drop_flags[right] = true;
+            } else {
+                // 逆向きなら、その領域は結果の内部に呑まれる。
+                drop_flags[left] = true;
+                drop_flags[right] = true;
+            }
+            break;
+        }
+    }
+
+    let mut index = 0;
+    pieces.retain(|_| {
+        let keep = !drop_flags[index];
+        index += 1;
+        keep
+    });
+}
+
+/// `Some(true)` when the two pieces occupy the same patch of plane facing the
+/// same way, `Some(false)` when they face opposite ways, `None` when they are
+/// not the same patch at all.
+fn coincident_face_direction(
+    left: &SelectedBooleanFacePiece,
+    right: &SelectedBooleanFacePiece,
+    tol: &Tolerance,
+) -> Option<bool> {
+    let (FaceGeometry::Plane(left_plane), FaceGeometry::Plane(right_plane)) =
+        (&left.face.geometry, &right.face.geometry)
+    else {
+        return None;
+    };
+
+    let left_normal = selected_piece_normal(left, left_plane)?;
+    let right_normal = selected_piece_normal(right, right_plane)?;
+
+    // 同一平面か。法線が平行で、原点間の距離が面内に収まっていること。
+    if left_normal.cross(&right_normal).norm() > 1e-9 {
+        return None;
+    }
+    if (right_plane.origin - left_plane.origin)
+        .dot(&left_normal)
+        .abs()
+        > tol.linear * 10.0
+    {
+        return None;
+    }
+
+    // 同じ領域か。境界サンプルの重心と広がりで判定する。分割後は重なる領域が
+    // そのまま一枚の面になっているので、これで十分に区別できる。
+    let left_points = left.face.outer_wire.sample_points(16);
+    let right_points = right.face.outer_wire.sample_points(16);
+    if left_points.is_empty() || right_points.is_empty() {
+        return None;
+    }
+
+    let centroid = |points: &[Point3]| {
+        let mut sum = Vec3::zeros();
+        for point in points {
+            sum += point.coords;
+        }
+        Point3::from(sum / points.len() as f64)
+    };
+    let extent = |points: &[Point3], centre: Point3| {
+        points
+            .iter()
+            .map(|point| (*point - centre).norm())
+            .fold(0.0f64, f64::max)
+    };
+
+    let left_centre = centroid(&left_points);
+    let right_centre = centroid(&right_points);
+    let left_extent = extent(&left_points, left_centre);
+
+    let scale = left_extent.max(1.0);
+    if (right_centre - left_centre).norm() > scale * 1e-6 {
+        return None;
+    }
+    if (extent(&right_points, right_centre) - left_extent).abs() > scale * 1e-6 {
+        return None;
+    }
+
+    Some(left_normal.dot(&right_normal) > 0.0)
+}
+
+/// The outward normal a selected piece will have in the assembled result,
+/// after both the face's own orientation flag and the boolean's reversal.
+fn selected_piece_normal(
+    piece: &SelectedBooleanFacePiece,
+    plane: &zenith_geom::PlaneSurface3,
+) -> Option<Vec3> {
+    let mut normal = plane.normal.try_normalize(1e-12)?;
+    if !piece.face.orientation.is_forward() {
+        normal = -normal;
+    }
+    if piece.reverse_orientation {
+        normal = -normal;
+    }
+    Some(normal)
 }
