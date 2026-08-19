@@ -414,6 +414,32 @@ impl BrepIntersectionBuilder {
             op,
             tol,
         ));
+
+        // 隣り合う面の片方だけが辺の途中で切られていると、辺の長さが食い違って
+        // 縫合が合わない。相手が持つ頂点を境界辺へ刻み込んで対応させる。
+        // 面の形は変わらず、境界に頂点が増えるだけ。
+        let mut imprint_points = Vec::new();
+        for candidate in Self::collect_intersection_edge_candidates(
+            &solid_a.outer_shell.faces,
+            &solid_b.outer_shell.faces,
+            tol,
+        ) {
+            imprint_points.push(candidate.edge.start_vertex.point);
+            imprint_points.push(candidate.edge.end_vertex.point);
+        }
+
+        let imprinted = imprint_vertices_on_edges(
+            selected_face_pieces
+                .iter()
+                .map(|piece| piece.face.clone())
+                .collect(),
+            &imprint_points,
+            tol,
+        );
+        for (piece, face) in selected_face_pieces.iter_mut().zip(imprinted) {
+            piece.face = face;
+        }
+
         let stitch_report = diagnose_selected_face_stitching(&selected_face_pieces, tol);
 
         BooleanFaceSelection {
@@ -609,6 +635,87 @@ impl BrepIntersectionBuilder {
         split_edge: &Edge,
         tol: &Tolerance,
     ) -> Result<Vec<Face>, String> {
+        Self::split_planar_face_by_edge_chain(face, std::slice::from_ref(split_edge), tol)
+    }
+
+    /// Splits a planar face along a connected chain of intersection edges.
+    ///
+    /// Where a corner of the other solid pokes through a face, the imprint of
+    /// its boundary is several segments meeting at interior corners: each stops
+    /// in the middle of the face and only the chain reaches the boundary at
+    /// both ends.
+    pub fn split_planar_face_by_edge_chain(
+        face: &Face,
+        chain: &[Edge],
+        tol: &Tolerance,
+    ) -> Result<Vec<Face>, String> {
+        if chain.is_empty() {
+            return Err("Split chain is empty".to_string());
+        }
+        if chain.len() == 1 {
+            return Self::split_planar_face_by_single_edge(face, &chain[0], tol);
+        }
+
+        let FaceGeometry::Plane(plane) = &face.geometry else {
+            return Err("Only planar faces can be split by an intersection edge".to_string());
+        };
+        if !face.inner_wires.is_empty() {
+            return Err("Planar face splitting with inner wires is not implemented yet".to_string());
+        }
+        let boundary = &face.outer_wire.edges;
+        if boundary.len() < 3 {
+            return Err("Cannot split a face with fewer than three boundary edges".to_string());
+        }
+
+        for edge in chain {
+            if (edge.end_vertex.point - edge.start_vertex.point).norm() <= tol.linear {
+                return Err("Split edge is degenerate".to_string());
+            }
+            if !edge_lies_on_plane(edge, plane, tol) {
+                return Err("Split edge must lie on the planar face".to_string());
+            }
+        }
+
+        let ordered = order_edges_into_open_chain(chain, tol)?;
+        let start = ordered.first().unwrap().start_vertex().point;
+        let end = ordered.last().unwrap().end_vertex().point;
+
+        let start_hit = locate_point_on_wire(boundary, start, tol)
+            .ok_or_else(|| "Split chain start does not lie on the outer boundary".to_string())?;
+        let end_hit = locate_point_on_wire(boundary, end, tol)
+            .ok_or_else(|| "Split chain end does not lie on the outer boundary".to_string())?;
+        if start_hit.edge_index == end_hit.edge_index && (start_hit.t - end_hit.t).abs() <= 1e-9 {
+            return Err("Split chain endpoints collapse to one boundary point".to_string());
+        }
+
+        let boundary_uv: Vec<Point2> = face
+            .outer_wire
+            .sample_points(16)
+            .iter()
+            .map(|point| project_to_plane_uv(*point, plane))
+            .collect();
+        for edge in chain {
+            let mid_uv = project_to_plane_uv(edge_midpoint(edge), plane);
+            if !point_in_polygon_2d(mid_uv, &boundary_uv, tol.parametric)
+                || point_on_polygon_boundary(mid_uv, &boundary_uv, tol.parametric)
+            {
+                return Err("Split chain must cross the face interior".to_string());
+            }
+        }
+
+        let path_a = wire_path_between(boundary, &start_hit, &end_hit, tol)?;
+        let path_b = wire_path_between(boundary, &end_hit, &start_hit, tol)?;
+
+        let face_a = face_from_wire_path_and_split_chain(face, path_a, &ordered, tol)?;
+        let face_b = face_from_wire_path_and_split_chain(face, path_b, &ordered, tol)?;
+        Ok(vec![face_a, face_b])
+    }
+
+    fn split_planar_face_by_single_edge(
+        face: &Face,
+        split_edge: &Edge,
+        tol: &Tolerance,
+    ) -> Result<Vec<Face>, String> {
         let FaceGeometry::Plane(plane) = &face.geometry else {
             return Err("Only planar faces can be split by an intersection edge".to_string());
         };
@@ -635,8 +742,12 @@ impl BrepIntersectionBuilder {
             .ok_or_else(|| "Split edge start does not lie on the outer boundary".to_string())?;
         let end_hit = locate_point_on_wire(boundary, end, tol)
             .ok_or_else(|| "Split edge end does not lie on the outer boundary".to_string())?;
-        if start_hit.edge_index == end_hit.edge_index {
-            return Err("Split edge endpoints collapse on one boundary edge".to_string());
+        // 同じ境界辺の上に両端が乗るのは正当な配置。ただし同じ点に潰れて
+        // いるなら切り込みにならない。
+        if start_hit.edge_index == end_hit.edge_index
+            && (start_hit.t - end_hit.t).abs() <= 1e-9
+        {
+            return Err("Split edge endpoints collapse to one boundary point".to_string());
         }
 
         let boundary_uv: Vec<Point2> = face
@@ -863,7 +974,7 @@ impl BrepIntersectionBuilder {
 
         let mut faces = vec![face.clone()];
         let mut applied_split_count = 0;
-        let mut skipped_split_count = 0;
+        let mut skipped_split_count: usize = 0;
 
         for split_edge in split_edges {
             let mut next_faces = Vec::new();
@@ -884,6 +995,44 @@ impl BrepIntersectionBuilder {
                 skipped_split_count += 1;
             }
             faces = next_faces;
+        }
+
+        // 1本ずつではどれも面を横断できなかった平面に限り、内部の角で繋がった
+        // 交線を鎖にまとめて切り込みとして試す。面の境界に沿って走る交線は
+        // 切り込みではないので、鎖に混ぜる前に外す。
+        if applied_split_count == 0
+            && matches!(face.geometry, FaceGeometry::Plane(_))
+            && split_edges.len() >= 2
+        {
+            let cutting: Vec<Edge> = deduplicate_split_edges(split_edges, tol)
+                .into_iter()
+                .filter(|edge| !edge_runs_along_face_boundary(face, edge, tol))
+                .collect();
+            let chains = group_edges_into_chains(&cutting, tol);
+
+            let mut chain_faces = vec![face.clone()];
+            let mut applied: usize = 0;
+            for chain in chains.iter().filter(|chain| chain.len() >= 2) {
+                let mut next_faces = Vec::new();
+                for current_face in chain_faces {
+                    match Self::split_planar_face_by_edge_chain(&current_face, chain, tol) {
+                        Ok(split_faces) => {
+                            applied += 1;
+                            next_faces.extend(split_faces);
+                        }
+                        Err(_) => next_faces.push(current_face),
+                    }
+                }
+                chain_faces = next_faces;
+            }
+
+            if applied > 0 {
+                return Ok(PlanarFaceMultiSplitResult {
+                    faces: chain_faces,
+                    applied_split_count: applied,
+                    skipped_split_count: skipped_split_count.saturating_sub(applied),
+                });
+            }
         }
 
         Ok(PlanarFaceMultiSplitResult {
@@ -1124,6 +1273,16 @@ fn wire_path_between(
     to: &WireHit,
     tol: &Tolerance,
 ) -> Result<Vec<OrientedEdge>, String> {
+    // 両端が同じ境界辺の上にあるとき、片方の経路はその辺の内側の一区間で
+    // 済む。一周する経路と区別しないと、両側とも遠回りになって面が切れない。
+    // 小さな出っ張りが一辺から入って同じ辺から出る配置で実際に起きる。
+    if from.edge_index == to.edge_index && from.t < to.t {
+        return match oriented_edge_portion(&edges[from.edge_index], from.t, to.t, tol)? {
+            Some(portion) => Ok(vec![portion]),
+            None => Err("Split edge did not produce a boundary path".to_string()),
+        };
+    }
+
     let mut path = Vec::new();
     if let Some(tail) = oriented_edge_portion(&edges[from.edge_index], from.t, 1.0, tol)? {
         path.push(tail);
@@ -1224,6 +1383,191 @@ fn oriented_edge_length(edge: &OrientedEdge) -> f64 {
         .windows(2)
         .map(|pair| (pair[1] - pair[0]).norm())
         .sum()
+}
+
+/// True when an intersection segment lies along the face's own boundary.
+///
+/// Such a segment records that the two solids touch along that edge, not that
+/// one cuts the other, so it must be kept out of the cutting chains.
+fn edge_runs_along_face_boundary(face: &Face, edge: &Edge, tol: &Tolerance) -> bool {
+    let FaceGeometry::Plane(plane) = &face.geometry else {
+        return false;
+    };
+    let boundary_uv: Vec<Point2> = face
+        .outer_wire
+        .sample_points(16)
+        .iter()
+        .map(|point| project_to_plane_uv(*point, plane))
+        .collect();
+    if boundary_uv.len() < 3 {
+        return false;
+    }
+
+    let mid_uv = project_to_plane_uv(edge_midpoint(edge), plane);
+    point_on_polygon_boundary(mid_uv, &boundary_uv, tol.parametric)
+}
+
+/// Removes segments that describe the same span, in either direction.
+fn deduplicate_split_edges(edges: &[Edge], tol: &Tolerance) -> Vec<Edge> {
+    let mut unique: Vec<Edge> = Vec::with_capacity(edges.len());
+    for edge in edges {
+        let start = edge.start_vertex.point;
+        let end = edge.end_vertex.point;
+        let midpoint = edge_midpoint(edge);
+        let duplicate = unique.iter().any(|existing| {
+            let existing_start = existing.start_vertex.point;
+            let existing_end = existing.end_vertex.point;
+            let same_span = (points_same_3d(existing_start, start, tol.linear)
+                && points_same_3d(existing_end, end, tol.linear))
+                || (points_same_3d(existing_start, end, tol.linear)
+                    && points_same_3d(existing_end, start, tol.linear));
+            same_span && points_same_3d(edge_midpoint(existing), midpoint, tol.linear * 10.0)
+        });
+        if !duplicate {
+            unique.push(edge.clone());
+        }
+    }
+    unique
+}
+
+/// Links edges end to end into chains, by coincident endpoints.
+fn group_edges_into_chains(edges: &[Edge], tol: &Tolerance) -> Vec<Vec<Edge>> {
+    let mut remaining: Vec<Edge> = edges.to_vec();
+    let mut chains: Vec<Vec<Edge>> = Vec::new();
+
+    while !remaining.is_empty() {
+        let seed = remaining.remove(0);
+        let mut head = seed.start_vertex.point;
+        let mut tail = seed.end_vertex.point;
+        let mut chain = vec![seed];
+
+        loop {
+            let extension = remaining.iter().position(|candidate| {
+                let candidate_start = candidate.start_vertex.point;
+                let candidate_end = candidate.end_vertex.point;
+                points_same_3d(candidate_start, tail, tol.linear)
+                    || points_same_3d(candidate_end, tail, tol.linear)
+                    || points_same_3d(candidate_start, head, tol.linear)
+                    || points_same_3d(candidate_end, head, tol.linear)
+            });
+
+            let Some(index) = extension else {
+                break;
+            };
+            let edge = remaining.remove(index);
+            let start = edge.start_vertex.point;
+            let end = edge.end_vertex.point;
+
+            if points_same_3d(start, tail, tol.linear) {
+                tail = end;
+            } else if points_same_3d(end, tail, tol.linear) {
+                tail = start;
+            } else if points_same_3d(start, head, tol.linear) {
+                head = end;
+            } else {
+                head = start;
+            }
+            chain.push(edge);
+        }
+
+        chains.push(chain);
+    }
+
+    chains
+}
+
+/// Orders a chain's edges head to tail, giving each its traversal direction.
+fn order_edges_into_open_chain(
+    edges: &[Edge],
+    tol: &Tolerance,
+) -> Result<Vec<OrientedEdge>, String> {
+    if edges.len() == 1 {
+        return Ok(vec![OrientedEdge::forward(edges[0].clone())]);
+    }
+
+    let mut remaining: Vec<Edge> = edges.to_vec();
+    let mut chain = vec![OrientedEdge::forward(remaining.remove(0))];
+
+    loop {
+        let tail = chain.last().unwrap().end_vertex().point;
+        let Some(index) = remaining.iter().position(|edge| {
+            points_same_3d(edge.start_vertex.point, tail, tol.linear)
+                || points_same_3d(edge.end_vertex.point, tail, tol.linear)
+        }) else {
+            break;
+        };
+        let edge = remaining.remove(index);
+        if points_same_3d(edge.start_vertex.point, tail, tol.linear) {
+            chain.push(OrientedEdge::forward(edge));
+        } else {
+            chain.push(OrientedEdge::reversed(edge));
+        }
+    }
+
+    loop {
+        let head = chain.first().unwrap().start_vertex().point;
+        let Some(index) = remaining.iter().position(|edge| {
+            points_same_3d(edge.end_vertex.point, head, tol.linear)
+                || points_same_3d(edge.start_vertex.point, head, tol.linear)
+        }) else {
+            break;
+        };
+        let edge = remaining.remove(index);
+        if points_same_3d(edge.end_vertex.point, head, tol.linear) {
+            chain.insert(0, OrientedEdge::forward(edge));
+        } else {
+            chain.insert(0, OrientedEdge::reversed(edge));
+        }
+    }
+
+    if !remaining.is_empty() {
+        return Err(format!(
+            "Split edges do not form a single chain; {} edge(s) are left over",
+            remaining.len()
+        ));
+    }
+
+    Ok(chain)
+}
+
+fn face_from_wire_path_and_split_chain(
+    template: &Face,
+    mut path: Vec<OrientedEdge>,
+    chain: &[OrientedEdge],
+    tol: &Tolerance,
+) -> Result<Face, String> {
+    let expected_start = path.last().unwrap().end_vertex().point;
+    let expected_end = path[0].start_vertex().point;
+
+    let chain_start = chain.first().unwrap().start_vertex().point;
+    let chain_end = chain.last().unwrap().end_vertex().point;
+
+    if points_same_3d(chain_start, expected_start, tol.linear)
+        && points_same_3d(chain_end, expected_end, tol.linear)
+    {
+        path.extend(chain.iter().cloned());
+    } else if points_same_3d(chain_end, expected_start, tol.linear)
+        && points_same_3d(chain_start, expected_end, tol.linear)
+    {
+        path.extend(chain.iter().rev().map(|oriented| {
+            OrientedEdge::new(oriented.edge.clone(), oriented.orientation.reversed())
+        }));
+    } else {
+        return Err("Split chain orientation does not close the split loop".to_string());
+    }
+
+    let wire = Wire::new(path);
+    if !wire.is_closed(tol) {
+        return Err("Planar split produced an open wire".to_string());
+    }
+
+    Ok(Face::new(
+        template.geometry.clone(),
+        wire,
+        Vec::new(),
+        template.orientation,
+        template.tolerance,
+    ))
 }
 
 fn face_from_wire_path_and_split_edge(
@@ -3105,4 +3449,180 @@ fn intersect_ruling_plane_cylinder_patch(
         segment_start,
         segment_end,
     }
+}
+
+/// Subdivides boundary edges wherever another face's vertex sits in their
+/// interior.
+///
+/// Where two solids meet along part of an edge, one face keeps the full edge
+/// while its neighbour has already been cut, so the two do not correspond and
+/// the shell will not stitch. Splitting the longer edge at the neighbour's
+/// vertex is what makes them match. The face keeps its shape; only its
+/// boundary gains a vertex.
+fn imprint_vertices_on_edges(
+    faces: Vec<Face>,
+    extra_points: &[Point3],
+    tol: &Tolerance,
+) -> Vec<Face> {
+    let mut points: Vec<Point3> = Vec::new();
+    let add_point = |point: Point3, points: &mut Vec<Point3>| {
+        if !points
+            .iter()
+            .any(|existing| points_same_3d(*existing, point, tol.linear))
+        {
+            points.push(point);
+        }
+    };
+
+    for point in extra_points {
+        add_point(*point, &mut points);
+    }
+    for face in &faces {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                add_point(oriented.edge.start_vertex.point, &mut points);
+                add_point(oriented.edge.end_vertex.point, &mut points);
+            }
+        }
+    }
+
+    let rewrite_wire = |wire: &Wire| -> Wire {
+        let mut edges = Vec::with_capacity(wire.edges.len());
+        for oriented in &wire.edges {
+            match split_edge_at_interior_points(&oriented.edge, &points, tol) {
+                Some(pieces) => {
+                    let ordered: Vec<Edge> = if oriented.orientation.is_forward() {
+                        pieces
+                    } else {
+                        pieces.into_iter().rev().collect()
+                    };
+                    for piece in ordered {
+                        edges.push(OrientedEdge::new(piece, oriented.orientation));
+                    }
+                }
+                None => edges.push(oriented.clone()),
+            }
+        }
+        Wire::new(edges)
+    };
+
+    faces
+        .iter()
+        .map(|face| {
+            Face::new(
+                face.geometry.clone(),
+                rewrite_wire(&face.outer_wire),
+                face.inner_wires.iter().map(rewrite_wire).collect(),
+                face.orientation,
+                face.tolerance,
+            )
+        })
+        .collect()
+}
+
+/// Splits one edge at every supplied point lying strictly inside it.
+fn split_edge_at_interior_points(
+    edge: &Edge,
+    points: &[Point3],
+    tol: &Tolerance,
+) -> Option<Vec<Edge>> {
+    let start = edge.start_vertex.point;
+    let end = edge.end_vertex.point;
+
+    let mut interior: Vec<(f64, Point3)> = Vec::new();
+    for point in points {
+        if points_same_3d(*point, start, tol.linear) || points_same_3d(*point, end, tol.linear) {
+            continue;
+        }
+        let Some(parameter) = curve_parameter_of_point(&edge.curve, *point, tol) else {
+            continue;
+        };
+        if interior
+            .iter()
+            .any(|(existing, _)| (existing - parameter).abs() <= 1e-9)
+        {
+            continue;
+        }
+        interior.push((parameter, *point));
+    }
+
+    if interior.is_empty() {
+        return None;
+    }
+    interior.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    let mut pieces: Vec<Edge> = Vec::new();
+    let mut remaining_curve = edge.curve.clone();
+    let mut remaining_start = edge.start_vertex.clone();
+
+    for (_, point) in &interior {
+        let parameter = curve_parameter_of_point(&remaining_curve, *point, tol)?;
+        let (left, right) = remaining_curve.split_bezier_at(parameter)?;
+        let cut_vertex = Vertex::new(*point, tol.linear);
+        pieces.push(Edge::new(
+            left,
+            remaining_start.clone(),
+            cut_vertex.clone(),
+            tol.linear,
+        ));
+        remaining_curve = right;
+        remaining_start = cut_vertex;
+    }
+
+    pieces.push(Edge::new(
+        remaining_curve,
+        remaining_start,
+        edge.end_vertex.clone(),
+        tol.linear,
+    ));
+
+    Some(pieces)
+}
+
+/// The parameter at which a curve passes through a point, or `None` when it
+/// does not pass through it within tolerance or only touches an end.
+fn curve_parameter_of_point(
+    curve: &zenith_geom::NurbsCurve3,
+    point: Point3,
+    tol: &Tolerance,
+) -> Option<f64> {
+    let (t_min, t_max) = curve.param_range();
+    if t_max - t_min <= f64::EPSILON {
+        return None;
+    }
+
+    const COARSE_SAMPLES: usize = 64;
+    let mut best_t = t_min;
+    let mut best_distance = f64::INFINITY;
+    for index in 0..=COARSE_SAMPLES {
+        let t = t_min + (t_max - t_min) * (index as f64 / COARSE_SAMPLES as f64);
+        let distance = (curve.evaluate(t) - point).norm();
+        if distance < best_distance {
+            best_distance = distance;
+            best_t = t;
+        }
+    }
+
+    let mut low = (best_t - (t_max - t_min) / COARSE_SAMPLES as f64).max(t_min);
+    let mut high = (best_t + (t_max - t_min) / COARSE_SAMPLES as f64).min(t_max);
+    for _ in 0..64 {
+        let mid_low = low + (high - low) / 3.0;
+        let mid_high = high - (high - low) / 3.0;
+        if (curve.evaluate(mid_low) - point).norm() <= (curve.evaluate(mid_high) - point).norm() {
+            high = mid_high;
+        } else {
+            low = mid_low;
+        }
+    }
+    let t = 0.5 * (low + high);
+    if (curve.evaluate(t) - point).norm() > tol.linear * 10.0 {
+        return None;
+    }
+
+    let span = t_max - t_min;
+    if t <= t_min + span * 1e-9 || t >= t_max - span * 1e-9 {
+        return None;
+    }
+
+    Some(t)
 }
