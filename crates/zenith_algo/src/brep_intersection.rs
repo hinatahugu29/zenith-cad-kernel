@@ -739,9 +739,6 @@ impl BrepIntersectionBuilder {
         let FaceGeometry::Plane(plane) = &face.geometry else {
             return Err("Only planar faces can be imprinted by an interior loop".to_string());
         };
-        if !face.inner_wires.is_empty() {
-            return Err("Imprinting a face that already has holes is not implemented".to_string());
-        }
         for edge in split_edges {
             if !edge_lies_on_plane(edge, plane, tol) {
                 return Err("Imprint loop edges must lie on the planar face".to_string());
@@ -784,17 +781,53 @@ impl BrepIntersectionBuilder {
             (reversed_loop, loop_wire)
         };
 
+        // 既にある穴を、新しいループの内と外に振り分ける。座ぐりのように
+        // 既存の穴を囲むループを刻むと、内側の面はドーナツ状になる。
+        let mut holes_inside = Vec::new();
+        let mut holes_outside = Vec::new();
+        for wire in &face.inner_wires {
+            let wire_uv: Vec<Point2> = wire
+                .sample_points(16)
+                .iter()
+                .map(|point| project_to_plane_uv(*point, plane))
+                .collect();
+            if wire_uv.is_empty() {
+                holes_outside.push(wire.clone());
+                continue;
+            }
+
+            let inside_count = wire_uv
+                .iter()
+                .filter(|uv| point_in_polygon_2d(**uv, &loop_uv, tol.parametric))
+                .count();
+
+            // 新しいループと既存の穴が交差している場合は、この単純な振り分けでは
+            // 表せないので手を出さない。
+            if inside_count == wire_uv.len() {
+                holes_inside.push(wire.clone());
+            } else if inside_count == 0 {
+                holes_outside.push(wire.clone());
+            } else {
+                return Err(
+                    "Imprint loop crosses an existing hole; that case is not implemented"
+                        .to_string(),
+                );
+            }
+        }
+
         let inner_face = Face::new(
             face.geometry.clone(),
             inner_face_wire,
-            Vec::new(),
+            holes_inside,
             face.orientation,
             face.tolerance,
         );
+        let mut outer_holes = holes_outside;
+        outer_holes.push(hole_wire);
         let outer_face = Face::new(
             face.geometry.clone(),
             face.outer_wire.clone(),
-            vec![hole_wire],
+            outer_holes,
             face.orientation,
             face.tolerance,
         );
@@ -1293,9 +1326,29 @@ fn split_cylinder_side_face_by_horizontal_edge(
         Vertex::new(top_end, tol.linear),
     )?;
 
+    // 境界は「面の外向きから見て反時計回り」で組む。向きフラグが Reversed の
+    // 面（前段のブーリアンで裏返された穴の内壁など）では外向きが逆なので、
+    // 同じ順序で組むと巡回だけが逆さになり、縫合で同方向のエッジ使用として
+    // 現れる。フラグに合わせて巡回を揃える。
+    let orient_wire = |edges: Vec<OrientedEdge>| {
+        if face.orientation.is_forward() {
+            Wire::new(edges)
+        } else {
+            Wire::new(
+                edges
+                    .into_iter()
+                    .rev()
+                    .map(|oriented| {
+                        OrientedEdge::new(oriented.edge, oriented.orientation.reversed())
+                    })
+                    .collect(),
+            )
+        }
+    };
+
     let lower = Face::new(
         face.geometry.clone(),
-        Wire::new(vec![
+        orient_wire(vec![
             bottom_oriented.clone(),
             OrientedEdge::forward(right_lower),
             split_reversed,
@@ -1307,7 +1360,7 @@ fn split_cylinder_side_face_by_horizontal_edge(
     );
     let upper = Face::new(
         face.geometry.clone(),
-        Wire::new(vec![
+        orient_wire(vec![
             split_forward,
             OrientedEdge::forward(right_upper),
             OrientedEdge::new(

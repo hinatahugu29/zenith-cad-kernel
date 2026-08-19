@@ -216,6 +216,65 @@ fn main() {
         analytic_volume: Some(PI * 100.0 * 20.0),
     });
 
+    // --- ブーリアン結果を再びブーリアンに掛ける ---
+    let mut bolted = PrimitiveBuilder::make_box(80.0, 60.0, 20.0).unwrap();
+    for (x, y) in [(15.0, 15.0), (65.0, 15.0), (65.0, 45.0), (15.0, 45.0)] {
+        let cutter = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_cylinder(5.0, 60.0).unwrap(),
+            Vec3::new(x, y, -20.0),
+        );
+        bolted = BooleanEngine::boolean_solids_exact_result(
+            &bolted,
+            &cutter,
+            BooleanOpType::Difference,
+            &tol,
+        )
+        .expect("bolt hole")
+        .solids
+        .remove(0);
+    }
+    items.push(Item {
+        name: "12_boolean_four_bolt_holes",
+        note: "four subtractions in a row, each cutting the result of the last",
+        solid: bolted,
+        analytic_volume: Some(80.0 * 60.0 * 20.0 - 4.0 * PI * 25.0 * 20.0),
+    });
+
+    let pilot_block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    let pilot_cut = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(5.0, 60.0).unwrap(),
+        Vec3::new(20.0, 20.0, -20.0),
+    );
+    let pilot_done = BooleanEngine::boolean_solids_exact_result(
+        &pilot_block,
+        &pilot_cut,
+        BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("pilot")
+    .solids
+    .remove(0);
+    let bore_cut = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(9.0, 40.0).unwrap(),
+        Vec3::new(20.0, 20.0, 14.0),
+    );
+    items.push(Item {
+        name: "13_boolean_counterbore",
+        note: "a wider shallow cut over an existing hole; the top face gains a ring",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &pilot_done,
+            &bore_cut,
+            BooleanOpType::Difference,
+            &tol,
+        )
+        .expect("counterbore")
+        .solids
+        .remove(0),
+        analytic_volume: Some(
+            40.0 * 40.0 * 20.0 - PI * 25.0 * 20.0 - (PI * 81.0 - PI * 25.0) * 6.0,
+        ),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

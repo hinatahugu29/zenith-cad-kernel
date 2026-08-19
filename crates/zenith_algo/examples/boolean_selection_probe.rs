@@ -16,17 +16,34 @@ use zenith_topo::FaceGeometry;
 
 fn main() {
     let tol = Tolerance::default();
-    let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
-    let drill = BrepTransform::translate_solid(
-        &PrimitiveBuilder::make_cylinder(6.0, 60.0).unwrap(),
-        Vec3::new(20.0, 20.0, -20.0),
-    );
+
+    // 既定は穴あけ。引数 "rotated" で回転ボックスの和集合を見る。
+    let case = std::env::args().nth(1).unwrap_or_else(|| "drill".to_string());
+
+    let (solid_a, solid_b, op) = if case == "rotated" {
+        let boxa = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
+        let rotated = BrepTransform::transform_solid(
+            &BrepTransform::translate_solid(&boxa, Vec3::new(10.0, 10.0, 0.0)),
+            &zenith_math::Transform3::from_axis_angle(
+                &Vec3::new(0.0, 0.0, 1.0),
+                std::f64::consts::FRAC_PI_4,
+            ),
+        )
+        .unwrap();
+        (boxa, rotated, BooleanOpType::Union)
+    } else {
+        let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+        let drill = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_cylinder(6.0, 60.0).unwrap(),
+            Vec3::new(20.0, 20.0, -20.0),
+        );
+        (block, drill, BooleanOpType::Difference)
+    };
+    let (block, drill) = (solid_a, solid_b);
+    println!("case: {case} ({op:?})");
 
     let selection = BrepIntersectionBuilder::collect_selected_boolean_face_pieces(
-        &block,
-        &drill,
-        BooleanOpType::Difference,
-        &tol,
+        &block, &drill, op, &tol,
     );
 
     println!("selected {} face pieces", selection.selected_face_pieces.len());

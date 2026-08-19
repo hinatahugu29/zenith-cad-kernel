@@ -57,6 +57,22 @@ fn main() {
             expected: [Some(16000.0), Some(8000.0), None],
         },
         Case {
+            name: "box x box (rotated 45deg, also offset in Z)",
+            a: boxa.clone(),
+            b: {
+                // Z にもずらすと、どの面も相手と同一平面にならない。
+                let rotation = zenith_math::Transform3::from_axis_angle(
+                    &Vec3::new(0.0, 0.0, 1.0),
+                    std::f64::consts::FRAC_PI_4,
+                );
+                let rotated =
+                    BrepTransform::transform_solid(&shifted(&boxa, 10.0, 10.0, 0.0), &rotation)
+                        .unwrap();
+                shifted(&rotated, 0.0, 0.0, 7.0)
+            },
+            expected: [None, None, None],
+        },
+        Case {
             name: "box x box (rotated 45deg about Z)",
             a: boxa.clone(),
             b: {

@@ -120,6 +120,31 @@ fn main() {
         BooleanOpType::Intersection,
     );
 
+    // 座ぐり: 既に穴のある板へ、同軸で太い浅い穴を足す。
+    let pilot = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(5.0, 60.0).unwrap(),
+        Vec3::new(20.0, 20.0, -20.0),
+    );
+    let small_block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    if let Ok(drilled) = BooleanEngine::boolean_solids_exact_result(
+        &small_block,
+        &pilot,
+        BooleanOpType::Difference,
+        &Tolerance::default(),
+    ) {
+        let drilled = drilled.solids.into_iter().next().unwrap();
+        let counterbore = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_cylinder(9.0, 40.0).unwrap(),
+            Vec3::new(20.0, 20.0, 14.0),
+        );
+        probe(
+            "counterbore on an already drilled block",
+            &drilled,
+            &counterbore,
+            BooleanOpType::Difference,
+        );
+    }
+
     // 面が接しているだけで重なりがない配置。差は A そのものになるはず。
     let boxa = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
     let flush = BrepTransform::translate_solid(&boxa, Vec3::new(20.0, 0.0, 0.0));
