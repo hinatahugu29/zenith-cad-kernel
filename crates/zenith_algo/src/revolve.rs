@@ -88,4 +88,194 @@ impl RevolveBuilder {
 
         NurbsSurface3::new(degree_u, degree_v, ctrl_pts_grid, knots_u, knot_vec_v)
     }
+
+    /// 閉断面ワイヤを軸まわりに360度回転させ、完全閉B-Repソリッド（Solid）を構築
+    pub fn revolve_wire_solid(
+        wire: &zenith_topo::Wire,
+        axis_origin: Point3,
+        axis_dir: Vec3,
+        tol: &Tolerance,
+    ) -> Result<zenith_topo::Solid, String> {
+        if !wire.is_closed(tol) {
+            return Err("Revolve solid requires a closed wire".to_string());
+        }
+        let num_edges = wire.edges.len();
+        if num_edges < 3 {
+            return Err("Revolve solid requires at least 3 edges".to_string());
+        }
+
+        let axis_dir = axis_dir
+            .try_normalize_safe(1e-12)
+            .ok_or("Axis direction is zero")?;
+
+        // 4セグメント（90度ごと）で360度全周回転
+        let num_segments = 4;
+        let d_theta = std::f64::consts::TAU / num_segments as f64; // PI/2
+        let wm = (d_theta / 2.0).cos();
+
+        // 1. 各頂点の4セグメント回転位置（0, 90, 180, 270, 360度）の頂点マトリクスを生成
+        // vertices[seg_idx][vertex_idx]
+        let mut rotated_vertices: Vec<Vec<zenith_topo::Vertex>> = Vec::with_capacity(num_segments + 1);
+
+        for seg in 0..=num_segments {
+            let theta = seg as f64 * d_theta;
+            let mut v_row = Vec::with_capacity(num_edges);
+            for oe in &wire.edges {
+                let p = oe.start_vertex().point;
+                let v_p = p - axis_origin;
+                let proj_len = v_p.dot(&axis_dir);
+                let p_center = axis_origin + axis_dir * proj_len;
+                let v_radial = p - p_center;
+                let radius = v_radial.norm();
+
+                let rot_p = if radius < 1e-12 {
+                    p
+                } else {
+                    let x_axis = v_radial / radius;
+                    let y_axis = axis_dir.cross(&x_axis);
+                    p_center + (x_axis * theta.cos() + y_axis * theta.sin()) * radius
+                };
+                v_row.push(zenith_topo::Vertex::new(rot_p, tol.linear));
+            }
+            rotated_vertices.push(v_row);
+        }
+
+        // 2. 各セグメント（0..4）における各プロファイルエッジを生成
+        // profile_edges[seg_idx][edge_idx]
+        let mut profile_edges: Vec<Vec<zenith_topo::Edge>> = Vec::with_capacity(num_segments + 1);
+
+        for seg in 0..=num_segments {
+            let theta = seg as f64 * d_theta;
+            let mut seg_edges = Vec::with_capacity(num_edges);
+
+            for i in 0..num_edges {
+                let next_i = (i + 1) % num_edges;
+                let v_start = rotated_vertices[seg][i].clone();
+                let v_end = rotated_vertices[seg][next_i].clone();
+
+                let orig_edge = &wire.edges[i].edge;
+                let mut rot_cps = Vec::with_capacity(orig_edge.curve.control_points.len());
+                for cp in &orig_edge.curve.control_points {
+                    let p = cp.point;
+                    let v_p = p - axis_origin;
+                    let proj_len = v_p.dot(&axis_dir);
+                    let p_center = axis_origin + axis_dir * proj_len;
+                    let v_radial = p - p_center;
+                    let radius = v_radial.norm();
+                    let rot_p = if radius < 1e-12 {
+                        p
+                    } else {
+                        let x_axis = v_radial / radius;
+                        let y_axis = axis_dir.cross(&x_axis);
+                        p_center + (x_axis * theta.cos() + y_axis * theta.sin()) * radius
+                    };
+                    rot_cps.push(ControlPoint3::new(rot_p, cp.weight));
+                }
+                let rot_curve = NurbsCurve3::new(
+                    orig_edge.curve.degree,
+                    rot_cps,
+                    orig_edge.curve.knots.clone(),
+                )?;
+                let edge = zenith_topo::Edge::new(rot_curve, v_start, v_end, tol.linear);
+                seg_edges.push(edge);
+            }
+            profile_edges.push(seg_edges);
+        }
+
+        // 3. 各セグメントにおける円弧方向エッジ（90度弧）の生成
+        // arc_edges[seg_idx][vertex_idx]
+        let mut arc_edges: Vec<Vec<zenith_topo::Edge>> = Vec::with_capacity(num_segments);
+
+        for seg in 0..num_segments {
+            let theta_start = seg as f64 * d_theta;
+            let theta_mid = theta_start + d_theta / 2.0;
+            let theta_end = theta_start + d_theta;
+
+            let mut seg_arcs = Vec::with_capacity(num_edges);
+            for i in 0..num_edges {
+                let v_start = rotated_vertices[seg][i].clone();
+                let v_end = if seg + 1 == num_segments {
+                    rotated_vertices[0][i].clone()
+                } else {
+                    rotated_vertices[seg + 1][i].clone()
+                };
+
+                let p = wire.edges[i].start_vertex().point;
+                let v_p = p - axis_origin;
+                let proj_len = v_p.dot(&axis_dir);
+                let p_center = axis_origin + axis_dir * proj_len;
+                let v_radial = p - p_center;
+                let radius = v_radial.norm();
+
+                if radius < 1e-9 {
+                    // 軸上特異点: 直線退化エッジ
+                    let line = zenith_topo::Edge::line_between(v_start, v_end)?;
+                    seg_arcs.push(line);
+                } else {
+                    let x_axis = v_radial / radius;
+                    let y_axis = axis_dir.cross(&x_axis);
+
+                    let p0 = p_center + (x_axis * theta_start.cos() + y_axis * theta_start.sin()) * radius;
+                    let p_mid = p_center + (x_axis * theta_mid.cos() + y_axis * theta_mid.sin()) * (radius / wm);
+                    let p1 = p_center + (x_axis * theta_end.cos() + y_axis * theta_end.sin()) * radius;
+
+                    let arc_curve = NurbsCurve3::new(
+                        2,
+                        vec![
+                            ControlPoint3::unweighted(p0),
+                            ControlPoint3::new(p_mid, wm),
+                            ControlPoint3::unweighted(p1),
+                        ],
+                        KnotVector::clamped_uniform(3, 2),
+                    )?;
+                    let edge = zenith_topo::Edge::new(arc_curve, v_start, v_end, tol.linear);
+                    seg_arcs.push(edge);
+                }
+            }
+            arc_edges.push(seg_arcs);
+        }
+
+        // 4. 各セグメント $\times$ 各エッジの 90 度有理 NURBS 回転曲面 Face を生成
+        let mut faces = Vec::with_capacity(num_segments * num_edges);
+
+        for seg in 0..num_segments {
+            let next_seg = (seg + 1) % num_segments;
+
+            for i in 0..num_edges {
+                let next_i = (i + 1) % num_edges;
+
+                let left_edge = profile_edges[seg][i].clone();
+                let right_edge = if next_seg == 0 {
+                    profile_edges[0][i].clone()
+                } else {
+                    profile_edges[seg + 1][i].clone()
+                };
+
+                let bot_arc = arc_edges[seg][i].clone();
+                let top_arc = arc_edges[seg][next_i].clone();
+
+                // ワイヤループ: [Left(prof), Top(arc), Rev(Right)(prof), Rev(Bot)(arc)]
+                let face_wire = zenith_topo::Wire::new(vec![
+                    zenith_topo::OrientedEdge::forward(left_edge.clone()),
+                    zenith_topo::OrientedEdge::forward(top_arc.clone()),
+                    zenith_topo::OrientedEdge::reversed(right_edge.clone()),
+                    zenith_topo::OrientedEdge::reversed(bot_arc.clone()),
+                ]);
+
+                // 90度回転有理NURBS曲面の構築
+                let curve = &left_edge.curve;
+                let surf = Self::revolve_curve(curve, axis_origin, axis_dir, d_theta, tol)?;
+
+                faces.push(zenith_topo::Face::simple(zenith_topo::FaceGeometry::Nurbs(surf), face_wire));
+            }
+        }
+
+        let shell = zenith_topo::Shell::closed(faces);
+        let report = shell.validate_closed(tol);
+        if !report.is_valid() {
+            return Err(format!("Revolve solid validation failed: {:?}", report.errors));
+        }
+        crate::validated_solid(shell)
+    }
 }
+

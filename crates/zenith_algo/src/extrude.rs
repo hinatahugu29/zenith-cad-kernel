@@ -11,6 +11,165 @@ impl ExtrudeBuilder {
         Self::extrude_face_with_holes(bottom_wire, &[], dir, tol)
     }
 
+    /// ドラフト角度（抜き勾配: draft_angle_rad）付きで閉じたワイヤを押し出し、完全閉Solidを構築
+    pub fn extrude_wire_with_draft(
+        bottom_wire: &Wire,
+        dir: Vec3,
+        draft_angle_rad: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if !bottom_wire.is_closed(tol) {
+            return Err("Extrude with draft requires a closed wire".to_string());
+        }
+        let num_edges = bottom_wire.edges.len();
+        if num_edges < 3 {
+            return Err("Extrude with draft requires at least 3 edges".to_string());
+        }
+
+        let height = dir.norm();
+        if height <= 1e-9 {
+            return Err("Extrude dir cannot be zero".to_string());
+        }
+
+        // 1. 底面ワイヤの重心（Centroid）を計算
+        let mut sum_pt = Vec3::zeros();
+        for oe in &bottom_wire.edges {
+            let p = oe.start_vertex().point.coords;
+            sum_pt += p;
+        }
+        let centroid = Point3::from(sum_pt / (num_edges as f64));
+
+        // 2. 底面頂点群およびドラフトテーパー付き天面頂点群の生成
+        let mut bottom_vertices = Vec::with_capacity(num_edges);
+        let mut top_vertices = Vec::with_capacity(num_edges);
+
+        let tan_draft = draft_angle_rad.tan();
+
+        for oe in &bottom_wire.edges {
+            let v_bot = oe.start_vertex();
+            bottom_vertices.push(v_bot.clone());
+
+            let diff = v_bot.point - centroid;
+            let dist_from_center = diff.norm();
+            let expansion_vector = if dist_from_center > 1e-9 {
+                (diff / dist_from_center) * (height * tan_draft)
+            } else {
+                Vec3::zeros()
+            };
+
+            let top_pt = v_bot.point + dir + expansion_vector;
+            top_vertices.push(Vertex::new(top_pt, tol.linear));
+        }
+
+        // 3. 天面エッジ群および天面ワイヤの生成
+        let mut top_edges = Vec::with_capacity(num_edges);
+        for i in 0..num_edges {
+            let next_i = (i + 1) % num_edges;
+            let v_start = top_vertices[i].clone();
+            let v_end = top_vertices[next_i].clone();
+
+            // 底面エッジの曲線形状に沿って天面曲線を構築
+            let bot_edge = &bottom_wire.edges[i].edge;
+            let n_cp = bot_edge.curve.control_points.len();
+            let mut top_cps = Vec::with_capacity(n_cp);
+            for cp in &bot_edge.curve.control_points {
+                let diff = cp.point - centroid;
+                let dist = diff.norm();
+                let exp = if dist > 1e-9 {
+                    (diff / dist) * (height * tan_draft)
+                } else {
+                    Vec3::zeros()
+                };
+                let pt = cp.point + dir + exp;
+                top_cps.push(ControlPoint3::new(pt, cp.weight));
+            }
+            let top_curve = NurbsCurve3::new(
+                bot_edge.curve.degree,
+                top_cps,
+                bot_edge.curve.knots.clone(),
+            )?;
+            let edge = Edge::new(top_curve, v_start, v_end, tol.linear);
+            top_edges.push(OrientedEdge::forward(edge));
+        }
+        let top_wire = Wire::new(top_edges);
+
+        // 4. 側面の柱エッジ群（Pillars）
+        let mut pillar_edges = Vec::with_capacity(num_edges);
+        for i in 0..num_edges {
+            let edge = Edge::line_between(bottom_vertices[i].clone(), top_vertices[i].clone())?;
+            pillar_edges.push(edge);
+        }
+
+        // 5. 側面Face群の生成
+        let mut faces = Vec::with_capacity(num_edges + 2);
+        for i in 0..num_edges {
+            let next_i = (i + 1) % num_edges;
+
+            let bot_edge = bottom_wire.edges[i].edge.clone();
+            let right_pillar = pillar_edges[next_i].clone();
+            let top_edge = top_wire.edges[i].edge.clone();
+            let left_pillar = pillar_edges[i].clone();
+
+            let side_wire = Wire::new(vec![
+                OrientedEdge::forward(bot_edge.clone()),
+                OrientedEdge::forward(right_pillar),
+                OrientedEdge::reversed(top_edge.clone()),
+                OrientedEdge::reversed(left_pillar),
+            ]);
+
+            // 底辺カーブと天辺カーブ間のルールドNURBS曲面
+            let n_u = bot_edge.curve.control_points.len();
+            let mut control_grid = Vec::with_capacity(n_u);
+            for u in 0..n_u {
+                let cp_bot = bot_edge.curve.control_points[u];
+                let cp_top = top_edge.curve.control_points[u];
+                control_grid.push(vec![cp_bot, cp_top]);
+            }
+            let side_surf = NurbsSurface3::new(
+                bot_edge.curve.degree,
+                1,
+                control_grid,
+                bot_edge.curve.knots.clone(),
+                KnotVector::clamped_uniform(2, 1),
+            )?;
+
+            faces.push(Face::simple(FaceGeometry::Nurbs(side_surf), side_wire));
+        }
+
+        // 6. 底面キャップ（-dir 法線）
+        let bot_normal = -dir
+            .try_normalize_safe(1e-12)
+            .unwrap_or_else(|| Vec3::new(0.0, 0.0, -1.0));
+        let bot_outer_wire = Self::reversed_wire(bottom_wire);
+        let bot_face = Self::make_cap_face_with_holes(
+            &bot_outer_wire,
+            &[],
+            bottom_wire.edges[0].start_vertex().point,
+            bot_normal,
+        )?;
+        faces.push(bot_face);
+
+        // 7. 天面キャップ（+dir 法線）
+        let top_normal = dir
+            .try_normalize_safe(1e-12)
+            .unwrap_or_else(|| Vec3::new(0.0, 0.0, 1.0));
+        let top_face = Self::make_cap_face_with_holes(
+            &top_wire,
+            &[],
+            top_wire.edges[0].start_vertex().point,
+            top_normal,
+        )?;
+        faces.push(top_face);
+
+        let shell = Shell::closed(faces);
+        let report = shell.validate_closed(tol);
+        if !report.is_valid() {
+            return Err(format!("Draft extrude validation failed: {:?}", report.errors));
+        }
+        crate::validated_solid(shell)
+    }
+
+
     /// 外側境界ワイヤと複数の内側境界（穴）ワイヤを持つ平坦なプロファイルから中空・穴あき押し出しSolidを構築
     pub fn extrude_face_with_holes(
         outer_wire: &Wire,

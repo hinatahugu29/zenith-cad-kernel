@@ -35,8 +35,21 @@ pub enum FeatureOp {
         sections: Vec<Vec<[f64; 3]>>,
         degree_v: usize,
     },
+    /// ドラフト（抜き勾配）付き押し出し
+    ExtrudeDraft {
+        points: Vec<[f64; 3]>,
+        dir: [f64; 3],
+        draft_angle_rad: f64,
+    },
+    /// 閉断面ワイヤの回転体閉ソリッド
+    RevolveSolid {
+        profile_points: Vec<[f64; 3]>,
+        axis_origin: [f64; 3],
+        axis_dir: [f64; 3],
+    },
     /// 任意閉断面ワイヤの3Dパススイープソリッド
     SweepWire {
+
         profile_points: Vec<[f64; 3]>,
         path_points: Vec<[f64; 3]>,
         num_sections: usize,
@@ -186,7 +199,29 @@ impl FeatureTree {
                     }
                     current_solid = Some(LoftBuilder::loft_solid(&section_wires, *degree_v, &tol)?);
                 }
+                FeatureOp::ExtrudeDraft { points, dir, draft_angle_rad } => {
+                    let wire = make_wire(points)?;
+                    let dir_vec = Vec3::new(dir[0], dir[1], dir[2]);
+                    current_solid = Some(ExtrudeBuilder::extrude_wire_with_draft(
+                        &wire,
+                        dir_vec,
+                        *draft_angle_rad,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::RevolveSolid { profile_points, axis_origin, axis_dir } => {
+                    let wire = make_wire(profile_points)?;
+                    let origin = Point3::new(axis_origin[0], axis_origin[1], axis_origin[2]);
+                    let dir_vec = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
+                    current_solid = Some(crate::RevolveBuilder::revolve_wire_solid(
+                        &wire,
+                        origin,
+                        dir_vec,
+                        &tol,
+                    )?);
+                }
                 FeatureOp::SweepWire { profile_points, path_points, num_sections } => {
+
                     let profile_wire = make_wire(profile_points)?;
                     let n_path = path_points.len();
                     let degree = (n_path - 1).min(3);

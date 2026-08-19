@@ -415,7 +415,106 @@ pub fn make_hollow_extrusion(
     Ok(PyMesh { mesh })
 }
 
+/// ドラフト（抜き勾配）角度付き押し出しSolid生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (profile, extrude_dir = [0.0, 0.0, 10.0], draft_angle_deg = 5.0, u_divisions = 4, v_divisions = 4, step_path = None))]
+pub fn make_draft_extrusion(
+    profile: Vec<[f64; 3]>,
+    extrude_dir: [f64; 3],
+    draft_angle_deg: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let n = profile.len();
+    if n < 3 {
+        return Err(PyValueError::new_err("Profile requires at least 3 points"));
+    }
+
+    let tol = Tolerance::default();
+    let vertices: Vec<zenith_topo::Vertex> = profile
+        .iter()
+        .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+        .collect();
+
+    let mut edges = Vec::with_capacity(n);
+    for i in 0..n {
+        let next_i = (i + 1) % n;
+        let edge = zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
+            .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+        edges.push(zenith_topo::OrientedEdge::forward(edge));
+    }
+    let wire = zenith_topo::Wire::new(edges);
+    let dir = Vec3::new(extrude_dir[0], extrude_dir[1], extrude_dir[2]);
+    let draft_rad = draft_angle_deg.to_radians();
+
+    let solid = zenith_algo::ExtrudeBuilder::extrude_wire_with_draft(&wire, dir, draft_rad, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Draft extrude failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_DRAFT_EXTRUSION")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 閉断面ワイヤの360度回転体完全閉Solid生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (profile, axis_origin = [0.0, 0.0, 0.0], axis_dir = [0.0, 0.0, 1.0], u_divisions = 8, v_divisions = 8, step_path = None))]
+pub fn make_revolve_solid(
+    profile: Vec<[f64; 3]>,
+    axis_origin: [f64; 3],
+    axis_dir: [f64; 3],
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let n = profile.len();
+    if n < 3 {
+        return Err(PyValueError::new_err("Profile requires at least 3 points"));
+    }
+
+    let tol = Tolerance::default();
+    let vertices: Vec<zenith_topo::Vertex> = profile
+        .iter()
+        .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+        .collect();
+
+    let mut edges = Vec::with_capacity(n);
+    for i in 0..n {
+        let next_i = (i + 1) % n;
+        let edge = zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
+            .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+        edges.push(zenith_topo::OrientedEdge::forward(edge));
+    }
+    let wire = zenith_topo::Wire::new(edges);
+    let orig = Point3::new(axis_origin[0], axis_origin[1], axis_origin[2]);
+    let dir = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
+
+    let solid = zenith_algo::RevolveBuilder::revolve_wire_solid(&wire, orig, dir, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Revolve solid failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_REVOLVE_SOLID")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
 /// シェル化・肉厚中空ソリッド（容器・ケーシング）の生成
+
 
 #[pyfunction]
 #[pyo3(signature = (dx, dy, dz, thickness, open_face_index = 1, u_divisions = 4, v_divisions = 4))]

@@ -888,8 +888,59 @@ impl StepImporter {
         }
 
 
+        if raw.name == "TOROIDAL_SURFACE" {
+            // TOROIDAL_SURFACE('',#axis2,major_radius,minor_radius)
+            let parts = Self::split_top_level_args(&raw.args);
+            if parts.len() >= 4 {
+                if let Some(axis2_id) = Self::parse_entity_ref(parts[1]) {
+                    let major_r = parts[2].parse::<f64>().unwrap_or(10.0);
+                    let minor_r = parts[3].parse::<f64>().unwrap_or(2.0);
+                    if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
+                        let y_dir = z_dir.cross(&x_dir).normalize();
+                        let w = std::f64::consts::FRAC_1_SQRT_2;
+
+                        // 90度 x 90度の有理2次 x 2次 トーラスパッチ
+                        let mut grid = Vec::with_capacity(3);
+                        for i in 0..3 {
+                            let mut row = Vec::with_capacity(3);
+                            let (dir_u, w_u) = match i {
+                                0 => (x_dir, 1.0),
+                                1 => ((x_dir + y_dir), w),
+                                _ => (y_dir, 1.0),
+                            };
+                            let c_u = origin + dir_u * major_r;
+
+                            for j in 0..3 {
+                                let (offset_v, w_v) = match j {
+                                    0 => (dir_u * minor_r, 1.0),
+                                    1 => ((dir_u + z_dir) * minor_r, w),
+                                    _ => (z_dir * minor_r, 1.0),
+                                };
+                                let pt = c_u + offset_v;
+                                row.push(ControlPoint3::new(pt, w_u * w_v));
+                            }
+                            grid.push(row);
+                        }
+
+                        if let Ok(nurbs) = NurbsSurface3::new(
+                            2,
+                            2,
+                            grid,
+                            KnotVector::clamped_uniform(3, 2),
+                            KnotVector::clamped_uniform(3, 2),
+                        ) {
+                            let geom = FaceGeometry::Nurbs(nurbs);
+                            ctx.surfaces.insert(id, geom.clone());
+                            return Ok(geom);
+                        }
+                    }
+                }
+            }
+        }
+
         if raw.name == "B_SPLINE_SURFACE_WITH_KNOTS"
             || raw.args.contains("B_SPLINE_SURFACE_WITH_KNOTS")
+
         {
             if let Some(nurbs) = Self::parse_nurbs_surface(ctx, &raw)? {
                 let geom = FaceGeometry::Nurbs(nurbs);
@@ -1777,6 +1828,14 @@ mod tests {
             },
         );
 
+        ctx.raw_entities.insert(
+            22,
+            RawEntity {
+                name: "TOROIDAL_SURFACE".to_string(),
+                args: "'',#10,20.0,5.0".to_string(),
+            },
+        );
+
         let cyl_geom = StepImporter::get_surface(&mut ctx, 20).expect("cylindrical surface import");
         match cyl_geom {
             FaceGeometry::Nurbs(s) => {
@@ -1794,7 +1853,17 @@ mod tests {
             }
             _ => panic!("Expected Nurbs geometry for conical surface"),
         }
+
+        let torus_geom = StepImporter::get_surface(&mut ctx, 22).expect("toroidal surface import");
+        match torus_geom {
+            FaceGeometry::Nurbs(s) => {
+                assert_eq!(s.degree_u, 2);
+                assert_eq!(s.degree_v, 2);
+            }
+            _ => panic!("Expected Nurbs geometry for toroidal surface"),
+        }
     }
+
 
     fn direction_entity(x: f64, y: f64, z: f64) -> RawEntity {
         RawEntity {
