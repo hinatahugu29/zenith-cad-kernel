@@ -154,9 +154,9 @@ cargo run --release -p zenith_algo --example step_import_audit
 ```
 box       6 ->  6 faces  volume 24000.0000 -> 24000.0000  rel 0.00e0    shell valid
 cylinder  6 ->  6 faces  volume 12566.3706 -> 12566.3706  rel 1.46e-13  shell valid
-sphere    8 ->  8 faces  volume  4188.7902 ->  4188.7902  rel 1.27e-13  shell valid
+sphere    8 ->  8 faces  volume  4188.7902 ->  4188.7902  rel 1.28e-13  shell valid
 cone      6 ->  6 faces  volume  3267.2564 ->  3267.2564  rel 1.17e-13  shell valid
-torus    16 -> 16 faces  volume  3789.9281 ->  3789.9281  rel 8.92e-14  shell valid
+torus    16 -> 16 faces  volume  3789.9281 ->  3789.9281  rel 8.98e-14  shell valid
 ```
 
 **期待（OpenCASCADE が書いたファイル）**: `FAILED` が 1 件も無いこと。
