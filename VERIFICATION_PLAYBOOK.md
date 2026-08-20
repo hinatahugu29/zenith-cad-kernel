@@ -89,7 +89,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 49 テストバイナリ、326 テスト、失敗 0。
+**期待**: 51 テストバイナリ、333 テスト、失敗 0。
 
 所要はおよそ **11分**です。曲面同士が交わるブーリアン（球×球、円柱×円柱、
 トーラス×箱）を閉じた式や独立な求積と突き合わせる検体があり、そこが大半を
