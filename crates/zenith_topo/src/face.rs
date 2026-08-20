@@ -1,4 +1,4 @@
-use crate::edge::Orientation;
+use crate::edge::{Orientation, OrientedEdge};
 use crate::wire::Wire;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -120,6 +120,30 @@ impl Face {
     }
 
     /// 穴なしのFaceを作成
+    /// Whether the outer boundary is nothing but seam, walked out and back.
+    ///
+    /// A closed surface written as a single face - the way OpenCASCADE writes a
+    /// sphere or a torus - has no real boundary. What stands in for one is the
+    /// seam, traversed once each way, so every edge in the loop appears twice.
+    /// Such a loop encloses the whole parameter domain, but it cannot be read
+    /// that way from its p-curves: a point on the seam maps to both ends of the
+    /// domain at once, so the signed area it traces depends on which end the
+    /// projection happens to pick. The topology says it plainly, so ask that.
+    pub fn has_seam_only_boundary(&self, tol: f64) -> bool {
+        if !self.inner_wires.is_empty() {
+            return false;
+        }
+        let edges = &self.outer_wire.edges;
+        if edges.is_empty() {
+            return false;
+        }
+        edges.iter().enumerate().all(|(index, edge)| {
+            edges.iter().enumerate().any(|(other_index, other)| {
+                other_index != index && same_edge_geometry(edge, other, tol)
+            })
+        })
+    }
+
     pub fn simple(geometry: FaceGeometry, outer_wire: Wire) -> Self {
         Self::new(geometry, outer_wire, Vec::new(), Orientation::Forward, 1e-6)
     }
@@ -694,4 +718,20 @@ fn dense_loop_points(wire: &Wire, samples_per_edge: usize) -> Vec<Point3> {
         }
     }
     points
+}
+
+/// Whether two edge uses run along the same curve, either way round.
+///
+/// The midpoint is what separates two edges that share both vertices: a torus
+/// written as one face has a seam the long way round and a seam the short way,
+/// and both begin and end at the same point.
+fn same_edge_geometry(a: &OrientedEdge, b: &OrientedEdge, tol: f64) -> bool {
+    if (a.evaluate_normalized(0.5) - b.evaluate_normalized(0.5)).norm() > tol {
+        return false;
+    }
+    let (a_start, a_end) = (a.start_vertex().point, a.end_vertex().point);
+    let (b_start, b_end) = (b.start_vertex().point, b.end_vertex().point);
+    let close = |left: Point3, right: Point3| (left - right).norm() <= tol;
+    close(a_start, b_start) && close(a_end, b_end)
+        || close(a_start, b_end) && close(a_end, b_start)
 }

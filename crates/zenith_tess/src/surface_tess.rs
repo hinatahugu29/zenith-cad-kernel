@@ -2,7 +2,7 @@ use crate::mesh::TriangleMesh;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use zenith_geom::Surface3;
-use zenith_math::{Point2, Point3, Vec2, Vec3};
+use zenith_math::{Point2, Point3, Tolerance, Vec2, Vec3};
 use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, Orientation, Shell, Solid};
 
 /// 曲面テッセレーション設定パラメータ
@@ -105,12 +105,17 @@ fn knot_aligned_uv_triangulation(
         return None;
     }
 
-    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
-    if outer_uvs.len() < 3 {
-        return None;
-    }
-    if !loop_covers_full_domain(&outer_uvs, u_min, u_max, v_min, v_max) {
-        return None;
+    // 縫い目だけの境界は UV 上で全域を囲むが、p-curve からはそう読めない。
+    // 縫い目上の点は領域の両端どちらにも写るので、辿った符号付き面積が
+    // 全域と一致しない。位相のほうが確かなので、そちらを先に見る。
+    if !face.has_seam_only_boundary(Tolerance::default().linear) {
+        let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+        if outer_uvs.len() < 3 {
+            return None;
+        }
+        if !loop_covers_full_domain(&outer_uvs, u_min, u_max, v_min, v_max) {
+            return None;
+        }
     }
 
     let u_lines = span_aligned_lines(&surface.knots_u.knots, surface.degree_u, u_min, u_max, params.u_divisions);

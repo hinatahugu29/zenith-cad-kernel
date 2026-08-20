@@ -53,6 +53,12 @@ struct EdgeUse {
     edge_index: usize,
     start: Point3,
     end: Point3,
+    /// A point from the middle of the curve, to tell apart two edges that run
+    /// between the same pair of vertices. A torus written as one face has two
+    /// such edges - the seam the long way round and the seam the short way -
+    /// and both begin and end at the same point, so endpoints alone made every
+    /// use on that face look like a mate of every other.
+    middle: Point3,
 }
 
 impl Shell {
@@ -270,6 +276,7 @@ fn collect_wire_edge_uses(
             edge_index,
             start: edge.start_vertex().point,
             end: edge.end_vertex().point,
+            middle: edge.evaluate_normalized(0.5),
         });
     }
 }
@@ -432,6 +439,15 @@ fn validate_planar_face_orientation(
         FaceGeometry::Nurbs(_) => true,
         _ => return,
     };
+
+    // 縫い目だけのループは面積では見分けられない。縫い目上の点は UV で
+    // 両端どちらにも写るので、投影がどちらを選ぶかで符号付き面積が揺れる。
+    // 代わりに位相で見る: どの辺も同じループ内にもう一度現れるなら、
+    // その面は曲面全体であって、ループは何も囲んでいない。
+    if seam_only_loop_allowed && face.has_seam_only_boundary(tol.linear) {
+        return;
+    }
+
     let Ok(pcurves) = face.pcurves(tol) else {
         return;
     };
@@ -508,8 +524,9 @@ fn same_edge_use(a: &EdgeUse, b: &EdgeUse) -> bool {
 }
 
 fn same_undirected_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
-    points_same(a.start, b.start, tol) && points_same(a.end, b.end, tol)
-        || points_same(a.start, b.end, tol) && points_same(a.end, b.start, tol)
+    points_same(a.middle, b.middle, tol)
+        && (points_same(a.start, b.start, tol) && points_same(a.end, b.end, tol)
+            || points_same(a.start, b.end, tol) && points_same(a.end, b.start, tol))
 }
 
 fn same_directed_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {

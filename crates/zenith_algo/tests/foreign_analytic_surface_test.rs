@@ -35,6 +35,7 @@ fn read_fixture(name: &str) -> Solid {
         "cone_full" => include_str!("fixtures/occ_reference_cone_full.step"),
         "sphere_capped" => include_str!("fixtures/occ_reference_sphere_capped.step"),
         "torus_segment" => include_str!("fixtures/occ_reference_torus_segment.step"),
+        "torus" => include_str!("fixtures/occ_reference_torus.step"),
         other => panic!("no fixture named {other}"),
     };
 
@@ -86,6 +87,33 @@ fn test_a_spherical_face_bounded_by_real_edges_is_readable() {
 fn test_a_toroidal_face_is_sized_from_its_boundary() {
     // A quarter of a torus, R=12 r=4: the elbow shape a pipe run is made of.
     assert_volume("torus_segment", 947.4820);
+}
+
+#[test]
+fn test_a_torus_written_as_one_face_is_readable() {
+    // OpenCASCADE writes a whole torus as a single face whose bound is nothing
+    // but seam: two circles, each walked once each way. Such a loop covers the
+    // whole parameter domain, but its p-curves cannot say so, because a point
+    // on the seam maps to both ends of the domain. Read from the p-curves the
+    // face came out at exactly half the surface, and so did the volume.
+    assert_volume("torus", 3789.9281);
+
+    let solid = read_fixture("torus");
+    assert_eq!(solid.outer_shell.faces.len(), 1);
+    let area = MassCalculator::compute_face_integral(
+        &solid.outer_shell.faces[0],
+        &TessellationParams {
+            u_divisions: 64,
+            v_divisions: 64,
+        },
+    )
+    .0;
+    // 4 pi^2 R r
+    let expected = 4.0 * std::f64::consts::PI * std::f64::consts::PI * 12.0 * 4.0;
+    assert!(
+        (area - expected).abs() / expected < 1e-3,
+        "torus surface area {area:.4}, closed form {expected:.4}"
+    );
 }
 
 #[test]
