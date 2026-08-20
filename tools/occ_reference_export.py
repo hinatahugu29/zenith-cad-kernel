@@ -25,6 +25,9 @@ TOKENS = [
     "CIRCLE",
     "LINE",
     "CYLINDRICAL_SURFACE",
+    "CONICAL_SURFACE",
+    "SPHERICAL_SURFACE",
+    "TOROIDAL_SURFACE",
     "PLANE",
     "ADVANCED_FACE",
     "EDGE_CURVE",
@@ -42,6 +45,10 @@ def report(name, shape):
         text = handle.read()
 
     print(f"=== OCC-written {name} ({os.path.getsize(path) / 1024:.1f} KB)")
+    try:
+        print(f"    volume {shape.Volume:.4f}, area {shape.Area:.4f}")
+    except Exception:
+        pass
     for token in TOKENS:
         count = text.count(token)
         if count:
@@ -51,6 +58,21 @@ def report(name, shape):
 
 def main():
     report("cylinder", Part.makeCylinder(10.0, 40.0))
+
+    # The analytic surfaces the importer has to size from the face boundary.
+    # Volumes are printed so the reader can be checked against the writer.
+    report("cone", Part.makeCone(10.0, 4.0, 20.0))
+    report("cone_full", Part.makeCone(10.0, 0.0, 20.0))
+    report("sphere", Part.makeSphere(10.0))
+    report("torus", Part.makeTorus(12.0, 4.0))
+
+    # Bounded analytic faces: a sphere and a torus cut by real edges rather
+    # than by a seam. This is the shape an ordinary CAD file gives the reader,
+    # and unlike the full versions it carries no degenerate loop.
+    box = Part.makeBox(20.0, 20.0, 20.0, FreeCAD.Vector(-10.0, -10.0, 0.0))
+    report("sphere_capped", Part.makeSphere(10.0).common(box))
+    report("torus_segment", Part.makeTorus(12.0, 4.0, FreeCAD.Vector(0, 0, 0),
+                                           FreeCAD.Vector(0, 0, 1), 0, 360, 90))
 
     # Force the B-spline representation the kernel uses, so the comparison is
     # about the exporter rather than about analytic vs spline surfaces.
