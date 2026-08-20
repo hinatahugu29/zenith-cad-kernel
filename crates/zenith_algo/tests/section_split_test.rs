@@ -50,7 +50,16 @@ fn test_a_plane_sections_a_torus_on_the_two_circles_it_should() {
         Vec3::new(-10.0, -10.0, -2.0),
     );
 
-    let sections = section_curves(&torus, &cutter, &tol);
+    // 箱の**底面**が作る断面だけを取る。箱は 20 立方で |x|, |y| <= 10 なので、
+    // 主半径12・副半径4のトーラス（軸からの距離は 8 から 16）は箱の側面も
+    // 突き抜けており、そちらにも本物の交線が出る。平面が軸に垂直でない切り方は
+    // 以前は取れておらず、この試験はそれが 0 本だった頃に書かれている。
+    let sections: Vec<_> = section_curves(&torus, &cutter, &tol)
+        .into_iter()
+        .filter(|(_, edge)| {
+            (0..=8).all(|step| (edge.evaluate(step as f64 / 8.0).z + 2.0).abs() < 1e-9)
+        })
+        .collect();
     // 16枚のうち z = -2 を含むのは下半分の8枚。
     assert_eq!(
         sections.len(),
@@ -95,7 +104,14 @@ fn test_a_torus_patch_splits_along_its_section() {
         Vec3::new(-10.0, -10.0, -2.0),
     );
 
-    for (face_index, edge) in section_curves(&torus, &cutter, &tol) {
+    // 箱の底面が作る断面だけを見る。側面の交線はパラメータ線ではないので、
+    // ここで見ている「断面で割る」経路の担当ではない。
+    let sections = section_curves(&torus, &cutter, &tol)
+        .into_iter()
+        .filter(|(_, edge)| {
+            (0..=8).all(|step| (edge.evaluate(step as f64 / 8.0).z + 2.0).abs() < 1e-9)
+        });
+    for (face_index, edge) in sections {
         let face = &torus.outer_shell.faces[face_index];
         let pieces = BrepIntersectionBuilder::split_face_by_edge(face, &edge, &tol)
             .unwrap_or_else(|err| panic!("torus face {face_index} should split: {err}"));

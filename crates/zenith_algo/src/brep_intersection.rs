@@ -3724,16 +3724,91 @@ fn intersect_face_supports(
             tol,
         )),
         (FaceGeometry::Plane(plane), FaceGeometry::Nurbs(surface)) => Some(
-            intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_a), surface, tol),
+            match intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_a), surface, tol)
+            {
+                FaceIntersectionKind::Unsupported => {
+                    intersect_planar_face_with_patch(face_a, plane, surface, tol)
+                }
+                kind => kind,
+            },
         ),
         (FaceGeometry::Nurbs(surface), FaceGeometry::Plane(plane)) => Some(
-            intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_b), surface, tol),
+            match intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_b), surface, tol)
+            {
+                FaceIntersectionKind::Unsupported => {
+                    intersect_planar_face_with_patch(face_b, plane, surface, tol)
+                }
+                kind => kind,
+            },
         ),
         (FaceGeometry::Nurbs(surface_a), FaceGeometry::Nurbs(surface_b)) => {
             Some(intersect_nurbs_patches(surface_a, surface_b, tol))
         }
         _ => None,
     }
+}
+
+/// 平面の面と曲面パッチの交線を、曲面同士と同じやり方で辿る。
+///
+/// 平面が軸に垂直なときは断面が等パラメータ線になり、専用の経路が扱う。
+/// そうでない切り方——トーラスを縦に切る、球を斜めに切る——はそこを外れ、
+/// これまで `Unsupported` だった。マーチングは平面も曲面も区別しないが、
+/// [`PlaneSurface3`] のパラメータ範囲は無限なので、そのままでは渡せない
+/// （種を撒く格子も、領域の縁への着地も決まらない）。**面が実際に占める
+/// ぶんだけの有界なパッチ**に直してから渡す。
+fn intersect_planar_face_with_patch(
+    planar_face: &Face,
+    plane: &zenith_geom::PlaneSurface3,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> FaceIntersectionKind {
+    let Some(patch) = planar_face_as_patch(planar_face, plane) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+    intersect_nurbs_patches(&patch, surface, tol)
+}
+
+/// 平面の面を、その境界が占める範囲ちょうどの1次×1次パッチにする。
+fn planar_face_as_patch(
+    face: &Face,
+    plane: &zenith_geom::PlaneSurface3,
+) -> Option<NurbsSurface3> {
+    use zenith_geom::{ControlPoint3, KnotVector};
+
+    let points = face.outer_wire.sample_points(8);
+    if points.is_empty() {
+        return None;
+    }
+    let (mut u_min, mut u_max) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut v_min, mut v_max) = (f64::INFINITY, f64::NEG_INFINITY);
+    for point in &points {
+        let uv = project_to_plane_uv(*point, plane);
+        u_min = u_min.min(uv.x);
+        u_max = u_max.max(uv.x);
+        v_min = v_min.min(uv.y);
+        v_max = v_max.max(uv.y);
+    }
+    if !(u_max > u_min && v_max > v_min) {
+        return None;
+    }
+    // 縁ちょうどで交わる切り方を落とさないよう、わずかに広げる。
+    let pad_u = (u_max - u_min) * 1e-6;
+    let pad_v = (v_max - v_min) * 1e-6;
+    let (u_min, u_max) = (u_min - pad_u, u_max + pad_u);
+    let (v_min, v_max) = (v_min - pad_v, v_max + pad_v);
+
+    let corner = |u: f64, v: f64| ControlPoint3::unweighted(plane.evaluate(u, v));
+    NurbsSurface3::new(
+        1,
+        1,
+        vec![
+            vec![corner(u_min, v_min), corner(u_min, v_max)],
+            vec![corner(u_max, v_min), corner(u_max, v_max)],
+        ],
+        KnotVector::clamped_uniform(2, 1),
+        KnotVector::clamped_uniform(2, 1),
+    )
+    .ok()
 }
 
 /// 曲面同士の交線を辿って1本の辺にする。
@@ -3752,7 +3827,7 @@ fn intersect_nurbs_patches(
     let first_step = (extent * 0.1).max(tol.linear * 100.0);
     let deviation_limit = tol.linear;
 
-    let Some((curve, _, _)) = zenith_geom::IntersectionMarcher::fit_to_tolerance(
+    let Some((curve, marched, _)) = zenith_geom::IntersectionMarcher::fit_to_tolerance(
         surface_a,
         surface_b,
         first_step,
@@ -3761,6 +3836,14 @@ fn intersect_nurbs_patches(
     ) else {
         return FaceIntersectionKind::Unsupported;
     };
+
+    // パッチの**縁に沿って**走る交線は、切り込みではなく接触の記録である。
+    // 平面がトーラスの赤道を通ると、そこはパッチの境界そのものなので、
+    // 縁に沿った線がいくつも出る。切り込みとして渡すと、面はそこで割れずに
+    // 「境界に届かない」と断られ、しかも本物の切り込みを押しのける。
+    if marched_runs_along_a_patch_edge(&marched, surface_a, surface_b) {
+        return FaceIntersectionKind::Unsupported;
+    }
 
     let (t0, t1) = curve.param_range();
     let start = curve.evaluate(t0);
@@ -3777,6 +3860,33 @@ fn intersect_nurbs_patches(
             tol.linear,
         ),
     }
+}
+
+/// 辿った点が、どちらかのパッチの縁に**ずっと**乗っているか。
+///
+/// 端の1点や2点が縁に来るのは普通のこと（交線はパッチの縁で終わる）。
+/// 見るのは全部の点である。
+fn marched_runs_along_a_patch_edge(
+    marched: &zenith_geom::MarchedIntersection,
+    surface_a: &NurbsSurface3,
+    surface_b: &NurbsSurface3,
+) -> bool {
+    let ((ua0, ua1), (va0, va1)) = surface_a.param_range();
+    let ((ub0, ub1), (vb0, vb1)) = surface_b.param_range();
+    let at = |value: f64, low: f64, high: f64| {
+        let margin = (high - low).abs().max(1.0) * 1e-7;
+        (value - low).abs() <= margin || (value - high).abs() <= margin
+    };
+
+    let on_a_edge = marched
+        .points
+        .iter()
+        .all(|p| at(p.uv1.0, ua0, ua1) || at(p.uv1.1, va0, va1));
+    let on_b_edge = marched
+        .points
+        .iter()
+        .all(|p| at(p.uv2.0, ub0, ub1) || at(p.uv2.1, vb0, vb1));
+    on_a_edge || on_b_edge
 }
 
 /// パッチの広がり。歩幅を形の大きさに合わせるために使う。
