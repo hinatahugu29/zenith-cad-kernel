@@ -1,6 +1,6 @@
 # 🚀 Zenith CAD Kernel - スペック総覧（棚卸し）＆ 次なる飛躍への展望
 
-**文書バージョン**: v2.4.0 (他カーネルの解析曲面読み込み・p-curve と最近傍点探索・平面×円錐ブーリアン・実測ベース改訂版)  
+**文書バージョン**: v2.5.0 (他カーネル相互運用・p-curve と最近傍点探索・回転面の平面切断・実測ベース改訂版)  
 **最終更新日時**: 2026年8月20日  
 **ステータス**: 完全自前 Rust B-Rep エンジン。**本書の数値はすべて実測値**で、対応範囲と未対応範囲を分けて記載している。
 
@@ -24,7 +24,7 @@ Zenith CAD Kernel は、Rust でフルスクラッチ開発された **次世代
 
 ```mermaid
 graph TD
-    A[Zenith CAD Kernel Core v2.4.0] --> B[1. 数値幾何・自由曲面エンジン]
+    A[Zenith CAD Kernel Core v2.5.0] --> B[1. 数値幾何・自由曲面エンジン]
     A --> C[2. B-Rep トポロジー構造]
     A --> D[3. 形状生成・フィーチャーモデリング]
     A --> E[4. ダイレクトモデリング＆解析]
@@ -93,7 +93,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **多段ロフト (Loft)** | `LoftBuilder::loft_surfaces` | 複数断面カーブ間の滑らかなNURBSスキニング・ロフトソリッド。 |
 | **中空ボックス (Hollow Box)** | `ShellBuilder::make_hollow_box` | 特定面を開口し、肉厚 $t$ で均一中空ソリッド化。 |
 | **自由曲面厚み付け (Thicken)** | `ThickenBuilder::thicken_face` | 開いた自由曲面シートに厚み $t$ を与え、側面パッチを自動生成してソリッド化。 |
-| **CSGブーリアン演算** | `BooleanEngine` | Union（結合）、Difference（差分）、Intersection（交差）。**対応範囲は限定的で、範囲外は誤答ではなくエラーを返す**。実測45ケース中28が成功し、誤答はゼロ。対応済みは**任意角度の多面体同士（同一平面の重なりを含む）**、**円柱による貫通穴・止まり穴・偏心穴（任意軸）とその連鎖・座ぐり**、**軸に垂直な平面による円錐の切断**、離れた立体の和（複数ソリッド結果）、面で接するだけの立体の差。未対応は曲面同士の交差（円柱×円柱、球×球など）、トーラス・球と平面の交差、および接線配置。詳細は `cargo run -p zenith_algo --example boolean_envelope` で随時測定できる。 |
+| **CSGブーリアン演算** | `BooleanEngine` | Union（結合）、Difference（差分）、Intersection（交差）。**対応範囲は限定的で、範囲外は誤答ではなくエラーを返す**。実測45ケース中28が成功し、誤答はゼロ。対応済みは**任意角度の多面体同士（同一平面の重なりを含む）**、**円柱による貫通穴・止まり穴・偏心穴（任意軸）とその連鎖・座ぐり**、**軸に垂直な平面による回転面（円柱・円錐・トーラス）の切断**、離れた立体の和（複数ソリッド結果）、面で接するだけの立体の差。断面が面のパラメータ線になる切り方は形を問わず同じ経路で扱う。未対応は曲面同士の交差（円柱×円柱、球×球など）、パラメータ線を横切る切り方（斜めの平面による円錐の切断、球と平面の交差）、および接線配置。詳細は `cargo run -p zenith_algo --example boolean_envelope` で随時測定できる。 |
 | **ブーリアン結果の検証ゲート** | `BooleanResultVerifier` | 結果を①全シェルの閉性②演算が含意する体積境界③384点の内外一貫性で検証し、通らなければエラーにする。閉多様体であることは正しさの十分条件ではなく、片方のオペランドをそのまま返しても閉多様体になるため。 |
 
 ---
@@ -141,7 +141,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 ## 🏆 FreeCAD 1.1 (OpenCASCADE 7.x) ヘッドレス自動検証実績
 
 本カーネルが生成した STEP ファイルに対し、FreeCAD 1.1 の OpenCASCADE C++ コアを Python から直接呼び出すヘッドレス自動監査ベンチマークを実施。
-突き合わせ用の 15 モデル（`export_validation_suite`）と、代表形状 16 モデル（`export_showcase`）の二本立てになっている。
+突き合わせ用の 15 モデル（`export_validation_suite`）と、代表形状 22 モデル（`export_showcase`）の二本立てになっている。
 
 検証は「カーネルが STEP と自前の測定値をマニフェストに書き出し、OpenCASCADE が同じ問いに独立に答えて突き合わせる」方式で、不一致があれば非ゼロ終了する再現可能なコマンドになっています。
 
@@ -150,7 +150,7 @@ cargo run --release -p zenith_algo --example export_validation_suite; & "C:\Prog
 ```
 
 - **15 / 15 の対象で両カーネルが一致**（形状種別 Solid・`isValid`・`isClosed`・体積・表面積・断面積）
-- 代表 **16 / 16 形状**が OpenCASCADE で valid closed solid として読まれる
+- 代表 **22 / 22 形状**が OpenCASCADE で valid closed solid として読まれる
 - 体積の相互一致: 多面体系は完全一致、曲面系は 1e-12〜1e-10、掃引系は 1e-05 台
 - 解析解があるものは**カーネル側が解析解と 1e-12 以下で一致**。直線経路の掃引（厳密に円柱）ではカーネルが 3.5e-14、OpenCASCADE が 1.1e-05 の誤差で、この範囲では本カーネルの積分の方が高精度
 - **詳細技術報告書**: [`FREECAD_VALIDATION_REPORT.md`](file:///e:/CAD-Kernel/FREECAD_VALIDATION_REPORT.md) に完全な監査データとデバッグ記録を収録。
@@ -195,14 +195,15 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | コマンド | 何を測るか |
 | :--- | :--- |
 | `export_validation_suite` ＋ `tools/freecad_cross_validate.py` | STEP 経由で OpenCASCADE に同じ問いを独立に答えさせ、体積・表面積・断面積を突き合わせる（不一致で非ゼロ終了） |
-| `export_showcase` ＋ `tools/verify_showcase.py` | 代表16形状を書き出し、OpenCASCADE が Solid として読めるかを全数確認 |
+| `export_showcase` ＋ `tools/verify_showcase.py` | 代表22形状を書き出し、OpenCASCADE が Solid として読めるかを全数確認 |
+| `foreign_reexport` ＋ `tools/verify_reexport.py` | 他カーネルのファイルを読んで書き戻し、元の値を保つかを見る（診断） |
 
 これらは回帰テストとしても固定されており（`builder_audit_test` / `boolean_verification_test` /
 `boolean_cylinder_test` / `boolean_chained_test` / `boolean_rotated_test` /
 `section_slice_test` / `sweep_smoothness_test` / `step_conformance_test` /
 `step_import_test` / `foreign_analytic_surface_test` / `pcurve_fidelity_test` /
-`boolean_cone_test`）、`cargo test` で常時検証されます。
-現在 39 テストバイナリ・270 テストがすべてグリーンです。
+`boolean_cone_test` / `boolean_torus_test` / `section_split_test`）、`cargo test` で常時検証されます。
+現在 41 テストバイナリ・276 テストがすべてグリーンです。
 
 `foreign_analytic_surface_test` だけは期待値の出どころが違います。
 OpenCASCADE 7.8 が書いた STEP を `crates/zenith_algo/tests/fixtures/` に置き、
@@ -218,9 +219,9 @@ OpenCASCADE 7.8 が書いた STEP を `crates/zenith_algo/tests/fixtures/` に�
 | 掃引・ロフト・歯車 | 解析解なし。分割数4倍で 1e-8 未満しか動かず、OpenCASCADE とも 1e-05 台で一致 |
 | 断面（平面のみの立体） | 厳密 |
 | 断面（曲面を含む立体） | 既定 96 分割で 1e-05〜1e-03、分割数とともに収束 |
-| ブーリアン（対応済み範囲） | 解析解と完全一致。任意角度の多面体同士（同一平面の重なりを含む）、円柱による貫通穴・止まり穴・偏心穴（任意軸）とその連鎖・座ぐり、軸に垂直な平面による円錐の切断、離れた立体の和 |
-| ブーリアン（未対応範囲） | 曲面同士の交差（円柱×円柱、球×球）、球・トーラスと平面の交差、斜めの平面による円錐の切断、接線配置。いずれも誤答ではなくエラーを返す |
-| STEP 書き出し | OpenCASCADE と体積・表面積が 1e-16〜1e-10 で一致。代表16形状すべてが Solid・valid・closed として読まれる |
+| ブーリアン（対応済み範囲） | 解析解と完全一致。任意角度の多面体同士（同一平面の重なりを含む）、円柱による貫通穴・止まり穴・偏心穴（任意軸）とその連鎖・座ぐり、軸に垂直な平面による回転面（円柱・円錐・トーラス）の切断、離れた立体の和 |
+| ブーリアン（未対応範囲） | 曲面同士の交差（円柱×円柱、球×球）、パラメータ線を横切る切り方（斜めの平面による円錐の切断、球と平面の交差）、接線配置。いずれも誤答ではなくエラーを返す |
+| STEP 書き出し | OpenCASCADE と体積・表面積が 1e-16〜1e-10 で一致。代表22形状すべてが Solid・valid・closed として読まれる |
 | STEP 読み込み（自前ファイル） | 面数・シェル妥当性・体積を保って往復。多面体は厳密、曲面系は 1e-13 |
 | STEP 読み込み（他カーネル・解析曲面） | OpenCASCADE が書いた円柱・円錐・頂点まで届く円錐・球・半球・トーラス・トーラス区分を、体積・面積とも OpenCASCADE の値と一致して読める |
 | STEP 読み込み（他カーネル・B-spline曲面） | NURBS円柱のキャップ面積 314.1512（真値 314.1593）、体積の相対誤差 2.0e-5 |

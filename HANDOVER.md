@@ -30,7 +30,7 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 | ビルダー監査 | 21/21 クリーン |
 | ブーリアン対応 | 45ケース中28成功、**誤答ゼロ** |
 | FreeCAD 相互検証 | 15/15 一致 |
-| ショーケース | 16/16 が OpenCASCADE で valid closed solid |
+| ショーケース | 22/22 が OpenCASCADE で valid closed solid |
 | 他カーネルの解析曲面の読み込み | 7/7 が体積・面積とも OpenCASCADE と一致 |
 | 他カーネルのトリム B-spline | 面積 314.1512（真値 314.1593）、体積の相対誤差 2.0e-5 |
 | p-curve の忠実度 | 構成に使っていない標本数で測っても 3.5e-11 以下 |
@@ -372,12 +372,31 @@ gap は全て 0 でした。
 | `crates/zenith_tess` | テッセレーション（積分領域はノット区間に整合） |
 | `crates/zenith_io` | STEP 読み書き、STL/OBJ/glTF/IGES |
 | `crates/zenith_py` | PyO3 バインディング（45関数） |
-| `crates/zenith_algo/examples/` | **測定・診断ツール**（19個） |
+| `crates/zenith_algo/examples/` | **測定・診断ツール**（21個） |
 | `tools/*.py` | FreeCAD ヘッドレス検証（`occ_*` は診断用） |
-| `target/showcase/` | 代表16形状の STEP（`export_showcase` で再生成） |
+| `target/showcase/` | 代表22形状の STEP。作り方は 5-2 |
 
 Blender アドオン本体（`__init__.py`・オペレータ・パネル）は未着手です。
 `blender_addon/` にはビルド済みの `zenith_cad.pyd` のみが入っています。
+
+---
+
+## 5-2. 出力物の作り方と置き場所
+
+```bash
+cargo run --release -p zenith_algo --example export_showcase          # target/showcase   22形状
+cargo run --release -p zenith_algo --example export_validation_suite  # target/validation 15形状
+cargo run --release -p zenith_algo --example foreign_reexport         # target/reexport    7形状
+```
+
+| 置き場所 | 中身 | 突き合わせ |
+| :--- | :--- | :--- |
+| `target/showcase/` | 代表22形状。解析解を持つものは表に相対誤差が出る | `tools/verify_showcase.py`（22/22） |
+| `target/validation/` | 相互検証用15形状＋OpenCASCADE が書いた参照ファイル | `tools/freecad_cross_validate.py`（15/15、不一致で非ゼロ終了） |
+| `target/reexport/` | 他カーネルのファイルを読んで書き戻したもの7形状 | `tools/verify_reexport.py`（診断。判定ゲートではない） |
+
+ショーケースの 17〜22 は今回のセッションで通るようになった範囲です
+（円錐を平面で切る3種、トーラスをスラブで切る2種、穴を5回重ねた板）。
 
 ---
 
