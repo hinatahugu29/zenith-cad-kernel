@@ -7,6 +7,11 @@
 仕様の詳細は [`KERNEL_SPECS.md`](KERNEL_SPECS.md)、検証の詳細は
 [`FREECAD_VALIDATION_REPORT.md`](FREECAD_VALIDATION_REPORT.md) にあります。
 
+**初めてこのリポジトリに来た方（人でも AI でも）は、先に
+[`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) を通してください。**
+書いてある数字が本当かを自分で確かめる手順と、この文書で使う
+「ゲート」と「診断」の区別が載っています。
+
 ---
 
 ## 1. まず動かして状態を確認する
