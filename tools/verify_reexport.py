@@ -5,17 +5,20 @@ read by this kernel, and were written out again. Handing them back to the kernel
 they came from closes the loop: their writer, our reader, our writer, their
 reader.
 
-The comparison needs care, because OpenCASCADE does not measure a rational
-B-spline the way it measures an analytic surface. Converting its own cylinder
-with `toNurbs` and measuring that gives 12674.63 against the analytic 12566.37,
-a difference of 0.86% that has nothing to do with any file we wrote. So three
-numbers are printed: what OpenCASCADE says about the analytic original, what it
-says about its own B-spline conversion of that original, and what it says about
-our re-export. The last two are the fair pair. Our own reading of the same file
-is printed alongside, since it is the one that can be checked against the closed
-form.
+For a long time this file said the fair comparison was OpenCASCADE's own
+`toNurbs` conversion, on the grounds that OpenCASCADE does not measure a
+rational B-spline the way it measures an analytic surface: converting its own
+cylinder and measuring that gives 12674.63 against the analytic 12566.37, 0.86%
+off. That reading was wrong, and it hid a defect of ours for as long as it
+stood. OpenCASCADE measures our own builders' rational patches to 1e-11. What
+it cannot measure is a patch wrapped all the way round, which is the form our
+importer used to hand straight back out. Once the exporter cuts those
+(`zenith_algo::Regularizer`), our re-exports land on the analytic value.
 
-This is a diagnostic, not a gate: it reports and always exits 0.
+So the comparison is now against the closed form, and OpenCASCADE's own
+conversion is printed beside it as context — it is the one that drifts.
+
+This is a gate: it exits non-zero if any re-export misses the analytic value.
 """
 
 import os
@@ -60,9 +63,12 @@ def main():
     print(
         f"{'subject':<16} {'type':<8} {'valid':<6} {'closed':<7} "
         f"{'OCC analytic':>14} {'OCC own nurbs':>14} {'OCC our file':>14} "
-        f"{'vs own nurbs':>13}"
+        f"{'ours vs true':>13}"
     )
     print("-" * 100)
+
+    tolerance = 1e-6
+    failures = []
 
     for subject, source_name in sorted(SOURCES.items()):
         path = os.path.join(directory, f"reexport_{subject}.step")
@@ -83,22 +89,28 @@ def main():
         analytic = original.Volume
         mine = ours.Volume
         closed = bool(ours.Solids) and ours.Solids[0].Shells[0].isClosed()
-        spread = abs(mine - own_nurbs) / abs(own_nurbs) if own_nurbs else float("nan")
+        error = abs(mine - analytic) / abs(analytic) if analytic else float("nan")
+        if not (error <= tolerance) or not ours.isValid() or not closed:
+            failures.append((subject, error, ours.isValid(), closed))
 
         print(
             f"{subject:<16} {ours.ShapeType:<8} {str(ours.isValid()):<6} {str(closed):<7} "
-            f"{analytic:>14.4f} {own_nurbs:>14.4f} {mine:>14.4f} {spread:>13.2e}"
+            f"{analytic:>14.4f} {own_nurbs:>14.4f} {mine:>14.4f} {error:>13.2e}"
         )
 
     print("-" * 100)
     print("OCC analytic  = OpenCASCADE measuring its own analytic surfaces (the true value)")
     print("OCC own nurbs = OpenCASCADE measuring its own B-spline conversion of the same shape")
     print("OCC our file  = OpenCASCADE measuring our re-export, which is also B-spline")
+    print("ours vs true  = the last column against the first. This is what is graded.")
     print()
-    print("The last two are the comparable pair. Both sit above the analytic value by")
-    print("a similar margin, which is OpenCASCADE's integration of rational patches,")
-    print("not a difference in the geometry: our reader puts every one of these files")
-    print("back at the analytic value to 1e-13 (foreign_reexport prints that column).")
+    if failures:
+        for subject, error, valid, closed in failures:
+            print(f"FAILED {subject}: error {error:.3e}, valid={valid}, closed={closed}")
+        print(f"{len(failures)} of {len(SOURCES)} re-exports miss the analytic value")
+        return 1
+    print(f"{len(SOURCES)} of {len(SOURCES)} re-exports land on the analytic value "
+          f"within {tolerance:.0e}, as valid closed solids")
     return 0
 
 
