@@ -14,7 +14,7 @@ use std::f64::consts::FRAC_1_SQRT_2;
 
 use zenith_algo::FaceSplitter;
 use zenith_geom::{ControlPoint3, IntersectionMarcher, KnotVector, NurbsCurve3, NurbsSurface3};
-use zenith_math::{Point3, Tolerance, Vec3};
+use zenith_math::{Point3, Tolerance};
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Orientation, Vertex, Wire};
 
 /// z 軸まわり、中心 `centre`、半径 `r`、高さ `z_low..z_high` の円柱の

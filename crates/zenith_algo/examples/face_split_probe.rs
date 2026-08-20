@@ -14,7 +14,7 @@
 //!
 //! 走らせ方: cargo run --release -p zenith_algo --example face_split_probe
 
-use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI};
+use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
 
 use zenith_algo::FaceSplitter;
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3};
@@ -298,5 +298,97 @@ fn main() {
         "{clean} of {} splits are clean, {problems} with problems",
         subjects.len()
     );
-    let _ = PI;
+
+    // 1枚に切り込みを複数入れる。互いに交わらない切り込みなら、1本ずつ
+    // 当てていけば足りる。合否はやはり面積の和で見る。
+    println!();
+    println!(
+        "{:<44} {:>7} {:>7} {:>14} {:>14} {:>12}",
+        "several cuts on one face", "pieces", "cuts", "area sum", "original", "residual"
+    );
+    println!("{}", "-".repeat(102));
+
+    let mut multi_clean = 0usize;
+    let mut multi_problems = 0usize;
+
+    let multi: Vec<(&str, Face, Vec<Edge>)> = vec![
+        (
+            "plane 10x10 cut into three by two lines",
+            planar_square(10.0),
+            vec![
+                Edge::line_between(
+                    Vertex::from_point(Point3::new(0.0, 3.0, 0.0)),
+                    Vertex::from_point(Point3::new(10.0, 3.0, 0.0)),
+                )
+                .unwrap(),
+                Edge::line_between(
+                    Vertex::from_point(Point3::new(0.0, 7.0, 0.0)),
+                    Vertex::from_point(Point3::new(10.0, 7.0, 0.0)),
+                )
+                .unwrap(),
+            ],
+        ),
+        (
+            "cylinder quarter cut into three by two sections",
+            cylinder_quarter(10.0, 40.0).1,
+            vec![
+                {
+                    let curve = tilted_section(10.0, 12.0, 0.4);
+                    let (a, b) = curve.param_range();
+                    Edge::new(
+                        curve.clone(),
+                        Vertex::from_point(curve.evaluate(a)),
+                        Vertex::from_point(curve.evaluate(b)),
+                        1e-6,
+                    )
+                },
+                {
+                    let curve = tilted_section(10.0, 28.0, -0.5);
+                    let (a, b) = curve.param_range();
+                    Edge::new(
+                        curve.clone(),
+                        Vertex::from_point(curve.evaluate(a)),
+                        Vertex::from_point(curve.evaluate(b)),
+                        1e-6,
+                    )
+                },
+            ],
+        ),
+    ];
+
+    for (name, face, cuts) in &multi {
+        match FaceSplitter::split_by_curves(face, cuts, &tol) {
+            Ok((pieces, report)) => {
+                let summed: f64 = report.piece_areas.iter().sum();
+                let bad = report.area_residual > 1e-6 || report.cuts_refused > 0;
+                if bad {
+                    multi_problems += 1;
+                } else {
+                    multi_clean += 1;
+                }
+                println!(
+                    "{:<44} {:>7} {:>7} {:>14.6} {:>14.6} {:>12.2e}",
+                    name,
+                    pieces.len(),
+                    report.cuts_applied,
+                    summed,
+                    report.original_area,
+                    report.area_residual
+                );
+                for reason in report.refusals.iter().take(2) {
+                    println!("{:>46}{}", "", reason.chars().take(58).collect::<String>());
+                }
+            }
+            Err(err) => {
+                multi_problems += 1;
+                println!("{:<44} {}", name, err.chars().take(58).collect::<String>());
+            }
+        }
+    }
+    println!("{}", "-".repeat(102));
+    println!(
+        "{multi_clean} of {} multi-cut faces are clean, {multi_problems} with problems",
+        multi.len()
+    );
+
 }

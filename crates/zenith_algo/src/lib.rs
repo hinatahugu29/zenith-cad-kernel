@@ -55,7 +55,7 @@ pub use brep_intersection::{
     PlanarOperandBatchSplits, SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };
 pub use brep_transform::BrepTransform;
-pub use face_split::{FaceSplitReport, FaceSplitter};
+pub use face_split::{FaceSplitReport, FaceSplitter, MultiSplitReport};
 pub use regularize::{RegularizeReport, Regularizer, StepInterop};
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;

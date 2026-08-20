@@ -46,6 +46,23 @@ pub struct FaceSplitReport {
     pub ends_off_boundary: f64,
 }
 
+/// 複数の曲線で割った結果と、その割り方が正しかったかを測った値。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiSplitReport {
+    /// 元の面の面積。
+    pub original_area: f64,
+    /// 出来た各片の面積。
+    pub piece_areas: Vec<f64>,
+    /// 片の面積の和が元からどれだけずれたか（相対）。
+    pub area_residual: f64,
+    /// 実際に入った切り込みの本数。
+    pub cuts_applied: usize,
+    /// どの片にも入らなかった本数。
+    pub cuts_refused: usize,
+    /// 入らなかった理由。診断のために残す。
+    pub refusals: Vec<String>,
+}
+
 /// 面の上の曲線で面を割る。
 pub struct FaceSplitter;
 
@@ -158,6 +175,82 @@ impl FaceSplitter {
                 area_residual,
                 curve_off_surface,
                 ends_off_boundary,
+            },
+        ))
+    }
+
+    /// 複数の曲線で1枚の面を割る。
+    ///
+    /// 曲線を1本ずつ当て、そのときどきの片のうち**受け取れるもの**に入れる。
+    /// どの片も受け取らない曲線は、理由を添えて数えるだけで捨てる。
+    /// もっともらしい割り方を作るより、割れなかったと言うほうが良い。
+    ///
+    /// 交線どうしが**面の内側で交わる**場合は、まだ扱えない。先に交点で
+    /// 互いを刻む段（imprint）が要る。ここは互いに交わらない切り込みだけを
+    /// 想定している。
+    pub fn split_by_curves(
+        face: &Face,
+        splits: &[Edge],
+        tol: &Tolerance,
+    ) -> Result<(Vec<Face>, MultiSplitReport), String> {
+        let params = TessellationParams::default();
+        let original_area = MassCalculator::compute_face_integral(face, &params).0;
+
+        let mut pieces = vec![face.clone()];
+        let mut applied = 0usize;
+        let mut refusals = Vec::new();
+
+        for split in splits {
+            let mut done = false;
+            for index in 0..pieces.len() {
+                match Self::split_by_curve(&pieces[index], split, tol) {
+                    Ok((two, report)) => {
+                        if report.area_residual > 1e-6 {
+                            refusals.push(format!(
+                                "a cut lost {:.3e} of the piece it was applied to",
+                                report.area_residual
+                            ));
+                            continue;
+                        }
+                        pieces.remove(index);
+                        pieces.extend(two);
+                        applied += 1;
+                        done = true;
+                        break;
+                    }
+                    Err(reason) => {
+                        // どの片にも当たらなかったときだけ理由を残す。
+                        if index + 1 == pieces.len() {
+                            refusals.push(reason);
+                        }
+                    }
+                }
+            }
+            if !done && refusals.is_empty() {
+                refusals.push("a cut landed on no piece".to_string());
+            }
+        }
+
+        let piece_areas: Vec<f64> = pieces
+            .iter()
+            .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+            .collect();
+        let summed: f64 = piece_areas.iter().sum();
+        let area_residual = if original_area.abs() > 1e-12 {
+            (summed - original_area).abs() / original_area.abs()
+        } else {
+            (summed - original_area).abs()
+        };
+
+        Ok((
+            pieces,
+            MultiSplitReport {
+                original_area,
+                piece_areas,
+                area_residual,
+                cuts_applied: applied,
+                cuts_refused: splits.len() - applied,
+                refusals,
             },
         ))
     }
@@ -578,6 +671,102 @@ mod tests {
             "the corner piece should be {triangle}, got {:?}",
             report.piece_areas
         );
+    }
+
+    /// 1枚に切り込みを2本入れて3枚にする。
+    ///
+    /// 面積の和で見るのは1本のときと同じだが、ここではもう一つ確かめる。
+    /// **どの片も潰れていないこと。** 片方が 0 でも和は合うので、和だけでは
+    /// 「割れた」と言えない。
+    #[test]
+    fn two_cuts_make_three_pieces_that_add_back_up() {
+        let tol = Tolerance::default();
+
+        // 平面を横に2本で切る。3枚の面積は 30, 40, 30。
+        let face = planar_square(10.0);
+        let cuts = vec![
+            Edge::line_between(
+                Vertex::from_point(Point3::new(0.0, 3.0, 0.0)),
+                Vertex::from_point(Point3::new(10.0, 3.0, 0.0)),
+            )
+            .unwrap(),
+            Edge::line_between(
+                Vertex::from_point(Point3::new(0.0, 7.0, 0.0)),
+                Vertex::from_point(Point3::new(10.0, 7.0, 0.0)),
+            )
+            .unwrap(),
+        ];
+        let (pieces, report) =
+            FaceSplitter::split_by_curves(&face, &cuts, &tol).expect("two cuts on a plane");
+
+        assert_eq!(pieces.len(), 3, "two cuts should make three pieces");
+        assert_eq!(report.cuts_applied, 2);
+        assert_eq!(report.cuts_refused, 0, "{:?}", report.refusals);
+        assert!(report.area_residual < 1e-12);
+
+        let mut areas = report.piece_areas.clone();
+        areas.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for (area, expected) in areas.iter().zip([30.0, 30.0, 40.0]) {
+            assert!(
+                (area - expected).abs() < 1e-9,
+                "pieces should be 30, 30 and 40, got {:?}",
+                report.piece_areas
+            );
+        }
+
+        // 曲面でも同じ。互いに交わらない2本なら、1本ずつ当てれば足りる。
+        let face = cylinder_quarter(10.0, 40.0);
+        let cuts: Vec<Edge> = [(12.0, 0.4), (28.0, -0.5)]
+            .into_iter()
+            .map(|(z0, slope)| tilted_section(10.0, z0, slope))
+            .collect();
+        let (pieces, report) =
+            FaceSplitter::split_by_curves(&face, &cuts, &tol).expect("two cuts on a cylinder");
+
+        assert_eq!(pieces.len(), 3);
+        assert_eq!(report.cuts_refused, 0, "{:?}", report.refusals);
+        assert!(
+            report.area_residual < 1e-9,
+            "the three pieces do not add up: {:.3e}",
+            report.area_residual
+        );
+        for area in &report.piece_areas {
+            assert!(
+                *area > report.original_area * 0.05,
+                "a piece came out empty: {:?}",
+                report.piece_areas
+            );
+        }
+    }
+
+    /// どの片にも当たらない切り込みは、数えて捨てる。
+    /// もっともらしい割り方を作るより、割れなかったと言うほうが良い。
+    #[test]
+    fn a_cut_that_lands_on_no_piece_is_counted_not_forced() {
+        let tol = Tolerance::default();
+        let face = planar_square(10.0);
+        let cuts = vec![
+            // 通る切り込み
+            Edge::line_between(
+                Vertex::from_point(Point3::new(0.0, 5.0, 0.0)),
+                Vertex::from_point(Point3::new(10.0, 5.0, 0.0)),
+            )
+            .unwrap(),
+            // 面から離れたところを通る切り込み
+            Edge::line_between(
+                Vertex::from_point(Point3::new(0.0, 5.0, 30.0)),
+                Vertex::from_point(Point3::new(10.0, 5.0, 30.0)),
+            )
+            .unwrap(),
+        ];
+
+        let (pieces, report) =
+            FaceSplitter::split_by_curves(&face, &cuts, &tol).expect("one cut lands");
+        assert_eq!(pieces.len(), 2, "only the cut that lands should apply");
+        assert_eq!(report.cuts_applied, 1);
+        assert_eq!(report.cuts_refused, 1);
+        assert!(!report.refusals.is_empty(), "a refusal must say why");
+        assert!(report.area_residual < 1e-12);
     }
 
     /// 面の上に無い曲線、境界に届かない曲線は**断らなければならない**。
