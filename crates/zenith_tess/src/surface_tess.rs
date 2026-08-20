@@ -56,6 +56,26 @@ pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTria
             }
         }
         FaceGeometry::Nurbs(nurbs) => {
+            // p-curve を保持していない面は、**その場で導出してから**使う。
+            // 以前はここで諦めて全矩形のグリッドに落ちていた。トリムされた面が
+            // 黙ってトリム前の面として積まれることになり、穴の壁が3倍の面積で
+            // 返っていた（`pcurve_derivation_probe` が並べる）。平面側は
+            // `plane_pcurves()` が同じことを既にしている。
+            let derived_holder;
+            let face = if face.pcurves.is_some() {
+                face
+            } else {
+                match face.pcurves(&Tolerance::default()) {
+                    Ok(pcurves) => {
+                        let mut with = face.clone();
+                        with.pcurves = Some(pcurves);
+                        derived_holder = with;
+                        &derived_holder
+                    }
+                    Err(_) => face,
+                }
+            };
+
             // 境界がパラメータ矩形そのものなら、ノット線に整合したグリッドを
             // 使う。B-spline は各ノット区間の内側でだけ滑らかなので、区間を
             // またぐ三角形の上で求積すると、いくら細分しても誤差が減らない。
@@ -64,6 +84,8 @@ pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTria
             }
             let trimmed = trimmed_uv_triangulation(face, nurbs, params);
             if trimmed.is_empty() {
+                // ここに来るのは p-curve が導出もできなかった面だけ。全矩形を
+                // 積むので、トリムされた面ならこの値は小さすぎず大きすぎる。
                 grid_uv_triangulation(nurbs, params)
             } else {
                 trimmed
