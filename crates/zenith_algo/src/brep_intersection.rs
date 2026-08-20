@@ -2111,8 +2111,8 @@ fn split_patch_face_by_section_edge(
         return Err("NURBS face splitting with inner wires is not implemented yet".to_string());
     }
     let boundary = &face.outer_wire.edges;
-    if boundary.len() != 4 {
-        return Err("Only a four-sided patch face can be split by a section".to_string());
+    if boundary.len() != 3 && boundary.len() != 4 {
+        return Err("Only a three- or four-sided patch face can be split".to_string());
     }
 
     // 分割線が本当にこの面の上にあるか。曲面の種類を問わず、投影して測る。
@@ -2153,8 +2153,21 @@ fn split_patch_face_by_section_edge(
             section_indices.push((index, 0.5 * (start_axial + end_axial)));
         }
     }
-    if section_indices.len() != 2 {
-        return Err("Face boundary does not read as two sections and two sides".to_string());
+    // 断面が1本しかない面は、反対側が一点に潰れている。球の極や円錐の頂点が
+    // これで、境界は3辺になる。潰れた側には辺が現れないので、上下の片方は
+    // その一点が受け持つ。
+    if section_indices.len() == 1 && boundary.len() == 3 {
+        return split_apex_patch_by_section_edge(
+            face,
+            split_edge,
+            section_indices[0].0,
+            &axial,
+            scale,
+            tol,
+        );
+    }
+    if section_indices.len() != 2 || boundary.len() != 4 {
+        return Err("Face boundary does not read as sections and sides".to_string());
     }
     // 巡回の上で断面と側辺が交互に並んでいなければ、四辺形として読めない。
     if (section_indices[1].0 + 4 - section_indices[0].0) % 4 != 2 {
@@ -2236,6 +2249,108 @@ fn split_patch_face_by_section_edge(
     }
 
     Ok(vec![lower, upper])
+}
+
+/// Splits a patch whose far side has closed to a point.
+///
+/// A sphere's polar patch and a cone's tip are three-sided: one section, two
+/// sides, and a corner where the sides meet. The section runs between one pair
+/// of the sides' ends and the point takes the place of the other, so the piece
+/// nearer the point stays three-sided while the other becomes four.
+///
+/// Both are cut out of the original cycle in the order it already uses, so the
+/// winding carries over; the sides are cut where the section meets them rather
+/// than redrawn.
+fn split_apex_patch_by_section_edge(
+    face: &Face,
+    split_edge: &Edge,
+    section_index: usize,
+    axial: &dyn Fn(Point3) -> f64,
+    scale: f64,
+    tol: &Tolerance,
+) -> Result<Vec<Face>, String> {
+    let boundary = &face.outer_wire.edges;
+    let section = boundary[section_index].clone();
+    // 巡回は 断面 -> 断面の終点から頂点へ -> 頂点から断面の始点へ。
+    let from_section = boundary[(section_index + 1) % 3].clone();
+    let to_section = boundary[(section_index + 2) % 3].clone();
+
+    let apex = from_section.end_vertex().point;
+    if (apex - to_section.start_vertex().point).norm() > tol.linear * 10.0 {
+        return Err("The two sides do not meet at a point".to_string());
+    }
+
+    let section_axial = 0.5
+        * (axial(section.start_vertex().point) + axial(section.end_vertex().point));
+    let apex_axial = axial(apex);
+    let split_axial = 0.5
+        * (axial(split_edge.start_vertex.point) + axial(split_edge.end_vertex.point));
+
+    let margin = tol.linear * scale;
+    let (low, high) = if section_axial <= apex_axial {
+        (section_axial, apex_axial)
+    } else {
+        (apex_axial, section_axial)
+    };
+    if split_axial <= low + margin || split_axial >= high - margin {
+        return Err("Section edge must cross the face interior".to_string());
+    }
+
+    let (point_from, point_to) = if edge_reaches_point(&from_section, split_edge.start_vertex.point, tol)
+    {
+        (split_edge.start_vertex.point, split_edge.end_vertex.point)
+    } else if edge_reaches_point(&from_section, split_edge.end_vertex.point, tol) {
+        (split_edge.end_vertex.point, split_edge.start_vertex.point)
+    } else {
+        return Err("Section endpoints do not land on the face sides".to_string());
+    };
+    if !edge_reaches_point(&to_section, point_to, tol) {
+        return Err("Section endpoints do not land on the face sides".to_string());
+    }
+
+    // from_section は 断面の終点 -> 頂点。先に来るのが断面側の断片。
+    let (near_section, near_apex) = cut_oriented_edge(&from_section, point_from, tol)
+        .ok_or_else(|| "Could not cut the side leaving the section".to_string())?;
+    // to_section は 頂点 -> 断面の始点。先に来るのが頂点側の断片。
+    let (apex_side, section_side) = cut_oriented_edge(&to_section, point_to, tol)
+        .ok_or_else(|| "Could not cut the side returning to the section".to_string())?;
+
+    let split_from_to = orient_edge_for_points(split_edge, point_from, point_to, tol)
+        .ok_or_else(|| "Section endpoints do not match the cut sides".to_string())?;
+    let split_to_from = OrientedEdge::new(
+        split_from_to.edge.clone(),
+        split_from_to.orientation.reversed(),
+    );
+
+    let banded = Face::new(
+        face.geometry.clone(),
+        Wire::new(vec![section, near_section, split_from_to, section_side]),
+        Vec::new(),
+        face.orientation,
+        face.tolerance,
+    );
+    let tipped = Face::new(
+        face.geometry.clone(),
+        Wire::new(vec![near_apex, apex_side, split_to_from]),
+        Vec::new(),
+        face.orientation,
+        face.tolerance,
+    );
+
+    for piece in [&banded, &tipped] {
+        if !piece.outer_wire.is_closed(tol) {
+            return Err("Apex split produced an open wire".to_string());
+        }
+        let report = piece.validate_pcurves(tol, 8)?;
+        if !report.is_valid() {
+            return Err(format!(
+                "Apex split p-curves are invalid with {} mismatches",
+                report.mismatch_count
+            ));
+        }
+    }
+
+    Ok(vec![banded, tipped])
 }
 
 /// How far an edge reaches, as a length to scale tolerances against.
