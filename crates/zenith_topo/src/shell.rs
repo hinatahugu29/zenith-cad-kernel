@@ -61,6 +61,14 @@ struct EdgeUse {
     middle: Point3,
 }
 
+/// How many places along each edge the p-curve is checked.
+///
+/// Deliberately coprime with the 8 the p-curves are built from: sampling at the
+/// construction points measures nothing, because the curve passes through them
+/// exactly by construction, and a curve that swept right round a sphere in
+/// between still read as zero.
+const PCURVE_VALIDATION_SAMPLES: usize = 37;
+
 impl Shell {
     pub fn new(faces: Vec<Face>, is_closed: bool) -> Self {
         Self {
@@ -129,7 +137,10 @@ impl Shell {
             }
 
             if face.pcurves.is_some() {
-                match face.validate_pcurves(tol, 8) {
+                // 構成に使った数と互いに素な標本数にする。p-curve は辺を8等分
+                // して作られるので、8で測ると自分が通ることの分かっている点しか
+                // 見ない。37 なら共有するのは両端だけになる。
+                match face.validate_pcurves(tol, PCURVE_VALIDATION_SAMPLES) {
                     Ok(pcurve_report) => {
                         report.pcurve_mismatch_count += pcurve_report.mismatch_count;
                         report.max_pcurve_distance =

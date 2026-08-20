@@ -123,6 +123,48 @@ impl ExtremumEngine {
             }
         }
 
+        Self::refine_surface_projection(point, surface, best_u, best_v, min_dist_sq, max_iterations, tolerance)
+    }
+
+    /// 最近傍点の探索を、与えられた (u, v) から始める。
+    ///
+    /// 曲線に沿って少しずつ進むときは、隣の結果がそのまま良い出発点になる。
+    /// 毎回そこら中を粗くサンプリングし直す必要は無い。
+    pub fn point_to_surface_seeded(
+        point: Point3,
+        surface: &NurbsSurface3,
+        seed_u: f64,
+        seed_v: f64,
+        max_iterations: usize,
+        tolerance: f64,
+    ) -> Result<PointSurfaceProjection, String> {
+        let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+        let start_u = seed_u.clamp(u_min, u_max);
+        let start_v = seed_v.clamp(v_min, v_max);
+        let start_dist_sq = (surface.evaluate(start_u, start_v) - point).norm_squared();
+        Self::refine_surface_projection(
+            point,
+            surface,
+            start_u,
+            start_v,
+            start_dist_sq,
+            max_iterations,
+            tolerance,
+        )
+    }
+
+    fn refine_surface_projection(
+        point: Point3,
+        surface: &NurbsSurface3,
+        start_u: f64,
+        start_v: f64,
+        start_dist_sq: f64,
+        max_iterations: usize,
+        tolerance: f64,
+    ) -> Result<PointSurfaceProjection, String> {
+        let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+        let (best_u, best_v, min_dist_sq) = (start_u, start_v, start_dist_sq);
+
         // 2. 2変数ニュートン・ラフソン法による精密収束
         //
         // ニュートン法は距離の停留点に向かうだけで、それが最小とは限らない。

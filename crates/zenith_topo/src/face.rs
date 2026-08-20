@@ -6,7 +6,7 @@ use zenith_geom::{
     ControlPoint2, CoonsPatch3, ExtremumEngine, GordonSurface3, KnotVector, NurbsCurve2,
     NurbsSurface3, PlaneSurface3, Surface3, TriangularPatch3,
 };
-use zenith_math::{Point2, Point3, Tolerance};
+use zenith_math::{Point2, Point3, Tolerance, Vec3};
 
 static FACE_ID_GEN: AtomicU64 = AtomicU64::new(1);
 
@@ -471,7 +471,150 @@ fn match_nurbs_boundary_pcurve(
         return Ok(curve);
     }
 
+    if let Ok(curve) = match_affine_patch_pcurve(edge, surface, tol) {
+        return Ok(curve);
+    }
+
     project_edge_to_nurbs_pcurve(edge, surface, tol, samples_per_edge)
+}
+
+/// A surface whose parameters map to space by an affine transform.
+///
+/// Converting a solid to B-splines turns every planar face into a patch like
+/// this: degree one each way, four corners, no weights. The parameters are then
+/// just coordinates in the plane, and there is nothing to approximate.
+struct AffinePatch {
+    origin: Point3,
+    du: Vec3,
+    dv: Vec3,
+    u_min: f64,
+    v_min: f64,
+}
+
+impl AffinePatch {
+    /// The parameters naming `point`, or `None` when it is off the plane.
+    fn parameters_of(&self, point: Point3, limit: f64) -> Option<Point2> {
+        let relative = point - self.origin;
+        let uu = self.du.dot(&self.du);
+        let uv = self.du.dot(&self.dv);
+        let vv = self.dv.dot(&self.dv);
+        let ru = relative.dot(&self.du);
+        let rv = relative.dot(&self.dv);
+
+        let det = uu * vv - uv * uv;
+        if det.abs() <= 1e-15 {
+            return None;
+        }
+        let along_u = (ru * vv - rv * uv) / det;
+        let along_v = (rv * uu - ru * uv) / det;
+
+        // 面内に無い点は写せない。有理曲線の制御点は曲面上には無いが、
+        // 平面の上には乗っているので、これで弾かれない。
+        if (relative - self.du * along_u - self.dv * along_v).norm() > limit {
+            return None;
+        }
+
+        Some(Point2::new(self.u_min + along_u, self.v_min + along_v))
+    }
+}
+
+/// Reads a surface's affine map, and checks that it really follows one.
+fn affine_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<AffinePatch> {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let u_span = u_max - u_min;
+    let v_span = v_max - v_min;
+    if !(u_span > 0.0 && v_span > 0.0) {
+        return None;
+    }
+
+    let origin = surface.evaluate(u_min, v_min);
+    let du = (surface.evaluate(u_max, v_min) - origin) / u_span;
+    let dv = (surface.evaluate(u_min, v_max) - origin) / v_span;
+
+    // 三隅から取った写像が本当に曲面と一致するか、格子で確かめる。
+    // 一致しなければアフィンではないので、近似の経路に任せる。
+    let extent = du.norm().max(dv.norm()).max(1.0) * u_span.max(v_span);
+    let limit = tol.linear.max(1e-9) * extent.max(1.0);
+    for i in 0..=4 {
+        for j in 0..=4 {
+            let u = u_min + u_span * i as f64 / 4.0;
+            let v = v_min + v_span * j as f64 / 4.0;
+            let expected = origin + du * (u - u_min) + dv * (v - v_min);
+            if (surface.evaluate(u, v) - expected).norm() > limit {
+                return None;
+            }
+        }
+    }
+
+    Some(AffinePatch {
+        origin,
+        du,
+        dv,
+        u_min,
+        v_min,
+    })
+}
+
+/// The exact p-curve of an edge on a surface whose parameters are affine.
+///
+/// An affine map carries a NURBS curve to a NURBS curve of the same degree,
+/// knots and weights, so the p-curve is the edge's own control points put
+/// through the map. Nothing is sampled and nothing is approximated, which is
+/// what the polyline path could not manage: a circle on such a patch came
+/// through as an octagon, 0.889 off its own edge and a tenth short on area.
+fn match_affine_patch_pcurve(
+    edge: &crate::edge::OrientedEdge,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> Result<NurbsCurve2, String> {
+    let patch = affine_patch(surface, tol)
+        .ok_or_else(|| "Surface parameters are not affine".to_string())?;
+
+    let scale = edge
+        .edge
+        .curve
+        .control_points
+        .iter()
+        .fold(0.0f64, |worst, cp| {
+            worst.max((cp.point - patch.origin).norm())
+        })
+        .max(1.0);
+    let limit = tol.linear.max(1e-9) * scale;
+
+    let mut control_points: Vec<ControlPoint2> = Vec::with_capacity(
+        edge.edge.curve.control_points.len(),
+    );
+    for cp in &edge.edge.curve.control_points {
+        let uv = patch.parameters_of(cp.point, limit).ok_or_else(|| {
+            format!("Edge {} leaves the plane of the patch", edge.edge.id)
+        })?;
+        control_points.push(ControlPoint2::new(uv, cp.weight));
+    }
+
+    let mut knots = edge.edge.curve.knots.clone();
+    if !edge.orientation.is_forward() {
+        control_points.reverse();
+        knots = reverse_knot_vector(&knots, edge.edge.curve.degree);
+    }
+
+    let curve = NurbsCurve2::new(edge.edge.curve.degree, control_points, knots)?;
+
+    // 主張で終わらせない。出来た p-curve を曲面に戻して、辺と一致するか測る。
+    let (t_min, t_max) = curve.param_range();
+    for step in 0..=16 {
+        let fraction = step as f64 / 16.0;
+        let uv = curve.evaluate(t_min + (t_max - t_min) * fraction);
+        let from_surface = surface.evaluate(uv.x, uv.y);
+        let from_edge = edge.evaluate_normalized(fraction);
+        if (from_surface - from_edge).norm() > limit {
+            return Err(format!(
+                "Edge {} affine p-curve differs from the edge",
+                edge.edge.id
+            ));
+        }
+    }
+
+    Ok(curve)
 }
 
 fn match_nurbs_outer_boundary_pcurve(
@@ -528,34 +671,102 @@ fn match_nurbs_outer_boundary_pcurve(
     NurbsCurve2::bspline_from_points(1, vec![uv0, uv1])
 }
 
+/// Projects a 3D edge onto a NURBS surface as a polyline in parameter space.
+///
+/// Two things decide whether this is any good, and only one of them used to be
+/// checked. Even spacing confirmed that the sampled points sat on the surface,
+/// and never that the straight run between two of them followed the edge: a
+/// circle came through as an octagon, every corner exactly on the surface and
+/// the trimmed region a tenth too small. So the samples are placed where the
+/// curve needs them, judged by how far the chord strays from the edge, which is
+/// the same quantity validation measures.
+///
+/// The knots are the edge parameters the samples were taken at, so a given
+/// fraction along the p-curve is the same fraction along the edge. Spacing the
+/// knots evenly while spacing the samples unevenly breaks that correspondence,
+/// and the p-curve then reads as wrong even where it is right.
 fn project_edge_to_nurbs_pcurve(
     edge: &crate::edge::OrientedEdge,
     surface: &NurbsSurface3,
     tol: &Tolerance,
     samples_per_edge: usize,
 ) -> Result<NurbsCurve2, String> {
-    let samples = samples_per_edge.max(4);
-    let mut uv_points = Vec::with_capacity(samples + 1);
+    let on_surface_limit = tol.linear.max(1e-6) * 10.0;
     let mut max_distance: f64 = 0.0;
 
-    for i in 0..=samples {
-        let t = i as f64 / samples as f64;
+    let mut project = |t: f64, seed: Option<Point2>| -> Result<Point2, String> {
         let point = edge.evaluate_normalized(t);
-        let projection = ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)?;
+        let projection = match seed {
+            Some(uv) => ExtremumEngine::point_to_surface_seeded(
+                point,
+                surface,
+                uv.x,
+                uv.y,
+                32,
+                tol.parametric,
+            )?,
+            None => ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)?,
+        };
         max_distance = max_distance.max(projection.distance);
-        uv_points.push(Point2::new(projection.u, projection.v));
+        Ok(Point2::new(projection.u, projection.v))
+    };
+
+    let start = samples_per_edge.max(4);
+    let mut parameters: Vec<f64> = (0..=start).map(|i| i as f64 / start as f64).collect();
+    let mut uv_points: Vec<Point2> = Vec::with_capacity(parameters.len());
+    for t in &parameters {
+        uv_points.push(project(*t, None)?);
+    }
+    settle_seam_parameters(&mut uv_points, surface, tol);
+
+    // 弦の中点が辺から離れている区間を割る。継ぎ目をまたぐ区間はここでは
+    // 詰められないので、割らずに残す。
+    let deflection = tol.linear;
+    const MAX_POINTS: usize = 4096;
+    let mut index = 0;
+    while index + 1 < parameters.len() && parameters.len() < MAX_POINTS {
+        let (t0, t1) = (parameters[index], parameters[index + 1]);
+        let middle = (t0 + t1) * 0.5;
+        let chord = uv_points[index] + (uv_points[index + 1] - uv_points[index]) * 0.5;
+        let strayed =
+            (surface.evaluate(chord.x, chord.y) - edge.evaluate_normalized(middle)).norm();
+
+        if strayed <= deflection || (t1 - t0) <= 1e-9 {
+            index += 1;
+            continue;
+        }
+
+        let uv = project(middle, Some(chord))?;
+        // 継ぎ目をまたぐ区間は、割っても弦が縮まない。無限に割らないよう抜ける。
+        let before = uv_points[index];
+        let after = uv_points[index + 1];
+        let inside = (uv.x - before.x.min(after.x)) >= -1e-9
+            && (uv.x - before.x.max(after.x)) <= 1e-9
+            && (uv.y - before.y.min(after.y)) >= -1e-9
+            && (uv.y - before.y.max(after.y)) <= 1e-9;
+        if !inside {
+            index += 1;
+            continue;
+        }
+
+        parameters.insert(index + 1, middle);
+        uv_points.insert(index + 1, uv);
     }
 
-    if max_distance > tol.linear.max(1e-6) * 10.0 {
+    if max_distance > on_surface_limit {
         return Err(format!(
             "Edge {} projection to NURBS surface exceeds tolerance; max distance {max_distance:.6e}",
             edge.edge.id
         ));
     }
 
-    settle_seam_parameters(&mut uv_points, surface, tol);
+    // 1次のクランプ節点列。節点をとった辺のパラメータをそのまま使う。
+    let mut knots = Vec::with_capacity(parameters.len() + 2);
+    knots.push(parameters[0]);
+    knots.extend(parameters.iter().copied());
+    knots.push(parameters[parameters.len() - 1]);
 
-    NurbsCurve2::bspline_from_points(1, uv_points)
+    NurbsCurve2::new(1, uv_points.into_iter().map(ControlPoint2::unweighted).collect(), KnotVector::new(knots))
 }
 
 /// Rewrites parameters that landed on a seam so the run reads as one path.
