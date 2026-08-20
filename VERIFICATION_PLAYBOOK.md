@@ -89,10 +89,11 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 45 テストバイナリ、311 テスト、失敗 0。
+**期待**: 46 テストバイナリ、313 テスト、失敗 0。
 
-所要はおよそ **6分**です。曲面同士が交わるブーリアンを含む検体があり、
-そこが大半を占めます。
+所要はおよそ **11分**です。曲面同士が交わるブーリアン（球×球、円柱×円柱、
+トーラス×箱）を閉じた式や独立な求積と突き合わせる検体があり、そこが大半を
+占めます。遅いことと壊れていることを取り違えないでください。
 
 数を数えるなら:
 
@@ -122,9 +123,12 @@ cargo run --release -p zenith_algo --example builder_audit
 cargo run --release -p zenith_algo --example boolean_envelope
 ```
 
-**期待**: `supported: 36   wrong-result: 0   unsupported/error: 9   (total 45)`
+**期待**: `supported: 39   wrong-result: 0   unsupported/error: 6   (total 45)`
 
-**所要時間はおよそ2〜3分です。** 曲面同士の交線を面の組ごとに探すためで、
+残る6件は**すべて接線配置**で、答えの定義が決まっていないためにエラーを
+返しています。実装が足りないのではありません。
+
+**所要時間はおよそ3分です。** 曲面同士の交線を面の組ごとに探すためで、
 以前の数秒とは桁が違います。遅いことと壊れていることを取り違えないでください。
 
 45ケースのうち25行に `volume matches analytic` が付きます。閉じた式を持つ
