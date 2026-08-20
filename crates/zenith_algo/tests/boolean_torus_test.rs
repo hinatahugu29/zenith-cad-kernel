@@ -55,6 +55,7 @@ fn test_a_slab_cuts_a_torus_at_the_right_height() {
     let whole = torus_volume(12.0, 4.0);
 
     let subjects = [
+        (BooleanOpType::Union, 60.0 * 60.0 * 20.0 + below),
         (BooleanOpType::Difference, below),
         (BooleanOpType::Intersection, whole - below),
     ];
@@ -77,6 +78,47 @@ fn test_a_slab_cuts_a_torus_at_the_right_height() {
             "{op:?} gave {measured:.4}, closed form {expected:.4} (relative {relative:.2e})"
         );
     }
+}
+
+#[test]
+fn test_the_union_takes_the_annulus_out_of_the_face_it_comes_through() {
+    // 和では、スラブの底面にトーラスが突き抜けたぶんの穴が要る。その面は
+    // 外側の領域・円環・内側の円板の3つに分かれ、和が採るのは外側と内側。
+    //
+    // 刻印は内部ループ1本ぶんしか扱えず、トーラスの断面は入れ子の2本なので
+    // 分けられなかった。分けられるようにしても、しばらくは通らなかった:
+    // 相手のトーラスが裏返っていて、正しく向いた領域と噛み合わなかった。
+    let tol = Tolerance::default();
+    let torus = PrimitiveBuilder::make_torus(12.0, 4.0).expect("torus");
+    let slab = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(60.0, 60.0, 20.0).expect("slab"),
+        Vec3::new(-30.0, -30.0, -2.0),
+    );
+
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&torus, &slab, BooleanOpType::Union, &tol)
+            .expect("union");
+    let solid = &result.solids[0];
+
+    // スラブ底面は2つに分かれる。外側は穴を持ち、内側は持たない。
+    let at_bottom: Vec<_> = solid
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| matches!(face.geometry, zenith_topo::FaceGeometry::Plane(_)))
+        .filter(|face| {
+            face.outer_wire
+                .sample_points(4)
+                .iter()
+                .all(|point| (point.z + 2.0).abs() < 1e-6)
+        })
+        .collect();
+    assert_eq!(at_bottom.len(), 2, "the bottom face should fall into two");
+    assert_eq!(
+        at_bottom.iter().filter(|face| !face.inner_wires.is_empty()).count(),
+        1,
+        "one of the two carries the hole the torus comes through"
+    );
 }
 
 #[test]
