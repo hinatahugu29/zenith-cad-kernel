@@ -254,6 +254,43 @@ impl NurbsCurve3 {
         KnotVector::new(knots)
     }
 
+    /// 端で繋がったクランプ済みベジエ区間を、1本の多区間曲線に繋ぐ。
+    ///
+    /// 折れ線と円弧が混じったパスを、円弧を弦に落とさずに1本で渡すための口。
+    /// 全区間が同じ次数で、内部ノットを持たないクランプ曲線であること。
+    /// 継ぎ目は C0（多重度が次数）になるので、形はそのまま保たれる。
+    pub fn join_clamped_beziers(pieces: &[Self]) -> Result<Self, String> {
+        let Some(first) = pieces.first() else {
+            return Err("joining needs at least one piece".to_string());
+        };
+        let degree = first.degree;
+        let order = degree + 1;
+        for piece in pieces {
+            if piece.degree != degree {
+                return Err("every piece must have the same degree".to_string());
+            }
+            if piece.control_points.len() != order || piece.knots.knots.len() != order * 2 {
+                return Err("every piece must be a single clamped Bezier span".to_string());
+            }
+        }
+
+        let mut control_points = first.control_points.clone();
+        for piece in pieces.iter().skip(1) {
+            // 継ぎ目の点は共有する。前の区間の終点と次の始点は同じ位置にある。
+            control_points.extend_from_slice(&piece.control_points[1..]);
+        }
+
+        let span_count = pieces.len();
+        let mut knots = vec![0.0; order];
+        for index in 1..span_count {
+            let value = index as f64 / span_count as f64;
+            knots.extend(std::iter::repeat(value).take(degree));
+        }
+        knots.extend(std::iter::repeat(1.0).take(order));
+
+        Self::new(degree, control_points, KnotVector::new(knots))
+    }
+
     /// パラメータ方向を反転した同じ曲線を返す。
     pub fn reversed(&self) -> Self {
         let start = self.knots.knots.first().copied().unwrap_or(0.0);
