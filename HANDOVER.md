@@ -131,10 +131,23 @@ cargo run --release -p zenith_algo --example foreign_reexport
 （`any_face_pair_may_intersect`。トーラス×箱の3演算で 96.6 → 62.2 秒）。
 選別とキャップで候補を共有する。
 
-残っていること: **失敗経路の `prepare_exact_boolean` が同じ走査を4回します**。
-また、面の組ごとの結果を1回のブーリアン内で覚えていません。面には `id` が
-ありますが、`regularize` が作る面は `id: 0` を共有しているので、id を鍵にした
-記憶は**そのままでは危険**です。まず id を正しく振るところからです。
+残っていること: **失敗経路の `prepare_exact_boolean` が同じ走査を4回します**
+（`crates/zenith_algo/src/boolean.rs:417`）。`collect_face_pair_candidates`、
+`collect_intersection_edge_candidates`、`collect_planar_face_split_candidates`、
+`collect_classified_planar_face_split_candidates`、
+`collect_boolean_shell_assembly` が順に呼ばれ、後ろのものは前のものを内側で
+やり直しています。報告のための数え上げなので、1回走らせて数えれば済みます。
+
+また、面の組ごとの結果を1回のブーリアン内で覚えていません。**面の `id` を鍵に
+した記憶は、いまは安全です**——かつて `regularize` の割った面が `id: 0` を
+共有していた問題は解消済みで、`regularize.rs` の
+`every_face_that_comes_out_of_a_split_has_its_own_id` が見張っています。
+`id` は `FACE_ID_GEN` の大域カウンタなので、2つの立体をまたいでも衝突しません。
+
+**着手するならここから**: `prepare_exact_boolean` を、1回の
+`collect_boolean_shell_assembly` の結果から数え上げるように書き換える。
+形が変わらないことは `boolean_envelope`（39成功・誤答0）と、テスト一式で
+確かめられます。
 
 ### 3-2. 接線配置（6件）— まず定義を決める
 
