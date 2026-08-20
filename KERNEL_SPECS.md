@@ -1,6 +1,6 @@
 # 🚀 Zenith CAD Kernel - スペック総覧（棚卸し）＆ 次なる飛躍への展望
 
-**文書バージョン**: v2.1.0 (任意角度の多面体ブーリアン・STEP相互運用・実測ベース改訂版)  
+**文書バージョン**: v2.2.0 (他カーネルの解析曲面読み込み・実測ベース改訂版)  
 **最終更新日時**: 2026年8月20日  
 **ステータス**: 完全自前 Rust B-Rep エンジン。**本書の数値はすべて実測値**で、対応範囲と未対応範囲を分けて記載している。
 
@@ -24,7 +24,7 @@ Zenith CAD Kernel は、Rust でフルスクラッチ開発された **次世代
 
 ```mermaid
 graph TD
-    A[Zenith CAD Kernel Core v2.0.0] --> B[1. 数値幾何・自由曲面エンジン]
+    A[Zenith CAD Kernel Core v2.2.0] --> B[1. 数値幾何・自由曲面エンジン]
     A --> C[2. B-Rep トポロジー構造]
     A --> D[3. 形状生成・フィーチャーモデリング]
     A --> E[4. ダイレクトモデリング＆解析]
@@ -140,7 +140,8 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 
 ## 🏆 FreeCAD 1.1 (OpenCASCADE 7.x) ヘッドレス自動検証実績
 
-本カーネルが生成した全 STEP ファイル（37 モデル）に対し、FreeCAD 1.1 の OpenCASCADE C++ コアを Python から直接呼び出すヘッドレス自動監査ベンチマークを実施。
+本カーネルが生成した STEP ファイルに対し、FreeCAD 1.1 の OpenCASCADE C++ コアを Python から直接呼び出すヘッドレス自動監査ベンチマークを実施。
+突き合わせ用の 15 モデル（`export_validation_suite`）と、代表形状 16 モデル（`export_showcase`）の二本立てになっている。
 
 検証は「カーネルが STEP と自前の測定値をマニフェストに書き出し、OpenCASCADE が同じ問いに独立に答えて突き合わせる」方式で、不一致があれば非ゼロ終了する再現可能なコマンドになっています。
 
@@ -148,7 +149,8 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 cargo run --release -p zenith_algo --example export_validation_suite; & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/freecad_cross_validate.py
 ```
 
-- **12 / 12 の対象で両カーネルが一致**（形状種別 Solid・`isValid`・`isClosed`・体積・表面積・断面積）
+- **15 / 15 の対象で両カーネルが一致**（形状種別 Solid・`isValid`・`isClosed`・体積・表面積・断面積）
+- 代表 **16 / 16 形状**が OpenCASCADE で valid closed solid として読まれる
 - 体積の相互一致: 多面体系は完全一致、曲面系は 1e-12〜1e-10、掃引系は 1e-05 台
 - 解析解があるものは**カーネル側が解析解と 1e-12 以下で一致**。直線経路の掃引（厳密に円柱）ではカーネルが 3.5e-14、OpenCASCADE が 1.1e-05 の誤差で、この範囲では本カーネルの積分の方が高精度
 - **詳細技術報告書**: [`FREECAD_VALIDATION_REPORT.md`](file:///e:/CAD-Kernel/FREECAD_VALIDATION_REPORT.md) に完全な監査データとデバッグ記録を収録。
@@ -162,8 +164,6 @@ cargo run --release -p zenith_algo --example export_validation_suite; & "C:\Prog
 STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも**外から測らなければ気づけません**。
 そのため、主張ではなく測定値を出すツールを常設してあります。
 
-| コマンド | 何を測るか |
-| :--- | :--- |
 **能力の測定**
 
 | コマンド | 何を測るか |
@@ -174,6 +174,7 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | `cargo run --release -p zenith_algo --example mass_convergence` | 質量積分が分割の細分に対して収束するか |
 | `cargo run --release -p zenith_algo --example slice_probe` | 断面積・周長と解析解の差 |
 | `cargo run --release -p zenith_algo --example step_import_audit` | STEP の往復と、他カーネルが書いたファイルを読めるか |
+| `cargo run --release -p zenith_algo --example pcurve_fidelity_probe` | p-curve が本当に 3D エッジの上にあるか（検証が見ている点の外でも測る） |
 
 **不具合を追うための診断**
 
@@ -186,6 +187,7 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | `coplanar_probe` | 同一平面で重なる面のペアと、法線の向きが一致するか |
 | `uv_domain_probe` / `surface_smoothness_probe` | テッセレーションの被覆と、曲面評価の不連続 |
 | `imported_curve_probe` | インポーターが再構成した曲線・面の中身 |
+| `pcurve_fidelity_probe` | p-curve と 3D エッジの距離を、サンプル数を変えて測った表 |
 
 **外部カーネルとの突き合わせ**
 
@@ -197,7 +199,13 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 これらは回帰テストとしても固定されており（`builder_audit_test` / `boolean_verification_test` /
 `boolean_cylinder_test` / `boolean_chained_test` / `boolean_rotated_test` /
 `section_slice_test` / `sweep_smoothness_test` / `step_conformance_test` /
-`step_import_test`）、`cargo test` で常時検証されます。
+`step_import_test` / `foreign_analytic_surface_test`）、`cargo test` で常時検証されます。
+現在 37 テストバイナリ・263 テストがすべてグリーンです。
+
+`foreign_analytic_surface_test` だけは期待値の出どころが違います。
+OpenCASCADE 7.8 が書いた STEP を `crates/zenith_algo/tests/fixtures/` に置き、
+期待する体積・面積も OpenCASCADE 自身が報告した値を使っています。
+ここが落ちたときは、本書が決めた数字との不一致ではなく、他カーネルとの不一致です。
 
 ### 測定で判明している精度の目安
 
@@ -212,8 +220,48 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | ブーリアン（未対応範囲） | 曲面同士の交差（円柱×円柱、球×球、円錐・トーラス絡み）。誤答ではなくエラーを返す |
 | STEP 書き出し | OpenCASCADE と体積・表面積が 1e-16〜1e-10 で一致。代表16形状すべてが Solid・valid・closed として読まれる |
 | STEP 読み込み（自前ファイル） | 面数・シェル妥当性・体積を保って往復。多面体は厳密、曲面系は 1e-13 |
-| STEP 読み込み（他カーネル・解析曲面） | OpenCASCADE の円柱を厳密に読める。円錐・球・トーラスは固定パッチのままで未対応 |
-| STEP 読み込み（他カーネル・B-spline曲面） | 読めるが、曲線トリム境界をポリゴン近似するため面積に数%の誤差 |
+| STEP 読み込み（他カーネル・解析曲面） | OpenCASCADE が書いた円柱・円錐・頂点まで届く円錐・球・半球・トーラス・トーラス区分を、体積・面積とも OpenCASCADE の値と一致して読める |
+| STEP 読み込み（他カーネル・B-spline曲面） | 読めるが、曲線トリム境界をポリゴン近似するため面積に数%の誤差（NURBS円柱のキャップ 282.47、正しくは 314.16） |
+| p-curve（投影で作られたもの） | **検証が効いていない。** 下記「測定されていない箇所」を参照 |
+
+### 測定されていない箇所（既知・未修正）
+
+本書の方針は「測って確かめた範囲だけを書く」ですが、**測定そのものが効いていない
+箇所が1つ見つかっています**。修正前に記録しておきます。
+
+NURBS 面の p-curve は、辺を8等分して投影した1次ポリラインとして作られます
+（`Face::derive_nurbs_boundary_pcurves(tol, 8)`）。シェル検証はこれを
+`validate_pcurves(tol, 8)` で確認します。**同じ8等分**なので、検証は p-curve が
+構成上ぴったり通ることが分かっている点しか見ておらず、その間を一度も見ていません。
+
+```bash
+cargo run --release -p zenith_algo --example pcurve_fidelity_probe
+```
+
+```
+file                                   face          8          9         16         37         64
+occ_reference_cylinder_nurbs.step      face  1 nurbs   5.515e-12   8.344e-1   8.892e-1   8.881e-1   8.892e-1
+occ_reference_sphere_capped.step       face  0 nurbs   3.534e-11    7.002e0    2.000e1    1.956e1    2.000e1
+```
+
+8のところだけ 1e-11、他はすべて 0.89 と 20.0 です。半球の 20.0 は半径10の球の
+**直径**にあたり、投影が裏側に落ちている点があることを意味します。近似が粗いと
+いう話ではありません。
+
+影響範囲は投影経路のみです。辺が曲面の等パラメータ境界に乗る場合は
+`match_nurbs_outer_boundary_pcurve` が厳密な p-curve を返し、どのサンプル数でも
+1e-15 に収まります。壊れているのは落ちた先の `project_edge_to_nurbs_pcurve` で、
+**点が曲面に乗っているかしか見ておらず、点と点の間が辺から離れていないかを
+一度も見ていません**。
+
+なお、この欠陥があっても解析曲面の行（円柱・円錐・球・半球・トーラス・トーラス区分）の
+体積・面積は OpenCASCADE と一致しています。p-curve が誤っていても、テッセレーションが
+囲む領域は結果的に正しく出ているためです。**一致していないのは B-spline 曲面の行のほうで**、
+キャップ面積 282.47（正しくは 314.16）はまさにこの投影経路が原因です。
+
+対処には3つの部品が要り、**入れる順序があります**（先に検証のサンプル数だけ上げると、
+いま正しく読めているファイルが軒並み弾かれます）。詳細と実測は
+[`HANDOVER.md`](HANDOVER.md) の 3-2 にあります。
 
 ---
 
@@ -256,4 +304,10 @@ graph LR
 Zenith CAD Kernel は、当初の目標であった **「Blender アドオンとしての脱OCCT（完全自前Rust製化）」を 100% 達成** いたしました。  
 外部の巨大な C++ ライブラリに一切依存せず、安全・高速・ポータブルな CAD モデリング環境が確立されています。
 
-業界標準 CAD（FreeCAD / OpenCASCADE）での全方位ヘッドレス検証によって幾何・B-Rep トポロジーの完全性が立証された今、オープンソースCADおよびプロフェッショナルモデリングの世界において、唯一無二の圧倒的な存在感を発揮できる強固な基盤が整いました！
+業界標準 CAD（FreeCAD / OpenCASCADE）とのヘッドレス相互検証が、突き合わせ 15/15・代表形状 16/16 で通っています。
+書き出しだけでなく読み込み側も、他カーネルが書いた解析曲面を体積・面積とも一致して読めるところまで来ました。
+
+一方で、対応範囲外は依然として明確に残っています。ブーリアンは 45 ケース中 25、曲面同士の交差（SSI）は未対応、
+p-curve の検証は上記のとおり効いていません。**「完全性が立証された」とは書けません**が、
+どこまでが測って確かめられていて、どこからがそうでないかは、本書と常設ツールで随時再現できます。
+それが基盤として意味のある状態だと考えています。
