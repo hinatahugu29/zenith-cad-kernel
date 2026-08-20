@@ -805,8 +805,13 @@ fn loop_deflection_target(pcurve_loop: &FacePcurveLoop, params: &TessellationPar
         return 1e-3;
     }
 
+    // 境界の折れは面積を必ず内側に削る一方向の誤差で、しかも分割数に比例して
+    // しか減らない。分割数に紐づけていたときは、512分割でも円形キャップの面積が
+    // 1.1e-3 足りなかった。境界は1次元なので、面の格子よりずっと細かく取っても
+    // 費用は線形にしか増えない。分割数に紐づけず、形の大きさに対する比で決める。
     let divisions = params.u_divisions.max(params.v_divisions).max(8) as f64;
-    (diagonal / (divisions * 4.0)).max(1e-4)
+    let from_divisions = diagonal / (divisions * 4.0);
+    (diagonal * 1e-5).min(from_divisions).max(1e-9)
 }
 
 fn sample_pcurve_segment_adaptive(

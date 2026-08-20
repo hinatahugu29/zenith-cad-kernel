@@ -4685,18 +4685,40 @@ fn test_cylinder_cap_curve_sampling_refines_with_tessellation_params() {
         v_divisions: 16,
     };
 
-    let low_cap = tessellate_face(&cyl.outer_shell.faces[5], &low);
-    let high_cap = tessellate_face(&cyl.outer_shell.faces[5], &high);
+    let cap = &cyl.outer_shell.faces[5];
+    let low_cap = tessellate_face(cap, &low);
+    let high_cap = tessellate_face(cap, &high);
 
     assert!(
         low_cap.positions.len() > 4,
         "even coarse tessellation should preserve curved cap boundaries"
     );
+    assert!(high_cap.num_triangles() >= low_cap.num_triangles());
+
+    // かつては「分割数を上げれば境界点が増える」ことを見ていた。増えることは
+    // 境界がちゃんと取れていることの代わりに過ぎず、しかも折れを分割数に
+    // 紐づけている限り、面積は分割数に比例してしか合わなかった（512分割でも
+    // 円形キャップが 1.1e-3 足りない）。境界は1次元で費用が線形にしか増えない
+    // ので、いまは分割数と切り離して形の大きさで決めている。
+    //
+    // そこで代わりに、欲しかった性質そのものを測る: 粗い設定でも面積が
+    // 解析解と合い、細かい設定にしても動かないこと。
+    let exact = std::f64::consts::PI * 100.0;
+    for (name, params) in [("coarse", &low), ("fine", &high)] {
+        let (area, _) = zenith_algo::MassCalculator::compute_face_integral(cap, params);
+        let relative = (area - exact).abs() / exact;
+        assert!(
+            relative < 1e-4,
+            "{name} cap area {area:.6} against {exact:.6} (relative {relative:.2e})"
+        );
+    }
+
+    let (low_area, _) = zenith_algo::MassCalculator::compute_face_integral(cap, &low);
+    let (high_area, _) = zenith_algo::MassCalculator::compute_face_integral(cap, &high);
     assert!(
-        high_cap.positions.len() > low_cap.positions.len(),
-        "higher tessellation settings should refine curved p-curve boundaries"
+        (high_area - low_area).abs() / exact < 1e-6,
+        "the cap boundary should no longer be what limits the area: {low_area:.6} vs {high_area:.6}"
     );
-    assert!(high_cap.num_triangles() > low_cap.num_triangles());
 }
 
 #[test]

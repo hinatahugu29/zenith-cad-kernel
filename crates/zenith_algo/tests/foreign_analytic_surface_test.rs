@@ -37,6 +37,7 @@ fn read_fixture(name: &str) -> Solid {
         "torus_segment" => include_str!("fixtures/occ_reference_torus_segment.step"),
         "torus" => include_str!("fixtures/occ_reference_torus.step"),
         "sphere" => include_str!("fixtures/occ_reference_sphere.step"),
+        "cylinder_nurbs" => include_str!("fixtures/occ_reference_cylinder_nurbs.step"),
         other => panic!("no fixture named {other}"),
     };
 
@@ -142,6 +143,41 @@ fn test_a_sphere_written_as_one_face_with_no_boundary_is_readable() {
     assert!(
         (area - expected).abs() / expected < 1e-3,
         "sphere surface area {area:.4}, closed form {expected:.4}"
+    );
+}
+
+#[test]
+fn test_a_solid_converted_to_b_splines_keeps_its_size() {
+    // OpenCASCADE の円柱を toNurbs したもの。解析曲面は一つも無く、平面の
+    // キャップまで1次のパッチになっている。曲線でトリムされた B-spline 面が
+    // どこまで正しく読めるかが、そのまま出る。
+    //
+    // かつてはキャップが八角形として通り、面積 282.47（正しくは 314.16）、
+    // 体積 12144.19（正しくは 12566.37）だった。原因は二つ重なっていて、
+    // p-curve が折れ線近似だったことと、テッセレータがトリムループを
+    // 分割数に比例した粗さでしか折らなかったこと。
+    let solid = read_fixture("cylinder_nurbs");
+    let params = TessellationParams {
+        u_divisions: 64,
+        v_divisions: 64,
+    };
+
+    let exact_cap = std::f64::consts::PI * 100.0;
+    let mut caps = 0;
+    for face in &solid.outer_shell.faces {
+        let area = MassCalculator::compute_face_integral(face, &params).0;
+        if (area - exact_cap).abs() / exact_cap < 1e-3 {
+            caps += 1;
+        }
+    }
+    assert_eq!(caps, 2, "both caps should come out at pi r^2");
+
+    let measured = volume(&solid);
+    let exact = std::f64::consts::PI * 100.0 * 40.0;
+    let relative = (measured - exact).abs() / exact;
+    assert!(
+        relative < 1e-3,
+        "converted cylinder volume {measured:.4} against {exact:.4} (relative {relative:.2e})"
     );
 }
 
