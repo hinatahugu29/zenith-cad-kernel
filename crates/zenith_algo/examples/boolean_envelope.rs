@@ -23,6 +23,43 @@ fn shifted(solid: &Solid, x: f64, y: f64, z: f64) -> Solid {
     BrepTransform::translate_solid(solid, Vec3::new(x, y, z))
 }
 
+/// 第1種・第2種の完全楕円積分 `K(k)`, `E(k)` を算術幾何平均で求める。
+///
+/// 半径の違う2本の直交円柱の交わりには閉じた式があり、そこにこれが要る。
+/// 期待値の側に特殊関数が要るからといって、期待値を測定値で置き換えては
+/// ならない。それをすると、この行は何も確かめなくなる。
+fn complete_elliptic_k_e(k: f64) -> (f64, f64) {
+    let mut a = 1.0f64;
+    let mut b = (1.0 - k * k).sqrt();
+    let mut c = k;
+    let mut sum = c * c * 0.5;
+    let mut power = 1.0f64;
+    for _ in 0..40 {
+        if c.abs() < 1e-17 {
+            break;
+        }
+        let next_a = (a + b) * 0.5;
+        let next_b = (a * b).sqrt();
+        c = (a - b) * 0.5;
+        a = next_a;
+        b = next_b;
+        power *= 2.0;
+        sum += power * c * c * 0.5;
+    }
+    let k_value = std::f64::consts::PI / (2.0 * a);
+    (k_value, k_value * (1.0 - sum))
+}
+
+/// 半径 `big` と `small` の直交する2円柱の交わりの体積。軸は交わっているとする。
+///
+/// `V = (8/3) R^3 [(1 + k^2) E(k) - (1 - k^2) K(k)]`, `k = r / R`。
+/// 半径が等しいときは Steinmetz の `16 R^3 / 3` に戻る。
+fn bicylinder_intersection_volume(big: f64, small: f64) -> f64 {
+    let k = small / big;
+    let (k_value, e_value) = complete_elliptic_k_e(k);
+    8.0 / 3.0 * big.powi(3) * ((1.0 + k * k) * e_value - (1.0 - k * k) * k_value)
+}
+
 fn main() {
     let tol = Tolerance::default();
     let params = TessellationParams {
@@ -184,13 +221,23 @@ fn main() {
                 .unwrap();
                 shifted(&along_x, -20.0, 0.0, 20.0)
             },
-            expected: [None, None, None],
+            expected: {
+                let big = std::f64::consts::PI * 100.0 * 40.0;
+                let small = std::f64::consts::PI * 36.0 * 40.0;
+                let lens = bicylinder_intersection_volume(10.0, 6.0);
+                [Some(big + small - lens), Some(big - lens), Some(lens)]
+            },
         },
         Case {
             name: "sphere x sphere",
             a: sphere.clone(),
             b: shifted(&sphere, 10.0, 0.0, 0.0),
-            expected: [None, None, None],
+            expected: {
+                // 半径 r の球2つ、中心間距離 d のレンズは (pi/12)(4r+d)(2r-d)^2。
+                let one = 4.0 / 3.0 * std::f64::consts::PI * 1000.0;
+                let lens = std::f64::consts::PI / 12.0 * 50.0 * 100.0;
+                [Some(2.0 * one - lens), Some(one - lens), Some(lens)]
+            },
         },
         Case {
             name: "cone x box",

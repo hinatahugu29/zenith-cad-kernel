@@ -1011,6 +1011,23 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // 曲面同士の交線は、相手のパッチの境界で細切れになって届く。円柱を
+        // 円柱で貫くと、片方の四半パッチに入る切り込みは2本に分かれ、どちらも
+        // 面の内側で終わるので、1本ずつ当てると両方とも断られる。端で繋がって
+        // いるなら、まとめて1本の切り込みとして当てる。
+        if split_edges.len() >= 2 && matches!(face.geometry, FaceGeometry::Nurbs(_)) {
+            if let Ok((pieces, report)) = crate::FaceSplitter::split_by_chain(face, split_edges, tol)
+            {
+                if report.area_residual <= 1e-6 && pieces.len() >= 2 {
+                    return Ok(PlanarFaceMultiSplitResult {
+                        faces: pieces,
+                        applied_split_count: split_edges.len(),
+                        skipped_split_count: 0,
+                    });
+                }
+            }
+        }
+
         let mut faces = vec![face.clone()];
         let mut applied_split_count = 0;
         let mut skipped_split_count: usize = 0;
@@ -3007,6 +3024,19 @@ fn points_same_3d(a: Point3, b: Point3, tol: f64) -> bool {
     (a - b).norm() <= tol
 }
 
+/// 面を代表する点。内外判定はこの1点で決まるので、**面の上になければ
+/// ならない**。
+///
+/// 以前は境界の標本の平均だった。平面ならそれで面の上に来るが、曲がった面では
+/// 来ない。円柱の四半パッチなら、境界の平均は軸のほうへ引っ込んだ位置にあり、
+/// 相手の立体に対する内外は面のそれと関係なく決まる。曲面の面が割られる
+/// までは表に出なかった（丸ごとの面は相手と交わらないか、判定が偶然合って
+/// いた）が、交線で割った断片ではそのまま誤りになる。円柱を円柱で貫くと、
+/// 貫かれた側の側面はどの断片も選ばれなかった。
+///
+/// トリム領域を三角形に割り、**いちばん大きい三角形の重心**を UV で取って
+/// 曲面に載せる。三角形は領域の内側にあり、大きいものを選べば境界からも
+/// 離れている。
 fn representative_face_point(face: &Face) -> Point3 {
     // 穴のある面の重心は穴の中に落ちることがあり、内外判定が反転する
     if !face.inner_wires.is_empty() {
@@ -3014,6 +3044,12 @@ fn representative_face_point(face: &Face) -> Point3 {
             if let Some(point) = planar_point_clear_of_holes(face, plane) {
                 return point;
             }
+        }
+    }
+
+    if let FaceGeometry::Nurbs(surface) = &face.geometry {
+        if let Some((u, v)) = largest_domain_triangle_centroid(face) {
+            return surface.evaluate(u, v);
         }
     }
 
@@ -3026,6 +3062,26 @@ fn representative_face_point(face: &Face) -> Point3 {
         .iter()
         .fold(Vec3::new(0.0, 0.0, 0.0), |acc, point| acc + point.coords);
     Point3::from(sum / points.len() as f64)
+}
+
+/// トリム領域の三角形のうち、いちばん大きいものの重心（UV）。
+fn largest_domain_triangle_centroid(face: &Face) -> Option<(f64, f64)> {
+    let domain = zenith_tess::face_uv_triangulation(face, &zenith_tess::TessellationParams::default());
+    let mut best: Option<(f64, (f64, f64))> = None;
+    for triangle in &domain.triangles {
+        let a = domain.uvs[triangle[0]];
+        let b = domain.uvs[triangle[1]];
+        let c = domain.uvs[triangle[2]];
+        let area = 0.5 * ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs();
+        let centroid = (
+            (a.x + b.x + c.x) / 3.0,
+            (a.y + b.y + c.y) / 3.0,
+        );
+        if best.as_ref().map(|(found, _)| area > *found).unwrap_or(true) {
+            best = Some((area, centroid));
+        }
+    }
+    best.map(|(_, centroid)| centroid)
 }
 
 /// Picks the material point of a pierced planar face that sits furthest from

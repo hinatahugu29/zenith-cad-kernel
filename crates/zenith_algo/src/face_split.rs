@@ -76,6 +76,48 @@ impl FaceSplitter {
         split: &Edge,
         tol: &Tolerance,
     ) -> Result<(Vec<Face>, FaceSplitReport), String> {
+        Self::split_by_chain(face, std::slice::from_ref(split), tol)
+    }
+
+    /// 端で繋がった何本かの曲線を1本の切り込みとして `face` を2枚に割る。
+    ///
+    /// 曲面同士の交線は、相手のパッチの境界で細切れになって届く。円柱を円柱で
+    /// 貫くと、片方の四半パッチに入る切り込みは2本に分かれ、**どちらも面の
+    /// 内側で終わる**。1本ずつ当てると両方とも「境界に着かない」と断られる。
+    /// 繋いで初めて、境界から境界へ届く1本の切り込みになる。
+    pub fn split_by_chain(
+        face: &Face,
+        chain: &[Edge],
+        tol: &Tolerance,
+    ) -> Result<(Vec<Face>, FaceSplitReport), String> {
+        if chain.is_empty() {
+            return Err("a cut needs at least one curve".to_string());
+        }
+        if chain.len() == 1 {
+            return Self::split_one(face, &chain[0], tol);
+        }
+
+        let ordered = order_chain(chain, tol)?;
+        Self::split_with_ordered_cut(face, &ordered, tol)
+    }
+
+    fn split_one(
+        face: &Face,
+        split: &Edge,
+        tol: &Tolerance,
+    ) -> Result<(Vec<Face>, FaceSplitReport), String> {
+        let start = split.start_vertex.point;
+        let end = split.end_vertex.point;
+        let forward = orient_between(split, start, end, tol)
+            .ok_or_else(|| "the splitting edge does not run between its own ends".to_string())?;
+        Self::split_with_ordered_cut(face, &[forward], tol)
+    }
+
+    fn split_with_ordered_cut(
+        face: &Face,
+        cut: &[OrientedEdge],
+        tol: &Tolerance,
+    ) -> Result<(Vec<Face>, FaceSplitReport), String> {
         if !face.inner_wires.is_empty() {
             return Err("splitting a face that has holes is not implemented".to_string());
         }
@@ -87,17 +129,21 @@ impl FaceSplitter {
         let scale = boundary_extent(&face.outer_wire).max(1.0);
         let limit = tol.linear * 10.0 * scale;
 
-        // 1. 分割線が本当にこの面の上にあるか。構成に使っていない位置で測る。
-        let curve_off_surface = Self::distance_to_surface(face, &split.curve, 23)?;
+        // 1. 切り込みが本当にこの面の上にあるか。構成に使っていない位置で測る。
+        let mut curve_off_surface: f64 = 0.0;
+        for piece in cut {
+            curve_off_surface =
+                curve_off_surface.max(Self::distance_to_surface(face, &piece.edge.curve, 23)?);
+        }
         if curve_off_surface > limit {
             return Err(format!(
                 "the splitting curve leaves the face by {curve_off_surface:.3e}, over {limit:.3e}"
             ));
         }
 
-        // 2. 両端が境界のどこに乗るか。乗っていなければ割れない。
-        let start = split.start_vertex.point;
-        let end = split.end_vertex.point;
+        // 2. 切り込みの両端が境界のどこに乗るか。乗っていなければ割れない。
+        let start = oriented_start(&cut[0]);
+        let end = oriented_end(&cut[cut.len() - 1]);
         let (from, from_distance) = locate_on_wire(&face.outer_wire, start, tol)
             .ok_or_else(|| "the splitting curve does not start on the boundary".to_string())?;
         let (to, to_distance) = locate_on_wire(&face.outer_wire, end, tol)
@@ -115,21 +161,23 @@ impl FaceSplitter {
             return Err("both ends of the splitting curve land at the same place".to_string());
         }
 
-        // 3. 巡回を2本に割り、それぞれを分割線で閉じる。
+        // 3. 巡回を2本に割り、それぞれを切り込みで閉じる。
         let forward = walk(edges, from, to, tol)?;
         let backward = walk(edges, to, from, tol)?;
 
-        let split_forward = orient_between(split, start, end, tol)
-            .ok_or_else(|| "the splitting edge does not run between its own ends".to_string())?;
-        let split_backward = OrientedEdge::new(
-            split_forward.edge.clone(),
-            split_forward.orientation.reversed(),
-        );
+        let cut_forward: Vec<OrientedEdge> = cut.to_vec();
+        let cut_backward: Vec<OrientedEdge> = cut
+            .iter()
+            .rev()
+            .map(|oriented| {
+                OrientedEdge::new(oriented.edge.clone(), oriented.orientation.reversed())
+            })
+            .collect();
 
         let mut first = forward;
-        first.push(split_backward);
+        first.extend(cut_backward);
         let mut second = backward;
-        second.push(split_forward);
+        second.extend(cut_forward);
 
         let pieces: Vec<Face> = [first, second]
             .into_iter()
@@ -281,6 +329,79 @@ impl FaceSplitter {
         }
         Ok(worst)
     }
+}
+
+fn oriented_start(oriented: &OrientedEdge) -> Point3 {
+    if oriented.orientation.is_forward() {
+        oriented.edge.start_vertex.point
+    } else {
+        oriented.edge.end_vertex.point
+    }
+}
+
+fn oriented_end(oriented: &OrientedEdge) -> Point3 {
+    if oriented.orientation.is_forward() {
+        oriented.edge.end_vertex.point
+    } else {
+        oriented.edge.start_vertex.point
+    }
+}
+
+/// 端で繋がった辺の集まりを、1本の道として並べ替える。
+///
+/// 端点が1度しか現れない辺が両端になる。輪になっている（すべての端点が2度
+/// 現れる）集まりは、境界に着地しないので断る。
+fn order_chain(chain: &[Edge], tol: &Tolerance) -> Result<Vec<OrientedEdge>, String> {
+    let limit = tol.linear.max(1e-9) * 10.0;
+    let same = |a: Point3, b: Point3| (a - b).norm() <= limit;
+
+    // 端点の出現回数を数え、1度しか出ない点を道の端とする。
+    let mut endpoints: Vec<(Point3, usize)> = Vec::new();
+    for edge in chain {
+        for point in [edge.start_vertex.point, edge.end_vertex.point] {
+            match endpoints.iter_mut().find(|(known, _)| same(*known, point)) {
+                Some((_, count)) => *count += 1,
+                None => endpoints.push((point, 1)),
+            }
+        }
+    }
+    let ends: Vec<Point3> = endpoints
+        .iter()
+        .filter(|(_, count)| *count == 1)
+        .map(|(point, _)| *point)
+        .collect();
+    if ends.len() != 2 {
+        return Err(format!(
+            "a cut made of {} curves has {} loose ends, not two",
+            chain.len(),
+            ends.len()
+        ));
+    }
+
+    let mut remaining: Vec<Edge> = chain.to_vec();
+    let mut ordered: Vec<OrientedEdge> = Vec::with_capacity(chain.len());
+    let mut cursor = ends[0];
+    while !remaining.is_empty() {
+        let found = remaining.iter().position(|edge| {
+            same(edge.start_vertex.point, cursor) || same(edge.end_vertex.point, cursor)
+        });
+        let Some(index) = found else {
+            return Err("the curves of a cut do not join end to end".to_string());
+        };
+        let edge = remaining.remove(index);
+        if same(edge.start_vertex.point, cursor) {
+            cursor = edge.end_vertex.point;
+            ordered.push(OrientedEdge::forward(edge));
+        } else {
+            cursor = edge.start_vertex.point;
+            ordered.push(OrientedEdge::reversed(edge));
+        }
+    }
+
+    if !same(cursor, ends[1]) {
+        return Err("a cut did not reach its own far end".to_string());
+    }
+    Ok(ordered)
 }
 
 /// 外周ワイヤの広がり。公差を形の大きさに合わせるために使う。
