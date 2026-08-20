@@ -147,7 +147,8 @@ impl Shell {
                 }
             }
 
-            if !face.outer_wire.is_closed(tol) {
+            // 境界を持たない面は、閉じていないのではなく囲むものが無い。
+            if !face.outer_wire.edges.is_empty() && !face.outer_wire.is_closed(tol) {
                 report.open_wire_count += 1;
                 report
                     .errors

@@ -120,11 +120,14 @@ impl Face {
     }
 
     /// 穴なしのFaceを作成
-    /// Whether the outer boundary is nothing but seam, walked out and back.
+    /// Whether the face covers its whole surface, with nothing trimmed away.
     ///
     /// A closed surface written as a single face - the way OpenCASCADE writes a
-    /// sphere or a torus - has no real boundary. What stands in for one is the
-    /// seam, traversed once each way, so every edge in the loop appears twice.
+    /// sphere or a torus - has no real boundary. Either there is none at all,
+    /// STEP's VERTEX_LOOP standing in as a single point, or what stands in for
+    /// one is the seam, traversed once each way, so every edge in the loop
+    /// appears twice.
+    ///
     /// Such a loop encloses the whole parameter domain, but it cannot be read
     /// that way from its p-curves: a point on the seam maps to both ends of the
     /// domain at once, so the signed area it traces depends on which end the
@@ -135,7 +138,7 @@ impl Face {
         }
         let edges = &self.outer_wire.edges;
         if edges.is_empty() {
-            return false;
+            return true;
         }
         edges.iter().enumerate().all(|(index, edge)| {
             edges.iter().enumerate().any(|(other_index, other)| {

@@ -675,6 +675,17 @@ impl StepImporter {
         Ok((origin, z_dir, x_dir))
     }
 
+    /// The point a VERTEX_LOOP stands at, or `None` for any other loop.
+    fn vertex_loop_point(ctx: &mut ImportContext, loop_id: u64) -> Option<Point3> {
+        let raw = ctx.raw_entities.get(&loop_id)?.clone();
+        if raw.name != "VERTEX_LOOP" {
+            return None;
+        }
+        let parts = Self::split_top_level_args(&raw.args);
+        let vertex_id = Self::parse_entity_ref(parts.get(1)?)?;
+        Self::get_vertex(ctx, vertex_id).ok().map(|vertex| vertex.point)
+    }
+
     fn get_wire(ctx: &mut ImportContext, loop_id: u64) -> Result<Wire, String> {
         if let Some(w) = ctx.wires.get(&loop_id) {
             return Ok(w.clone());
@@ -684,6 +695,18 @@ impl StepImporter {
             .get(&loop_id)
             .ok_or_else(|| format!("Entity #{} not found", loop_id))?
             .clone();
+        if raw.name == "VERTEX_LOOP" {
+            // VERTEX_LOOP('',#vertex)
+            //
+            // 頂点ひとつだけのループ。辺が無いのは書き落としではなく、
+            // 面が曲面全体を覆っていて囲むものが無いという意味。球を1面で
+            // 書くと極がこれになる。空のワイヤで表し、境界の広がりは
+            // 頂点のほうから渡す。
+            let wire = Wire::new(Vec::new());
+            ctx.wires.insert(loop_id, wire.clone());
+            return Ok(wire);
+        }
+
         if raw.name == "EDGE_LOOP" {
             // EDGE_LOOP('',(#1,#2,#3...))
             let parts = Self::split_top_level_args(&raw.args);
@@ -1218,6 +1241,9 @@ impl StepImporter {
             // 出すので、印が付いていなければ幾何から外周を決める必要がある。
             // これを必須としていたため、他カーネルの STEP が一切読めなかった。
             let mut unmarked_wires: Vec<Wire> = Vec::new();
+            // 辺を持たない境界からは形が取れないので、頂点だけは別に控えておく。
+            // 曲面をどう張るかを決めるのに、この一点でも位置の手掛かりになる。
+            let mut vertex_loop_points: Vec<Point3> = Vec::new();
             for b_id in Self::parse_ref_list(parts[1]) {
                 let bound_raw = ctx
                     .raw_entities
@@ -1227,6 +1253,9 @@ impl StepImporter {
                 let b_parts = Self::split_top_level_args(&bound_raw.args);
                 if b_parts.len() >= 2 {
                     let loop_id = Self::parse_entity_ref(b_parts[1]).ok_or("loop ref")?;
+                    if let Some(point) = Self::vertex_loop_point(ctx, loop_id) {
+                        vertex_loop_points.push(point);
+                    }
                     let mut wire = Self::get_wire(ctx, loop_id)?;
                     // FACE_BOUND の向きフラグ。.F. のとき、ループは書かれている
                     // のと逆向きに面を囲む。これを無視すると、辺が隣り合う面から
@@ -1285,6 +1314,7 @@ impl StepImporter {
             for wire in &inner_wires {
                 boundary_points.extend(wire.sample_points(12));
             }
+            boundary_points.extend(vertex_loop_points);
             let geom = Self::get_surface_for_boundary(ctx, surface_id, &boundary_points)?;
 
             let orientation = if same_sense {

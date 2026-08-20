@@ -36,6 +36,7 @@ fn read_fixture(name: &str) -> Solid {
         "sphere_capped" => include_str!("fixtures/occ_reference_sphere_capped.step"),
         "torus_segment" => include_str!("fixtures/occ_reference_torus_segment.step"),
         "torus" => include_str!("fixtures/occ_reference_torus.step"),
+        "sphere" => include_str!("fixtures/occ_reference_sphere.step"),
         other => panic!("no fixture named {other}"),
     };
 
@@ -113,6 +114,34 @@ fn test_a_torus_written_as_one_face_is_readable() {
     assert!(
         (area - expected).abs() / expected < 1e-3,
         "torus surface area {area:.4}, closed form {expected:.4}"
+    );
+}
+
+#[test]
+fn test_a_sphere_written_as_one_face_with_no_boundary_is_readable() {
+    // OpenCASCADE writes a whole sphere as one face bounded by a VERTEX_LOOP:
+    // a single point at the south pole and no edges at all. That is not a loop
+    // missing its edges, it is a face with nothing to trim away, and the point
+    // is the only thing saying where on the sphere the face sits.
+    assert_volume("sphere", 4188.7902);
+
+    let solid = read_fixture("sphere");
+    assert_eq!(solid.outer_shell.faces.len(), 1);
+    assert!(solid.outer_shell.faces[0].outer_wire.edges.is_empty());
+
+    let area = MassCalculator::compute_face_integral(
+        &solid.outer_shell.faces[0],
+        &TessellationParams {
+            u_divisions: 64,
+            v_divisions: 64,
+        },
+    )
+    .0;
+    // 4 pi r^2
+    let expected = 4.0 * std::f64::consts::PI * 100.0;
+    assert!(
+        (area - expected).abs() / expected < 1e-3,
+        "sphere surface area {area:.4}, closed form {expected:.4}"
     );
 }
 
