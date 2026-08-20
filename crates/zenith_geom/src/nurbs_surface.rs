@@ -117,6 +117,85 @@ impl NurbsSurface3 {
         ControlPoint3::from_homogeneous(&s_w).point
     }
 
+    /// The curve this surface traces at a fixed `v`, as an exact rational curve.
+    ///
+    /// Every control point of the result is the v-direction basis applied to a
+    /// column of the control net in homogeneous coordinates, so the curve is the
+    /// surface restricted to that line and not an approximation of it. The u
+    /// degree and u knots carry over unchanged.
+    ///
+    /// This is what makes a section of a surface of revolution exact: cut a
+    /// cylinder, a cone or a torus square to its axis and the result is one of
+    /// these lines, so the intersection curve comes straight out of the control
+    /// net rather than being traced.
+    pub fn iso_curve_v(&self, v: f64) -> Option<crate::nurbs_curve::NurbsCurve3> {
+        let num_u = self.control_points.len();
+        let num_v = self.control_points[0].len();
+        let (_, (v_min, v_max)) = self.param_range();
+        if !(v_min - 1e-9..=v_max + 1e-9).contains(&v) {
+            return None;
+        }
+        let v = v.clamp(v_min, v_max);
+
+        let span_v = self.knots_v.find_span(num_v, self.degree_v, v);
+        let basis_v = self.knots_v.basis_functions(span_v, self.degree_v, v);
+
+        let control_points = (0..num_u)
+            .map(|u_index| {
+                let mut accumulated = nalgebra::Vector4::zeros();
+                for (l, weight) in basis_v.iter().enumerate().take(self.degree_v + 1) {
+                    let v_index = span_v - self.degree_v + l;
+                    accumulated += self.control_points[u_index][v_index].to_homogeneous() * *weight;
+                }
+                ControlPoint3::from_homogeneous(&accumulated)
+            })
+            .collect();
+
+        crate::nurbs_curve::NurbsCurve3::new(
+            self.degree_u,
+            control_points,
+            KnotVector::new(self.knots_u.knots.clone()),
+        )
+        .ok()
+    }
+
+    /// The curve this surface traces at a fixed `u`, the other way round from
+    /// [`Self::iso_curve_v`].
+    ///
+    /// Which of the two carries a shape's axial direction is a matter of how
+    /// the builder laid the patch out - a cylinder's runs along v, a torus's
+    /// along u - so anything sectioning a surface has to be prepared for both.
+    pub fn iso_curve_u(&self, u: f64) -> Option<crate::nurbs_curve::NurbsCurve3> {
+        let num_u = self.control_points.len();
+        let num_v = self.control_points[0].len();
+        let ((u_min, u_max), _) = self.param_range();
+        if !(u_min - 1e-9..=u_max + 1e-9).contains(&u) {
+            return None;
+        }
+        let u = u.clamp(u_min, u_max);
+
+        let span_u = self.knots_u.find_span(num_u, self.degree_u, u);
+        let basis_u = self.knots_u.basis_functions(span_u, self.degree_u, u);
+
+        let control_points = (0..num_v)
+            .map(|v_index| {
+                let mut accumulated = nalgebra::Vector4::zeros();
+                for (k, weight) in basis_u.iter().enumerate().take(self.degree_u + 1) {
+                    let u_index = span_u - self.degree_u + k;
+                    accumulated += self.control_points[u_index][v_index].to_homogeneous() * *weight;
+                }
+                ControlPoint3::from_homogeneous(&accumulated)
+            })
+            .collect();
+
+        crate::nurbs_curve::NurbsCurve3::new(
+            self.degree_v,
+            control_points,
+            KnotVector::new(self.knots_v.knots.clone()),
+        )
+        .ok()
+    }
+
     /// 曲面上の点および U方向・V方向の偏導関数 (Du, Dv) を評価
     pub fn evaluate_derivatives_1st(&self, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
         let num_u = self.control_points.len();

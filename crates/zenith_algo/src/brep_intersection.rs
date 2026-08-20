@@ -1,6 +1,9 @@
 use crate::cap::CapBuilder;
 use std::collections::BTreeMap;
-use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3, Surface3};
+use zenith_geom::{
+    ControlPoint3, ExtremumEngine, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3,
+    Surface3,
+};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec2, Vec3, Vec3Ext};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
 use zenith_topo::{Edge, Face, FaceGeometry, FacePcurveLoop, OrientedEdge, Vertex, Wire};
@@ -788,6 +791,12 @@ impl BrepIntersectionBuilder {
             .or_else(|horizontal_error| {
                 split_cylinder_side_face_by_vertical_edge(face, surface, split_edge, tol)
                     .map_err(|vertical_error| format!("{horizontal_error}; {vertical_error}"))
+            })
+            .or_else(|cylinder_errors| {
+                // 円柱・円錐でない面。断面が面の等パラメータ線になっていれば、
+                // 形が何であれ同じやり方で割れる。トーラスがこれ。
+                split_patch_face_by_section_edge(face, surface, split_edge, tol)
+                    .map_err(|general_error| format!("{cylinder_errors}; {general_error}"))
             }),
             _ => Err("Face splitting is not implemented for this geometry".to_string()),
         }
@@ -1736,6 +1745,292 @@ fn split_cylinder_side_face_by_horizontal_edge(
     }
 
     Ok(vec![lower, upper])
+}
+
+/// Splits a four-sided patch face along a section that crosses it.
+///
+/// This asks nothing about what the surface is. The section edge is a circle
+/// about some axis - fitting it gives both - and from there the face's own
+/// boundary sorts itself out: two of its edges have both ends at the same
+/// distance along that axis and are the sections it already runs between, and
+/// the other two carry it from one to the other. The section has to land on
+/// those two and lie between the existing ones.
+///
+/// The pieces keep the original surface and take sub-arcs of the original side
+/// edges, cut where the section meets them. The cylinder path builds those side
+/// pieces as straight lines, which is right for a ruling and wrong for anything
+/// else; a torus's sides are arcs, so they are cut rather than redrawn.
+fn split_patch_face_by_section_edge(
+    face: &Face,
+    surface: &NurbsSurface3,
+    split_edge: &Edge,
+    tol: &Tolerance,
+) -> Result<Vec<Face>, String> {
+    if !face.inner_wires.is_empty() {
+        return Err("NURBS face splitting with inner wires is not implemented yet".to_string());
+    }
+    if face.outer_wire.edges.len() != 4 {
+        return Err("Only a four-sided patch face can be split by a section".to_string());
+    }
+
+    // 分割線が本当にこの面の上にあるか。曲面の種類を問わず、投影して測る。
+    let scale = sampled_edge_extent(split_edge).max(1.0);
+    for point in sample_curve_points(&split_edge.curve, 12) {
+        let projection = ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)
+            .map_err(|err| format!("Section edge could not be projected: {err}"))?;
+        if projection.distance > tol.linear * 10.0 * scale {
+            return Err(format!(
+                "Section edge leaves the face by {:.3e}",
+                projection.distance
+            ));
+        }
+    }
+
+    // 分割線そのものが軸を教えてくれる。円として当てはめれば、法線が軸、
+    // 中心が軸上の点。
+    let (center, _, normal) = fit_section_circle(&split_edge.curve, tol)
+        .ok_or_else(|| "Section edge is not a circle about an axis".to_string())?;
+    let axis = normal.ok_or_else(|| "Section edge has collapsed to a point".to_string())?;
+    let axial = |point: Point3| (point - center).dot(&axis);
+
+    let split_start = split_edge.start_vertex.point;
+    let split_end = split_edge.end_vertex.point;
+    let split_axial = 0.5 * (axial(split_start) + axial(split_end));
+    if (axial(split_start) - axial(split_end)).abs() > tol.linear * 10.0 * scale {
+        return Err("Section edge does not stay at one level".to_string());
+    }
+
+    let mut arcs: Vec<(&Edge, f64)> = Vec::new();
+    let mut sides: Vec<&Edge> = Vec::new();
+    for oriented in &face.outer_wire.edges {
+        let edge = &oriented.edge;
+        let (start_axial, end_axial) = (
+            axial(edge.start_vertex.point),
+            axial(edge.end_vertex.point),
+        );
+        if (start_axial - end_axial).abs() <= tol.linear * 10.0 * scale {
+            arcs.push((edge, 0.5 * (start_axial + end_axial)));
+        } else {
+            sides.push(edge);
+        }
+    }
+    if arcs.len() != 2 || sides.len() != 2 {
+        return Err("Face boundary does not read as two sections and two sides".to_string());
+    }
+
+    let (mut bottom, mut top) = (arcs[0], arcs[1]);
+    if bottom.1 > top.1 {
+        std::mem::swap(&mut bottom, &mut top);
+    }
+    let margin = tol.linear * scale;
+    if split_axial <= bottom.1 + margin || split_axial >= top.1 - margin {
+        return Err("Section edge must cross the face interior".to_string());
+    }
+
+    // 分割線の端点が、どちらの側辺に乗るか。乗る点で側辺を切る。
+    let mut cut_sides: Vec<(Point3, Edge, Edge)> = Vec::new();
+    for endpoint in [split_start, split_end] {
+        let mut matched = None;
+        for side in &sides {
+            if let Some((lower, upper)) = split_edge_at_point(side, endpoint, tol) {
+                matched = Some((endpoint, lower, upper));
+                break;
+            }
+        }
+        cut_sides.push(
+            matched.ok_or_else(|| "Section endpoints do not land on the face sides".to_string())?,
+        );
+    }
+    if cut_sides.len() != 2 {
+        return Err("Section edge does not meet both sides".to_string());
+    }
+
+    // 下側の弧の両端に合わせて、どちらの切り口がどちらの側かを決める。
+    let bottom_start = bottom.0.start_vertex.point;
+    let bottom_end = bottom.0.end_vertex.point;
+    let ordered = |point: Point3| {
+        let (first, second) = (&cut_sides[0], &cut_sides[1]);
+        if side_reaches(&first.1, point, tol) || side_reaches(&first.2, point, tol) {
+            Some(first)
+        } else if side_reaches(&second.1, point, tol) || side_reaches(&second.2, point, tol) {
+            Some(second)
+        } else {
+            None
+        }
+    };
+    let left = ordered(bottom_start)
+        .ok_or_else(|| "Could not match a cut side to the bottom arc".to_string())?;
+    let right = ordered(bottom_end)
+        .ok_or_else(|| "Could not match a cut side to the bottom arc".to_string())?;
+    if std::ptr::eq(left, right) {
+        return Err("Both section endpoints landed on the same side".to_string());
+    }
+
+    let top_start = far_end_of(&left.1, &left.2, bottom_start, tol)
+        .ok_or_else(|| "Could not follow the left side to the top arc".to_string())?;
+    let top_end = far_end_of(&right.1, &right.2, bottom_end, tol)
+        .ok_or_else(|| "Could not follow the right side to the top arc".to_string())?;
+
+    let left_lower = piece_between(&left.1, &left.2, bottom_start, left.0, tol)
+        .ok_or_else(|| "Could not cut the left side below the section".to_string())?;
+    let left_upper = piece_between(&left.1, &left.2, left.0, top_start, tol)
+        .ok_or_else(|| "Could not cut the left side above the section".to_string())?;
+    let right_lower = piece_between(&right.1, &right.2, bottom_end, right.0, tol)
+        .ok_or_else(|| "Could not cut the right side below the section".to_string())?;
+    let right_upper = piece_between(&right.1, &right.2, right.0, top_end, tol)
+        .ok_or_else(|| "Could not cut the right side above the section".to_string())?;
+
+    let split_forward = orient_edge_for_points(split_edge, left.0, right.0, tol)
+        .ok_or_else(|| "Section endpoints do not match the cut sides".to_string())?;
+    let split_reversed = OrientedEdge::new(
+        split_forward.edge.clone(),
+        split_forward.orientation.reversed(),
+    );
+    let bottom_oriented = orient_edge_for_points(bottom.0, bottom_start, bottom_end, tol)
+        .ok_or_else(|| "Bottom section does not match the face corners".to_string())?;
+    let top_oriented = orient_edge_for_points(top.0, top_start, top_end, tol)
+        .ok_or_else(|| "Top section does not match the face corners".to_string())?;
+
+    let orient_wire = |edges: Vec<OrientedEdge>| {
+        if face.orientation.is_forward() {
+            Wire::new(edges)
+        } else {
+            Wire::new(
+                edges
+                    .into_iter()
+                    .rev()
+                    .map(|oriented| {
+                        OrientedEdge::new(oriented.edge, oriented.orientation.reversed())
+                    })
+                    .collect(),
+            )
+        }
+    };
+
+    let lower = Face::new(
+        face.geometry.clone(),
+        orient_wire(vec![
+            bottom_oriented,
+            right_lower,
+            split_reversed,
+            OrientedEdge::new(left_lower.edge.clone(), left_lower.orientation.reversed()),
+        ]),
+        Vec::new(),
+        face.orientation,
+        face.tolerance,
+    );
+    let upper = Face::new(
+        face.geometry.clone(),
+        orient_wire(vec![
+            split_forward,
+            right_upper,
+            OrientedEdge::new(
+                top_oriented.edge.clone(),
+                top_oriented.orientation.reversed(),
+            ),
+            OrientedEdge::new(left_upper.edge.clone(), left_upper.orientation.reversed()),
+        ]),
+        Vec::new(),
+        face.orientation,
+        face.tolerance,
+    );
+
+    for piece in [&lower, &upper] {
+        if !piece.outer_wire.is_closed(tol) {
+            return Err("Section split produced an open wire".to_string());
+        }
+        let report = piece.validate_pcurves(tol, 8)?;
+        if !report.is_valid() {
+            return Err(format!(
+                "Section split p-curves are invalid with {} mismatches",
+                report.mismatch_count
+            ));
+        }
+    }
+
+    Ok(vec![lower, upper])
+}
+
+/// How far an edge reaches, as a length to scale tolerances against.
+fn sampled_edge_extent(edge: &Edge) -> f64 {
+    let samples = sample_curve_points(&edge.curve, 8);
+    let origin = samples[0];
+    samples
+        .iter()
+        .fold(0.0f64, |worst, sample| worst.max((sample - origin).norm()))
+}
+
+/// Cuts an edge at a point lying on it, into the part before and the part after.
+fn split_edge_at_point(edge: &Edge, point: Point3, tol: &Tolerance) -> Option<(Edge, Edge)> {
+    let projection =
+        ExtremumEngine::point_to_curve(point, &edge.curve, 64, tol.parametric).ok()?;
+    let scale = sampled_edge_extent(edge).max(1.0);
+    if projection.distance > tol.linear * 10.0 * scale {
+        return None;
+    }
+    // 端に当たった場合は切っても意味が無い。
+    let (lower, upper) = edge.curve.split_bezier_at(projection.parameter)?;
+    let middle = Vertex::new(point, tol.linear);
+    Some((
+        Edge::new(
+            lower,
+            edge.start_vertex.clone(),
+            middle.clone(),
+            tol.linear,
+        ),
+        Edge::new(upper, middle, edge.end_vertex.clone(), tol.linear),
+    ))
+}
+
+/// Whether one of an edge's own ends is at the given point.
+fn side_reaches(edge: &Edge, point: Point3, tol: &Tolerance) -> bool {
+    (edge.start_vertex.point - point).norm() <= tol.linear * 10.0
+        || (edge.end_vertex.point - point).norm() <= tol.linear * 10.0
+}
+
+/// The end of a cut side that is not the given one.
+fn far_end_of(lower: &Edge, upper: &Edge, near: Point3, tol: &Tolerance) -> Option<Point3> {
+    for edge in [lower, upper] {
+        for candidate in [edge.start_vertex.point, edge.end_vertex.point] {
+            if (candidate - near).norm() > tol.linear * 10.0
+                && !side_reaches_both(lower, upper, candidate, near, tol)
+            {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn side_reaches_both(
+    lower: &Edge,
+    upper: &Edge,
+    candidate: Point3,
+    near: Point3,
+    tol: &Tolerance,
+) -> bool {
+    // 切り口そのものは両方の断片が共有している。端点として選んではいけない。
+    let shared = [lower.end_vertex.point, upper.start_vertex.point];
+    shared
+        .iter()
+        .any(|point| (point - candidate).norm() <= tol.linear * 10.0)
+        && (candidate - near).norm() > tol.linear * 10.0
+}
+
+/// The one of two cut pieces that runs between the given points.
+fn piece_between(
+    lower: &Edge,
+    upper: &Edge,
+    from: Point3,
+    to: Point3,
+    tol: &Tolerance,
+) -> Option<OrientedEdge> {
+    for edge in [lower, upper] {
+        if let Some(oriented) = orient_edge_for_points(edge, from, to, tol) {
+            return Some(oriented);
+        }
+    }
+    None
 }
 
 /// The extent a cylinder-side face actually occupies, read from its boundary
@@ -3371,7 +3666,9 @@ fn intersect_plane_cylinder_patch(
         return FaceIntersectionKind::Unsupported;
     };
     let Some(patch) = recognize_cylinder_patch(surface, tol) else {
-        return FaceIntersectionKind::Unsupported;
+        // 円柱でも円錐でもない面。それでも、平面に平行な等パラメータ線を
+        // 持っているなら断面はその線として厳密に取り出せる。トーラスがこれ。
+        return intersect_plane_by_iso_section(plane, normal, surface, tol);
     };
 
     if normal.cross(&patch.axis).norm() <= tol.angular {
@@ -3444,6 +3741,156 @@ fn intersect_oblique_plane_cylinder_patch(
             tol.linear,
         ),
     }
+}
+
+/// Intersects a plane with any patch that has an iso-line lying in it.
+///
+/// A surface of revolution cut square to its axis meets the plane along one of
+/// its own parameter lines, whatever the surface is: a cylinder, a cone, a
+/// torus. The line is exact - it comes out of the control net - and it runs
+/// from one edge of the patch to the other, which is what the split stage
+/// needs.
+///
+/// Nothing here recognizes a shape. It asks two questions of the patch and
+/// takes the answers: does the distance along the plane's normal depend on one
+/// parameter alone, and is there a value of that parameter where the distance
+/// is zero? Then it checks the line it found really does lie in the plane, and
+/// refuses if it does not. A patch that is not a surface of revolution about
+/// this normal fails the first question; one the plane misses fails the second.
+///
+/// Both parameter directions are tried, because which one carries the axial
+/// direction is a matter of how the builder laid the patch out: a cylinder's
+/// runs along v, a torus's along u.
+fn intersect_plane_by_iso_section(
+    plane: &PlaneSurface3,
+    plane_normal: Vec3,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> FaceIntersectionKind {
+    for along_u in [false, true] {
+        if let Some(kind) = iso_section_along(plane, plane_normal, surface, tol, along_u) {
+            return kind;
+        }
+    }
+    FaceIntersectionKind::Unsupported
+}
+
+fn iso_section_along(
+    plane: &PlaneSurface3,
+    plane_normal: Vec3,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+    along_u: bool,
+) -> Option<FaceIntersectionKind> {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    if !(u_max > u_min && v_max > v_min) {
+        return None;
+    }
+    // 断面を決めるほうのパラメータと、その線に沿って動くほうのパラメータ。
+    let (section_min, section_max) = if along_u {
+        (u_min, u_max)
+    } else {
+        (v_min, v_max)
+    };
+    let (along_min, along_max) = if along_u {
+        (v_min, v_max)
+    } else {
+        (u_min, u_max)
+    };
+
+    let evaluate = |section: f64, along: f64| {
+        if along_u {
+            surface.evaluate(section, along)
+        } else {
+            surface.evaluate(along, section)
+        }
+    };
+    let offset_at = |section: f64, along: f64| {
+        (evaluate(section, along) - plane.origin).dot(&plane_normal)
+    };
+
+    let extent = (surface.evaluate(u_max, v_max) - surface.evaluate(u_min, v_min))
+        .norm()
+        .max(1.0);
+    let limit = tol.linear * extent;
+
+    // 法線方向の距離が、断面を決めるパラメータだけで決まるか。もう一方を
+    // 動かして変わるようなら、この向きは回転軸ではない。
+    let offset_of = |section: f64| offset_at(section, along_min);
+    for step in 0..=4 {
+        let section = section_min + (section_max - section_min) * step as f64 / 4.0;
+        let reference = offset_of(section);
+        for along_step in 1..=4 {
+            let along = along_min + (along_max - along_min) * along_step as f64 / 4.0;
+            if (offset_at(section, along) - reference).abs() > limit {
+                return None;
+            }
+        }
+    }
+
+    let (low, high) = (offset_of(section_min), offset_of(section_max));
+    if low.min(high) > limit || low.max(high) < -limit {
+        return None;
+    }
+    if (high - low).abs() <= limit {
+        // パッチ全体が平面と同じ高さにある。断面ではなく重なりなので、
+        // ここで promote するものは無い。
+        return None;
+    }
+
+    // 単調でなければ交わりが2本以上あり得る。分割段は面の組ごとに1本しか
+    // 受け取れないので、そこは promote しない。
+    let mut previous = low;
+    for step in 1..=16 {
+        let section = section_min + (section_max - section_min) * step as f64 / 16.0;
+        let current = offset_of(section);
+        if (current - previous) * (high - low) < -limit {
+            return None;
+        }
+        previous = current;
+    }
+
+    // 二分法。単調なので挟み撃ちで決まる。
+    let (mut lower, mut upper) = if low <= high {
+        (section_min, section_max)
+    } else {
+        (section_max, section_min)
+    };
+    for _ in 0..80 {
+        let middle = 0.5 * (lower + upper);
+        if offset_of(middle) < 0.0 {
+            lower = middle;
+        } else {
+            upper = middle;
+        }
+    }
+    let section = 0.5 * (lower + upper);
+
+    let curve = if along_u {
+        surface.iso_curve_u(section)?
+    } else {
+        surface.iso_curve_v(section)?
+    };
+
+    // 主張で終わらせない。取り出した線が本当に平面の上にあるか測る。
+    let (t_min, t_max) = curve.param_range();
+    for step in 0..=16 {
+        let point = curve.evaluate(t_min + (t_max - t_min) * step as f64 / 16.0);
+        if (point - plane.origin).dot(&plane_normal).abs() > limit {
+            return None;
+        }
+    }
+
+    let start = curve.evaluate(t_min);
+    let end = curve.evaluate(t_max);
+    Some(FaceIntersectionKind::Curve {
+        edge: Edge::new(
+            curve,
+            Vertex::new(start, tol.linear),
+            Vertex::new(end, tol.linear),
+            tol.linear,
+        ),
+    })
 }
 
 fn intersect_section_plane_cylinder_patch(
