@@ -188,6 +188,19 @@ impl IntersectionMarcher {
         }
         pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
+        // 触れてすらいない組は、ここで打ち切る。格子の目より遠いところに
+        // しか近づかないなら、この2枚は交わっていない。ブーリアンは面の組
+        // ごとにここを通るので、交わらない組で辿りに入らないことが効く。
+        let mut spacing = 0.0f64;
+        for index in 1..grid_a.len().min(steps + 2) {
+            spacing = spacing.max((grid_a[index].2 - grid_a[index - 1].2).norm());
+        }
+        if pairs.first().map(|(distance, _, _)| *distance).unwrap_or(f64::INFINITY)
+            > spacing * 2.0
+        {
+            return Vec::new();
+        }
+
         let mut seeds = Vec::new();
         for (_, index_a, index_b) in pairs.iter().take(limit * 8) {
             if seeds.len() >= limit {
@@ -655,11 +668,22 @@ impl IntersectionMarcher {
         let samples = points.len() * 4 + 1;
         let mut worst: f64 = 0.0;
         for step in 0..=samples {
-            let t = t0 + (t1 - t0) * step as f64 / samples as f64;
+            let fraction = step as f64 / samples as f64;
+            let t = t0 + (t1 - t0) * fraction;
             let point = curve.evaluate(t);
-            for surface in [s1, s2] {
-                let projection =
-                    ExtremumEngine::point_to_surface(point, surface, 64, 1e-13).ok()?;
+            // 射影の出発点には、いちばん近い辿り点の (u, v) を渡す。曲線は
+            // その点列を通るので、答えはすぐ隣にある。粗サンプリングから
+            // 始めると1回あたり 16 x 16 の評価が余分に走り、面の組ごとに
+            // これを回すブーリアンでは効いてくる。
+            let nearest =
+                ((fraction * (marched.points.len() - 1) as f64).round() as usize)
+                    .min(marched.points.len() - 1);
+            let seed = &marched.points[nearest];
+            for (surface, uv) in [(s1, seed.uv1), (s2, seed.uv2)] {
+                let projection = ExtremumEngine::point_to_surface_seeded(
+                    point, surface, uv.0, uv.1, 64, 1e-13,
+                )
+                .ok()?;
                 worst = worst.max(projection.distance);
             }
         }
@@ -680,16 +704,27 @@ impl IntersectionMarcher {
     ) -> Option<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> {
         // 種は一度だけ集める。歩幅を縮めるたびに探し直すと、同じ答えを何度も
         // 計算することになる。
-        let seeds = Self::find_seeds(s1, s2, 16, 6);
+        let seeds = Self::find_seeds(s1, s2, 16, 4);
         for (seed_u, seed_v) in seeds {
             let mut step = first_step;
-            for _ in 0..8 {
-                if let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, 8192, tol) {
+            let mut previous: Option<f64> = None;
+            for _ in 0..6 {
+                if let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, 2048, tol) {
                     if marched.points.len() >= 4 {
                         if let Some((curve, deviation)) = Self::fit_curve(s1, s2, &marched, 3) {
                             if deviation <= deviation_limit {
                                 return Some((curve, marched, deviation));
                             }
+                            // 3次の補間なので、歩幅を半分にすればずれは 8 分の1
+                            // 前後まで減るはずである。減り方がそれよりずっと
+                            // 悪いなら、足りないのは歩幅ではない。刻み続けても
+                            // 届かないので、次の種へ移る。
+                            if let Some(before) = previous {
+                                if deviation > before * 0.5 {
+                                    break;
+                                }
+                            }
+                            previous = Some(deviation);
                         }
                     }
                 }
