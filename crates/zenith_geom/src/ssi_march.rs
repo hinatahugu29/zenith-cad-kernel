@@ -252,6 +252,110 @@ impl IntersectionMarcher {
         }
     }
 
+    /// いまの位置から、進む向きの先にあるパラメータ領域の縁へ着地する。
+    ///
+    /// 8つの縁（2曲面 x 2方向 x 上下）を順に試し、いまより先に進んだものの
+    /// うち**いちばん近い**ものを採る。遠いほうを採ると、交線を通り越した
+    /// 位置に着いてしまう。
+    fn land_on_nearest_bound(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        state: &[f64; 4],
+        direction: Vec3,
+        reach: f64,
+        tol: &Tolerance,
+    ) -> Option<[f64; 4]> {
+        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
+        let bounds = [
+            (u_min, u_max),
+            (v_min, v_max),
+            (s_min, s_max),
+            (t_min, t_max),
+        ];
+        let here = s1.evaluate(state[0], state[1]);
+
+        let mut best: Option<(f64, [f64; 4])> = None;
+        for (index, (low, high)) in bounds.iter().enumerate() {
+            for target in [*low, *high] {
+                if (state[index] - target).abs() <= 1e-12 {
+                    continue;
+                }
+                let mut trial = *state;
+                if Self::newton_to_bound(s1, s2, &mut trial, index, target, tol).is_none() {
+                    continue;
+                }
+                let landed = s1.evaluate(trial[0], trial[1]);
+                let travel = (landed - here).dot(&direction);
+                // 進む向きの先にあることを確かめる。後ろに着いたら、それは
+                // いま来た道である。
+                if travel <= tol.linear {
+                    continue;
+                }
+                // **1歩ぶんより遠くへは着地しない。** 遠い縁を目がけると、
+                // ニュートンは交線の別の場所にある解へ落ちることがある。
+                // 式は満たされているので、そのままだと点列に飛びが混ざる。
+                if (landed - here).norm() > reach {
+                    continue;
+                }
+                if best.as_ref().map(|(d, _)| travel < *d).unwrap_or(true) {
+                    best = Some((travel, trial));
+                }
+            }
+        }
+
+        best.map(|(_, trial)| trial)
+    }
+
+    /// 4つ目の式を「`which` 番目のパラメータが `value` に等しい」に差し替えた
+    /// ニュートン法。パッチの縁ちょうどに着地させるために使う。
+    fn newton_to_bound(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        state: &mut [f64; 4],
+        which: usize,
+        value: f64,
+        tol: &Tolerance,
+    ) -> Option<f64> {
+        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
+        let limit = tol.linear.min(1e-10);
+        state[which] = value;
+
+        for _ in 0..40 {
+            let (p1, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
+            let (p2, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
+            let gap = p1 - p2;
+            let off = state[which] - value;
+            if gap.norm().max(off.abs()) <= limit {
+                return Some(gap.norm());
+            }
+
+            let mut row = [0.0f64; 4];
+            row[which] = 1.0;
+            let jacobian = nalgebra::Matrix4::new(
+                du1.x, dv1.x, -du2.x, -dv2.x, du1.y, dv1.y, -du2.y, -dv2.y, du1.z, dv1.z, -du2.z,
+                -dv2.z, row[0], row[1], row[2], row[3],
+            );
+            let rhs = nalgebra::Vector4::new(-gap.x, -gap.y, -gap.z, -off);
+            let delta = jacobian.lu().solve(&rhs)?;
+            if !delta.iter().all(|value| value.is_finite()) {
+                return None;
+            }
+            state[0] = (state[0] + delta[0]).clamp(u_min, u_max);
+            state[1] = (state[1] + delta[1]).clamp(v_min, v_max);
+            state[2] = (state[2] + delta[2]).clamp(s_min, s_max);
+            state[3] = (state[3] + delta[3]).clamp(t_min, t_max);
+        }
+
+        let gap = s1.evaluate(state[0], state[1]) - s2.evaluate(state[2], state[3]);
+        if gap.norm() <= tol.linear && (state[which] - value).abs() <= tol.parametric {
+            Some(gap.norm())
+        } else {
+            None
+        }
+    }
+
     /// 交線の進む向きと、2つの法線のなす角の正弦。
     ///
     /// 正弦は「そこで交線の位置がどれだけ決まるか」を表す。小さいほど、
@@ -350,11 +454,62 @@ impl IntersectionMarcher {
                 }
                 next = trial;
             }
-            let Some(settled) = settled else {
-                break;
+            // 歩けなかったときも、そこで終わりにしない。パラメータは毎回
+            // 範囲に丸められるので、縁の向こうへ出ようとした歩は必ず失敗する。
+            // 失敗は「縁に着いた」ことの合図でもあるので、縁への着地を試す。
+            let settled = match settled {
+                Some(state) => state,
+                None => {
+                    if let Some(edge_state) = Self::land_on_nearest_bound(
+                        s1,
+                        s2,
+                        &state,
+                        direction,
+                        step.abs() * 2.0,
+                        tol,
+                    ) {
+                        points.push(Self::sample(s1, s2, &edge_state));
+                    }
+                    hit_boundary = true;
+                    break;
+                }
             };
 
             if !inside(&settled) {
+                // 縁を越えたら、越えた手前で止めるのではなく**縁ちょうど**に
+                // 着地させる。手前で止めると、辿った曲線の端が面の境界に
+                // 届かず、その曲線では面を割れない（実測で 7.07e-4 足りず、
+                // 分割が断られた）。4つ目の式を平面から「そのパラメータが
+                // 境界値に等しい」に差し替えるだけでよい。
+                let bounds = [
+                    (u_min, u_max),
+                    (v_min, v_max),
+                    (s_min, s_max),
+                    (t_min, t_max),
+                ];
+                let mut landed = None;
+                for (index, (low, high)) in bounds.iter().enumerate() {
+                    let target = if settled[index] < *low {
+                        *low
+                    } else if settled[index] > *high {
+                        *high
+                    } else {
+                        continue;
+                    };
+                    let mut trial = state;
+                    if Self::newton_to_bound(s1, s2, &mut trial, index, target, tol).is_some() {
+                        landed = Some(trial);
+                        break;
+                    }
+                }
+                if let Some(edge_state) = landed {
+                    // 直前の点と同じ位置なら足さない。
+                    let here = s1.evaluate(edge_state[0], edge_state[1]);
+                    let previous = s1.evaluate(state[0], state[1]);
+                    if (here - previous).norm() > tol.linear {
+                        points.push(Self::sample(s1, s2, &edge_state));
+                    }
+                }
                 hit_boundary = true;
                 break;
             }
@@ -417,6 +572,70 @@ impl IntersectionMarcher {
             uv1: (state[0], state[1]),
             uv2: (state[2], state[3]),
         }
+    }
+
+    /// 辿った点列を、両方の曲面の上に乗る1本の曲線に当てはめる。
+    ///
+    /// **当てはめた点で測っても意味がない。** そこは補間の定義から通るので、
+    /// どんな曲線でも 0 が出る。曲線を、補間に使った位置と**互いに素な**
+    /// 位置で標本し、そこから両曲面への距離を測って返す。
+    ///
+    /// 返すのは `(曲線, 最悪の距離)`。距離が要求に足りなければ、歩幅を
+    /// 縮めて辿り直すのは呼び手の仕事である。
+    pub fn fit_curve(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        marched: &MarchedIntersection,
+        degree: usize,
+    ) -> Option<(crate::nurbs_curve::NurbsCurve3, f64)> {
+        let points: Vec<Point3> = marched.points.iter().map(|sample| sample.point).collect();
+        if points.len() < 2 {
+            return None;
+        }
+        let curve = crate::nurbs_curve::NurbsCurve3::interpolate_points(degree, &points).ok()?;
+
+        let (t0, t1) = curve.param_range();
+        // 補間に使ったのは点の数ぶんの位置なので、標本数はそれと互いに素に取る。
+        let samples = points.len() * 4 + 1;
+        let mut worst: f64 = 0.0;
+        for step in 0..=samples {
+            let t = t0 + (t1 - t0) * step as f64 / samples as f64;
+            let point = curve.evaluate(t);
+            for surface in [s1, s2] {
+                let projection =
+                    ExtremumEngine::point_to_surface(point, surface, 64, 1e-13).ok()?;
+                worst = worst.max(projection.distance);
+            }
+        }
+        Some((curve, worst))
+    }
+
+    /// 交線を、要求した精度で1本の曲線にする。
+    ///
+    /// 歩幅を決め打ちにすると、曲率の高い交線では足りず、緩い交線では
+    /// 無駄に細かくなる。**当てはめてから測り、足りなければ歩幅を半分にして
+    /// やり直す。** 測ってから決めるので、形を問わずに要求が満たせる。
+    pub fn fit_to_tolerance(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        first_step: f64,
+        deviation_limit: f64,
+        tol: &Tolerance,
+    ) -> Option<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> {
+        let mut step = first_step;
+        for _ in 0..8 {
+            if let Some(marched) = Self::march_from_best_seed(s1, s2, 16, step, 8192, tol) {
+                if marched.points.len() >= 4 {
+                    if let Some((curve, deviation)) = Self::fit_curve(s1, s2, &marched, 3) {
+                        if deviation <= deviation_limit {
+                            return Some((curve, marched, deviation));
+                        }
+                    }
+                }
+            }
+            step *= 0.5;
+        }
+        None
     }
 
     /// 点列が2つの曲面からどれだけ離れているか。

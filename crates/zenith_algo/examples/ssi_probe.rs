@@ -263,4 +263,34 @@ fn main() {
     println!("tangency    = the march stopped before the normals became parallel. There the");
     println!("               residual no longer pins the position: for equal-radius cylinders a");
     println!("               point 2.99e-5 off the curve satisfies both surfaces to 2.24e-11.");
+
+    // 辿った点列を1本の曲線に当てはめ、要求した精度に届くまで歩幅を詰める。
+    // ここが交線と面分割をつなぐ段である。
+    println!();
+    println!(
+        "{:<48} {:>8} {:>10} {:>14} {:>12}",
+        "fitting the marched points into one curve", "points", "step", "deviation", "verdict"
+    );
+    println!("{}", "-".repeat(98));
+    for subject in &subjects {
+        match IntersectionMarcher::fit_to_tolerance(&subject.a, &subject.b, 2.0, 1e-6, &tol) {
+            Some((curve, marched, deviation)) => println!(
+                "{:<48} {:>8} {:>10} {:>14.3e} {:>12}",
+                subject.name,
+                marched.points.len(),
+                curve.control_points.len(),
+                deviation,
+                if deviation <= 1e-6 { "ok" } else { "too far" }
+            ),
+            None => println!(
+                "{:<48} {:>8} {:>10} {:>14} {:>12}",
+                subject.name, "-", "-", "-", "no fit"
+            ),
+        }
+    }
+    println!("{}", "-".repeat(98));
+    println!("deviation = the fitted curve measured against both surfaces at positions coprime");
+    println!("            with the ones it was interpolated through, where it is exact by");
+    println!("            construction and would report zero for any curve at all");
+
 }

@@ -92,6 +92,83 @@ impl NurbsCurve3 {
         Self::new(degree, ctrl_pts, knots)
     }
 
+    /// 与えた点を**すべて通る**クランプ B-spline を作る。
+    ///
+    /// `bspline_from_points` は渡した点を制御点として使うので、曲線は端の2点
+    /// 以外を通らない。交線を辿った点列のように「この位置を通ってほしい」
+    /// 点があるときは、それでは足りない。
+    ///
+    /// 手順は The NURBS Book の A9.1（大域補間）。弦長で媒介変数を割り当て、
+    /// ノットはその平均で置き、`N P = Q` を解く。有理ではない（重みは 1）。
+    pub fn interpolate_points(degree: usize, points: &[Point3]) -> Result<Self, String> {
+        let count = points.len();
+        if count < 2 {
+            return Err("interpolation needs at least two points".to_string());
+        }
+        let degree = degree.min(count - 1).max(1);
+
+        // 1. 弦長で媒介変数を割り当てる。等間隔だと、点の間隔が変わるところで
+        //    曲線が膨らむ。
+        let mut lengths = Vec::with_capacity(count);
+        lengths.push(0.0);
+        let mut total = 0.0;
+        for index in 1..count {
+            total += (points[index] - points[index - 1]).norm();
+            lengths.push(total);
+        }
+        if total <= f64::EPSILON {
+            return Err("interpolation points are all at the same place".to_string());
+        }
+        let parameters: Vec<f64> = lengths.iter().map(|length| length / total).collect();
+
+        // 2. ノットは媒介変数の移動平均。こう置くと係数行列が正則になる
+        //    （A9.1 の根拠）。
+        let mut knots = vec![0.0; degree + 1];
+        for j in 1..count.saturating_sub(degree) {
+            let mean: f64 = parameters[j..j + degree].iter().sum::<f64>() / degree as f64;
+            knots.push(mean);
+        }
+        knots.extend(std::iter::repeat(1.0).take(degree + 1));
+        let knot_vector = KnotVector::new(knots);
+
+        // 3. N P = Q を解く。点の数は交線1本ぶん程度なので密行列で足りる。
+        let mut matrix = nalgebra::DMatrix::<f64>::zeros(count, count);
+        for (row, parameter) in parameters.iter().enumerate() {
+            let span = knot_vector.find_span(count, degree, *parameter);
+            let basis = knot_vector.basis_functions(span, degree, *parameter);
+            for (offset, value) in basis.iter().enumerate().take(degree + 1) {
+                let column = span - degree + offset;
+                if column < count {
+                    matrix[(row, column)] = *value;
+                }
+            }
+        }
+
+        let mut rhs = nalgebra::DMatrix::<f64>::zeros(count, 3);
+        for (row, point) in points.iter().enumerate() {
+            rhs[(row, 0)] = point.x;
+            rhs[(row, 1)] = point.y;
+            rhs[(row, 2)] = point.z;
+        }
+
+        let solution = matrix
+            .lu()
+            .solve(&rhs)
+            .ok_or_else(|| "the interpolation system is singular".to_string())?;
+
+        let control_points = (0..count)
+            .map(|row| {
+                ControlPoint3::unweighted(Point3::new(
+                    solution[(row, 0)],
+                    solution[(row, 1)],
+                    solution[(row, 2)],
+                ))
+            })
+            .collect();
+
+        Self::new(degree, control_points, knot_vector)
+    }
+
     /// パラメータ方向を反転した同じ曲線を返す。
     pub fn reversed(&self) -> Self {
         let start = self.knots.knots.first().copied().unwrap_or(0.0);
