@@ -22,6 +22,66 @@ use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, OrientedEdge, Solid, Vertex, Wire};
 
+/// 半径 `radius`、高さ `z` の真円ワイヤ。四半円弧4本、重み cos(45度) の
+/// 有理2次なので、円としては厳密である。
+fn circle_wire(radius: f64, z: f64) -> Wire {
+    use zenith_geom::{ControlPoint3, KnotVector};
+    let weight = std::f64::consts::FRAC_1_SQRT_2;
+    let at = |index: usize| {
+        let angle = std::f64::consts::FRAC_PI_2 * index as f64;
+        Point3::new(radius * angle.cos(), radius * angle.sin(), z)
+    };
+    let corner = |index: usize| {
+        let angle = std::f64::consts::FRAC_PI_2 * index as f64;
+        let next = std::f64::consts::FRAC_PI_2 * (index + 1) as f64;
+        Point3::new(
+            radius * (angle.cos() + next.cos()),
+            radius * (angle.sin() + next.sin()),
+            z,
+        )
+    };
+    let vertices: Vec<Vertex> = (0..4).map(|i| Vertex::from_point(at(i))).collect();
+    let edges = (0..4)
+        .map(|index| {
+            let curve = NurbsCurve3::new(
+                2,
+                vec![
+                    ControlPoint3::unweighted(at(index)),
+                    ControlPoint3::new(corner(index), weight),
+                    ControlPoint3::unweighted(at(index + 1)),
+                ],
+                KnotVector::clamped_uniform(3, 2),
+            )
+            .unwrap();
+            OrientedEdge::forward(Edge::new(
+                curve,
+                vertices[index % 4].clone(),
+                vertices[(index + 1) % 4].clone(),
+                1e-6,
+            ))
+        })
+        .collect();
+    Wire::new(edges)
+}
+
+/// 半径 `radius` の四半円弧（xy 平面、0度から90度）。有理2次で厳密。
+fn quarter_arc(radius: f64) -> NurbsCurve3 {
+    use zenith_geom::{ControlPoint3, KnotVector};
+    NurbsCurve3::new(
+        2,
+        vec![
+            ControlPoint3::unweighted(Point3::new(radius, 0.0, 0.0)),
+            ControlPoint3::new(
+                Point3::new(radius, radius, 0.0),
+                std::f64::consts::FRAC_1_SQRT_2,
+            ),
+            ControlPoint3::unweighted(Point3::new(0.0, radius, 0.0)),
+        ],
+        KnotVector::clamped_uniform(3, 2),
+    )
+    .unwrap()
+}
+
 struct Case {
     name: &'static str,
     solid: Result<Solid, String>,
@@ -245,19 +305,63 @@ fn build_cases() -> Vec<Case> {
         analytic_volume: None,
     });
 
+    // 螺旋掃引には閉じた式がある。断面の重心が経路の上にあり経路に垂直なら、
+    // 経路が曲がっていても `V = A x L` がきっかり成り立つ（重心まわりの1次
+    // モーメントが 0 になるので、曲率の項が落ちる）。螺旋の経路長は
+    // `turns * sqrt((2 pi R)^2 + pitch^2)` で閉じた式なので、外の物差しになる。
+    //
+    // これが使えるようになったのは経路を直してからである。90度刻みの螺旋は
+    // 高さが 3.16e-2 外れており、**掃引をいくら細かくしても** 4.278e-5 ずれた
+    // 値に収束していた。
+    let helix_radius = 10.0;
+    let helix_pitch = 6.0;
+    let helix_turns = 2.0;
+    let helix_length = helix_turns
+        * ((std::f64::consts::TAU * helix_radius).powi(2) + helix_pitch * helix_pitch).sqrt();
     cases.push(Case {
-        name: "helix sweep",
+        name: "helix sweep (V = A x path length)",
         solid: HelixBuilder::sweep_wire_along_helix(
             &rect_wire(1.0, 1.0, 0.0),
-            10.0,
-            6.0,
-            2.0,
+            helix_radius,
+            helix_pitch,
+            helix_turns,
             Point3::new(0.0, 0.0, 0.0),
             Vec3::new(0.0, 0.0, 1.0),
             64,
             &tol,
         ),
-        analytic_volume: None,
+        analytic_volume: Some(4.0 * helix_length),
+    });
+
+    // 円断面を真円の四半弧に沿って掃く。出来上がるのは四半トーラスなので、
+    // 体積は `pi r^2 * theta R` （Pappus）で閉じている。
+    let arc_radius = 20.0;
+    let tube_radius = 3.0;
+    cases.push(Case {
+        name: "sweep along a quarter circle (torus segment)",
+        solid: SweepBuilder::sweep_circle_along_curve(&quarter_arc(arc_radius), tube_radius, 256),
+        analytic_volume: Some(
+            PI * tube_radius * tube_radius * (std::f64::consts::FRAC_PI_2 * arc_radius),
+        ),
+    });
+
+    // 大小の正方形を直線で結ぶと角錐台になる。V = (h/3)(A1 + A2 + sqrt(A1 A2))。
+    cases.push(Case {
+        name: "loft between unequal squares (frustum)",
+        solid: LoftBuilder::loft_solid(
+            &[rect_wire(10.0, 10.0, 0.0), rect_wire(5.0, 5.0, 30.0)],
+            1,
+            &tol,
+        ),
+        analytic_volume: Some(30.0 / 3.0 * (400.0 + 100.0 + (400.0f64 * 100.0).sqrt())),
+    });
+
+    // 大小の真円を直線で結ぶと円錐台になる。専用ビルダーの円錐と同じ値に
+    // ならなければならない。
+    cases.push(Case {
+        name: "loft between unequal circles (cone frustum)",
+        solid: LoftBuilder::loft_solid(&[circle_wire(10.0, 0.0), circle_wire(4.0, 20.0)], 1, &tol),
+        analytic_volume: Some(PI * 20.0 / 3.0 * (100.0 + 40.0 + 16.0)),
     });
 
     cases.push(Case {
