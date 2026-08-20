@@ -66,7 +66,7 @@ fn test_gate_rejects_overlapping_sphere_boolean_that_returns_one_operand() {
 }
 
 #[test]
-fn test_gate_rejects_cone_box_difference_and_intersection_overlap() {
+fn test_cone_box_difference_and_intersection_now_split_the_cone_correctly() {
     let tol = Tolerance::default();
     let cone = PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap();
     let cutter = BrepTransform::translate_solid(
@@ -74,11 +74,38 @@ fn test_gate_rejects_cone_box_difference_and_intersection_overlap() {
         Vec3::new(-10.0, -10.0, 10.0),
     );
 
-    // 差と積が同値 (3141.593) を返していた。V(A-B) + V(A*B) = V(A) を満たさない。
-    for op in [BooleanOpType::Difference, BooleanOpType::Intersection] {
+    // かつては差も積も同じ 3141.593 を返していた。円柱向けの近道が円錐を
+    // 円柱と読み違え、半径10・高さ10の円柱として作り直していたためで、
+    // V(A-B) + V(A*B) = V(A) を満たさない。ゲートがそれを弾いていたので
+    // 誤答は外に出ていなかった。
+    //
+    // いまは両方とも正しく求まる。ゲートが弾くことではなく、正しい値が
+    // 出ることを固定する。これは以前より強い主張で、3141.593 が戻れば
+    // やはり落ちる。
+    let frustum = |r0: f64, r1: f64, h: f64| {
+        std::f64::consts::PI * h / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1)
+    };
+    let whole = frustum(10.0, 4.0, 20.0);
+    let overlap = frustum(7.0, 4.0, 10.0);
+
+    let expected = [
+        (BooleanOpType::Difference, whole - overlap),
+        (BooleanOpType::Intersection, overlap),
+    ];
+
+    let params = TessellationParams {
+        u_divisions: 64,
+        v_divisions: 64,
+    };
+    for (op, want) in expected {
+        let result = BooleanEngine::boolean_solids_exact_result(&cone, &cutter, op, &tol)
+            .unwrap_or_else(|err| panic!("{op:?} of cone and box should succeed: {err}"));
+        assert_eq!(result.solids.len(), 1);
+        let got = MassCalculator::compute_from_brep(&result.solids[0], &params).volume;
+        let relative = (got - want).abs() / want;
         assert!(
-            BooleanEngine::boolean_solids_exact_result(&cone, &cutter, op, &tol).is_err(),
-            "{op:?} of cone and box must not report success"
+            relative < 1e-6,
+            "{op:?} gave {got:.4}, closed form {want:.4} (relative {relative:.2e})"
         );
     }
 }

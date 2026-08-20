@@ -198,13 +198,28 @@ fn axis_cylinder_bounds(solid: &Solid, tol: &Tolerance) -> Option<AxisCylinderBo
         return None;
     }
 
-    let samples_on_cylinder = points.iter().filter(|point| {
-        let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
-        (radial_distance - radius).abs() <= tol.linear * 20.0
-            && point.z >= z_min - tol.linear
-            && point.z <= z_max + tol.linear
-    });
-    if samples_on_cylinder.count() < 16 {
+    // 側面の標本が「全て」同じ半径にあることまで見る。最大半径にいくつか
+    // 乗っているだけでは円柱とは言えない。円錐は底の円がちょうど最大半径に
+    // 乗るので、数を数えるだけだった頃は円柱として通り、半径の変わらない
+    // 立体として作り直されていた。検証ゲートがその結果を弾いていたので誤答は
+    // 出ていないが、正しい経路にも進めなくなっていた。
+    let mut lateral_samples = 0usize;
+    for face in &solid.outer_shell.faces {
+        if !matches!(face.geometry, FaceGeometry::Nurbs(_)) {
+            continue;
+        }
+        for point in face.outer_wire.sample_points(8) {
+            let radial_distance = (point.x * point.x + point.y * point.y).sqrt();
+            if (radial_distance - radius).abs() > tol.linear * 20.0 {
+                return None;
+            }
+            if point.z < z_min - tol.linear || point.z > z_max + tol.linear {
+                return None;
+            }
+            lateral_samples += 1;
+        }
+    }
+    if lateral_samples < 16 {
         return None;
     }
 
