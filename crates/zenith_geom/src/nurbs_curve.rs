@@ -165,6 +165,114 @@ impl NurbsCurve3 {
         Some((build(left)?, build(right)?))
     }
 
+    /// ノット `t` を `times` 回挿入した、形の変わらない同じ曲線を返す。
+    ///
+    /// Boehm の挿入を同次座標で行うので、有理曲線でも重みごと厳密に保たれる。
+    /// 端のノットや、多重度が次数を超える挿入は `None` を返す。
+    pub fn insert_knot(&self, t: f64, times: usize) -> Option<Self> {
+        if times == 0 {
+            return Some(self.clone());
+        }
+        let p = self.degree;
+        let (t_min, t_max) = self.param_range();
+        let span = (t_max - t_min).abs().max(1.0);
+        if t <= t_min + span * 1e-12 || t >= t_max - span * 1e-12 {
+            return None;
+        }
+
+        let mut knots = self.knots.knots.clone();
+        let mut points: Vec<nalgebra::Vector4<f64>> = self
+            .control_points
+            .iter()
+            .map(|point| point.to_homogeneous())
+            .collect();
+
+        let multiplicity = knots
+            .iter()
+            .filter(|k| (**k - t).abs() <= span * 1e-12)
+            .count();
+        if multiplicity + times > p {
+            return None;
+        }
+
+        for _ in 0..times {
+            // t を含む区間 [knots[k], knots[k+1]) を探す。
+            let k = match knots.windows(2).position(|w| w[0] <= t && t < w[1]) {
+                Some(index) => index,
+                None => return None,
+            };
+            if k < p {
+                return None;
+            }
+
+            let mut next = Vec::with_capacity(points.len() + 1);
+            next.extend_from_slice(&points[..k - p + 1]);
+            for i in (k - p + 1)..=k {
+                let denom = knots[i + p] - knots[i];
+                let alpha = if denom.abs() <= f64::EPSILON {
+                    0.0
+                } else {
+                    (t - knots[i]) / denom
+                };
+                next.push(points[i] * alpha + points[i - 1] * (1.0 - alpha));
+            }
+            next.extend_from_slice(&points[k..]);
+
+            knots.insert(k + 1, t);
+            points = next;
+        }
+
+        let control_points = points.iter().map(ControlPoint3::from_homogeneous).collect();
+        Self::new(p, control_points, KnotVector::new(knots)).ok()
+    }
+
+    /// パラメータ `t` で2本のクランプ曲線に分割する。
+    ///
+    /// `split_bezier_at` と違い、内部ノットを持つ曲線でも割れる。全周の円を
+    /// 四半円弧に刻むのはこの経路で、有理の重みは挿入で保たれるので、割った
+    /// 後の2本は元の曲線と同じ点を通る。
+    pub fn split_at(&self, t: f64) -> Option<(Self, Self)> {
+        let p = self.degree;
+        let (t_min, t_max) = self.param_range();
+        let span = (t_max - t_min).abs().max(1.0);
+        let multiplicity = self
+            .knots
+            .knots
+            .iter()
+            .filter(|k| (**k - t).abs() <= span * 1e-12)
+            .count();
+        if multiplicity > p {
+            return None;
+        }
+
+        let raised = self.insert_knot(t, p - multiplicity)?;
+        let knots = &raised.knots.knots;
+        let first = knots.iter().position(|k| (*k - t).abs() <= span * 1e-12)?;
+        if first == 0 || first + p > knots.len() {
+            return None;
+        }
+
+        let mut left_knots = knots[..first].to_vec();
+        left_knots.extend(std::iter::repeat(t).take(p + 1));
+        let left = Self::new(
+            p,
+            raised.control_points[..first].to_vec(),
+            KnotVector::new(left_knots),
+        )
+        .ok()?;
+
+        let mut right_knots: Vec<f64> = std::iter::repeat(t).take(p + 1).collect();
+        right_knots.extend_from_slice(&knots[first + p..]);
+        let right = Self::new(
+            p,
+            raised.control_points[first - 1..].to_vec(),
+            KnotVector::new(right_knots),
+        )
+        .ok()?;
+
+        Some((left, right))
+    }
+
     /// パラメータ有効範囲 [u_min, u_max]
 
 
@@ -340,5 +448,91 @@ mod tests {
         assert!((reversed.evaluate(0.0) - curve.evaluate(2.0)).norm() < 1e-9);
         assert!((reversed.evaluate(0.75) - curve.evaluate(1.25)).norm() < 1e-9);
         assert!((reversed.evaluate(2.0) - curve.evaluate(0.0)).norm() < 1e-9);
+    }
+
+    /// 重み 1, √2/2 を繰り返す4弧の有理2次曲線。半径 `r` の真円。
+    fn full_circle(r: f64) -> NurbsCurve3 {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let pts = vec![
+            ControlPoint3::unweighted(Point3::new(r, 0.0, 0.0)),
+            ControlPoint3::new(Point3::new(r, r, 0.0), w),
+            ControlPoint3::unweighted(Point3::new(0.0, r, 0.0)),
+            ControlPoint3::new(Point3::new(-r, r, 0.0), w),
+            ControlPoint3::unweighted(Point3::new(-r, 0.0, 0.0)),
+            ControlPoint3::new(Point3::new(-r, -r, 0.0), w),
+            ControlPoint3::unweighted(Point3::new(0.0, -r, 0.0)),
+            ControlPoint3::new(Point3::new(r, -r, 0.0), w),
+            ControlPoint3::unweighted(Point3::new(r, 0.0, 0.0)),
+        ];
+        NurbsCurve3::new(
+            2,
+            pts,
+            KnotVector::new(vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ]),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn inserting_a_knot_does_not_move_the_curve() {
+        let circle = full_circle(10.0);
+        let refined = circle.insert_knot(0.375, 1).expect("insert");
+
+        assert_eq!(refined.control_points.len(), circle.control_points.len() + 1);
+        assert_eq!(refined.knots.knots.len(), circle.knots.knots.len() + 1);
+
+        // 挿入に使った位置と互いに素な標本で測る。構成点の上だけで比べても
+        // 何も分からない（p-curve の検証で一度踏んだ間違い）。
+        let mut worst: f64 = 0.0;
+        for i in 0..=97 {
+            let t = i as f64 / 97.0;
+            worst = worst.max((refined.evaluate(t) - circle.evaluate(t)).norm());
+        }
+        assert!(worst < 1e-12, "knot insertion moved the curve by {worst}");
+    }
+
+    #[test]
+    fn splitting_a_full_circle_keeps_both_halves_on_the_circle() {
+        let r = 10.0;
+        let circle = full_circle(r);
+        let (left, right) = circle.split_at(0.25).expect("split");
+
+        for (piece, lo, hi) in [(&left, 0.0, 0.25), (&right, 0.25, 1.0)] {
+            let (a, b) = piece.param_range();
+            assert!((a - lo).abs() < 1e-12 && (b - hi).abs() < 1e-12);
+            let mut worst: f64 = 0.0;
+            let mut off_circle: f64 = 0.0;
+            for i in 0..=53 {
+                let t = lo + (hi - lo) * (i as f64 / 53.0);
+                let p = piece.evaluate(t);
+                worst = worst.max((p - circle.evaluate(t)).norm());
+                off_circle = off_circle.max(((p - Point3::origin()).norm() - r).abs());
+            }
+            assert!(worst < 1e-12, "split piece drifted by {worst}");
+            assert!(off_circle < 1e-12, "split piece left the circle by {off_circle}");
+        }
+    }
+
+    #[test]
+    fn splitting_at_an_existing_interior_knot_is_exact() {
+        let circle = full_circle(4.0);
+        // 0.5 は既に多重度 2（= 次数）なので、挿入なしで割れるはず。
+        let (left, right) = circle.split_at(0.5).expect("split at existing knot");
+        assert_eq!(left.control_points.len(), 5);
+        assert_eq!(right.control_points.len(), 5);
+        for i in 0..=41 {
+            let t = 0.5 * (i as f64 / 41.0);
+            assert!((left.evaluate(t) - circle.evaluate(t)).norm() < 1e-13);
+            assert!((right.evaluate(0.5 + t) - circle.evaluate(0.5 + t)).norm() < 1e-13);
+        }
+    }
+
+    #[test]
+    fn a_split_refuses_the_ends_rather_than_returning_a_degenerate_piece() {
+        let circle = full_circle(1.0);
+        assert!(circle.split_at(0.0).is_none());
+        assert!(circle.split_at(1.0).is_none());
+        assert!(circle.insert_knot(0.5, 3).is_none());
     }
 }

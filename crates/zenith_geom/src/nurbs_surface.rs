@@ -90,6 +90,93 @@ impl NurbsSurface3 {
         (u_range, v_range)
     }
 
+    /// `u` の位置で2枚のパッチに分割する。
+    ///
+    /// 各 v 列を1本の曲線として同じ分割にかけるので、有理の重みも保たれる。
+    /// 分割位置が端にあるか、いずれかの列で割れなければ `None`。
+    pub fn split_u(&self, u: f64) -> Option<(Self, Self)> {
+        let num_v = self.control_points[0].len();
+        let mut left_cols = Vec::with_capacity(num_v);
+        let mut right_cols = Vec::with_capacity(num_v);
+        let mut left_knots = None;
+        let mut right_knots = None;
+
+        for j in 0..num_v {
+            let column: Vec<ControlPoint3> =
+                self.control_points.iter().map(|row| row[j]).collect();
+            let curve =
+                crate::nurbs_curve::NurbsCurve3::new(self.degree_u, column, self.knots_u.clone())
+                    .ok()?;
+            let (left, right) = curve.split_at(u)?;
+            left_knots = Some(left.knots.clone());
+            right_knots = Some(right.knots.clone());
+            left_cols.push(left.control_points);
+            right_cols.push(right.control_points);
+        }
+
+        let transpose = |cols: Vec<Vec<ControlPoint3>>| {
+            let rows = cols[0].len();
+            (0..rows)
+                .map(|i| cols.iter().map(|col| col[i]).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        };
+
+        let left = Self::new(
+            self.degree_u,
+            self.degree_v,
+            transpose(left_cols),
+            left_knots?,
+            self.knots_v.clone(),
+        )
+        .ok()?;
+        let right = Self::new(
+            self.degree_u,
+            self.degree_v,
+            transpose(right_cols),
+            right_knots?,
+            self.knots_v.clone(),
+        )
+        .ok()?;
+        Some((left, right))
+    }
+
+    /// `v` の位置で2枚のパッチに分割する。`split_u` の行と列を入れ替えた版。
+    pub fn split_v(&self, v: f64) -> Option<(Self, Self)> {
+        let mut left_rows = Vec::with_capacity(self.control_points.len());
+        let mut right_rows = Vec::with_capacity(self.control_points.len());
+        let mut left_knots = None;
+        let mut right_knots = None;
+
+        for row in &self.control_points {
+            let curve =
+                crate::nurbs_curve::NurbsCurve3::new(self.degree_v, row.clone(), self.knots_v.clone())
+                    .ok()?;
+            let (left, right) = curve.split_at(v)?;
+            left_knots = Some(left.knots.clone());
+            right_knots = Some(right.knots.clone());
+            left_rows.push(left.control_points);
+            right_rows.push(right.control_points);
+        }
+
+        let left = Self::new(
+            self.degree_u,
+            self.degree_v,
+            left_rows,
+            self.knots_u.clone(),
+            left_knots?,
+        )
+        .ok()?;
+        let right = Self::new(
+            self.degree_u,
+            self.degree_v,
+            right_rows,
+            self.knots_u.clone(),
+            right_knots?,
+        )
+        .ok()?;
+        Some((left, right))
+    }
+
     /// 曲面上の3次元座標を評価（Algorithm A3.5 / A4.3 from The NURBS Book）
     pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
         let num_u = self.control_points.len();
@@ -258,5 +345,111 @@ impl NurbsSurface3 {
         let (_p, du, dv) = self.evaluate_derivatives_1st(u, v);
         let cross = du.cross(&dv);
         cross.try_normalize_safe(1e-12)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NurbsSurface3;
+    use crate::bspline_basis::KnotVector;
+    use crate::nurbs_curve::ControlPoint3;
+    use zenith_math::Point3;
+
+    /// 半径 `r`、高さ `h` の円柱側面を、全周1枚の有理パッチとして張る。
+    /// これは他カーネルの STEP を読んだときに出てくる形そのもの。
+    fn full_wrap_cylinder(r: f64, h: f64) -> NurbsSurface3 {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let ring = [
+            (r, 0.0, 1.0),
+            (r, r, w),
+            (0.0, r, 1.0),
+            (-r, r, w),
+            (-r, 0.0, 1.0),
+            (-r, -r, w),
+            (0.0, -r, 1.0),
+            (r, -r, w),
+            (r, 0.0, 1.0),
+        ];
+        let grid = ring
+            .iter()
+            .map(|(x, y, weight)| {
+                vec![
+                    ControlPoint3::new(Point3::new(*x, *y, 0.0), *weight),
+                    ControlPoint3::new(Point3::new(*x, *y, h), *weight),
+                ]
+            })
+            .collect();
+        NurbsSurface3::new(
+            2,
+            1,
+            grid,
+            KnotVector::new(vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ]),
+            KnotVector::new(vec![0.0, 0.0, 1.0, 1.0]),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn splitting_in_u_keeps_every_piece_on_the_original_surface() {
+        let surface = full_wrap_cylinder(10.0, 40.0);
+        let (left, right) = surface.split_u(0.25).expect("split u");
+
+        for (piece, lo, hi) in [(&left, 0.0, 0.25), (&right, 0.25, 1.0)] {
+            let ((u0, u1), _) = piece.param_range();
+            assert!((u0 - lo).abs() < 1e-12 && (u1 - hi).abs() < 1e-12);
+            let mut worst: f64 = 0.0;
+            let mut off_radius: f64 = 0.0;
+            // 分割位置 (1/4) と互いに素な刻みで測る。
+            for i in 0..=37 {
+                for j in 0..=7 {
+                    let u = lo + (hi - lo) * (i as f64 / 37.0);
+                    let v = j as f64 / 7.0;
+                    let p = piece.evaluate(u, v);
+                    worst = worst.max((p - surface.evaluate(u, v)).norm());
+                    off_radius = off_radius.max(((p.x * p.x + p.y * p.y).sqrt() - 10.0).abs());
+                }
+            }
+            assert!(worst < 1e-12, "u split moved the surface by {worst}");
+            assert!(off_radius < 1e-12, "u split left the cylinder by {off_radius}");
+        }
+    }
+
+    #[test]
+    fn splitting_in_v_keeps_every_piece_on_the_original_surface() {
+        let surface = full_wrap_cylinder(6.0, 20.0);
+        let (bottom, top) = surface.split_v(0.5).expect("split v");
+
+        for (piece, lo, hi) in [(&bottom, 0.0, 0.5), (&top, 0.5, 1.0)] {
+            let mut worst: f64 = 0.0;
+            for i in 0..=13 {
+                for j in 0..=11 {
+                    let u = i as f64 / 13.0;
+                    let v = lo + (hi - lo) * (j as f64 / 11.0);
+                    worst = worst.max((piece.evaluate(u, v) - surface.evaluate(u, v)).norm());
+                }
+            }
+            assert!(worst < 1e-12, "v split moved the surface by {worst}");
+        }
+    }
+
+    #[test]
+    fn quartering_a_full_wrap_patch_leaves_four_pieces_that_do_not_close() {
+        let surface = full_wrap_cylinder(10.0, 40.0);
+        let (a, rest) = surface.split_u(0.25).expect("first");
+        let (b, rest) = rest.split_u(0.5).expect("second");
+        let (c, d) = rest.split_u(0.75).expect("third");
+
+        for piece in [&a, &b, &c, &d] {
+            let ((u0, u1), _) = piece.param_range();
+            // 四半周のパッチは始端と終端が別の点になる。全周1枚ならここが一致する。
+            let start = piece.evaluate(u0, 0.0);
+            let end = piece.evaluate(u1, 0.0);
+            assert!(
+                (start - end).norm() > 1.0,
+                "piece still wraps onto itself: {start:?} {end:?}"
+            );
+        }
     }
 }
