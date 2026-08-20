@@ -348,7 +348,7 @@ impl SurfaceIntegral {
 
         MassProperties {
             surface_area: self.area,
-            volume: self.volume.abs(),
+            volume: self.volume,
             center_of_mass,
             inertia_diagonal: Vec3::new(inertia.x.abs(), inertia.y.abs(), inertia.z.abs()),
         }

@@ -986,6 +986,15 @@ impl BrepIntersectionBuilder {
                     skipped_split_count: 0,
                 });
             }
+            // 刻印は内部のループ1本ぶんしか扱えない。平面がトーラスを切ると
+            // 入れ子の2本になり、面は3つの領域に分かれる。
+            if let Some(regions) = split_planar_face_by_interior_loops(face, split_edges, tol) {
+                return Ok(PlanarFaceMultiSplitResult {
+                    applied_split_count: regions.len().saturating_sub(1),
+                    skipped_split_count: 0,
+                    faces: regions,
+                });
+            }
         }
 
         let mut faces = vec![face.clone()];
@@ -1095,6 +1104,151 @@ fn collect_batch_splits_for_faces(
 ///
 /// Loops are only compared with loops in the same plane. Two rings at different
 /// heights are not nested however they look from above.
+/// Splits a planar face along closed loops that lie inside it.
+///
+/// A loop that closes without touching the boundary is not a cut across the
+/// face, it is the outline of a region within it, and the face has to come
+/// apart into the regions those outlines mark off. Taking the loop apart into
+/// single edges and asking each to reach the boundary - which is what the cut
+/// path does - leaves every one of them refused and the face whole.
+///
+/// A plane through a torus leaves two such loops, one inside the other, and the
+/// face they sit on falls into three regions: what is outside both, the ring
+/// between them, and the disc inside. Which of those belong to the answer is
+/// the selection stage's business; this only has to produce them.
+///
+/// Returns `None` when the edges are not closed loops inside the face, so the
+/// ordinary cut path keeps handling those.
+fn split_planar_face_by_interior_loops(
+    face: &Face,
+    split_edges: &[Edge],
+    tol: &Tolerance,
+) -> Option<Vec<Face>> {
+    let FaceGeometry::Plane(plane) = &face.geometry else {
+        return None;
+    };
+    if !face.inner_wires.is_empty() || split_edges.is_empty() {
+        return None;
+    }
+
+    let extraction = collect_closed_intersection_edge_loops(split_edges, tol);
+    if extraction.loops.is_empty() || extraction.skipped_edge_count > 0 {
+        return None;
+    }
+
+    let boundary: Vec<Point2> = face
+        .outer_wire
+        .sample_points(24)
+        .iter()
+        .map(|point| project_to_plane_uv(*point, plane))
+        .collect();
+
+    let mut wires: Vec<Wire> = Vec::with_capacity(extraction.loops.len());
+    let mut outlines: Vec<Vec<Point2>> = Vec::with_capacity(extraction.loops.len());
+    for edge_loop in &extraction.loops {
+        let wire = order_edges_into_closed_wire(&edge_loop.edges, tol).ok()?;
+        let outline: Vec<Point2> = wire
+            .sample_points(16)
+            .iter()
+            .map(|point| project_to_plane_uv(*point, plane))
+            .collect();
+        // 面の内側で閉じていなければ、これは切り込みのほう。
+        for point in &outline {
+            if !point_in_polygon_2d(*point, &boundary, tol.parametric)
+                || point_on_polygon_boundary(*point, &boundary, tol.parametric)
+            {
+                return None;
+            }
+        }
+        wires.push(wire);
+        outlines.push(outline);
+    }
+
+    // 入れ子の深さ。境界そのものを深さ0とし、ループはそれより内側にある。
+    let mut depth = vec![1usize; outlines.len()];
+    for (inner, outline) in outlines.iter().enumerate() {
+        for (outer, candidate) in outlines.iter().enumerate() {
+            if outer != inner && point_in_polygon_2d(outline[0], candidate, tol.parametric) {
+                depth[inner] += 1;
+            }
+        }
+    }
+
+    let contains = |outer: usize, inner: usize| {
+        outer != inner && point_in_polygon_2d(outlines[inner][0], &outlines[outer], tol.parametric)
+    };
+
+    // 元の面がどちら回りを外周としているか。分けた領域も同じ約束に揃える。
+    let parent_winding = signed_area_2d(&boundary).signum();
+
+    let mut regions = Vec::with_capacity(outlines.len() + 1);
+
+    let outer_children: Vec<usize> = (0..outlines.len()).filter(|i| depth[*i] == 1).collect();
+    regions.push(planar_region_face(
+        face,
+        face.outer_wire.clone(),
+        parent_winding,
+        parent_winding,
+        &outer_children,
+        &wires,
+        &outlines,
+    ));
+
+    for (index, wire) in wires.iter().enumerate() {
+        let children: Vec<usize> = (0..outlines.len())
+            .filter(|other| depth[*other] == depth[index] + 1 && contains(index, *other))
+            .collect();
+        regions.push(planar_region_face(
+            face,
+            wire.clone(),
+            signed_area_2d(&outlines[index]).signum(),
+            parent_winding,
+            &children,
+            &wires,
+            &outlines,
+        ));
+    }
+
+    Some(regions)
+}
+
+/// One region of a decomposed planar face: an outline, and the loops that sit
+/// directly inside it as holes.
+fn planar_region_face(
+    face: &Face,
+    outer: Wire,
+    outer_winding: f64,
+    parent_winding: f64,
+    children: &[usize],
+    wires: &[Wire],
+    outlines: &[Vec<Point2>],
+) -> Face {
+    let outer = if outer_winding == parent_winding {
+        outer
+    } else {
+        reversed_wire(&outer)
+    };
+
+    let holes: Vec<Wire> = children
+        .iter()
+        .map(|child| {
+            if signed_area_2d(&outlines[*child]).signum() == parent_winding {
+                reversed_wire(&wires[*child])
+            } else {
+                wires[*child].clone()
+            }
+        })
+        .collect();
+
+    Face::new(
+        face.geometry.clone(),
+        outer,
+        holes,
+        face.orientation,
+        face.tolerance,
+    )
+}
+
 fn build_caps_from_nested_loops(wires: Vec<Wire>, tol: &Tolerance) -> (Vec<Face>, usize) {
     let mut faces = Vec::new();
     let mut failures = 0;

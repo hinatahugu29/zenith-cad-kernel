@@ -305,17 +305,21 @@ impl RevolveBuilder {
                 let bot_arc = arc_edges[seg][i].clone();
                 let top_arc = arc_edges[seg][next_i].clone();
 
-                // ワイヤループ: [Left(prof), Top(arc), Rev(Right)(prof), Rev(Bot)(arc)]
+                // 母線方向を逆に取るぶん、ワイヤも逆に回す。
+                // [Bot(arc), Right(prof), Rev(Top)(arc), Rev(Left)(prof)]
                 let face_wire = zenith_topo::Wire::new(vec![
-                    zenith_topo::OrientedEdge::forward(left_edge.clone()),
-                    zenith_topo::OrientedEdge::forward(top_arc.clone()),
-                    zenith_topo::OrientedEdge::reversed(right_edge.clone()),
-                    zenith_topo::OrientedEdge::reversed(bot_arc.clone()),
+                    zenith_topo::OrientedEdge::forward(bot_arc.clone()),
+                    zenith_topo::OrientedEdge::forward(right_edge.clone()),
+                    zenith_topo::OrientedEdge::reversed(top_arc.clone()),
+                    zenith_topo::OrientedEdge::reversed(left_edge.clone()),
                 ]);
 
                 // 単一回転セグメント有理NURBS曲面の構築
                 let curve = &left_edge.curve;
-                let surf = Self::revolve_curve_segment(curve, axis_origin, axis_dir, d_theta, tol)?;
+                let mut surf = Self::revolve_curve_segment(curve, axis_origin, axis_dir, d_theta, tol)?;
+                // 母線方向の行の順を逆にして du x dv を外向きにする。
+                // そのままだと立体の内側を向き、面積分の符号が逆になる。
+                surf.control_points.reverse();
 
                 faces.push(zenith_topo::Face::simple(zenith_topo::FaceGeometry::Nurbs(surf), face_wire));
 

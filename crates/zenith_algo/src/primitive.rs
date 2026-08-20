@@ -440,6 +440,11 @@ impl PrimitiveBuilder {
                         ControlPoint3::new(revolve_point(s, z, theta + FRAC_PI_2), w_meridian),
                     ]);
                 }
+                // 行の順を南から北ではなく北から南にする。こうしないと
+                // du x dv が球の内側を向く。赤道の +X 上で du は北 (+Z)、
+                // dv は東 (+Y) なので、外積は -X、つまり内向きだった。
+                // 面積分は面の法線を使うので、この向きで積むと符号が逆になる。
+                grid.reverse();
 
                 let surface = NurbsSurface3::new(
                     2,
@@ -450,19 +455,20 @@ impl PrimitiveBuilder {
                 )?;
 
                 // UV反時計回り。極側の行は1点に潰れているのでその辺は現れない。
+                // 行を反転したぶん UV が鏡像になるので、ワイヤも逆に回す。
                 let wire = if j == 0 {
-                    // u=0 が南極（退化）、u=1 が赤道。
+                    // u=1 が南極（退化）、u=0 が赤道。
                     Wire::new(vec![
-                        OrientedEdge::forward(meridian_edges[i][0].clone()),
-                        OrientedEdge::forward(equator_edges[i].clone()),
-                        OrientedEdge::reversed(meridian_edges[(i + 1) % 4][0].clone()),
+                        OrientedEdge::forward(meridian_edges[(i + 1) % 4][0].clone()),
+                        OrientedEdge::reversed(equator_edges[i].clone()),
+                        OrientedEdge::reversed(meridian_edges[i][0].clone()),
                     ])
                 } else {
-                    // u=0 が赤道、u=1 が北極（退化）。
+                    // u=1 が赤道、u=0 が北極（退化）。
                     Wire::new(vec![
-                        OrientedEdge::forward(meridian_edges[i][1].clone()),
-                        OrientedEdge::reversed(meridian_edges[(i + 1) % 4][1].clone()),
-                        OrientedEdge::reversed(equator_edges[i].clone()),
+                        OrientedEdge::forward(equator_edges[i].clone()),
+                        OrientedEdge::forward(meridian_edges[(i + 1) % 4][1].clone()),
+                        OrientedEdge::reversed(meridian_edges[i][1].clone()),
                     ])
                 };
 
@@ -896,6 +902,10 @@ impl PrimitiveBuilder {
                     ]);
                 }
 
+                // 行の順を逆にして du x dv を外向きにする。そのままだと
+                // チューブの内側を向き、面積分の符号が逆になる。球と同じ話。
+                grid.reverse();
+
                 let surface = NurbsSurface3::new(
                     2,
                     2,
@@ -904,12 +914,13 @@ impl PrimitiveBuilder {
                     KnotVector::clamped_uniform(3, 2),
                 )?;
 
-                // UV空間で反時計回り (0,0)->(1,0)->(1,1)->(0,1) になる巡回。
+                // UV空間で反時計回りになる巡回。行を反転したぶん UV が鏡像に
+                // なるので、ワイヤも逆に回す。
                 let wire = Wire::new(vec![
-                    OrientedEdge::forward(minor_edges[i][j].clone()),
-                    OrientedEdge::forward(major_edges[i][(j + 1) % 4].clone()),
-                    OrientedEdge::reversed(minor_edges[(i + 1) % 4][j].clone()),
-                    OrientedEdge::reversed(major_edges[i][j].clone()),
+                    OrientedEdge::forward(major_edges[i][j].clone()),
+                    OrientedEdge::forward(minor_edges[(i + 1) % 4][j].clone()),
+                    OrientedEdge::reversed(major_edges[i][(j + 1) % 4].clone()),
+                    OrientedEdge::reversed(minor_edges[i][j].clone()),
                 ]);
 
                 faces.push(Face::simple(FaceGeometry::Nurbs(surface), wire));
