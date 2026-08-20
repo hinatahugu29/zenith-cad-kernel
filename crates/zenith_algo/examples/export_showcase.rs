@@ -331,6 +331,138 @@ fn main() {
         analytic_volume: None,
     });
 
+    // --- 回転面を平面で切ったもの（このセッションで通るようになった範囲）---
+    let cone = PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).expect("cone");
+    let cone_cutter = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box"),
+        Vec3::new(-10.0, -10.0, 10.0),
+    );
+    let frustum = |r0: f64, r1: f64, h: f64| {
+        std::f64::consts::PI * h / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1)
+    };
+
+    items.push(Item {
+        name: "17_cone_union_box",
+        note: "a box seated on a cone; the cut is a circle, exact from the control net",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &cone,
+            &cone_cutter,
+            BooleanOpType::Union,
+            &tol,
+        )
+        .expect("cone union box")
+        .solids
+        .remove(0),
+        analytic_volume: Some(frustum(10.0, 4.0, 20.0) + 8000.0 - frustum(7.0, 4.0, 10.0)),
+    });
+
+    items.push(Item {
+        name: "18_cone_difference_box",
+        note: "the cone below that cut, a frustum with the tip taken off",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &cone,
+            &cone_cutter,
+            BooleanOpType::Difference,
+            &tol,
+        )
+        .expect("cone minus box")
+        .solids
+        .remove(0),
+        analytic_volume: Some(frustum(10.0, 4.0, 20.0) - frustum(7.0, 4.0, 10.0)),
+    });
+
+    items.push(Item {
+        name: "19_cone_intersection_box",
+        note: "and the piece above it",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &cone,
+            &cone_cutter,
+            BooleanOpType::Intersection,
+            &tol,
+        )
+        .expect("cone meets box")
+        .solids
+        .remove(0),
+        analytic_volume: Some(frustum(7.0, 4.0, 10.0)),
+    });
+
+    // トーラスをスラブで切る。断面は2本の円で、塞ぐのは円環1枚。
+    let torus = PrimitiveBuilder::make_torus(12.0, 4.0).expect("torus");
+    let slab = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(60.0, 60.0, 20.0).expect("slab"),
+        Vec3::new(-30.0, -30.0, -2.0),
+    );
+    let torus_below = {
+        let antiderivative =
+            |z: f64| 0.5 * z * (16.0 - z * z).sqrt() + 8.0 * (z / 4.0).asin();
+        4.0 * std::f64::consts::PI * 12.0 * (antiderivative(-2.0) - antiderivative(-4.0))
+    };
+    let torus_whole = 2.0 * std::f64::consts::PI * std::f64::consts::PI * 12.0 * 16.0;
+
+    items.push(Item {
+        name: "20_torus_sliced_below",
+        note: "a torus cut by a plane; the cap is one annulus, not two discs",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &torus,
+            &slab,
+            BooleanOpType::Difference,
+            &tol,
+        )
+        .expect("torus minus slab")
+        .solids
+        .remove(0),
+        analytic_volume: Some(torus_below),
+    });
+
+    items.push(Item {
+        name: "21_torus_sliced_above",
+        note: "the rest of the same torus, capped by the same annulus the other way",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &torus,
+            &slab,
+            BooleanOpType::Intersection,
+            &tol,
+        )
+        .expect("torus meets slab")
+        .solids
+        .remove(0),
+        analytic_volume: Some(torus_whole - torus_below),
+    });
+
+    // 穴あけを重ねた板。ブーリアンの結果をさらに加工できることを見せる。
+    let plate = PrimitiveBuilder::make_box(60.0, 40.0, 12.0).expect("plate");
+    let mut drilled = plate;
+    for (x, y, radius) in [
+        (12.0, 10.0, 3.0),
+        (12.0, 30.0, 3.0),
+        (48.0, 10.0, 3.0),
+        (48.0, 30.0, 3.0),
+        (30.0, 20.0, 8.0),
+    ] {
+        let drill = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_cylinder(radius, 40.0).expect("drill"),
+            Vec3::new(x, y, -14.0),
+        );
+        drilled = BooleanEngine::boolean_solids_exact_result(
+            &drilled,
+            &drill,
+            BooleanOpType::Difference,
+            &tol,
+        )
+        .expect("plate drilling")
+        .solids
+        .remove(0);
+    }
+    let bolt_holes: f64 = 4.0 * std::f64::consts::PI * 9.0 * 12.0;
+    let centre_hole = std::f64::consts::PI * 64.0 * 12.0;
+
+    items.push(Item {
+        name: "22_drilled_mounting_plate",
+        note: "five holes cut one after another, each into the result of the last",
+        solid: drilled,
+        analytic_volume: Some(60.0 * 40.0 * 12.0 - bolt_holes - centre_hole),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,
