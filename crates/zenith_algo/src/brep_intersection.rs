@@ -1793,10 +1793,7 @@ fn cylinder_face_bounds(
     let bottom_end = bottom.0.end_vertex.point;
 
     // 上側の円弧の端点を、下側と同じルーリングに乗るように対応づける。
-    let on_same_ruling = |point: Point3, base: Point3| {
-        let offset = point - base;
-        (offset - patch.axis * offset.dot(&patch.axis)).norm() <= tol.linear * 10.0
-    };
+    let on_same_ruling = |point: Point3, base: Point3| patch.on_same_ruling(point, base, tol);
 
     let (top_start, top_end) = {
         let candidate_start = top.0.start_vertex.point;
@@ -1837,8 +1834,7 @@ fn ruling_boundary_endpoints(
     tol: &Tolerance,
 ) -> Option<(Point3, Point3)> {
     let on_ruling = |point: Point3, ruling_base: Point3| {
-        let offset = point - ruling_base;
-        (offset - patch.axis * offset.dot(&patch.axis)).norm() <= tol.linear * 10.0
+        patch.on_same_ruling(point, ruling_base, tol)
     };
 
     let start = split_edge.start_vertex.point;
@@ -2064,7 +2060,7 @@ fn edge_lies_on_recognized_cylinder_patch(
         let axial = patch.axial_coordinate(point);
         axial >= -tol.linear * 10.0
             && axial <= patch.height + tol.linear * 10.0
-            && (patch.radial_distance(point) - patch.radius).abs() <= tol.linear * 10.0
+            && (patch.radial_distance(point) - patch.radius_at(axial)).abs() <= tol.linear * 10.0
     })
 }
 
@@ -3049,10 +3045,13 @@ fn intersect_planes(
 
 /// A NURBS patch recognized as a piece of a circular cylinder of any axis.
 #[derive(Debug, Clone, Copy)]
+/// A ruled band of a surface of revolution: the side of a cylinder, or of a
+/// cone, which is the same shape with the two end radii different.
 struct CylinderPatch {
     axis: Vec3,
     base_center: Point3,
     radius: f64,
+    top_radius: f64,
     height: f64,
     frame_u: Vec3,
     frame_v: Vec3,
@@ -3064,10 +3063,47 @@ impl CylinderPatch {
         (point - self.base_center).dot(&self.axis)
     }
 
+    /// The radius the patch has at a given distance along the axis.
+    fn radius_at(&self, axial: f64) -> f64 {
+        if self.height <= 0.0 {
+            return self.radius;
+        }
+        self.radius + (self.top_radius - self.radius) * (axial / self.height)
+    }
+
+    /// Whether the two ends have the same radius, which makes this a cylinder.
+    ///
+    /// The plane cuts that give a ruling or an ellipse only do so on a
+    /// cylinder; the same plane through a cone gives a hyperbola or a parabola,
+    /// and neither is a parameter line of the patch.
+    fn is_cylindrical(&self, tol: &Tolerance) -> bool {
+        (self.top_radius - self.radius).abs()
+            <= tol.linear * self.radius.max(self.top_radius).max(1.0)
+    }
+
     /// Distance from the axis line.
     fn radial_distance(&self, point: Point3) -> f64 {
         let offset = point - self.base_center;
         (offset - self.axis * offset.dot(&self.axis)).norm()
+    }
+
+    /// Whether two points sit on the same ruling of the patch.
+    ///
+    /// Asking whether one is directly above the other only works on a cylinder;
+    /// a cone's rulings lean inwards, so the two ends of one ruling are at
+    /// different distances from the axis. What a ruling does hold constant is
+    /// the angle around the axis, so that is what to compare - scaled back into
+    /// a length so the tolerance means the same thing at any radius.
+    fn on_same_ruling(&self, point: Point3, base: Point3, tol: &Tolerance) -> bool {
+        let limit = tol.linear * 10.0;
+        let (reach_point, reach_base) = (self.radial_distance(point), self.radial_distance(base));
+        // 頂点はあらゆる母線の上にある。そこでは角度が定まらない。
+        if reach_point.min(reach_base) <= limit {
+            return true;
+        }
+        let gap = (self.angle_of(point) - self.angle_of(base)).abs();
+        let wrapped = gap.min(std::f64::consts::PI * 2.0 - gap);
+        wrapped * reach_point.max(reach_base) <= limit
     }
 
     /// Angle around the axis in the patch frame.
@@ -3077,56 +3113,42 @@ impl CylinderPatch {
     }
 }
 
-/// Recognizes a cylinder-side patch without assuming a Z axis.
+/// Centre, radius and plane normal of a section curve that is a circle.
 ///
-/// The patch qualifies when it is linear in `v` with one shared ruling vector,
-/// and its `v = 0` section is a circle around that ruling direction.
-fn recognize_cylinder_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<CylinderPatch> {
-    if surface.degree_v != 1 || surface.degree_u != 2 {
-        return None;
-    }
-    if surface.control_points.len() != surface.degree_u + 1
-        || surface.control_points.iter().any(|row| row.len() != 2)
-    {
-        return None;
-    }
-
-    let mut ruling: Option<Vec3> = None;
-    for row in &surface.control_points {
-        let (bottom, top) = (row[0], row[1]);
-        if (bottom.weight - top.weight).abs() > tol.linear {
-            return None;
-        }
-        let offset = top.point - bottom.point;
-        match ruling {
-            None => ruling = Some(offset),
-            Some(first) => {
-                if (offset - first).norm() > tol.linear {
-                    return None;
-                }
-            }
-        }
-    }
-
-    let ruling = ruling?;
-    let height = ruling.norm();
-    if height <= tol.linear {
-        return None;
-    }
-    let axis = ruling / height;
-    let frame_u = axis_perpendicular(axis)?;
-    let frame_v = axis.cross(&frame_u);
-
-    let section = cylinder_section_curve(surface, 0.0)?;
-    let samples = sample_curve_points(&section, 8);
+/// The normal is `None` when the section has collapsed to a point, which is
+/// what the row at a cone's apex does; there is a centre and a zero radius, but
+/// no plane to speak of.
+fn fit_section_circle(
+    curve: &NurbsCurve3,
+    tol: &Tolerance,
+) -> Option<(Point3, f64, Option<Vec3>)> {
+    let samples = sample_curve_points(curve, 8);
     let origin = samples[0];
+    let extent = samples
+        .iter()
+        .fold(0.0f64, |worst, sample| worst.max((sample - origin).norm()));
+    if extent <= tol.linear {
+        return Some((origin, 0.0, None));
+    }
+
+    // 断面が平面に乗っているか。乗っていなければ円ではない。
+    let mut normal = Vec3::new(0.0, 0.0, 0.0);
+    for window in samples.windows(3) {
+        let candidate = (window[1] - window[0]).cross(&(window[2] - window[0]));
+        if candidate.norm() > normal.norm() {
+            normal = candidate;
+        }
+    }
+    let normal = normal.try_normalize_safe(1e-12)?;
     if samples
         .iter()
-        .any(|sample| (sample - origin).dot(&axis).abs() > tol.linear)
+        .any(|sample| (sample - origin).dot(&normal).abs() > tol.linear * extent.max(1.0))
     {
         return None;
     }
 
+    let frame_u = axis_perpendicular(normal)?;
+    let frame_v = normal.cross(&frame_u);
     let to_frame = |point: Point3| {
         let offset = point - origin;
         Point2::new(offset.dot(&frame_u), offset.dot(&frame_v))
@@ -3137,29 +3159,103 @@ fn recognize_cylinder_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<
         to_frame(samples[samples.len() - 1]),
         tol,
     )?;
-    let base_center = origin + frame_u * center_2d.x + frame_v * center_2d.y;
-
-    let radius = (samples[0] - base_center).norm();
+    let center = origin + frame_u * center_2d.x + frame_v * center_2d.y;
+    let radius = (samples[0] - center).norm();
     if radius <= tol.linear {
         return None;
     }
+
+    // 全ての標本が同じ半径にあるか。円弧でなければここで落ちる。
     if samples
         .iter()
-        .any(|sample| ((sample - base_center).norm() - radius).abs() > tol.linear)
+        .any(|sample| ((sample - center).norm() - radius).abs() > tol.linear * radius.max(1.0))
     {
         return None;
+    }
+
+    Some((center, radius, Some(normal)))
+}
+
+/// Recognizes the ruled side of a cylinder or a cone, without assuming an axis.
+///
+/// The two boundary sections carry everything needed, so the patch is read from
+/// them rather than from the control net: fit each as a circle, take the axis
+/// from the line joining their centres, and then check that sections taken part
+/// way along still land where those two ends imply. That last check is what
+/// separates a cone from a ruled surface that merely happens to end on two
+/// circles, and it is the reason the reading can be trusted rather than assumed.
+///
+/// Reading the control net directly, as this used to, required every ruling to
+/// be the same vector. That is true of a cylinder and false of a cone, so every
+/// cone was refused and no plane could be intersected with one.
+fn recognize_cylinder_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<CylinderPatch> {
+    if surface.degree_v != 1 || surface.degree_u != 2 {
+        return None;
+    }
+    if surface.control_points.len() != surface.degree_u + 1
+        || surface.control_points.iter().any(|row| row.len() != 2)
+    {
+        return None;
+    }
+
+    let base = cylinder_section_curve(surface, 0.0)?;
+    let top = cylinder_section_curve(surface, 1.0)?;
+    let (base_center, radius, base_normal) = fit_section_circle(&base, tol)?;
+    let (top_center, top_radius, top_normal) = fit_section_circle(&top, tol)?;
+
+    let scale = radius.max(top_radius);
+    if scale <= tol.linear {
+        return None;
+    }
+
+    let span = top_center - base_center;
+    let height = span.norm();
+    if height <= tol.linear {
+        return None;
+    }
+    let axis = span / height;
+
+    // 断面の平面は軸に直交していなければならない。頂点に潰れた側は面を持たない
+    // ので、そこは見ない。
+    for normal in [base_normal, top_normal].into_iter().flatten() {
+        if normal.cross(&axis).norm() > tol.angular {
+            return None;
+        }
+    }
+
+    let frame_u = axis_perpendicular(axis)?;
+    let frame_v = axis.cross(&frame_u);
+
+    // 途中の断面が、両端が張る円錐（半径が等しければ円柱）の上に乗っているか。
+    for step in 1..4 {
+        let alpha = step as f64 / 4.0;
+        let section = cylinder_section_curve(surface, alpha)?;
+        let expected_center = base_center + span * alpha;
+        let expected_radius = radius + (top_radius - radius) * alpha;
+        for sample in sample_curve_points(&section, 8) {
+            let offset = sample - expected_center;
+            let axial = offset.dot(&axis);
+            let radial = (offset - axis * axial).norm();
+            if axial.abs() > tol.linear * scale
+                || (radial - expected_radius).abs() > tol.linear * scale
+            {
+                return None;
+            }
+        }
     }
 
     Some(CylinderPatch {
         axis,
         base_center,
         radius,
+        top_radius,
         height,
         frame_u,
         frame_v,
     })
 }
 
+/// Any unit vector at right angles to the given one.
 fn axis_perpendicular(axis: Vec3) -> Option<Vec3> {
     let seed = if axis.x.abs() < 0.9 {
         Vec3::new(1.0, 0.0, 0.0)
@@ -3280,6 +3376,11 @@ fn intersect_plane_cylinder_patch(
 
     if normal.cross(&patch.axis).norm() <= tol.angular {
         return intersect_section_plane_cylinder_patch(plane, surface, &patch, tol);
+    }
+    // 軸に平行な平面が母線を切り、斜めの平面が楕円を切るのは円柱の話。
+    // 円錐では双曲線・放物線になり、いずれもパッチのパラメータ線ではない。
+    if !patch.is_cylindrical(tol) {
+        return FaceIntersectionKind::Unsupported;
     }
     if normal.dot(&patch.axis).abs() <= tol.angular {
         return intersect_ruling_plane_cylinder_patch(plane, normal, surface, &patch, tol);
