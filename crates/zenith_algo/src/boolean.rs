@@ -141,6 +141,36 @@ impl BooleanEngine {
         Ok(result)
     }
 
+    /// Whether the two solids' bounding boxes share more than a face.
+    ///
+    /// Boxes that only touch enclose no volume between them, so nothing can be
+    /// in both solids. This is a sound test in one direction only: boxes that
+    /// do overlap say nothing about whether the solids do, and those go on to
+    /// the ordinary path.
+    fn bounds_overlap_in_volume(solid_a: &Solid, solid_b: &Solid, tol: &Tolerance) -> bool {
+        let params = zenith_tess::TessellationParams::default();
+        let bounds = |solid: &Solid| {
+            let mesh = zenith_tess::tessellate_solid(solid, &params);
+            let mut low = [f64::INFINITY; 3];
+            let mut high = [f64::NEG_INFINITY; 3];
+            for point in &mesh.positions {
+                for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
+                    low[axis] = low[axis].min(value);
+                    high[axis] = high[axis].max(value);
+                }
+            }
+            (low, high)
+        };
+
+        let (low_a, high_a) = bounds(solid_a);
+        let (low_b, high_b) = bounds(solid_b);
+        (0..3).all(|axis| {
+            low_a[axis].is_finite()
+                && low_b[axis].is_finite()
+                && high_a[axis].min(high_b[axis]) - low_a[axis].max(low_b[axis]) > tol.linear
+        })
+    }
+
     /// The raw boolean pipeline, without the correctness gate.
     ///
     /// Intended for diagnosing the pipeline itself; callers that need a
@@ -164,6 +194,14 @@ impl BooleanEngine {
         }
         if !solid_b.is_topologically_valid(tol) {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
+        }
+
+        // 境界箱が体積を持って重ならないなら、積は空だと確かめられる。
+        // 面が触れているだけの配置はここに落ちる: 交線の候補はあるので
+        // 下の経路に入ってしまい、「未実装」と報告されていた。
+        if op == BooleanOpType::Intersection && !Self::bounds_overlap_in_volume(solid_a, solid_b, tol)
+        {
+            return Ok(ExactBooleanResult::from_solids(Vec::new()));
         }
 
         if !Self::has_face_pair_candidates(solid_a, solid_b, tol) {
@@ -341,12 +379,17 @@ impl BooleanEngine {
                 } else if b_inside_a {
                     Ok(ExactBooleanResult::single(solid_b.clone()))
                 } else {
-                    Err("Exact B-Rep boolean intersection is empty for disjoint solids".to_string())
+                    // 交わらない2立体の積は空。空であることは失敗ではなく
+                    // 答えなので、エラーではなく空の結果で返す。ここは
+                    // 「重なりが無い」と幾何的に確かめた枝であって、
+                    // 「求められなかった」枝ではない。
+                    Ok(ExactBooleanResult::from_solids(Vec::new()))
                 }
             }
             BooleanOpType::Difference => {
                 if a_inside_b {
-                    Err("Exact B-Rep boolean difference is empty because input A is contained in input B".to_string())
+                    // A が B に含まれるなら A - B は空。これも答えのほう。
+                    Ok(ExactBooleanResult::from_solids(Vec::new()))
                 } else if b_inside_a {
                     Solid::try_new(
                         solid_a.outer_shell.clone(),

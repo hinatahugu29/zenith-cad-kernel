@@ -1095,7 +1095,7 @@ fn test_exact_brep_boolean_returns_left_solid_for_disjoint_difference() {
 }
 
 #[test]
-fn test_exact_brep_boolean_rejects_empty_disjoint_intersection() {
+fn test_a_disjoint_intersection_is_empty_rather_than_a_failure() {
     let tol = Tolerance::default();
     let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
     let solid_b = zenith_algo::BrepTransform::translate_solid(
@@ -1103,15 +1103,27 @@ fn test_exact_brep_boolean_rejects_empty_disjoint_intersection() {
         Vec3::new(20.0, 20.0, 20.0),
     );
 
-    let err = zenith_algo::BooleanEngine::boolean_solids_exact(
+    // 空であることは答えであって失敗ではない。結果を返す API は空で返す。
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
         &solid_a,
         &solid_b,
         zenith_algo::BooleanOpType::Intersection,
         &tol,
     )
-    .expect_err("disjoint exact intersection should not build an empty solid");
+    .expect("a disjoint intersection is empty, not a failure");
+    assert!(result.is_empty(), "the intersection of disjoint solids is empty");
 
-    assert!(err.contains("intersection is empty for disjoint solids"));
+    // ただし立体を1つ返す API は、返すものが無いので失敗のままでよい。
+    assert!(
+        zenith_algo::BooleanEngine::boolean_solids_exact(
+            &solid_a,
+            &solid_b,
+            zenith_algo::BooleanOpType::Intersection,
+            &tol,
+        )
+        .is_err(),
+        "there is no single solid to hand back"
+    );
 }
 
 #[test]

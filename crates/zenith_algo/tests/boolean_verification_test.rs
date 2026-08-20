@@ -66,6 +66,35 @@ fn test_gate_rejects_overlapping_sphere_boolean_that_returns_one_operand() {
 }
 
 #[test]
+fn test_an_empty_result_is_judged_by_whether_it_should_be_empty() {
+    let tol = Tolerance::default();
+    let a = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
+
+    // 交わらない2箱の積は空。空であることは失敗ではなく答えなので、
+    // ゲートは通さなければならない。
+    let far = BrepTransform::translate_solid(&a, Vec3::new(60.0, 0.0, 0.0));
+    assert!(
+        BooleanResultVerifier::verify(&a, &far, &[], BooleanOpType::Intersection, &tol).is_valid(),
+        "an intersection that really is empty must be accepted"
+    );
+
+    // ただし「空」を万能の逃げ道にはさせない。重なっている2箱の積が空だと
+    // 言えば、内外一貫性が食い違うので弾かれる。
+    let overlapping = BrepTransform::translate_solid(&a, Vec3::new(10.0, 10.0, 10.0));
+    assert!(
+        !BooleanResultVerifier::verify(&a, &overlapping, &[], BooleanOpType::Intersection, &tol)
+            .is_valid(),
+        "an intersection that is not empty must not be reported as empty"
+    );
+
+    // 離れていても、和は空ではない。
+    assert!(
+        !BooleanResultVerifier::verify(&a, &far, &[], BooleanOpType::Union, &tol).is_valid(),
+        "a union is never empty when its operands are not"
+    );
+}
+
+#[test]
 fn test_cone_box_difference_and_intersection_now_split_the_cone_correctly() {
     let tol = Tolerance::default();
     let cone = PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap();

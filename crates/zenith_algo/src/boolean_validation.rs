@@ -119,13 +119,11 @@ impl BooleanResultVerifier {
             errors: Vec::new(),
         };
 
-        if result.is_empty() {
-            report
-                .errors
-                .push("Boolean result has no solids".to_string());
-            return report;
-        }
-
+        // 空の結果は、それ自体では合否が決まらない。空であることが正しい
+        // 場合（交わらない立体の積など）と、求められなかった場合の両方が
+        // ありうる。前者なら、下の内外一貫性でどのサンプル点も述語を満たさない
+        // はずなので、そちらに判定を任せる。頭から弾いていたときは、正しい
+        // 空をエラーとしか言えなかった。
         // 1. Topology: every result shell, cavities included, must still be a
         //    valid closed shell.
         for (index, solid) in result.iter().enumerate() {
@@ -165,7 +163,7 @@ impl BooleanResultVerifier {
         let vr = report.volume_result;
         let eps = params.volume_relative_tolerance * va.abs().max(vb.abs()).max(1.0);
 
-        if vr <= eps {
+        if !result.is_empty() && vr <= eps {
             report
                 .errors
                 .push(format!("result volume {vr:.6} is not positive"));

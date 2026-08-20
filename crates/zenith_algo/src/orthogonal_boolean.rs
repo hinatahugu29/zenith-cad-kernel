@@ -35,10 +35,10 @@ impl OrthogonalBoxBoolean {
         match op {
             BooleanOpType::Intersection => {
                 let Some(overlap) = bounds_a.intersection(bounds_b, tol) else {
-                    return Err(
-                        "Exact B-Rep boolean intersection has no positive volume overlap"
-                            .to_string(),
-                    );
+                    // 重なりが無いことを境界箱で確かめた枝。積は空であって、
+                    // 求められなかったわけではない。呼び出し側が空の結果を
+                    // 作れるよう、ここでは「この近道の出番ではない」と返す。
+                    return Ok(None);
                 };
                 Self::make_box_from_bounds(overlap).map(Some)
             }
