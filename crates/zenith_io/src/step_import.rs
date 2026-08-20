@@ -1227,7 +1227,24 @@ impl StepImporter {
                 let b_parts = Self::split_top_level_args(&bound_raw.args);
                 if b_parts.len() >= 2 {
                     let loop_id = Self::parse_entity_ref(b_parts[1]).ok_or("loop ref")?;
-                    let wire = Self::get_wire(ctx, loop_id)?;
+                    let mut wire = Self::get_wire(ctx, loop_id)?;
+                    // FACE_BOUND の向きフラグ。.F. のとき、ループは書かれている
+                    // のと逆向きに面を囲む。これを無視すると、辺が隣り合う面から
+                    // 同じ向きに2度使われ、シェル検証が対で見つけられなくなる。
+                    if b_parts.len() >= 3 && b_parts[2].trim() == ".F." {
+                        wire = Wire::new(
+                            wire.edges
+                                .iter()
+                                .rev()
+                                .map(|oriented| {
+                                    OrientedEdge::new(
+                                        oriented.edge.clone(),
+                                        oriented.orientation.reversed(),
+                                    )
+                                })
+                                .collect(),
+                        );
+                    }
                     if bound_raw.name == "FACE_OUTER_BOUND" {
                         outer_wire = Some(wire);
                     } else {
