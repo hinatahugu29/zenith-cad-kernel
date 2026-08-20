@@ -90,6 +90,100 @@ impl NurbsSurface3 {
         (u_range, v_range)
     }
 
+    /// 格子状に並んだ点を**すべて通る**曲面を作る。
+    ///
+    /// 行ごと・列ごとに曲線補間を2回かけるテンソル積の大域補間
+    /// （The NURBS Book A9.4）。媒介変数は行や列ごとに決めると食い違うので、
+    /// **弦長で決めたものを平均して共通**に使う。
+    ///
+    /// 有理ではない（重みは 1）。曲面のオフセットのように「この位置を通って
+    /// ほしい」点の集まりから曲面を起こすための入口である。
+    pub fn interpolate_points(
+        degree_u: usize,
+        degree_v: usize,
+        grid: &[Vec<Point3>],
+    ) -> Result<Self, String> {
+        let rows = grid.len();
+        if rows < 2 {
+            return Err("surface interpolation needs at least two rows".to_string());
+        }
+        let columns = grid[0].len();
+        if columns < 2 || grid.iter().any(|row| row.len() != columns) {
+            return Err("surface interpolation needs a rectangular grid".to_string());
+        }
+        let degree_u = degree_u.min(rows - 1).max(1);
+        let degree_v = degree_v.min(columns - 1).max(1);
+
+        // 1. 媒介変数。列ごとに u 方向の弦長を測り、平均する。行も同様。
+        let mut u_parameters = vec![0.0f64; rows];
+        let mut counted = 0usize;
+        for column in 0..columns {
+            let strip: Vec<Point3> = (0..rows).map(|row| grid[row][column]).collect();
+            if let Some(parameters) = crate::nurbs_curve::NurbsCurve3::interpolation_parameters(&strip)
+            {
+                for (index, value) in parameters.iter().enumerate() {
+                    u_parameters[index] += value;
+                }
+                counted += 1;
+            }
+        }
+        if counted == 0 {
+            return Err("every column of the grid is degenerate".to_string());
+        }
+        for value in &mut u_parameters {
+            *value /= counted as f64;
+        }
+
+        let mut v_parameters = vec![0.0f64; columns];
+        let mut counted = 0usize;
+        for row in grid.iter() {
+            if let Some(parameters) = crate::nurbs_curve::NurbsCurve3::interpolation_parameters(row) {
+                for (index, value) in parameters.iter().enumerate() {
+                    v_parameters[index] += value;
+                }
+                counted += 1;
+            }
+        }
+        if counted == 0 {
+            return Err("every row of the grid is degenerate".to_string());
+        }
+        for value in &mut v_parameters {
+            *value /= counted as f64;
+        }
+
+        let knots_u = crate::nurbs_curve::NurbsCurve3::interpolation_knots(&u_parameters, degree_u);
+        let knots_v = crate::nurbs_curve::NurbsCurve3::interpolation_knots(&v_parameters, degree_v);
+
+        // 2. 列ごとに u 方向へ補間して、中間の制御点を得る。
+        let mut intermediate: Vec<Vec<Point3>> = vec![vec![Point3::origin(); columns]; rows];
+        for column in 0..columns {
+            let strip: Vec<Point3> = (0..rows).map(|row| grid[row][column]).collect();
+            let curve = crate::nurbs_curve::NurbsCurve3::interpolate_points_with(
+                degree_u,
+                &strip,
+                &u_parameters,
+                &knots_u,
+            )?;
+            for (row, control) in curve.control_points.iter().enumerate() {
+                intermediate[row][column] = control.point;
+            }
+        }
+
+        // 3. その行ごとに v 方向へ補間すると、曲面の制御点になる。
+        let mut control_points: Vec<Vec<ControlPoint3>> = Vec::with_capacity(rows);
+        for row in intermediate.iter() {
+            let curve = crate::nurbs_curve::NurbsCurve3::interpolate_points_with(
+                degree_v,
+                row,
+                &v_parameters,
+                &knots_v,
+            )?;
+            control_points.push(curve.control_points);
+        }
+
+        Self::new(degree_u, degree_v, control_points, knots_u, knots_v)
+    }
+
     /// `u` の位置で2枚のパッチに分割する。
     ///
     /// 各 v 列を1本の曲線として同じ分割にかけるので、有理の重みも保たれる。

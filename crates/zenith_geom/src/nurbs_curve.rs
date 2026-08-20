@@ -169,6 +169,91 @@ impl NurbsCurve3 {
         Self::new(degree, control_points, knot_vector)
     }
 
+    /// 媒介変数とノットを外から与えて補間する。
+    ///
+    /// テンソル積で曲面を補間するときは、行ごとに弦長で決めた媒介変数を使うと
+    /// 行どうしで食い違う。共通の媒介変数を渡せる口が要る。
+    pub fn interpolate_points_with(
+        degree: usize,
+        points: &[Point3],
+        parameters: &[f64],
+        knots: &KnotVector,
+    ) -> Result<Self, String> {
+        let count = points.len();
+        if count < 2 || parameters.len() != count {
+            return Err("interpolation needs one parameter per point".to_string());
+        }
+
+        let mut matrix = nalgebra::DMatrix::<f64>::zeros(count, count);
+        for (row, parameter) in parameters.iter().enumerate() {
+            let span = knots.find_span(count, degree, *parameter);
+            let basis = knots.basis_functions(span, degree, *parameter);
+            for (offset, value) in basis.iter().enumerate().take(degree + 1) {
+                let column = span - degree + offset;
+                if column < count {
+                    matrix[(row, column)] = *value;
+                }
+            }
+        }
+
+        let mut rhs = nalgebra::DMatrix::<f64>::zeros(count, 3);
+        for (row, point) in points.iter().enumerate() {
+            rhs[(row, 0)] = point.x;
+            rhs[(row, 1)] = point.y;
+            rhs[(row, 2)] = point.z;
+        }
+
+        let solution = matrix
+            .lu()
+            .solve(&rhs)
+            .ok_or_else(|| "the interpolation system is singular".to_string())?;
+
+        let control_points = (0..count)
+            .map(|row| {
+                ControlPoint3::unweighted(Point3::new(
+                    solution[(row, 0)],
+                    solution[(row, 1)],
+                    solution[(row, 2)],
+                ))
+            })
+            .collect();
+
+        Self::new(degree, control_points, knots.clone())
+    }
+
+    /// 弦長で媒介変数を割り当て、その平均でノットを置く。
+    ///
+    /// 補間の媒介変数とノットの決め方は The NURBS Book の A9.1 に従う。
+    pub fn interpolation_parameters(points: &[Point3]) -> Option<Vec<f64>> {
+        let count = points.len();
+        if count < 2 {
+            return None;
+        }
+        let mut lengths = Vec::with_capacity(count);
+        lengths.push(0.0);
+        let mut total = 0.0;
+        for index in 1..count {
+            total += (points[index] - points[index - 1]).norm();
+            lengths.push(total);
+        }
+        if total <= f64::EPSILON {
+            return None;
+        }
+        Some(lengths.iter().map(|length| length / total).collect())
+    }
+
+    /// 媒介変数の移動平均でノットを置く。
+    pub fn interpolation_knots(parameters: &[f64], degree: usize) -> KnotVector {
+        let count = parameters.len();
+        let mut knots = vec![0.0; degree + 1];
+        for j in 1..count.saturating_sub(degree) {
+            let mean: f64 = parameters[j..j + degree].iter().sum::<f64>() / degree as f64;
+            knots.push(mean);
+        }
+        knots.extend(std::iter::repeat(1.0).take(degree + 1));
+        KnotVector::new(knots)
+    }
+
     /// パラメータ方向を反転した同じ曲線を返す。
     pub fn reversed(&self) -> Self {
         let start = self.knots.knots.first().copied().unwrap_or(0.0);

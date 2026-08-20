@@ -168,6 +168,18 @@ impl SketchSolver {
                 None => return Err(format!("Singular Jacobian at iteration {}", iter)),
             };
 
+            // `is_fixed` を立てた点は動かさない。`add_fixed_point` は
+            // `FixedPoint` 拘束も足すのでそちらでも止まるが、フィールドは
+            // 公開されている。読まれない公開フィールドは、立てた人が「効いた」
+            // と思い込む罠になる。
+            let mut delta = delta;
+            for (index, point) in self.points.iter().enumerate() {
+                if point.is_fixed {
+                    delta[2 * index] = 0.0;
+                    delta[2 * index + 1] = 0.0;
+                }
+            }
+
             let x_new = &x + &delta;
             let (f_new, _) = self.eval_residuals_and_jacobian(&x_new);
 
