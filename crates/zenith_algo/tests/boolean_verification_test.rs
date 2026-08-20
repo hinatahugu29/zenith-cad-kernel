@@ -48,19 +48,52 @@ fn test_gate_lets_correct_axis_aligned_box_booleans_through() {
     }
 }
 
+/// 2つの重なる球のブーリアン。
+///
+/// この試験はもともと「成功したと言ってはならない」を主張していた。曲面同士の
+/// 交差が無く、通れば片方の球をそのまま返すしかなかったからである。交線を辿って
+/// 面を割れるようになったので、いまは**答えそのもの**を見る。主張が
+/// 「できないこと」から「正しいこと」に変わっただけで、守っている当のものは
+/// 同じ——片方の球（4188.790）を答えにしてはならない、である。
+///
+/// 半径 r の球2つ、中心間距離 d の重なり（レンズ）の体積は
+/// `(pi/12)(4r + d)(2r - d)^2` で閉じている。
 #[test]
-fn test_gate_rejects_overlapping_sphere_boolean_that_returns_one_operand() {
+fn test_two_overlapping_spheres_give_the_closed_form_or_an_error_but_never_one_operand() {
     let tol = Tolerance::default();
-    let a = PrimitiveBuilder::make_sphere(10.0).unwrap();
-    let b = BrepTransform::translate_solid(&a, Vec3::new(10.0, 0.0, 0.0));
+    let radius = 10.0f64;
+    let distance = 10.0f64;
+    let a = PrimitiveBuilder::make_sphere(radius).unwrap();
+    let b = BrepTransform::translate_solid(&a, Vec3::new(distance, 0.0, 0.0));
 
-    // 半径10・中心間距離10の2球。和は 7068.583、積は 1308.997 が正解であり、
-    // どちらも球1個ぶん (4188.790) にはなり得ない。
-    for op in [BooleanOpType::Union, BooleanOpType::Intersection] {
-        let result = BooleanEngine::boolean_solids_exact_result(&a, &b, op, &tol);
+    let one_sphere = 4.0 / 3.0 * std::f64::consts::PI * radius.powi(3);
+    let lens = std::f64::consts::PI / 12.0
+        * (4.0 * radius + distance)
+        * (2.0 * radius - distance).powi(2);
+
+    for (op, expected) in [
+        (BooleanOpType::Union, 2.0 * one_sphere - lens),
+        (BooleanOpType::Intersection, lens),
+        (BooleanOpType::Difference, one_sphere - lens),
+    ] {
+        let Ok(result) = BooleanEngine::boolean_solids_exact_result(&a, &b, op, &tol) else {
+            // 対応範囲外をエラーで返すのは仕様。誤答でなければよい。
+            continue;
+        };
+
+        let volume: f64 = result
+            .solids
+            .iter()
+            .map(|s| MassCalculator::compute_from_brep(s, &fine_tessellation()).volume)
+            .sum();
+
         assert!(
-            result.is_err(),
-            "{op:?} of two overlapping spheres must not report success; got a solid instead"
+            (volume - one_sphere).abs() / one_sphere > 1e-3,
+            "{op:?} returned one sphere untouched ({volume})"
+        );
+        assert!(
+            (volume - expected).abs() / expected < 1e-3,
+            "{op:?} volume {volume} does not match the closed form {expected}"
         );
     }
 }

@@ -118,42 +118,98 @@ impl IntersectionMarcher {
         max_points: usize,
         tol: &Tolerance,
     ) -> Option<MarchedIntersection> {
-        let (seed_u, seed_v) = Self::find_seed(s1, s2, grid)?;
-        Self::march(s1, s2, seed_u, seed_v, step, max_points, tol)
+        let mut best: Option<MarchedIntersection> = None;
+        for (seed_u, seed_v) in Self::find_seeds(s1, s2, grid, 8) {
+            let Some(curve) = Self::march(s1, s2, seed_u, seed_v, step, max_points, tol) else {
+                continue;
+            };
+            if curve.closed {
+                return Some(curve);
+            }
+            // 長く辿れたほうを採る。種が交線の端に近いと数歩で終わる。
+            if best
+                .as_ref()
+                .map(|found| curve.points.len() > found.points.len())
+                .unwrap_or(true)
+            {
+                best = Some(curve);
+            }
+        }
+        best
     }
 
-    /// `s2` にいちばん近く、そこで法線が平行でない `s1` 上の格子点。
-    pub fn find_seed(s1: &NurbsSurface3, s2: &NurbsSurface3, grid: usize) -> Option<(f64, f64)> {
-        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+    /// 交線に乗りそうな種を、近い順に集める。
+    ///
+    /// 1つに絞ろうとしない。近さで選ぶと、2面が触れている配置では接点が
+    /// いちばん近く、そこから始めても進む向きが定まらない。条件の良さで
+    /// 選ぶと、交線から遠い点を掴む。**どちらの当て方も外したので、
+    /// 候補を並べて順に試し、結果を測って採ることにした。**
+    ///
+    /// 格子の各点から最近傍射影を回すと、1点あたり粗サンプリングとニュートンが
+    /// 走って高くつく（ブーリアンで面の組ごとに呼ぶと 45 ケースの走査が
+    /// 4分47秒になった）。両方の格子を並べて近い組を選び、そこだけ詰める。
+    pub fn find_seeds(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        grid: usize,
+        limit: usize,
+    ) -> Vec<(f64, f64)> {
         let steps = grid.max(4);
-        let mut best: Option<(f64, f64, f64)> = None;
+        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
 
+        let mut grid_a = Vec::with_capacity((steps + 1) * (steps + 1));
         for i in 0..=steps {
             let u = u_min + (u_max - u_min) * i as f64 / steps as f64;
             for j in 0..=steps {
                 let v = v_min + (v_max - v_min) * j as f64 / steps as f64;
-                let point = s1.evaluate(u, v);
-                let Ok(projection) = ExtremumEngine::point_to_surface(point, s2, 64, 1e-13) else {
-                    continue;
-                };
-                let state = [u, v, projection.u, projection.v];
-                let Some((_, sine)) = Self::tangent(s1, s2, &state) else {
-                    continue;
-                };
-                if sine < TANGENCY_SINE_LIMIT * 10.0 {
-                    continue;
-                }
-                if best
-                    .as_ref()
-                    .map(|(_, _, d)| projection.distance < *d)
-                    .unwrap_or(true)
-                {
-                    best = Some((u, v, projection.distance));
-                }
+                grid_a.push((u, v, s1.evaluate(u, v)));
+            }
+        }
+        let mut grid_b = Vec::with_capacity((steps + 1) * (steps + 1));
+        for i in 0..=steps {
+            let s = s_min + (s_max - s_min) * i as f64 / steps as f64;
+            for j in 0..=steps {
+                let t = t_min + (t_max - t_min) * j as f64 / steps as f64;
+                grid_b.push((s, t, s2.evaluate(s, t)));
             }
         }
 
-        best.map(|(u, v, _)| (u, v))
+        let mut pairs: Vec<(f64, usize, usize)> = Vec::with_capacity(grid_a.len());
+        for (index_a, (_, _, point_a)) in grid_a.iter().enumerate() {
+            let mut best = (f64::INFINITY, 0usize);
+            for (index_b, (_, _, point_b)) in grid_b.iter().enumerate() {
+                let distance = (point_a - point_b).norm();
+                if distance < best.0 {
+                    best = (distance, index_b);
+                }
+            }
+            pairs.push((best.0, index_a, best.1));
+        }
+        pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        let mut seeds = Vec::new();
+        for (_, index_a, index_b) in pairs.iter().take(limit * 8) {
+            if seeds.len() >= limit {
+                break;
+            }
+            let (u, v, point) = grid_a[*index_a];
+            let (s, t, _) = grid_b[*index_b];
+            let Ok(projection) =
+                ExtremumEngine::point_to_surface_seeded(point, s2, s, t, 64, 1e-13)
+            else {
+                continue;
+            };
+            let state = [u, v, projection.u, projection.v];
+            let Some((_, sine)) = Self::tangent(s1, s2, &state) else {
+                continue;
+            };
+            if sine < TANGENCY_SINE_LIMIT * 10.0 {
+                continue;
+            }
+            seeds.push((u, v));
+        }
+        seeds
     }
 
     /// 種の位置から、動かずに交線へ落とす。
@@ -622,18 +678,23 @@ impl IntersectionMarcher {
         deviation_limit: f64,
         tol: &Tolerance,
     ) -> Option<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> {
-        let mut step = first_step;
-        for _ in 0..8 {
-            if let Some(marched) = Self::march_from_best_seed(s1, s2, 16, step, 8192, tol) {
-                if marched.points.len() >= 4 {
-                    if let Some((curve, deviation)) = Self::fit_curve(s1, s2, &marched, 3) {
-                        if deviation <= deviation_limit {
-                            return Some((curve, marched, deviation));
+        // 種は一度だけ集める。歩幅を縮めるたびに探し直すと、同じ答えを何度も
+        // 計算することになる。
+        let seeds = Self::find_seeds(s1, s2, 16, 6);
+        for (seed_u, seed_v) in seeds {
+            let mut step = first_step;
+            for _ in 0..8 {
+                if let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, 8192, tol) {
+                    if marched.points.len() >= 4 {
+                        if let Some((curve, deviation)) = Self::fit_curve(s1, s2, &marched, 3) {
+                            if deviation <= deviation_limit {
+                                return Some((curve, marched, deviation));
+                            }
                         }
                     }
                 }
+                step *= 0.5;
             }
-            step *= 0.5;
         }
         None
     }

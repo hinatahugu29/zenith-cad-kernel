@@ -259,20 +259,45 @@ fn test_exact_brep_boolean_entry_is_separate_from_mesh_preview() {
         ),
     }
 
-    // 対応範囲外の組では、もっともらしいソリッドではなくエラーが返る。
+    // 球同士の和は、交線を辿って面を割れるようになったので通る。通るなら
+    // 閉じた式と一致していなければならない。半径 r の球2つ、中心間距離 d の
+    // 重なりは `(pi/12)(4r + d)(2r - d)^2`。
     let sphere = zenith_algo::PrimitiveBuilder::make_sphere(10.0).unwrap();
     let offset_sphere =
         zenith_algo::BrepTransform::translate_solid(&sphere, Vec3::new(10.0, 0.0, 0.0));
-    assert!(
-        zenith_algo::BooleanEngine::boolean_solids_exact(
-            &sphere,
-            &offset_sphere,
-            zenith_algo::BooleanOpType::Union,
-            &tol,
-        )
-        .is_err(),
-        "curved surface intersection is not supported and must not report success"
-    );
+    match zenith_algo::BooleanEngine::boolean_solids_exact(
+        &sphere,
+        &offset_sphere,
+        zenith_algo::BooleanOpType::Union,
+        &tol,
+    ) {
+        Ok(solid) => {
+            let one = 4.0 / 3.0 * std::f64::consts::PI * 1000.0;
+            let lens = std::f64::consts::PI / 12.0 * 50.0 * 100.0;
+            let expected = 2.0 * one - lens;
+            let volume = zenith_algo::MassCalculator::compute_from_brep(
+                &solid,
+                &TessellationParams {
+                    u_divisions: 48,
+                    v_divisions: 48,
+                },
+            )
+            .volume;
+            assert!(
+                (volume - one).abs() / one > 1e-3,
+                "the union returned one sphere untouched ({volume})"
+            );
+            assert!(
+                (volume - expected).abs() / expected < 1e-3,
+                "sphere union volume {volume} should be {expected}"
+            );
+        }
+        Err(err) => assert!(
+            err.contains("not implemented yet") || err.contains("fails verification"),
+            "an unsupported case must say so, got: {err}"
+        ),
+    }
+
 }
 
 #[test]

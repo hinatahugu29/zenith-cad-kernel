@@ -800,6 +800,20 @@ impl BrepIntersectionBuilder {
                 // 形が何であれ同じやり方で割れる。トーラスがこれ。
                 split_patch_face_by_section_edge(face, surface, split_edge, tol)
                     .map_err(|general_error| format!("{cylinder_errors}; {general_error}"))
+            })
+            .or_else(|iso_errors| {
+                // 等パラメータ線でない切り口。境界の巡回を割るだけの一般の
+                // 分割にかける。**面積の和が元に戻ることを測って**から採る。
+                // 閉じたワイヤになっただけでは、領域の取り違えは分からない。
+                let (pieces, report) = crate::FaceSplitter::split_by_curve(face, split_edge, tol)
+                    .map_err(|general_error| format!("{iso_errors}; {general_error}"))?;
+                if report.area_residual > 1e-6 {
+                    return Err(format!(
+                        "{iso_errors}; the general split lost {:.3e} of the face area",
+                        report.area_residual
+                    ));
+                }
+                Ok(pieces)
             }),
             _ => Err("Face splitting is not implemented for this geometry".to_string()),
         }
@@ -3659,9 +3673,73 @@ fn intersect_face_supports(
         (FaceGeometry::Nurbs(surface), FaceGeometry::Plane(plane)) => Some(
             intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_b), surface, tol),
         ),
-        (FaceGeometry::Nurbs(_), FaceGeometry::Nurbs(_)) => Some(FaceIntersectionKind::Unsupported),
+        (FaceGeometry::Nurbs(surface_a), FaceGeometry::Nurbs(surface_b)) => {
+            Some(intersect_nurbs_patches(surface_a, surface_b, tol))
+        }
         _ => None,
     }
+}
+
+/// 曲面同士の交線を辿って1本の辺にする。
+///
+/// ここに来るまで、この組み合わせは `Unsupported` を返していた。交線が
+/// 取れなければブーリアンは始まらない。
+///
+/// **要求した精度に届かなければ `Unsupported` を返す。** 近いところを通る
+/// もっともらしい曲線を渡すと、その先の分割と選別が静かに間違う。
+fn intersect_nurbs_patches(
+    surface_a: &NurbsSurface3,
+    surface_b: &NurbsSurface3,
+    tol: &Tolerance,
+) -> FaceIntersectionKind {
+    let extent = surface_patch_extent(surface_a).max(surface_patch_extent(surface_b));
+    let first_step = (extent * 0.1).max(tol.linear * 100.0);
+    let deviation_limit = tol.linear;
+
+    let Some((curve, _, _)) = zenith_geom::IntersectionMarcher::fit_to_tolerance(
+        surface_a,
+        surface_b,
+        first_step,
+        deviation_limit,
+        tol,
+    ) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+
+    let (t0, t1) = curve.param_range();
+    let start = curve.evaluate(t0);
+    let end = curve.evaluate(t1);
+    if (end - start).norm() <= tol.linear {
+        return FaceIntersectionKind::Unsupported;
+    }
+
+    FaceIntersectionKind::Curve {
+        edge: Edge::new(
+            curve,
+            Vertex::new(start, tol.linear),
+            Vertex::new(end, tol.linear),
+            tol.linear,
+        ),
+    }
+}
+
+/// パッチの広がり。歩幅を形の大きさに合わせるために使う。
+fn surface_patch_extent(surface: &NurbsSurface3) -> f64 {
+    let ((u0, u1), (v0, v1)) = surface.param_range();
+    let corners = [
+        surface.evaluate(u0, v0),
+        surface.evaluate(u1, v0),
+        surface.evaluate(u0, v1),
+        surface.evaluate(u1, v1),
+        surface.evaluate((u0 + u1) * 0.5, (v0 + v1) * 0.5),
+    ];
+    let mut worst: f64 = 0.0;
+    for (index, a) in corners.iter().enumerate() {
+        for b in corners.iter().skip(index + 1) {
+            worst = worst.max((a - b).norm());
+        }
+    }
+    worst.max(1.0)
 }
 
 fn oriented_plane_normal(face: &Face) -> Vec3 {
