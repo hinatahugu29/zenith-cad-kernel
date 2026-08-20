@@ -82,43 +82,36 @@ fn quarter_arc(radius: f64) -> NurbsCurve3 {
     .unwrap()
 }
 
-/// 平歯車のプロファイル多角形の面積。
+/// インボリュート平歯車の断面積。
 ///
-/// 歯1つにつき「歯底左・歯先左・歯先右・歯底右」の4点を取り、直線で結ぶ。
-/// 靴紐の公式で面積が出る。`bore_radius` は穴ではなく歯底半径の下限に効く。
+/// カーネルの外の物差しなので、`GearBuilder::involute_profile_area` は
+/// **呼ばない**。同じ閉じた式を、寸法の定義から独立に組み直している。
+///
+/// 極形式のグリーンの定理 `A = (1/2) ∮ r^2 dθ` を境界の3種類に分けて積む。
+/// 半径方向の直線は `dθ = 0` で寄与せず、半径 `R` が角 `Δ` を張る弧は
+/// `R^2 Δ / 2`、基礎円 `r_b` のインボリュートを `t1..t2` でたどると
+/// `r_b^2 (t2^3 - t1^3) / 6` になる。`bore` は穴ではなく歯底半径の下限。
 fn spur_gear_profile_area(module: f64, teeth: usize, pressure_angle_deg: f64, bore: f64) -> f64 {
+    let inv = |angle: f64| angle.tan() - angle;
+
     let z = teeth as f64;
     let alpha = pressure_angle_deg.to_radians();
     let pitch_radius = module * z * 0.5;
     let base_radius = pitch_radius * alpha.cos();
     let tip_radius = pitch_radius + module;
     let root_radius = (pitch_radius - 1.25 * module)
-        .max(base_radius * 0.8)
-        .max(bore + 0.5 * module);
+        .max(bore + 0.5 * module)
+        .min(base_radius);
 
-    let pitch_angle = 2.0 * PI / z;
-    let half_tooth = pitch_angle * 0.25;
+    let tip_alpha = (base_radius / tip_radius).acos();
+    let half_at_base = PI / (2.0 * z) + inv(alpha);
+    let half_at_tip = half_at_base - inv(tip_alpha);
+    let tip_t = tip_alpha.tan();
 
-    let mut points: Vec<(f64, f64)> = Vec::with_capacity(teeth * 4);
-    for index in 0..teeth {
-        let centre = index as f64 * pitch_angle;
-        for (angle, radius) in [
-            (centre - half_tooth * 1.5, root_radius),
-            (centre - half_tooth * 0.5, tip_radius),
-            (centre + half_tooth * 0.5, tip_radius),
-            (centre + half_tooth * 1.5, root_radius),
-        ] {
-            points.push((radius * angle.cos(), radius * angle.sin()));
-        }
-    }
-
-    let mut twice_area = 0.0;
-    for index in 0..points.len() {
-        let (x0, y0) = points[index];
-        let (x1, y1) = points[(index + 1) % points.len()];
-        twice_area += x0 * y1 - x1 * y0;
-    }
-    twice_area.abs() * 0.5
+    let per_tooth = root_radius * root_radius * (PI / z - half_at_base)
+        + base_radius * base_radius * tip_t.powi(3) / 3.0
+        + tip_radius * tip_radius * half_at_tip;
+    z * per_tooth
 }
 
 struct Case {
@@ -403,15 +396,13 @@ fn build_cases() -> Vec<Case> {
         analytic_volume: Some(PI * 20.0 / 3.0 * (100.0 + 40.0 + 16.0)),
     });
 
-    // 歯車の歯形はインボリュートではなく、歯ごとに4点を直線で結んだ多角形
-    // である（`GearBuilder::make_spur_gear` の説明を参照）。したがって体積は
-    // **多角形の面積 × 厚み**で閉じている。
+    // 歯形は基礎円のインボリュートである。歯先と歯底の弧、歯底から基礎円への
+    // 直線は厳密なので、閉じた式との差はすべて歯面の3次補間から来る。
     //
-    // ここで確かめているのは歯形の正しさではなく、その多角形を押し出して
-    // 積んだ体積が幾何どおりかである。歯形そのものを外から確かめるには、
-    // インボリュートを本当に使うようにしてからでないと意味がない。
+    // 2026年8月20日までは4点の多角形だったので、ここも靴紐の公式で当てて
+    // いました。歯形を直したので、物差しのほうも書き直しています。
     cases.push(Case {
-        name: "spur gear m2 z18 (polygon teeth)",
+        name: "spur gear m2 z18 (involute teeth)",
         solid: GearBuilder::make_spur_gear(2.0, 18, 20.0, 8.0, 6.0),
         analytic_volume: Some(spur_gear_profile_area(2.0, 18, 20.0, 6.0) * 8.0),
     });

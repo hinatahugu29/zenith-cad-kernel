@@ -1136,6 +1136,9 @@ pub fn check_boxes_interference(
 }
 
 /// インボリュート平歯車（Spur Gear）B-Rep Solid生成（STEP出力対応）
+///
+/// 歯面は基礎円のインボリュート。`bore_radius` は**穴を開けません**——歯底
+/// 半径の下限に効くだけです。軸穴が要るなら円柱との差で開けてください。
 #[pyfunction]
 #[pyo3(signature = (module = 2.0, teeth = 18, pressure_angle = 20.0, thickness = 10.0, bore_radius = 5.0, u_divisions = 8, v_divisions = 8, step_path = None))]
 pub fn make_spur_gear(

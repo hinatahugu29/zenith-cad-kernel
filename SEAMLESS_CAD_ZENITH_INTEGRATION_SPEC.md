@@ -52,7 +52,7 @@ Seamless CAD（`reference/CAD_8_1_5_1`）の主要プリミティブ・モディ
 | Seamless CAD プリミティブ / 操作 | 内部種別名 (`type`) | Zenith CAD ネイティブ API (`zenith_cad`) | 実装ステータス |
 | :--- | :--- | :--- | :---: |
 | **直方体 (Box)** | `BOX` | `make_box(dx, dy, dz)` | ✅ 完全対応 |
-| **平歯車**（歯形は多角形。インボリュートではない） | `GEAR` | `make_spur_gear(module, teeth, angle, ...)` | ⚠ 形は出るが歯形が違う |
+| **インボリュート平歯車**（歯元はトロコイドではなく直線。`bore_radius` は穴を開けない） | `GEAR` | `make_spur_gear(module, teeth, angle, ...)` | ✅ 歯形は基礎円のインボリュート（閉じた式と 1.99e-9） |
 | **円柱 (Cylinder)** | `CYLINDER` | `make_cylinder(radius, height, ...)` | ✅ 完全対応 |
 
 | **円錐 / 円錐台 (Cone)** | `CONE` | `make_cone(r1, r2, h)` | ✅ 完全対応 |

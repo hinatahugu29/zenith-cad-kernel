@@ -14,6 +14,18 @@ Usage (FreeCAD's bundled interpreter, so the OCC bindings resolve):
 
 Exit code is non-zero when any subject disagrees beyond tolerance, so this can
 gate a release.
+
+A caveat found on 2026年8月21日: `spur_gear_m2_z18` reads **7.18e-05** in the
+volume column while every other subject sits at 1e-12. That is not our error.
+The gear's surface **area** agrees to 8.2e-08, the re-imported tooth flanks lie
+within 7.6e-08 of the true involute, and re-integrating the same imported shape
+from its own tessellation converges on the closed form. What differs is
+OpenCASCADE's `shape.Volume` on this solid — 146 faces whose flanks are degree-3
+B-splines over dozens of knot spans. See `tools/diagnose_gear_reexport.py`.
+
+Read the volume column with that in mind: it is a strong yardstick for analytic
+surfaces and for the degree-2 rational patches `verify_reexport` grades, and a
+weaker one for spline-heavy solids like this gear.
 """
 
 import json
