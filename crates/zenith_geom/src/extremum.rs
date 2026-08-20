@@ -124,8 +124,21 @@ impl ExtremumEngine {
         }
 
         // 2. 2変数ニュートン・ラフソン法による精密収束
+        //
+        // ニュートン法は距離の停留点に向かうだけで、それが最小とは限らない。
+        // 素直に反復して最後の位置を返していたときは、退化行（球の極など）で
+        // ヤコビアンが特異になった時点で打ち切り、極そのものを答えとして
+        // 返していた。半径10の球で 0.446 ずれる。
+        //
+        // そこで、これまでで最も近かった位置を常に持ち、**それより悪い位置は
+        // 決して返さない**。歩幅は距離が縮むまで半分にする。縮む向きが無ければ
+        // そこが極小なので止める。こうすると、結果は粗サンプリングの当たり以上
+        // であることが保証される。
         let mut cur_u = best_u;
         let mut cur_v = best_v;
+        let mut best_dist_sq = min_dist_sq;
+
+        let distance_sq_at = |u: f64, v: f64| (surface.evaluate(u, v) - point).norm_squared();
 
         for _ in 0..max_iterations {
             let (pt, su, sv) = surface.evaluate_derivatives_1st(cur_u, cur_v);
@@ -143,29 +156,64 @@ impl ExtremumEngine {
             let g_coeff = sv.norm_squared();
 
             let det = e * g_coeff - f_coeff * f_coeff;
-            if det.abs() < 1e-12 {
+            // 特異なら降下方向へ退く。極の上でも進めるようにするため、
+            // ここで打ち切らない。
+            let (step_u, step_v) = if det.abs() < 1e-12 {
+                let scale = (e + g_coeff).max(1e-12);
+                (f / scale, g / scale)
+            } else {
+                (
+                    (f * g_coeff - g * f_coeff) / det,
+                    (g * e - f * f_coeff) / det,
+                )
+            };
+
+            if !step_u.is_finite() || !step_v.is_finite() {
                 break;
             }
 
-            let delta_u = (f * g_coeff - g * f_coeff) / det;
-            let delta_v = (g * e - f * f_coeff) / det;
+            // 距離が縮む歩幅が見つかるまで半分にする。
+            let mut damping = 1.0;
+            let mut moved = false;
+            for _ in 0..24 {
+                let next_u = (cur_u - step_u * damping).clamp(u_min, u_max);
+                let next_v = (cur_v - step_v * damping).clamp(v_min, v_max);
+                let next = distance_sq_at(next_u, next_v);
+                if next < best_dist_sq {
+                    let settled = (next_u - cur_u).abs() < tolerance
+                        && (next_v - cur_v).abs() < tolerance;
+                    cur_u = next_u;
+                    cur_v = next_v;
+                    best_dist_sq = next;
+                    moved = true;
+                    if settled {
+                        return Ok(Self::surface_projection(point, surface, cur_u, cur_v));
+                    }
+                    break;
+                }
+                damping *= 0.5;
+            }
 
-            cur_u = (cur_u - delta_u).clamp(u_min, u_max);
-            cur_v = (cur_v - delta_v).clamp(v_min, v_max);
-
-            if delta_u.abs() < tolerance && delta_v.abs() < tolerance {
+            if !moved {
                 break;
             }
         }
 
-        let closest_point = surface.evaluate(cur_u, cur_v);
-        let distance = (closest_point - point).norm();
+        Ok(Self::surface_projection(point, surface, cur_u, cur_v))
+    }
 
-        Ok(PointSurfaceProjection {
-            u: cur_u,
-            v: cur_v,
+    fn surface_projection(
+        point: Point3,
+        surface: &NurbsSurface3,
+        u: f64,
+        v: f64,
+    ) -> PointSurfaceProjection {
+        let closest_point = surface.evaluate(u, v);
+        PointSurfaceProjection {
+            u,
+            v,
             closest_point,
-            distance,
-        })
+            distance: (closest_point - point).norm(),
+        }
     }
 }

@@ -553,7 +553,98 @@ fn project_edge_to_nurbs_pcurve(
         ));
     }
 
+    settle_seam_parameters(&mut uv_points, surface, tol);
+
     NurbsCurve2::bspline_from_points(1, uv_points)
+}
+
+/// Rewrites parameters that landed on a seam so the run reads as one path.
+///
+/// A point on the seam of a closed surface has two names, one at each end of
+/// the domain, and the projection has no reason to prefer either. When a run of
+/// samples picks the far one for its first point and the near one for the rest,
+/// the straight line joining them in parameter space crosses the whole domain,
+/// and the p-curve sweeps right round the surface between two neighbouring
+/// samples. That is where the twenty-unit gap on a radius-ten sphere came from:
+/// not an approximation, but a curve going the wrong way round.
+///
+/// Samples away from a seam are unambiguous, so they are the ones to trust; a
+/// seam sample is moved to whichever end sits nearer them. A run that is all
+/// seam is already consistent and is left alone.
+fn settle_seam_parameters(uv_points: &mut [Point2], surface: &NurbsSurface3, tol: &Tolerance) {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    settle_seam_axis(uv_points, u_min, u_max, tol, surface, true);
+    settle_seam_axis(uv_points, v_min, v_max, tol, surface, false);
+}
+
+fn settle_seam_axis(
+    uv_points: &mut [Point2],
+    min: f64,
+    max: f64,
+    tol: &Tolerance,
+    surface: &NurbsSurface3,
+    along_u: bool,
+) {
+    let span = max - min;
+    if span <= 0.0 || uv_points.len() < 2 {
+        return;
+    }
+    let edge_of_domain = span * 1e-9;
+    let coordinate = |uv: &Point2| if along_u { uv.x } else { uv.y };
+
+    let at_seam: Vec<bool> = uv_points
+        .iter()
+        .map(|uv| {
+            let value = coordinate(uv);
+            (value - min).abs() <= edge_of_domain || (value - max).abs() <= edge_of_domain
+        })
+        .collect();
+
+    // 端に居ない標本が一つも無ければ、寄せる先が無い。全部が継ぎ目上なら
+    // すでに揃っている。
+    if at_seam.iter().all(|seam| *seam) || at_seam.iter().all(|seam| !*seam) {
+        return;
+    }
+
+    for index in 0..uv_points.len() {
+        if !at_seam[index] {
+            continue;
+        }
+        // 一番近い、端に居ない標本を基準にする。
+        let Some(reference) = (0..uv_points.len())
+            .filter(|other| !at_seam[*other])
+            .min_by_key(|other| other.abs_diff(index))
+            .map(|other| coordinate(&uv_points[other]))
+        else {
+            continue;
+        };
+
+        let nearer = if (reference - min).abs() <= (reference - max).abs() {
+            min
+        } else {
+            max
+        };
+        let current = coordinate(&uv_points[index]);
+        if (current - nearer).abs() <= edge_of_domain {
+            continue;
+        }
+
+        // 両端が同じ点を指していることを確かめてから置き換える。継ぎ目でない
+        // 端をまたいでしまうと、面から外れた p-curve になる。
+        let other_end = uv_points[index];
+        let moved = if along_u {
+            Point2::new(nearer, other_end.y)
+        } else {
+            Point2::new(other_end.x, nearer)
+        };
+        let before = surface.evaluate(other_end.x, other_end.y);
+        let after = surface.evaluate(moved.x, moved.y);
+        if (after - before).norm() > tol.linear.max(1e-9) {
+            continue;
+        }
+
+        uv_points[index] = moved;
+    }
 }
 
 fn project_to_plane_uv(point: Point3, plane: &PlaneSurface3) -> Point2 {
