@@ -123,6 +123,33 @@ impl ExtremumEngine {
             }
         }
 
+        // 粗い格子のまま渡すと、ニュートン法が動けなかったときに格子間隔
+        // そのものが答えとして残る。半径10の球を16分割した格子では、
+        // 赤道上の点が 1.8 ずれたまま通っていた。当たりの周りを数回詰めてから
+        // 渡せば、出発点は最初から近い。
+        let closed = SurfaceClosure::of(surface);
+        let mut cell_u = (u_max - u_min) / samples as f64;
+        let mut cell_v = (v_max - v_min) / samples as f64;
+        for _ in 0..8 {
+            cell_u *= 0.5;
+            cell_v *= 0.5;
+            for i in -1..=1 {
+                for j in -1..=1 {
+                    if i == 0 && j == 0 {
+                        continue;
+                    }
+                    let u = closed.settle_u(best_u + cell_u * i as f64, u_min, u_max);
+                    let v = closed.settle_v(best_v + cell_v * j as f64, v_min, v_max);
+                    let dist_sq = (surface.evaluate(u, v) - point).norm_squared();
+                    if dist_sq < min_dist_sq {
+                        min_dist_sq = dist_sq;
+                        best_u = u;
+                        best_v = v;
+                    }
+                }
+            }
+        }
+
         Self::refine_surface_projection(point, surface, best_u, best_v, min_dist_sq, max_iterations, tolerance)
     }
 
@@ -164,6 +191,7 @@ impl ExtremumEngine {
     ) -> Result<PointSurfaceProjection, String> {
         let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
         let (best_u, best_v, min_dist_sq) = (start_u, start_v, start_dist_sq);
+        let closed = SurfaceClosure::of(surface);
 
         // 2. 2変数ニュートン・ラフソン法による精密収束
         //
@@ -218,8 +246,8 @@ impl ExtremumEngine {
             let mut damping = 1.0;
             let mut moved = false;
             for _ in 0..24 {
-                let next_u = (cur_u - step_u * damping).clamp(u_min, u_max);
-                let next_v = (cur_v - step_v * damping).clamp(v_min, v_max);
+                let next_u = closed.settle_u(cur_u - step_u * damping, u_min, u_max);
+                let next_v = closed.settle_v(cur_v - step_v * damping, v_min, v_max);
                 let next = distance_sq_at(next_u, next_v);
                 if next < best_dist_sq {
                     let settled = (next_u - cur_u).abs() < tolerance
@@ -256,6 +284,66 @@ impl ExtremumEngine {
             v,
             closest_point,
             distance: (closest_point - point).norm(),
+        }
+    }
+}
+
+/// Which way round a surface joins up with itself.
+///
+/// A parameter that runs off one end of a closed direction has not left the
+/// surface, it has come back at the other end. Clamping it instead pins the
+/// search against the seam: a point just short of longitude zero on a sphere
+/// would be answered with the seam itself, 1.83 out on a radius of ten, and no
+/// amount of iterating could cross back because every step was clamped away.
+struct SurfaceClosure {
+    in_u: bool,
+    in_v: bool,
+}
+
+impl SurfaceClosure {
+    fn of(surface: &NurbsSurface3) -> Self {
+        let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+        // 端どうしが同じ点を指しているかを、何本かの線で確かめる。
+        let extent = (surface.evaluate(u_max, v_max) - surface.evaluate(u_min, v_min))
+            .norm()
+            .max(1.0);
+        let limit = extent * 1e-9;
+
+        let mut in_u = u_max > u_min;
+        let mut in_v = v_max > v_min;
+        for step in 0..=4 {
+            let fraction = step as f64 / 4.0;
+            let v = v_min + (v_max - v_min) * fraction;
+            if in_u && (surface.evaluate(u_min, v) - surface.evaluate(u_max, v)).norm() > limit {
+                in_u = false;
+            }
+            let u = u_min + (u_max - u_min) * fraction;
+            if in_v && (surface.evaluate(u, v_min) - surface.evaluate(u, v_max)).norm() > limit {
+                in_v = false;
+            }
+        }
+
+        Self { in_u, in_v }
+    }
+
+    fn settle_u(&self, value: f64, min: f64, max: f64) -> f64 {
+        Self::settle(value, min, max, self.in_u)
+    }
+
+    fn settle_v(&self, value: f64, min: f64, max: f64) -> f64 {
+        Self::settle(value, min, max, self.in_v)
+    }
+
+    fn settle(value: f64, min: f64, max: f64, wraps: bool) -> f64 {
+        if !wraps || !(max > min) {
+            return value.clamp(min, max);
+        }
+        let span = max - min;
+        let wrapped = min + (value - min).rem_euclid(span);
+        if wrapped.is_finite() {
+            wrapped
+        } else {
+            value.clamp(min, max)
         }
     }
 }

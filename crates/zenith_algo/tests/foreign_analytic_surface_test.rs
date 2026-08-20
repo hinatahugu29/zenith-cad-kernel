@@ -13,7 +13,7 @@
 //! number this repository chose.
 
 use zenith_algo::MassCalculator;
-use zenith_io::StepImporter;
+use zenith_io::{StepExporter, StepImporter};
 use zenith_math::Tolerance;
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -179,6 +179,37 @@ fn test_a_solid_converted_to_b_splines_keeps_its_size() {
         relative < 1e-3,
         "converted cylinder volume {measured:.4} against {exact:.4} (relative {relative:.2e})"
     );
+}
+
+#[test]
+fn test_what_we_read_from_another_kernel_we_can_write_and_read_again() {
+    // 他カーネル → 自前リーダー → 自前ライター → 自前リーダー、の一周。
+    // 半球はここで弾かれていた。境界点が曲面から 1.827273 外れている、と。
+    // ファイルの中身は元と一致していて、違ったのは最近傍点の探索のほうだった。
+    // 継ぎ目の向こう側に答えがある点で、領域の端に阻まれて回り込めず、
+    // 継ぎ目そのものを最近傍として返していた。半径10の球で 1.83。
+    let subjects = [
+        "cone",
+        "cone_full",
+        "sphere",
+        "sphere_capped",
+        "torus",
+        "torus_segment",
+    ];
+
+    for name in subjects {
+        let solid = read_fixture(name);
+        let before = volume(&solid);
+        let step = StepExporter::export_solid_to_string(&solid, name);
+        let read_back = StepImporter::import_solid_from_str(&step)
+            .unwrap_or_else(|err| panic!("{name} should survive being written out: {err}"));
+        let after = volume(&read_back);
+        let relative = (after - before).abs() / before.abs();
+        assert!(
+            relative < 1e-9,
+            "{name} round trip {before:.6} -> {after:.6} (relative {relative:.2e})"
+        );
+    }
 }
 
 #[test]
