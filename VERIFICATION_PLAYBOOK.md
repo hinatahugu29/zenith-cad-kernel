@@ -227,6 +227,14 @@ cargo run --release -p zenith_algo --example export_validation_suite
 
 不一致があれば非ゼロ終了します。CI に置けます。
 
+> **書き出しを飛ばさないこと。** `freecad_cross_validate.py` は
+> `target/validation/` にある **STEP と、そこに一緒に書かれたカーネル側の
+> 数値**を突き合わせます。書き出し直さずに走らせると、**古い形と古い数値**を
+> 比べて仲良く一致します。歯車を作り直した日に、これで「1.9e-12 で一致」と
+> 出ました——読んでいたのは1つ前の74面の歯車でした。書き出し直したら
+> 7.2e-5 で、そこから本当の話（3章 d7）が始まりました。
+> **通ったことより、何を比べたかを見てください。**
+
 ```bash
 cargo run --release -p zenith_algo --example export_showcase
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_showcase.py
