@@ -1,6 +1,6 @@
 # 🚀 Zenith CAD Kernel - スペック総覧（棚卸し）＆ 次なる飛躍への展望
 
-**文書バージョン**: v2.5.0 (他カーネル相互運用・p-curve と最近傍点探索・回転面の平面切断・実測ベース改訂版)  
+**文書バージョン**: v2.6.0 (他カーネル相互運用・p-curve と最近傍点探索・回転面の平面切断・面の向きの是正・実測ベース改訂版)  
 **最終更新日時**: 2026年8月20日  
 **ステータス**: 完全自前 Rust B-Rep エンジン。**本書の数値はすべて実測値**で、対応範囲と未対応範囲を分けて記載している。
 
@@ -27,7 +27,7 @@ Zenith CAD Kernel は、Rust でフルスクラッチ開発された **次世代
 
 ```mermaid
 graph TD
-    A[Zenith CAD Kernel Core v2.5.0] --> B[1. 数値幾何・自由曲面エンジン]
+    A[Zenith CAD Kernel Core v2.6.0] --> B[1. 数値幾何・自由曲面エンジン]
     A --> C[2. B-Rep トポロジー構造]
     A --> D[3. 形状生成・フィーチャーモデリング]
     A --> E[4. ダイレクトモデリング＆解析]
@@ -65,7 +65,7 @@ graph TD
 | **`Wire`** | 連続したエッジ列で構成される閉ループ境界。オイラー閉ループ検証・反時計回り（CCW）配向管理。 |
 | **`Face`** | 基礎曲面幾何（`FaceGeometry`）＋ 外側Wire（`outer_wire`）＋ 内部穴Wire群（`inner_wires`）＋ 2D UV境界（`PCurve`）。 |
 | **`Shell`** | Faceの連結集合。開シェル（Open Shell）および閉シェル（Closed Shell）判定。境界エッジの一致・多様体検査。 |
-| **`Solid`** | 外殻閉シェル（`outer_shell`）および内部空洞シェル群（`inner_shells`）を持つ3次元完全マニホールド立体。 |
+| **`Solid`** | 外殻閉シェル（`outer_shell`）および内部空洞シェル群（`inner_shells`）を持つ3次元完全マニホールド立体。面の向きは外向きに揃えられ、**符号付き体積が正であること**を `face_orientation_test` が全ビルダーについて検査する（`MassProperties` が絶対値を返していた間、球・トーラス・回転体が裏返ったまま気付かれなかった）。 |
 | **`Assembly` / `ComponentInstance`** | 複数のソリッドを 4x4 アフィン変換行列（`Transform3`）で空間配置・階層管理するマルチボディ構造。 |
 
 ---
@@ -205,8 +205,9 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 `boolean_cylinder_test` / `boolean_chained_test` / `boolean_rotated_test` /
 `section_slice_test` / `sweep_smoothness_test` / `step_conformance_test` /
 `step_import_test` / `foreign_analytic_surface_test` / `pcurve_fidelity_test` /
-`boolean_cone_test` / `boolean_torus_test` / `section_split_test`）、`cargo test` で常時検証されます。
-現在 41 テストバイナリ・276 テストがすべてグリーンです。
+`boolean_cone_test` / `boolean_torus_test` / `section_split_test` /
+`face_orientation_test`）、`cargo test` で常時検証されます。
+現在 42 テストバイナリ・279 テストがすべてグリーンです。
 
 `foreign_analytic_surface_test` だけは期待値の出どころが違います。
 OpenCASCADE 7.8 が書いた STEP を `crates/zenith_algo/tests/fixtures/` に置き、
