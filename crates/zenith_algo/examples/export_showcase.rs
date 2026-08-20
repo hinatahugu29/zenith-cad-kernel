@@ -429,6 +429,44 @@ fn main() {
         analytic_volume: Some(torus_whole - torus_below),
     });
 
+    // 球をスラブで切る。極が退化した三辺パッチの分割が要る。
+    let sphere = PrimitiveBuilder::make_sphere(10.0).expect("sphere");
+    let sphere_slab = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(60.0, 60.0, 40.0).expect("slab"),
+        Vec3::new(-30.0, -30.0, -2.0),
+    );
+    let cap = std::f64::consts::PI * 64.0 * (30.0 - 8.0) / 3.0;
+
+    items.push(Item {
+        name: "23_sphere_cap",
+        note: "a sphere cut by a plane; the pole is a corner, not an edge",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &sphere,
+            &sphere_slab,
+            BooleanOpType::Difference,
+            &tol,
+        )
+        .expect("sphere minus slab")
+        .solids
+        .remove(0),
+        analytic_volume: Some(cap),
+    });
+
+    items.push(Item {
+        name: "24_sphere_minus_cap",
+        note: "the rest of that sphere, closed by the same disc",
+        solid: BooleanEngine::boolean_solids_exact_result(
+            &sphere,
+            &sphere_slab,
+            BooleanOpType::Intersection,
+            &tol,
+        )
+        .expect("sphere meets slab")
+        .solids
+        .remove(0),
+        analytic_volume: Some(4.0 / 3.0 * std::f64::consts::PI * 1000.0 - cap),
+    });
+
     // 穴あけを重ねた板。ブーリアンの結果をさらに加工できることを見せる。
     let plate = PrimitiveBuilder::make_box(60.0, 40.0, 12.0).expect("plate");
     let mut drilled = plate;

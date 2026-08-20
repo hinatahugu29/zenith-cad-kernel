@@ -89,7 +89,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 42 テストバイナリ、279 テスト、失敗 0。
+**期待**: 43 テストバイナリ、282 テスト、失敗 0。
 
 数を数えるなら:
 
@@ -119,7 +119,7 @@ cargo run --release -p zenith_algo --example builder_audit
 cargo run --release -p zenith_algo --example boolean_envelope
 ```
 
-**期待**: `supported: 28   wrong-result: 0   unsupported/error: 17   (total 45)`
+**期待**: `supported: 30   wrong-result: 0   unsupported/error: 15   (total 45)`
 
 **`wrong-result` が 0 であることが最も重要です。** 対応範囲が狭いのは
 仕様ですが、誤答は仕様ではありません。ここが 0 でなくなったら、
@@ -212,7 +212,7 @@ cargo run --release -p zenith_algo --example export_showcase
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_showcase.py
 ```
 
-**期待**: `22 of 22 read back as valid closed solids`、**終了コード 0**。
+**期待**: `24 of 24 read back as valid closed solids`、**終了コード 0**。
 
 ### 2-9. まとめて実行する
 
@@ -440,7 +440,7 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | コマンド | 何を測るか |
 | :--- | :--- |
 | `export_validation_suite` ＋ `tools/freecad_cross_validate.py` | 体積・表面積・断面積を OpenCASCADE と突き合わせ（ゲート） |
-| `export_showcase` ＋ `tools/verify_showcase.py` | 代表22形状が Solid として読めるか（ゲート） |
+| `export_showcase` ＋ `tools/verify_showcase.py` | 代表24形状が Solid として読めるか（ゲート） |
 | `occ_reference_export.py` | OpenCASCADE 自身に解析曲面の STEP を書かせる |
 | `foreign_reexport` ＋ `tools/verify_reexport.py` | 読んで書き戻した一周（診断） |
 
@@ -449,13 +449,13 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 ## 7. 出力物の置き場所
 
 ```bash
-cargo run --release -p zenith_algo --example export_showcase          # target/showcase   22形状
+cargo run --release -p zenith_algo --example export_showcase          # target/showcase   24形状
 cargo run --release -p zenith_algo --example export_validation_suite  # target/validation 15形状
 cargo run --release -p zenith_algo --example foreign_reexport         # target/reexport    7形状
 ```
 
 | 置き場所 | 中身 | 突き合わせ |
 | :--- | :--- | :--- |
-| `target/showcase/` | 代表22形状。解析解を持つものは相対誤差付き | `verify_showcase.py`（ゲート） |
+| `target/showcase/` | 代表24形状。解析解を持つものは相対誤差付き | `verify_showcase.py`（ゲート） |
 | `target/validation/` | 相互検証用15形状＋OCC が書いた参照ファイル | `freecad_cross_validate.py`（ゲート） |
 | `target/reexport/` | 他カーネルのファイルを読んで書き戻した7形状 | `verify_reexport.py`（診断） |
