@@ -82,7 +82,8 @@ pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTria
             if let Some(aligned) = knot_aligned_uv_triangulation(face, nurbs, params) {
                 return aligned;
             }
-            let trimmed = trimmed_uv_triangulation(face, nurbs, params);
+            // 面積を積む側なので、境界の折れは1つも落とさない。
+            let trimmed = trimmed_uv_triangulation(face, nurbs, params, LoopFidelity::Exact);
             if trimmed.is_empty() {
                 // ここに来るのは p-curve が導出もできなかった面だけ。全矩形を
                 // 積むので、トリムされた面ならこの値は小さすぎず大きすぎる。
@@ -131,7 +132,7 @@ fn knot_aligned_uv_triangulation(
     // 縫い目上の点は領域の両端どちらにも写るので、辿った符号付き面積が
     // 全域と一致しない。位相のほうが確かなので、そちらを先に見る。
     if !face.has_seam_only_boundary(Tolerance::default().linear) {
-        let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+        let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, LoopFidelity::Display);
         if outer_uvs.len() < 3 {
             return None;
         }
@@ -274,7 +275,7 @@ fn planar_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTriang
     let Ok(pcurves) = face.plane_pcurves() else {
         return UvTriangulation::default();
     };
-    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, LoopFidelity::Display);
     if outer_uvs.len() < 3 {
         return UvTriangulation::default();
     }
@@ -288,7 +289,7 @@ fn planar_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTriang
         uvs.push(*uv);
     }
     for pcurve_loop in &pcurves.inner_loops {
-        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params);
+        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params, LoopFidelity::Display);
         if hole_uvs.len() >= 3 {
             hole_indices.push(uvs.len());
             for uv in &hole_uvs {
@@ -385,7 +386,9 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
         FaceGeometry::Nurbs(nurbs) => {
             // トリムループが使えるならそれに従い、扱えない面（球の極など）は
             // 従来どおりパラメータ矩形全体の一様グリッドに落とす
-            let trimmed = trimmed_uv_triangulation(face, nurbs, params);
+            // 表示用。境界に何千点も置くと三角形が破綻するので、たわみの
+            // 目標までの適応標本で足りる。
+            let trimmed = trimmed_uv_triangulation(face, nurbs, params, LoopFidelity::Display);
             if trimmed.is_empty() {
                 tessellate_surface(nurbs, params, face.orientation)
             } else {
@@ -399,7 +402,7 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
             let Ok(pcurves) = face.plane_pcurves() else {
                 return TriangleMesh::new();
             };
-            let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+            let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, LoopFidelity::Display);
             if outer_uvs.len() < 3 {
                 return TriangleMesh::new();
             }
@@ -440,7 +443,7 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
 
             // 内側穴ループ
             for pcurve_loop in &pcurves.inner_loops {
-                let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params);
+                let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params, LoopFidelity::Display);
                 if hole_uvs.len() >= 3 {
                     hole_indices.push(all_positions.len());
                     for uv in &hole_uvs {
@@ -484,11 +487,12 @@ fn trimmed_uv_triangulation(
     face: &Face,
     surface: &impl Surface3,
     params: &TessellationParams,
+    fidelity: LoopFidelity,
 ) -> UvTriangulation {
     let Some(pcurves) = &face.pcurves else {
         return UvTriangulation::default();
     };
-    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, fidelity);
     if outer_uvs.len() < 3 {
         return UvTriangulation::default();
     }
@@ -504,7 +508,7 @@ fn trimmed_uv_triangulation(
     }
 
     for pcurve_loop in &pcurves.inner_loops {
-        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params);
+        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params, fidelity);
         if hole_uvs.len() >= 3 {
             hole_indices.push(uvs.len());
             for uv in &hole_uvs {
@@ -772,7 +776,25 @@ fn build_trimmed_mesh(
     mesh
 }
 
-fn sample_pcurve_loop_uv(pcurve_loop: &FacePcurveLoop, params: &TessellationParams) -> Vec<Point2> {
+/// トリムループを UV 上の折れ線にするときの細かさ。
+///
+/// 積分と表示では要るものが違う。面積を積むなら境界の折れを1つも落とせない
+/// ——落ちたぶんは必ず内側に削れる一方向の誤差になる——が、表示用の三角形は
+/// 目に見える細かさで足り、境界に何千点も置くと三角形が破綻する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopFidelity {
+    /// 表示用。たわみの目標まで適応的に標本を取る。
+    Display,
+    /// 積分用。1次の p-curve は制御点がそのまま折れ線の頂点なので、
+    /// 取り直さずに全部使う。
+    Exact,
+}
+
+fn sample_pcurve_loop_uv(
+    pcurve_loop: &FacePcurveLoop,
+    params: &TessellationParams,
+    fidelity: LoopFidelity,
+) -> Vec<Point2> {
     let mut points = Vec::new();
     let deflection = loop_deflection_target(pcurve_loop, params);
 
@@ -780,9 +802,16 @@ fn sample_pcurve_loop_uv(pcurve_loop: &FacePcurveLoop, params: &TessellationPara
         // 先頭点は「前の区間の終点と一致するときだけ」落とす。縮退エッジを
         // 持つ面（円錐の頂点など）では UV 上に正当な跳びがあり、無条件に
         // 落とすとトリム領域が欠ける。
-        let segment_points = if segment.curve.degree == 1 && segment.curve.control_points.len() == 2
+        // 1次の p-curve は折れ線そのものなので、制御点がそのまま頂点である。
+        // 取り直すと角が落ちる。適応標本は深さ 10 までの二分で区間は最大
+        // 1024 本なので、投影で作られた p-curve がそれより多くの折れを持つと
+        // 必ず削れる。実測では、円柱を傾いた平面で切った境界（p-curve は
+        // 制御点 1566 個）で UV 面積が 3.85e-6 欠け、ヤコビアン 628 を掛けて
+        // 3D の面積が 2.42e-3 足りなかった。
+        let segment_points = if segment.curve.degree == 1
+            && (fidelity == LoopFidelity::Exact || segment.curve.control_points.len() == 2)
         {
-            segment.curve.sample_points(2)
+            segment.curve.control_points.iter().map(|cp| cp.point).collect()
         } else {
             sample_pcurve_segment_adaptive(segment, deflection)
         };

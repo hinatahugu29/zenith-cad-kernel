@@ -9,6 +9,7 @@ pub mod chamfer;
 mod cylinder_boolean;
 pub mod direct_edit;
 pub mod extrude;
+pub mod face_split;
 pub mod feature_tree;
 pub mod fillet;
 pub mod gear;
@@ -54,6 +55,7 @@ pub use brep_intersection::{
     PlanarOperandBatchSplits, SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };
 pub use brep_transform::BrepTransform;
+pub use face_split::{FaceSplitReport, FaceSplitter};
 pub use regularize::{RegularizeReport, Regularizer, StepInterop};
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;
