@@ -341,12 +341,12 @@ impl BooleanEngine {
     }
 
     fn has_face_pair_candidates(solid_a: &Solid, solid_b: &Solid, tol: &Tolerance) -> bool {
-        !crate::BrepIntersectionBuilder::collect_face_pair_candidates(
+        // 「あるかないか」だけの問いに交線の走査は要らない。
+        crate::BrepIntersectionBuilder::any_face_pair_may_intersect(
             &solid_a.outer_shell.faces,
             &solid_b.outer_shell.faces,
             tol,
         )
-        .is_empty()
     }
 
     fn boolean_solids_exact_without_intersections(

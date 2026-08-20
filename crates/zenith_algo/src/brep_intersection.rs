@@ -214,6 +214,48 @@ impl BrepIntersectionBuilder {
         candidates
     }
 
+    /// 面の組が1つでも交わり得るか、**交線を求めずに**答える。
+    ///
+    /// `collect_face_pair_candidates` は組ごとに交線を辿るので、「あるか
+    /// ないか」を訊くだけのために呼ぶと高くつく。1回のブーリアンで交線の
+    /// 走査は3回走っており、そのうち1回はこの問いだけだった。
+    ///
+    /// answering `true` は「交わっているかもしれない」であって「交わって
+    /// いる」ではない。呼び手はその先で本当の交線を求める。
+    pub fn any_face_pair_may_intersect(
+        faces_a: &[Face],
+        faces_b: &[Face],
+        tol: &Tolerance,
+    ) -> bool {
+        let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_boundary_bbox).collect();
+        let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_boundary_bbox).collect();
+
+        for (index_a, face_a) in faces_a.iter().enumerate() {
+            for (index_b, face_b) in faces_b.iter().enumerate() {
+                if !face_bboxes_intersect(
+                    bboxes_a[index_a].as_ref(),
+                    bboxes_b[index_b].as_ref(),
+                    tol,
+                ) {
+                    continue;
+                }
+                // 幾何の組み合わせとして扱えるかだけを見る。交線は求めない。
+                let supported = matches!(
+                    (&face_a.geometry, &face_b.geometry),
+                    (FaceGeometry::Plane(_), FaceGeometry::Plane(_))
+                        | (FaceGeometry::Plane(_), FaceGeometry::Nurbs(_))
+                        | (FaceGeometry::Nurbs(_), FaceGeometry::Plane(_))
+                        | (FaceGeometry::Nurbs(_), FaceGeometry::Nurbs(_))
+                );
+                if supported {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
     pub fn collect_intersection_edge_candidates(
         faces_a: &[Face],
         faces_b: &[Face],
@@ -303,6 +345,19 @@ impl BrepIntersectionBuilder {
         tol: &Tolerance,
     ) -> PlanarOperandBatchSplits {
         let edge_candidates = Self::collect_intersection_edge_candidates(faces_a, faces_b, tol);
+        Self::batch_splits_from_candidates(faces_a, faces_b, edge_candidates, tol)
+    }
+
+    /// 既に求めてある交線の候補から面の分割を組む。
+    ///
+    /// 交線の走査は面の組ごとにマーチングを走らせるので、1回のブーリアンで
+    /// 何度も呼ぶと効いてくる。求めた候補は使い回す。
+    pub fn batch_splits_from_candidates(
+        faces_a: &[Face],
+        faces_b: &[Face],
+        edge_candidates: Vec<IntersectionEdgeCandidate>,
+        tol: &Tolerance,
+    ) -> PlanarOperandBatchSplits {
         let mut edges_by_face_a: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
         let mut edges_by_face_b: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
 
@@ -412,9 +467,26 @@ impl BrepIntersectionBuilder {
         op: crate::BooleanOpType,
         tol: &Tolerance,
     ) -> BooleanFaceSelection {
-        let batch_splits = Self::collect_planar_face_batch_splits(
+        let candidates = Self::collect_intersection_edge_candidates(
             &solid_a.outer_shell.faces,
             &solid_b.outer_shell.faces,
+            tol,
+        );
+        Self::selected_face_pieces_from_candidates(solid_a, solid_b, candidates, op, tol)
+    }
+
+    /// 既に求めてある交線の候補から選別まで進める。
+    pub fn selected_face_pieces_from_candidates(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        candidates: Vec<IntersectionEdgeCandidate>,
+        op: crate::BooleanOpType,
+        tol: &Tolerance,
+    ) -> BooleanFaceSelection {
+        let batch_splits = Self::batch_splits_from_candidates(
+            &solid_a.outer_shell.faces,
+            &solid_b.outer_shell.faces,
+            candidates,
             tol,
         );
         let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
@@ -534,10 +606,18 @@ impl BrepIntersectionBuilder {
         op: crate::BooleanOpType,
         tol: &Tolerance,
     ) -> BooleanShellAssembly {
-        let selection = Self::collect_selected_boolean_face_pieces(solid_a, solid_b, op, tol);
+        // 交線は一度だけ求め、選別とキャップの両方で使う。以前はここで
+        // 二度走っていた。
         let edge_candidates = Self::collect_intersection_edge_candidates(
             &solid_a.outer_shell.faces,
             &solid_b.outer_shell.faces,
+            tol,
+        );
+        let selection = Self::selected_face_pieces_from_candidates(
+            solid_a,
+            solid_b,
+            edge_candidates.clone(),
+            op,
             tol,
         );
         let cap_generation =
