@@ -4,6 +4,7 @@
 //! Run with: cargo run --release -p zenith_algo --example export_showcase
 //! Output:   target/showcase/
 
+use zenith_algo::StepInterop;
 use std::f64::consts::PI;
 use std::fs;
 use std::path::Path;
@@ -13,7 +14,6 @@ use zenith_algo::{
     PrimitiveBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
-use zenith_io::StepExporter;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, OrientedEdge, Solid, Vertex, Wire};
@@ -515,7 +515,7 @@ fn main() {
 
     for item in &items {
         let path = out_dir.join(format!("{}.step", item.name));
-        StepExporter::export_solid_to_file(&item.solid, path.to_str().unwrap(), item.name)
+        StepInterop::export_solid_to_file(&item.solid, path.to_str().unwrap(), item.name, &tol)
             .unwrap_or_else(|err| panic!("export failed for {}: {err}", item.name));
 
         let mass = MassCalculator::compute_from_brep(&item.solid, &integration);

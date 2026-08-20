@@ -5,11 +5,12 @@
 //! path - their writer, our reader, our writer, their reader - is exercised at
 //! once.
 
+use zenith_algo::StepInterop;
 use std::fs;
 use std::path::Path;
 
 use zenith_algo::MassCalculator;
-use zenith_io::{StepExporter, StepImporter};
+use zenith_io::StepImporter;
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
 
@@ -38,6 +39,7 @@ fn main() {
         ("cylinder", 12566.3706),
     ];
 
+    let tol = zenith_math::Tolerance::default();
     println!(
         "{:<16} {:>14} {:>14} {:>10} {:>14} {:>10}  {}",
         "subject", "OCC wrote", "we read", "rel", "we read back", "rel", "re-exported to"
@@ -59,7 +61,9 @@ fn main() {
         let relative = (read - occ_volume).abs() / occ_volume;
 
         let target = out.join(format!("reexport_{name}.step"));
-        let text = StepExporter::export_solid_to_string(solid, name);
+        // 全周1枚のパッチのまま書くと OpenCASCADE の積分が外れるので、
+        // 書き出しは正規化を通す口を使う。
+        let (text, _) = StepInterop::export_solid_to_string(solid, name, &tol);
         fs::write(&target, text).unwrap();
 
         // 書き出したものを自前で読み直す。ここが一致していれば、書き手と

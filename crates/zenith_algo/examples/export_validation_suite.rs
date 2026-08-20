@@ -7,6 +7,7 @@
 //!
 //! Run with: cargo run -p zenith_algo --example export_validation_suite
 
+use zenith_algo::StepInterop;
 use std::f64::consts::PI;
 use std::fs;
 use std::path::Path;
@@ -17,7 +18,6 @@ use zenith_algo::{
     ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
-use zenith_io::StepExporter;
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, OrientedEdge, Solid, Vertex, Wire};
@@ -46,10 +46,11 @@ fn main() {
 
     for subject in &subjects {
         let step_path = out_dir.join(format!("{}.step", subject.name));
-        StepExporter::export_solid_to_file(
+        StepInterop::export_solid_to_file(
             &subject.solid,
             step_path.to_str().unwrap(),
             &subject.name.to_uppercase(),
+            &tol,
         )
         .unwrap_or_else(|err| panic!("STEP export failed for {}: {err}", subject.name));
 

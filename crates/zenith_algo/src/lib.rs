@@ -25,6 +25,7 @@ pub mod patch_builder;
 pub mod pattern;
 pub mod polyline;
 pub mod primitive;
+pub mod regularize;
 
 
 pub mod revolve;
@@ -53,6 +54,7 @@ pub use brep_intersection::{
     PlanarOperandBatchSplits, SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };
 pub use brep_transform::BrepTransform;
+pub use regularize::{RegularizeReport, Regularizer, StepInterop};
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;
 pub use direct_edit::{DirectModeling, EdgeInspection, EdgeKind, FaceInspection};
