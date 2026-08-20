@@ -1,6 +1,6 @@
 # 🚀 Zenith CAD Kernel - スペック総覧（棚卸し）＆ 次なる飛躍への展望
 
-**文書バージョン**: v2.7.0 (他カーネル相互運用・p-curve と最近傍点探索・回転面の平面切断・面の向きの是正・実測ベース改訂版)  
+**文書バージョン**: v2.8.0 (全周エンティティの正規化・トリム積分の是正・他カーネル相互運用・実測ベース改訂版)  
 **最終更新日時**: 2026年8月20日  
 **ステータス**: 完全自前 Rust B-Rep エンジン。**本書の数値はすべて実測値**で、対応範囲と未対応範囲を分けて記載している。
 
@@ -199,7 +199,9 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | :--- | :--- |
 | `export_validation_suite` ＋ `tools/freecad_cross_validate.py` | STEP 経由で OpenCASCADE に同じ問いを独立に答えさせ、体積・表面積・断面積を突き合わせる（不一致で非ゼロ終了） |
 | `export_showcase` ＋ `tools/verify_showcase.py` | 代表24形状を書き出し、OpenCASCADE が Solid として読めるかを全数確認 |
-| `foreign_reexport` ＋ `tools/verify_reexport.py` | 他カーネルのファイルを読んで書き戻し、元の値を保つかを見る（診断） |
+| `foreign_reexport` ＋ `tools/verify_reexport.py` | 他カーネルのファイルを読んで書き戻し、OpenCASCADE が解析解と同じ値に読むかを見る（不一致で非ゼロ終了）。実測は 7/7 が 1e-11 以内 |
+| `regularize_probe` | 全周1枚のパッチ・全周1本の辺を刻んでも、体積・面積が動かないか |
+| `pcurve_derivation_probe` | 保持している p-curve を捨てて導出し直したとき、面の積分が変わるか |
 
 これらは回帰テストとしても固定されており（`builder_audit_test` / `boolean_verification_test` /
 `boolean_cylinder_test` / `boolean_chained_test` / `boolean_rotated_test` /
@@ -207,7 +209,7 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 `step_import_test` / `foreign_analytic_surface_test` / `pcurve_fidelity_test` /
 `boolean_cone_test` / `boolean_torus_test` / `section_split_test` /
 `face_orientation_test`）、`cargo test` で常時検証されます。
-現在 43 テストバイナリ・282 テストがすべてグリーンです。
+現在 43 テストバイナリ・293 テストがすべてグリーンです。
 
 `foreign_analytic_surface_test` だけは期待値の出どころが違います。
 OpenCASCADE 7.8 が書いた STEP を `crates/zenith_algo/tests/fixtures/` に置き、
@@ -305,11 +307,12 @@ graph LR
 Zenith CAD Kernel は、当初の目標であった **「Blender アドオンとしての脱OCCT（完全自前Rust製化）」を 100% 達成** いたしました。  
 外部の巨大な C++ ライブラリに一切依存せず、安全・高速・ポータブルな CAD モデリング環境が確立されています。
 
-業界標準 CAD（FreeCAD / OpenCASCADE）とのヘッドレス相互検証が、突き合わせ 15/15・代表形状 16/16 で通っています。
-書き出しだけでなく読み込み側も、他カーネルが書いた解析曲面を体積・面積とも一致して読めるところまで来ました。
+業界標準 CAD（FreeCAD / OpenCASCADE）とのヘッドレス相互検証が、突き合わせ 15/15・代表形状 24/24 で通っています。
+書き出しだけでなく読み込み側も、他カーネルが書いた解析曲面を体積・面積とも一致して読めます。
+読んだものを書き戻す一周も、OpenCASCADE の測定で解析解と 1e-11 以内に収まります
+（従来は最大 9.3e-3。全周を1つのエンティティで書いていたのが原因で、`Regularizer` が刻むようになりました）。
 
-一方で、対応範囲外は依然として明確に残っています。ブーリアンは 45 ケース中 28、曲面同士の交差（SSI）は未対応、
-p-curve の検証は効くようにしましたが、球を1枚の巻き付き面として書き出すと
-OpenCASCADE 側の積分が 0.93% ずれます。**「完全性が立証された」とは書けません**が、
+一方で、対応範囲外は依然として明確に残っています。ブーリアンは 45 ケース中 30、曲面同士の交差（SSI）は未対応、
+断面積は解析解に 2.5e-5 届きません。**「完全性が立証された」とは書けません**が、
 どこまでが測って確かめられていて、どこからがそうでないかは、本書と常設ツールで随時再現できます。
 それが基盤として意味のある状態だと考えています。

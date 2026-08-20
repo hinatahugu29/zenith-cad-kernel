@@ -1,7 +1,7 @@
 # 検証手順書 — Zenith CAD Kernel
 
 **対象コミット**: `kernel-accuracy-hardening` ブランチ
-**最終確認**: 2026年8月20日
+**最終確認**: 2026年8月20日（再エクスポート精度の是正まで）
 
 この文書は、**このリポジトリを初めて見る人（または別の AI モデル）が、
 主張を信じずに自分で確かめながら作業を進める**ための手順書です。
@@ -89,7 +89,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 43 テストバイナリ、282 テスト、失敗 0。
+**期待**: 43 テストバイナリ、293 テスト、失敗 0。
 
 数を数えるなら:
 
@@ -214,6 +214,17 @@ cargo run --release -p zenith_algo --example export_showcase
 
 **期待**: `24 of 24 read back as valid closed solids`、**終了コード 0**。
 
+```bash
+cargo run --release -p zenith_algo --example foreign_reexport
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_reexport.py
+```
+
+**期待**: `7 of 7 re-exports land on the analytic value within 1e-06`、
+**終了コード 0**。実測はすべて 1e-11 以内です。
+
+これは以前は診断でした。比較相手を「OpenCASCADE 自身の NURBS 化」に置いていた
+ためで、その置き方が我々の欠陥を隠していました（3章末を参照）。
+
 ### 2-9. まとめて実行する
 
 ```bash
@@ -223,7 +234,9 @@ cargo test --release --workspace --exclude zenith_py \
   && cargo run --release -q -p zenith_algo --example export_validation_suite > /dev/null \
   && "/c/Program Files/FreeCAD 1.1/bin/python.exe" tools/freecad_cross_validate.py | tail -1 \
   && cargo run --release -q -p zenith_algo --example export_showcase > /dev/null \
-  && "/c/Program Files/FreeCAD 1.1/bin/python.exe" tools/verify_showcase.py | tail -1
+  && "/c/Program Files/FreeCAD 1.1/bin/python.exe" tools/verify_showcase.py | tail -1 \
+  && cargo run --release -q -p zenith_algo --example foreign_reexport > /dev/null \
+  && "/c/Program Files/FreeCAD 1.1/bin/python.exe" tools/verify_reexport.py | tail -1
 ```
 
 ---
@@ -244,12 +257,24 @@ cargo test --release --workspace --exclude zenith_py \
 | `step_import_audit` | 診断 | 数字を読む |
 | `pcurve_fidelity_probe` | 診断 | 数字を読む |
 | `mass_convergence` / `slice_probe` | 診断 | 数字を読む |
-| `verify_reexport.py` | **診断**（常に 0 終了） | 2つのカーネルの積分の違いを見るためのもの |
+| `verify_reexport.py` | **ゲート**（非ゼロ終了） | 解析解と 1e-6 以内かを見る |
+| `regularize_probe` | 診断 | 全周を刻んで形が動いていないか |
+| `pcurve_derivation_probe` | 診断 | p-curve を導出し直すと答えが変わる面 |
 
-`verify_reexport.py` を合否と読まないでください。OpenCASCADE は有理B-spline を
-解析曲面と同じようには測らず、**自分の円柱を `toNurbs` してから測ると
-12674.63（解析値 12566.37 に対して +0.86%）**になります。比較相手は
-「OCC 自身の NURBS 化」であって「OCC の解析値」ではありません。
+**この表の `verify_reexport.py` の行は、以前は「診断」でした。それが誤りでした。**
+
+かつてこの文書はこう書いていました——OpenCASCADE は有理 B-spline を解析曲面と
+同じようには測らず、自分の円柱を `toNurbs` してから測ると 12674.63（解析値
+12566.37 に対して +0.86%）になる。だから比較相手は「OCC 自身の NURBS 化」で
+あって「OCC の解析値」ではない、と。
+
+**測り直すと成り立ちませんでした。** 自前ビルダーの有理パッチ（円柱の四半周）は
+OpenCASCADE が **628.318530712**（解析解 628.318530718、相対 1e-11）で読みます。
+有理パッチが測れないのではありません。測れないのは**全周を1枚で巻いたパッチ**
+だけで、それを書いていたのは我々でした。
+
+比較相手を「相手も同じくらい外れているもの」に置くと、欠陥は仕様に見えます。
+**外れようのないもの（解析解）を相手に置いてください。**
 
 ---
 
@@ -328,6 +353,30 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 > **対策**: 検査の標本位置を、構成に使った位置と**互いに素**にする。
 > いまは 37（8 と共有するのは両端だけ）。
 
+**(e0) 比較相手が同じくらい外れていると、欠陥が仕様に見える**
+
+書き戻したファイルを OpenCASCADE が 0.86% 高く測るのを、「OCC は有理パッチを
+そう測らない」と説明し、比較相手を **OCC 自身の NURBS 化**に置いていました。
+両方が同じくらい外れているので、一致しているように見えます。実際は、
+**自前ビルダーの有理パッチは 1e-11 で読まれていました**。外れていたのは
+有理パッチ全般ではなく、我々が書いていた**全周1枚**の形だけです。
+
+> **対策**: 比較相手には、外れようのないもの（解析解）を置く。
+> 「相手も同じくらい外れている」は、自分が正しい証拠ではない。
+
+**(e1) 同じ量を2つの経路で出していると、片方だけ直っていることがある**
+
+`face_uv_triangulation` は面が**保持している** p-curve のフィールドを見て、
+無ければトリム前の全矩形に落ちていました。`plane_pcurves()` のほうは無ければ
+**導出**します。同じ「その面の p-curve」を指す2つの経路が別々に振る舞い、
+トリムされた面が3倍の面積で返っていました（穴の壁で 113.10 対 376.99）。
+
+**導出そのものは正しかった**（結果は保持しているものと UV 上で1点ずつ一致する）
+ので、幾何を疑っている限り見つかりません。
+
+> **対策**: 値が食い違ったら、まず両者が**同じ経路**を通っているかを見る。
+> 片方がフィールドを、片方が幾何を見ていないか。
+
 **(e) 絶対値を取ると、向きの誤りが見えなくなる**
 
 `MassProperties` は体積の絶対値を返していました。捨てていた符号こそが、
@@ -401,6 +450,7 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 
 - 検証ゲートを緩めて「通った」と報告する
 - 対応範囲外を、エラーではなく近似で返すようにする
+- STEP を `StepInterop` ではなく `StepExporter` で直接書く（全周1枚のまま出る）
 - 測っていないことを「一致している」と書く
 - 数字を丸めて都合よく見せる（相対誤差は指数表記のまま出す）
 
@@ -420,6 +470,8 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `step_import_audit` | STEP の往復と、他カーネルのファイルを読めるか |
 | `pcurve_fidelity_probe` | p-curve が本当に辺の上にあるか |
 | `foreign_reexport` | 他カーネルのファイルを読んで書き戻す一周 |
+| `regularize_probe` | 全周を刻んでも体積・面積が動かないか |
+| `pcurve_derivation_probe` | p-curve を導出し直すと積分が変わる面 |
 
 **不具合を追うための診断**
 
@@ -442,7 +494,7 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `export_validation_suite` ＋ `tools/freecad_cross_validate.py` | 体積・表面積・断面積を OpenCASCADE と突き合わせ（ゲート） |
 | `export_showcase` ＋ `tools/verify_showcase.py` | 代表24形状が Solid として読めるか（ゲート） |
 | `occ_reference_export.py` | OpenCASCADE 自身に解析曲面の STEP を書かせる |
-| `foreign_reexport` ＋ `tools/verify_reexport.py` | 読んで書き戻した一周（診断） |
+| `foreign_reexport` ＋ `tools/verify_reexport.py` | 読んで書き戻した一周が解析解に乗るか（**ゲート**） |
 
 ---
 
@@ -458,4 +510,4 @@ cargo run --release -p zenith_algo --example foreign_reexport         # target/r
 | :--- | :--- | :--- |
 | `target/showcase/` | 代表24形状。解析解を持つものは相対誤差付き | `verify_showcase.py`（ゲート） |
 | `target/validation/` | 相互検証用15形状＋OCC が書いた参照ファイル | `freecad_cross_validate.py`（ゲート） |
-| `target/reexport/` | 他カーネルのファイルを読んで書き戻した7形状 | `verify_reexport.py`（診断） |
+| `target/reexport/` | 他カーネルのファイルを読んで書き戻した7形状 | `verify_reexport.py`（**ゲート**） |
