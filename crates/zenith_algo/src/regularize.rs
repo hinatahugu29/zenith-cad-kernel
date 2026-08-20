@@ -470,15 +470,17 @@ impl Regularizer {
             return None;
         }
 
-        Some(Face {
-            id: 0,
-            geometry: FaceGeometry::Nurbs(patch.surface.clone()),
-            outer_wire: Wire::new(wire_edges),
-            inner_wires: Vec::new(),
-            pcurves: None,
-            orientation: face.orientation,
-            tolerance: face.tolerance,
-        })
+        // `Face` を組み立てるときは `Face::new` を通す。構造体リテラルで
+        // 作ると `id` を自分で書くことになり、ここでは 0 を書いていた。
+        // 割った面がすべて同じ id を名乗るので、id を鍵にして面を覚える
+        // 仕組みを後から足すと、静かに取り違える。
+        Some(Face::new(
+            FaceGeometry::Nurbs(patch.surface.clone()),
+            Wire::new(wire_edges),
+            Vec::new(),
+            face.orientation,
+            face.tolerance,
+        ))
     }
 
     fn same_edge_geometry(a: &Edge, b: &Edge, tol: &Tolerance) -> bool {
@@ -813,6 +815,36 @@ mod tests {
                 "{name} volume moved on a no-op pass"
             );
         }
+    }
+
+    /// 割って出来た面は、それぞれ別の `id` を名乗ること。
+    ///
+    /// 以前は構造体リテラルで組み立てていて `id: 0` を書いており、割った面が
+    /// 全部同じ id を名乗っていました。面を id で覚える仕組み——ブーリアンの
+    /// 交線を面の組ごとに記憶する、など——を足した途端に取り違えます。
+    /// 使われていない間は誰も気づかない類の罠なので、測っておきます。
+    #[test]
+    fn every_face_that_comes_out_of_a_split_has_its_own_id() {
+        let tol = Tolerance::default();
+        let (regular, report) = Regularizer::regularize_solid(&one_face_sphere(10.0), &tol);
+        assert!(report.wrapped_faces_split > 0, "nothing was split");
+
+        let mut ids: Vec<u64> = regular
+            .outer_shell
+            .faces
+            .iter()
+            .map(|face| face.id)
+            .collect();
+        let count = ids.len();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(
+            ids.len(),
+            count,
+            "{count} faces share only {} ids between them",
+            ids.len()
+        );
+        assert!(!ids.contains(&0), "a face came out with id 0");
     }
 
     #[test]

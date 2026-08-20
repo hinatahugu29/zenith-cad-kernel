@@ -82,6 +82,45 @@ fn quarter_arc(radius: f64) -> NurbsCurve3 {
     .unwrap()
 }
 
+/// 平歯車のプロファイル多角形の面積。
+///
+/// 歯1つにつき「歯底左・歯先左・歯先右・歯底右」の4点を取り、直線で結ぶ。
+/// 靴紐の公式で面積が出る。`bore_radius` は穴ではなく歯底半径の下限に効く。
+fn spur_gear_profile_area(module: f64, teeth: usize, pressure_angle_deg: f64, bore: f64) -> f64 {
+    let z = teeth as f64;
+    let alpha = pressure_angle_deg.to_radians();
+    let pitch_radius = module * z * 0.5;
+    let base_radius = pitch_radius * alpha.cos();
+    let tip_radius = pitch_radius + module;
+    let root_radius = (pitch_radius - 1.25 * module)
+        .max(base_radius * 0.8)
+        .max(bore + 0.5 * module);
+
+    let pitch_angle = 2.0 * PI / z;
+    let half_tooth = pitch_angle * 0.25;
+
+    let mut points: Vec<(f64, f64)> = Vec::with_capacity(teeth * 4);
+    for index in 0..teeth {
+        let centre = index as f64 * pitch_angle;
+        for (angle, radius) in [
+            (centre - half_tooth * 1.5, root_radius),
+            (centre - half_tooth * 0.5, tip_radius),
+            (centre + half_tooth * 0.5, tip_radius),
+            (centre + half_tooth * 1.5, root_radius),
+        ] {
+            points.push((radius * angle.cos(), radius * angle.sin()));
+        }
+    }
+
+    let mut twice_area = 0.0;
+    for index in 0..points.len() {
+        let (x0, y0) = points[index];
+        let (x1, y1) = points[(index + 1) % points.len()];
+        twice_area += x0 * y1 - x1 * y0;
+    }
+    twice_area.abs() * 0.5
+}
+
 struct Case {
     name: &'static str,
     solid: Result<Solid, String>,
@@ -364,10 +403,17 @@ fn build_cases() -> Vec<Case> {
         analytic_volume: Some(PI * 20.0 / 3.0 * (100.0 + 40.0 + 16.0)),
     });
 
+    // 歯車の歯形はインボリュートではなく、歯ごとに4点を直線で結んだ多角形
+    // である（`GearBuilder::make_spur_gear` の説明を参照）。したがって体積は
+    // **多角形の面積 × 厚み**で閉じている。
+    //
+    // ここで確かめているのは歯形の正しさではなく、その多角形を押し出して
+    // 積んだ体積が幾何どおりかである。歯形そのものを外から確かめるには、
+    // インボリュートを本当に使うようにしてからでないと意味がない。
     cases.push(Case {
-        name: "spur gear m2 z18",
+        name: "spur gear m2 z18 (polygon teeth)",
         solid: GearBuilder::make_spur_gear(2.0, 18, 20.0, 8.0, 6.0),
-        analytic_volume: None,
+        analytic_volume: Some(spur_gear_profile_area(2.0, 18, 20.0, 6.0) * 8.0),
     });
 
     cases
