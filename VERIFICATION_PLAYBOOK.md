@@ -89,7 +89,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 43 テストバイナリ、296 テスト、失敗 0。
+**期待**: 44 テストバイナリ、307 テスト、失敗 0。
 
 数を数えるなら:
 
@@ -103,7 +103,7 @@ cargo test --release --workspace --exclude zenith_py 2>&1 | grep -E "^test resul
 cargo run --release -p zenith_algo --example builder_audit
 ```
 
-**期待**: `21 of 21 builder cases clean, 0 with problems`
+**期待**: `24 of 24 builder cases clean, 0 with problems`
 
 各行は、シェルの有効性・体積の正値性・**分割数を4倍にしたときの安定性**・
 解析解との相対誤差を出します。解析解を持つものは 1e-12 以下です。
@@ -119,7 +119,10 @@ cargo run --release -p zenith_algo --example builder_audit
 cargo run --release -p zenith_algo --example boolean_envelope
 ```
 
-**期待**: `supported: 30   wrong-result: 0   unsupported/error: 15   (total 45)`
+**期待**: `supported: 33   wrong-result: 0   unsupported/error: 12   (total 45)`
+
+**所要時間はおよそ1分50秒です。** 曲面同士の交線を面の組ごとに探すためで、
+以前の数秒とは桁が違います。遅いことと壊れていることを取り違えないでください。
 
 **`wrong-result` が 0 であることが最も重要です。** 対応範囲が狭いのは
 仕様ですが、誤答は仕様ではありません。ここが 0 でなくなったら、
@@ -266,6 +269,8 @@ cargo test --release --workspace --exclude zenith_py \
 | `verify_reexport.py` | **ゲート**（非ゼロ終了） | 解析解と 1e-6 以内かを見る |
 | `regularize_probe` | 診断 | 全周を刻んで形が動いていないか |
 | `pcurve_derivation_probe` | 診断 | p-curve を導出し直すと答えが変わる面 |
+| `face_split_probe` | 診断 | パラメータ線でない曲線で面を割れるか、面積の和が戻るか |
+| `ssi_probe` | 診断 | 曲面同士の交線が両曲面に乗るか、当てはめた曲線が届くか |
 
 **この表の `verify_reexport.py` の行は、以前は「診断」でした。それが誤りでした。**
 
@@ -364,6 +369,16 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 
 > **対策**: 検査の標本位置を、構成に使った位置と**互いに素**にする。
 > いまは 37（8 と共有するのは両端だけ）。
+
+**(d2) 残差が小さいことは、位置が決まっていることではない**
+
+曲面同士が**接している**場所では、「両方の曲面の上にある」という条件が交線上の
+位置を一意にしません。等半径の直交円柱では、交線から **2.99e-5** 離れた点が
+両曲面を **2.24e-11** で満たします。残差だけ見ていると、10桁合っているのに
+5桁ずれた答えを採ることになります。
+
+> **対策**: 解の**条件数**を一緒に見る。ここでは2つの法線のなす角の正弦が
+> それに当たる。悪いところでは答えずに断る。
 
 **(e0) 比較相手が同じくらい外れていると、欠陥が仕様に見える**
 
@@ -484,6 +499,8 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `foreign_reexport` | 他カーネルのファイルを読んで書き戻す一周 |
 | `regularize_probe` | 全周を刻んでも体積・面積が動かないか |
 | `pcurve_derivation_probe` | p-curve を導出し直すと積分が変わる面 |
+| `face_split_probe` | 一般の曲線で面を割ったとき、面積の和が元に戻るか |
+| `ssi_probe` | 交線が両曲面に乗るか、1本の曲線に当てはまるか |
 
 **不具合を追うための診断**
 
