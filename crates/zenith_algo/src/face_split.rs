@@ -197,7 +197,25 @@ impl FaceSplitter {
                 return Err(format!("piece {index} came out with too few edges"));
             }
             if !piece.outer_wire.is_closed(tol) {
-                return Err(format!("piece {index} came out with an open wire"));
+                // どこで開いているかを言う。開いたという事実だけでは、
+                // 巡回の割り方と切り込みのどちらが悪いのか分からない。
+                let edges = &piece.outer_wire.edges;
+                let mut gaps = Vec::new();
+                for position in 0..edges.len() {
+                    let here = edges[position].end_vertex().point;
+                    let next = edges[(position + 1) % edges.len()].start_vertex().point;
+                    let gap = (here - next).norm();
+                    if gap > tol.linear {
+                        gaps.push(format!(
+                            "after edge {position} of {}: {:.3e} between ({:.4},{:.4},{:.4}) and ({:.4},{:.4},{:.4})",
+                            edges.len(), gap, here.x, here.y, here.z, next.x, next.y, next.z
+                        ));
+                    }
+                }
+                return Err(format!(
+                    "piece {index} came out with an open wire; {}",
+                    gaps.join("; ")
+                ));
             }
         }
 

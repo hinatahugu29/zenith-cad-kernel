@@ -321,6 +321,68 @@ impl IntersectionMarcher {
         }
     }
 
+    /// 予測した位置が越えた縁へ着地する。越えた縁が無ければ、近い縁を探す
+    /// ほうへ回す。
+    fn land_on_crossed_bound(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        state: &[f64; 4],
+        predicted: &[f64; 4],
+        direction: Vec3,
+        reach: f64,
+        tol: &Tolerance,
+    ) -> Option<[f64; 4]> {
+        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
+        let bounds = [
+            (u_min, u_max),
+            (v_min, v_max),
+            (s_min, s_max),
+            (t_min, t_max),
+        ];
+
+        // 越えた量が大きい順ではなく、**先に越える**順に見る。歩の途中で
+        // どれだけ進んだところで越えたかは、越えた量を歩幅で割れば分かる。
+        let mut crossed: Vec<(f64, usize, f64)> = Vec::new();
+        for (index, (low, high)) in bounds.iter().enumerate() {
+            let travel = predicted[index] - state[index];
+            if travel.abs() <= f64::EPSILON {
+                continue;
+            }
+            let target = if predicted[index] < *low {
+                *low
+            } else if predicted[index] > *high {
+                *high
+            } else {
+                continue;
+            };
+            let fraction = ((target - state[index]) / travel).clamp(0.0, 1.0);
+            crossed.push((fraction, index, target));
+        }
+        crossed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        let here = s1.evaluate(state[0], state[1]);
+        for (_, index, target) in &crossed {
+            let mut trial = *state;
+            if Self::newton_to_bound(s1, s2, &mut trial, *index, *target, tol).is_none() {
+                continue;
+            }
+            let landed = s1.evaluate(trial[0], trial[1]);
+            if (landed - here).norm() > reach {
+                continue;
+            }
+            // 着いた先が接点なら採らない。そこでは残差が位置を決めないので、
+            // 「両方の曲面の上にある」を満たしたまま交線から外れた点が通る。
+            match Self::tangent(s1, s2, &trial) {
+                Some((_, sine)) if sine >= TANGENCY_SINE_LIMIT => {}
+                _ => continue,
+            }
+            return Some(trial);
+        }
+
+        Self::land_on_nearest_bound(s1, s2, state, direction, reach, tol)
+    }
+
     /// いまの位置から、進む向きの先にあるパラメータ領域の縁へ着地する。
     ///
     /// 8つの縁（2曲面 x 2方向 x 上下）を順に試し、いまより先に進んだものの
@@ -366,6 +428,10 @@ impl IntersectionMarcher {
                 // 式は満たされているので、そのままだと点列に飛びが混ざる。
                 if (landed - here).norm() > reach {
                     continue;
+                }
+                match Self::tangent(s1, s2, &trial) {
+                    Some((_, sine)) if sine >= TANGENCY_SINE_LIMIT => {}
+                    _ => continue,
                 }
                 if best.as_ref().map(|(d, _)| travel < *d).unwrap_or(true) {
                     best = Some((travel, trial));
@@ -529,11 +595,23 @@ impl IntersectionMarcher {
             let settled = match settled {
                 Some(state) => state,
                 None => {
-                    if let Some(edge_state) = Self::land_on_nearest_bound(
+                    // 歩けなかったのは、たいてい縁の向こうへ出ようとしたから
+                    // である。**予測した位置がどの縁を越えたか**を先に見る。
+                    // 越えていない縁を目がけると、条件の悪いところで解いて
+                    // しまい、実測で 2e-3 ずれた端点が出た（トーラスを縦に
+                    // 切ったとき、隣り合う弧の端が合わなくなる）。
+                    // 後ろ向きに辿っているときは、進んでいる向きは接線の逆で
+                    // ある。接線をそのまま渡すと「前に進んだ着地しか採らない」
+                    // 判定に全部弾かれ、後ろ側の端だけが縁に届かないまま残る
+                    // （トーラスを縦に切ったとき、片側の弧の端だけが 2e-3
+                    // 手前で止まっていた）。
+                    let travelling = if step >= 0.0 { direction } else { -direction };
+                    if let Some(edge_state) = Self::land_on_crossed_bound(
                         s1,
                         s2,
                         &state,
-                        direction,
+                        &next,
+                        travelling,
                         step.abs() * 2.0,
                         tol,
                     ) {
@@ -556,8 +634,10 @@ impl IntersectionMarcher {
                     (s_min, s_max),
                     (t_min, t_max),
                 ];
-                let mut landed = None;
+                // 越えた縁のうち、歩の**早い側で**越えたものから試す。
+                let mut crossed: Vec<(f64, usize, f64)> = Vec::new();
                 for (index, (low, high)) in bounds.iter().enumerate() {
+                    let travel = settled[index] - state[index];
                     let target = if settled[index] < *low {
                         *low
                     } else if settled[index] > *high {
@@ -565,11 +645,27 @@ impl IntersectionMarcher {
                     } else {
                         continue;
                     };
+                    let fraction = if travel.abs() <= f64::EPSILON {
+                        0.0
+                    } else {
+                        ((target - state[index]) / travel).clamp(0.0, 1.0)
+                    };
+                    crossed.push((fraction, index, target));
+                }
+                crossed.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+                let mut landed = None;
+                for (_, index, target) in &crossed {
                     let mut trial = state;
-                    if Self::newton_to_bound(s1, s2, &mut trial, index, target, tol).is_some() {
-                        landed = Some(trial);
-                        break;
+                    if Self::newton_to_bound(s1, s2, &mut trial, *index, *target, tol).is_none() {
+                        continue;
                     }
+                    match Self::tangent(s1, s2, &trial) {
+                        Some((_, sine)) if sine >= TANGENCY_SINE_LIMIT => {}
+                        _ => continue,
+                    }
+                    landed = Some(trial);
+                    break;
                 }
                 if let Some(edge_state) = landed {
                     // 直前の点と同じ位置なら足さない。
@@ -732,6 +828,63 @@ impl IntersectionMarcher {
             }
         }
         None
+    }
+
+    /// 交わりの**枝を全部**辿って、それぞれを1本の曲線にする。
+    ///
+    /// 2つの面が1本の曲線で交わるとは限らない。平面がトーラスを軸と平行に
+    /// 切ると、交わりは2本の閉曲線になる（spiric section）。枝を1本しか
+    /// 返さないと、残りは無かったことになり、面はそこで割れない。
+    ///
+    /// 種を多めに集め、既に見つけた枝の上に乗っている種は飛ばす。**枝が
+    /// 別物かどうかは、種の点が既存の枝からどれだけ離れているかで決める。**
+    pub fn fit_all_branches(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        first_step: f64,
+        deviation_limit: f64,
+        max_branches: usize,
+        tol: &Tolerance,
+    ) -> Vec<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> {
+        let mut found: Vec<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> =
+            Vec::new();
+
+        // 費用はここで決まる。ブーリアンは面の組ごとにこれを呼ぶので、格子を
+        // 大きくすると効いてくる。20 x 20 にしたときはテスト一式が10分を
+        // 超えた。12 x 12（片側169点）で、既知の配置はすべて拾える。
+        for (seed_u, seed_v) in Self::find_seeds(s1, s2, 12, max_branches * 2) {
+            if found.len() >= max_branches {
+                break;
+            }
+            let seed_point = s1.evaluate(seed_u, seed_v);
+            // 既に辿った枝の上に来た種は飛ばす。同じ曲線を何度も辿らない。
+            let already = found.iter().any(|(_, marched, _)| {
+                marched
+                    .points
+                    .iter()
+                    .any(|sample| (sample.point - seed_point).norm() <= first_step)
+            });
+            if already {
+                continue;
+            }
+
+            let mut step = first_step;
+            for _ in 0..6 {
+                if let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, 2048, tol) {
+                    if marched.points.len() >= 4 {
+                        if let Some((curve, deviation)) = Self::fit_curve(s1, s2, &marched, 3) {
+                            if deviation <= deviation_limit {
+                                found.push((curve, marched, deviation));
+                                break;
+                            }
+                        }
+                    }
+                }
+                step *= 0.5;
+            }
+        }
+
+        found
     }
 
     /// 点列が2つの曲面からどれだけ離れているか。

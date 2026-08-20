@@ -20,6 +20,13 @@ pub enum FaceIntersectionKind {
     Curve {
         edge: Edge,
     },
+    /// 交わりが1本の曲線では足りない場合。
+    ///
+    /// 平面がトーラスを軸と平行に切ると、交わりは2本の閉曲線になる。1本しか
+    /// 返さないと残りは無かったことになり、面はそこで割れない。
+    Curves {
+        edges: Vec<Edge>,
+    },
     Coincident,
     Unsupported,
 }
@@ -233,15 +240,28 @@ impl BrepIntersectionBuilder {
                         Edge::new(curve, start_vertex, end_vertex, tol.linear)
                     }
                     FaceIntersectionKind::Curve { edge } => edge,
+                    FaceIntersectionKind::Curves { edges } => {
+                        return Some(
+                            edges
+                                .into_iter()
+                                .map(|edge| IntersectionEdgeCandidate {
+                                    face_a_index: candidate.face_a_index,
+                                    face_b_index: candidate.face_b_index,
+                                    edge,
+                                })
+                                .collect::<Vec<_>>(),
+                        )
+                    }
                     _ => return None,
                 };
 
-                Some(IntersectionEdgeCandidate {
+                Some(vec![IntersectionEdgeCandidate {
                     face_a_index: candidate.face_a_index,
                     face_b_index: candidate.face_b_index,
                     edge,
-                })
+                }])
             })
+            .flatten()
             .collect()
     }
 
@@ -1011,23 +1031,6 @@ impl BrepIntersectionBuilder {
             }
         }
 
-        // 曲面同士の交線は、相手のパッチの境界で細切れになって届く。円柱を
-        // 円柱で貫くと、片方の四半パッチに入る切り込みは2本に分かれ、どちらも
-        // 面の内側で終わるので、1本ずつ当てると両方とも断られる。端で繋がって
-        // いるなら、まとめて1本の切り込みとして当てる。
-        if split_edges.len() >= 2 && matches!(face.geometry, FaceGeometry::Nurbs(_)) {
-            if let Ok((pieces, report)) = crate::FaceSplitter::split_by_chain(face, split_edges, tol)
-            {
-                if report.area_residual <= 1e-6 && pieces.len() >= 2 {
-                    return Ok(PlanarFaceMultiSplitResult {
-                        faces: pieces,
-                        applied_split_count: split_edges.len(),
-                        skipped_split_count: 0,
-                    });
-                }
-            }
-        }
-
         let mut faces = vec![face.clone()];
         let mut applied_split_count = 0;
         let mut skipped_split_count: usize = 0;
@@ -1088,6 +1091,26 @@ impl BrepIntersectionBuilder {
                     applied_split_count: applied,
                     skipped_split_count: skipped_split_count.saturating_sub(applied),
                 });
+            }
+        }
+
+        // ここまでで1つも入らなかったときだけ、**端で繋がった1本の切り込み**
+        // として当て直す。曲面同士の交線は相手のパッチの境界で細切れになって
+        // 届き、どの片も面の内側で終わるので、1本ずつでは必ず断られる。
+        //
+        // 順序が要る。専用の経路を差し置いてここを先に通すと、回転した箱同士の
+        // 和のように、既に通っていた割り方が別の割り方に置き換わって壊れる。
+        // **最後の受け皿**に置くこと。
+        if applied_split_count == 0 && split_edges.len() >= 2 {
+            if let Ok((pieces, report)) = crate::FaceSplitter::split_by_chain(face, split_edges, tol)
+            {
+                if report.area_residual <= 1e-6 && pieces.len() >= 2 {
+                    return Ok(PlanarFaceMultiSplitResult {
+                        faces: pieces,
+                        applied_split_count: split_edges.len(),
+                        skipped_split_count: 0,
+                    });
+                }
             }
         }
 
@@ -3791,11 +3814,9 @@ fn planar_face_as_patch(
     if !(u_max > u_min && v_max > v_min) {
         return None;
     }
-    // 縁ちょうどで交わる切り方を落とさないよう、わずかに広げる。
-    let pad_u = (u_max - u_min) * 1e-6;
-    let pad_v = (v_max - v_min) * 1e-6;
-    let (u_min, u_max) = (u_min - pad_u, u_max + pad_u);
-    let (v_min, v_max) = (v_min - pad_v, v_max + pad_v);
+    // **広げない。** 交線はこのパッチの縁で止まり、その端がそのまま面を割る
+    // 切り込みの端になる。1e-6 だけ広げてみたところ、20 幅の面では端が 2e-5
+    // だけ面の外に出て、割った片のワイヤがそこで開いた。
 
     let corner = |u: f64, v: f64| ControlPoint3::unweighted(plane.evaluate(u, v));
     NurbsSurface3::new(
@@ -3827,38 +3848,46 @@ fn intersect_nurbs_patches(
     let first_step = (extent * 0.1).max(tol.linear * 100.0);
     let deviation_limit = tol.linear;
 
-    let Some((curve, marched, _)) = zenith_geom::IntersectionMarcher::fit_to_tolerance(
+    // 枝は2本まで見る。1枚のパッチと1枚のパッチが3本以上で交わる配置は
+    // 今の検体には無く、上限を上げるとブーリアンの走査が目に見えて遅くなる。
+    let branches = zenith_geom::IntersectionMarcher::fit_all_branches(
         surface_a,
         surface_b,
         first_step,
         deviation_limit,
+        2,
         tol,
-    ) else {
-        return FaceIntersectionKind::Unsupported;
-    };
+    );
 
-    // パッチの**縁に沿って**走る交線は、切り込みではなく接触の記録である。
-    // 平面がトーラスの赤道を通ると、そこはパッチの境界そのものなので、
-    // 縁に沿った線がいくつも出る。切り込みとして渡すと、面はそこで割れずに
-    // 「境界に届かない」と断られ、しかも本物の切り込みを押しのける。
-    if marched_runs_along_a_patch_edge(&marched, surface_a, surface_b) {
-        return FaceIntersectionKind::Unsupported;
-    }
-
-    let (t0, t1) = curve.param_range();
-    let start = curve.evaluate(t0);
-    let end = curve.evaluate(t1);
-    if (end - start).norm() <= tol.linear {
-        return FaceIntersectionKind::Unsupported;
-    }
-
-    FaceIntersectionKind::Curve {
-        edge: Edge::new(
+    let mut edges = Vec::new();
+    for (curve, marched, _) in branches {
+        // パッチの**縁に沿って**走る交線は、切り込みではなく接触の記録である。
+        // 平面がトーラスの赤道を通ると、そこはパッチの境界そのものなので、
+        // 縁に沿った線がいくつも出る。切り込みとして渡すと、面はそこで割れずに
+        // 「境界に届かない」と断られ、しかも本物の切り込みを押しのける。
+        if marched_runs_along_a_patch_edge(&marched, surface_a, surface_b) {
+            continue;
+        }
+        let (t0, t1) = curve.param_range();
+        let start = curve.evaluate(t0);
+        let end = curve.evaluate(t1);
+        if (end - start).norm() <= tol.linear {
+            continue;
+        }
+        edges.push(Edge::new(
             curve,
             Vertex::new(start, tol.linear),
             Vertex::new(end, tol.linear),
             tol.linear,
-        ),
+        ));
+    }
+
+    match edges.len() {
+        0 => FaceIntersectionKind::Unsupported,
+        1 => FaceIntersectionKind::Curve {
+            edge: edges.into_iter().next().unwrap(),
+        },
+        _ => FaceIntersectionKind::Curves { edges },
     }
 }
 
