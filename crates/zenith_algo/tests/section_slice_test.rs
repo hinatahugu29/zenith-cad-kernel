@@ -258,3 +258,121 @@ fn test_zero_normal_is_rejected() {
     )
     .is_err());
 }
+
+/// 断面は、メッシュから拾った弦の多角形ではなく、**B-Rep の上で測った点**で
+/// 積まれる。多角形のままだと面積は必ず内側に削れ、分割数の2乗でしか縮まない。
+///
+/// この検査は、いま届いている桁（既定分割で 1e-9 以内）を固定する。
+/// `test_curved_section_accuracy_improves_with_tessellation` が「良くなること」
+/// を見るのに対し、こちらは「どこまで来ているか」を見る。
+#[test]
+fn test_curved_sections_land_on_the_analytic_value_not_merely_near_it() {
+    let tol = Tolerance::default();
+    let cases: Vec<(&str, zenith_topo::Solid, Point3, f64, f64)> = vec![
+        (
+            "cylinder r10",
+            PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
+            Point3::new(0.0, 0.0, 20.0),
+            PI * 100.0,
+            2.0 * PI * 10.0,
+        ),
+        (
+            "sphere r10 equator",
+            PrimitiveBuilder::make_sphere(10.0).unwrap(),
+            Point3::new(0.0, 0.0, 0.0),
+            PI * 100.0,
+            2.0 * PI * 10.0,
+        ),
+    ];
+
+    for (name, solid, origin, expected_area, expected_perimeter) in cases {
+        let result =
+            SectionSlicer::slice_solid(&solid, origin, Vec3::new(0.0, 0.0, 1.0), &tol)
+                .unwrap_or_else(|err| panic!("{name} section: {err}"));
+
+        let area_error = relative_error(result.total_area, expected_area);
+        let perimeter_error = relative_error(result.total_perimeter, expected_perimeter);
+        assert!(
+            area_error < 1e-9,
+            "{name} section area {} is {area_error:.3e} from {expected_area}",
+            result.total_area
+        );
+        assert!(
+            perimeter_error < 1e-9,
+            "{name} section perimeter {} is {perimeter_error:.3e} from {expected_perimeter}",
+            result.total_perimeter
+        );
+        assert_eq!(
+            result.unrefined_chord_count, 0,
+            "{name} should have every chord measured against the B-Rep"
+        );
+    }
+}
+
+/// 平面だけでできた断面は、以前から厳密だった。B-Rep に当てる段を入れても
+/// **一切動いてはならない**。動いたら、それは補正ではなく探索の残差である。
+#[test]
+fn test_planar_sections_stay_exact_at_every_tessellation() {
+    let tol = Tolerance::default();
+    let solid = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap();
+
+    for divisions in [4usize, 24, 96, 192] {
+        let result = SectionSlicer::slice_solid_with_tessellation(
+            &solid,
+            Point3::new(0.0, 0.0, 20.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            &tol,
+            &TessellationParams {
+                u_divisions: divisions,
+                v_divisions: divisions,
+            },
+        )
+        .expect("box section");
+
+        assert_eq!(
+            result.total_area, 600.0,
+            "a planar section moved at {divisions} divisions"
+        );
+        assert_eq!(
+            result.total_perimeter, 100.0,
+            "a planar section perimeter moved at {divisions} divisions"
+        );
+        assert_eq!(
+            result.settled_point_count, 0,
+            "a planar section has nothing to settle onto"
+        );
+    }
+}
+
+/// 誤差が分割数の**4乗**で縮むこと。弦のままだと2乗にしかならないので、
+/// この比が、二次で積んでいることの証拠になる。
+#[test]
+fn test_section_error_falls_with_the_fourth_power_of_the_division_count() {
+    let tol = Tolerance::default();
+    let solid = PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap();
+    let expected = PI * 100.0;
+
+    let error_at = |divisions: usize| -> f64 {
+        let result = SectionSlicer::slice_solid_with_tessellation(
+            &solid,
+            Point3::new(0.0, 0.0, 20.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            &tol,
+            &TessellationParams {
+                u_divisions: divisions,
+                v_divisions: divisions,
+            },
+        )
+        .expect("section");
+        relative_error(result.total_area, expected)
+    };
+
+    let coarse = error_at(24);
+    let fine = error_at(48);
+    let ratio = coarse / fine;
+    assert!(
+        (8.0..40.0).contains(&ratio),
+        "doubling the divisions should divide the error by about 16, got {ratio:.1} \
+         (coarse {coarse:.3e}, fine {fine:.3e})"
+    );
+}
