@@ -1,6 +1,6 @@
 use zenith_geom::{ControlPoint3, KnotVector, NurbsSurface3, PlaneSurface3};
 use zenith_math::{Point3, Vec3};
-use zenith_topo::{Face, FaceGeometry, Wire};
+use zenith_topo::{Face, FaceGeometry, Orientation, Wire};
 
 /// 穴埋め・端面キャップ・N辺パッチビルダー（Plasticity / Rhino風 自由曲面穴塞ぎ）
 pub struct CapBuilder;
@@ -8,6 +8,16 @@ pub struct CapBuilder;
 impl CapBuilder {
     /// 任意の平面境界ワイヤから平面Face（Planar Cap）を生成して穴を塞ぐ
     pub fn make_planar_cap(wire: Wire) -> Result<Face, String> {
+        Self::make_planar_cap_with_holes(wire, Vec::new())
+    }
+
+    /// A planar cap with holes in it.
+    ///
+    /// Cutting a torus with a plane leaves two loops, one inside the other, and
+    /// what they bound between them is an annulus. Closing each loop with its
+    /// own disc covers the hole as well as the ring, and leaves every edge on
+    /// the inner loop used twice in the same direction.
+    pub fn make_planar_cap_with_holes(wire: Wire, holes: Vec<Wire>) -> Result<Face, String> {
         if wire.edges.is_empty() {
             return Err("Wire has no edges".to_string());
         }
@@ -56,7 +66,17 @@ impl CapBuilder {
         let plane = PlaneSurface3::new(center, u_axis, v_axis)
             .ok_or("Failed to create planar cap surface")?;
 
-        Ok(Face::simple(FaceGeometry::Plane(plane), wire))
+        if holes.is_empty() {
+            return Ok(Face::simple(FaceGeometry::Plane(plane), wire));
+        }
+
+        Ok(Face::new(
+            FaceGeometry::Plane(plane),
+            wire,
+            holes,
+            Orientation::Forward,
+            1e-6,
+        ))
     }
 
     /// 任意の3D境界ワイヤからドーム状・滑らかなテンション曲面パッチ（Dome Cap / Curved Patch）を生成

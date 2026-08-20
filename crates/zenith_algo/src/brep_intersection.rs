@@ -604,15 +604,18 @@ impl BrepIntersectionBuilder {
         tol: &Tolerance,
     ) -> PlanarCapGeneration {
         let edge_loop_extraction = collect_closed_intersection_edge_loops(edges, tol);
-        let mut cap_faces = Vec::new();
-        let mut failed_loop_count = 0;
 
+        let mut wires: Vec<Wire> = Vec::with_capacity(edge_loop_extraction.loops.len());
+        let mut failed_loop_count = 0;
         for edge_loop in &edge_loop_extraction.loops {
-            match Self::build_planar_cap_from_edge_loop(&edge_loop.edges, tol) {
-                Ok(face) => cap_faces.push(face),
+            match order_edges_into_closed_wire(&edge_loop.edges, tol) {
+                Ok(wire) => wires.push(wire),
                 Err(_) => failed_loop_count += 1,
             }
         }
+
+        let (cap_faces, nesting_failures) = build_caps_from_nested_loops(wires, tol);
+        failed_loop_count += nesting_failures;
 
         PlanarCapGeneration {
             edge_loop_extraction,
@@ -1080,6 +1083,187 @@ fn collect_batch_splits_for_faces(
             })
         })
         .collect()
+}
+
+/// Builds cap faces from closed loops, letting a loop inside another become a
+/// hole in it rather than a disc of its own.
+///
+/// A plane through a torus leaves two loops, and what they bound between them
+/// is an annulus. Capping each with its own disc covers the hole as well as the
+/// ring, and every edge of the inner loop ends up used twice the same way round,
+/// which is what the stitching reported.
+///
+/// Loops are only compared with loops in the same plane. Two rings at different
+/// heights are not nested however they look from above.
+fn build_caps_from_nested_loops(wires: Vec<Wire>, tol: &Tolerance) -> (Vec<Face>, usize) {
+    let mut faces = Vec::new();
+    let mut failures = 0;
+
+    for group in group_coplanar_loops(&wires, tol) {
+        // 面の枠は、この組の最初のループから取る。同一平面なので共通に使える。
+        let Some((origin, normal)) = planar_loop_frame(&wires[group[0]]) else {
+            failures += group.len();
+            continue;
+        };
+        let Some(frame_u) = plane_frame_axis(normal) else {
+            failures += group.len();
+            continue;
+        };
+        let frame_v = normal.cross(&frame_u);
+        let to_plane = |point: Point3| {
+            let offset = point - origin;
+            Point2::new(offset.dot(&frame_u), offset.dot(&frame_v))
+        };
+
+        let outlines: Vec<Vec<Point2>> = group
+            .iter()
+            .map(|index| {
+                wires[*index]
+                    .sample_points(16)
+                    .into_iter()
+                    .map(to_plane)
+                    .collect()
+            })
+            .collect();
+
+        // 何枚のループに囲まれているか。偶数なら外周、奇数なら穴。
+        let mut depth = vec![0usize; group.len()];
+        for (inner, outline) in outlines.iter().enumerate() {
+            let Some(probe) = outline.first().copied() else {
+                continue;
+            };
+            for (outer, candidate) in outlines.iter().enumerate() {
+                if outer == inner {
+                    continue;
+                }
+                if point_in_polygon_2d(probe, candidate, tol.parametric) {
+                    depth[inner] += 1;
+                }
+            }
+        }
+
+        for (position, index) in group.iter().enumerate() {
+            if depth[position] % 2 != 0 {
+                continue;
+            }
+            // 自分をすぐ内側から囲まれているループが、この面の穴。
+            //
+            // 穴は外周と逆回りでなければならない。面ごと裏返しても両方の
+            // 向きが同時に変わるだけなので、ここで揃えておかないと後から
+            // 直せない。組み立て側は面全体の表裏しか試さない。
+            let outer_winding = signed_area_2d(&outlines[position]).signum();
+            let holes: Vec<Wire> = group
+                .iter()
+                .enumerate()
+                .filter(|(other, _)| {
+                    depth[*other] == depth[position] + 1
+                        && point_in_polygon_2d(
+                            outlines[*other][0],
+                            &outlines[position],
+                            tol.parametric,
+                        )
+                })
+                .map(|(other, other_index)| {
+                    let wire = wires[*other_index].clone();
+                    if signed_area_2d(&outlines[other]).signum() == outer_winding {
+                        reversed_wire(&wire)
+                    } else {
+                        wire
+                    }
+                })
+                .collect();
+
+            match CapBuilder::make_planar_cap_with_holes(wires[*index].clone(), holes) {
+                Ok(face) => match face.validate_pcurves(tol, 4) {
+                    Ok(report) if report.is_valid() => faces.push(face),
+                    _ => failures += 1,
+                },
+                Err(_) => failures += 1,
+            }
+        }
+    }
+
+    (faces, failures)
+}
+
+/// The same wire walked the other way round.
+fn reversed_wire(wire: &Wire) -> Wire {
+    Wire::new(
+        wire.edges
+            .iter()
+            .rev()
+            .map(|oriented| {
+                OrientedEdge::new(oriented.edge.clone(), oriented.orientation.reversed())
+            })
+            .collect(),
+    )
+}
+
+/// Groups loops that lie in the same plane.
+fn group_coplanar_loops(wires: &[Wire], tol: &Tolerance) -> Vec<Vec<usize>> {
+    let frames: Vec<Option<(Point3, Vec3)>> = wires.iter().map(planar_loop_frame).collect();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+
+    for (index, frame) in frames.iter().enumerate() {
+        let Some((origin, normal)) = frame else {
+            groups.push(vec![index]);
+            continue;
+        };
+        let mut joined = false;
+        for group in groups.iter_mut() {
+            let Some((other_origin, other_normal)) = frames[group[0]] else {
+                continue;
+            };
+            let parallel = normal.dot(&other_normal).abs() >= 1.0 - tol.angular;
+            let same_level = (origin - other_origin).dot(&other_normal).abs() <= tol.linear * 10.0;
+            if parallel && same_level {
+                group.push(index);
+                joined = true;
+                break;
+            }
+        }
+        if !joined {
+            groups.push(vec![index]);
+        }
+    }
+
+    groups
+}
+
+/// A point on a closed planar wire and the plane's unit normal.
+fn planar_loop_frame(wire: &Wire) -> Option<(Point3, Vec3)> {
+    let points = wire.sample_points(8);
+    if points.len() < 3 {
+        return None;
+    }
+
+    let mut center = Vec3::new(0.0, 0.0, 0.0);
+    for point in &points {
+        center += point.coords;
+    }
+    let center = Point3::from(center / points.len() as f64);
+
+    // Newell 法。三点だけで法線を取ると、ほぼ一直線の並びで壊れる。
+    let mut normal = Vec3::new(0.0, 0.0, 0.0);
+    for index in 0..points.len() {
+        let current = points[index];
+        let next = points[(index + 1) % points.len()];
+        normal.x += (current.y - next.y) * (current.z + next.z);
+        normal.y += (current.z - next.z) * (current.x + next.x);
+        normal.z += (current.x - next.x) * (current.y + next.y);
+    }
+
+    normal.try_normalize_safe(1e-12).map(|normal| (center, normal))
+}
+
+/// Any unit vector lying in the plane with the given normal.
+fn plane_frame_axis(normal: Vec3) -> Option<Vec3> {
+    let seed = if normal.x.abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    (seed - normal * seed.dot(&normal)).try_normalize_safe(1e-12)
 }
 
 fn order_edges_into_closed_wire(edges: &[Edge], tol: &Tolerance) -> Result<Wire, String> {
@@ -1753,13 +1937,16 @@ fn split_cylinder_side_face_by_horizontal_edge(
 /// about some axis - fitting it gives both - and from there the face's own
 /// boundary sorts itself out: two of its edges have both ends at the same
 /// distance along that axis and are the sections it already runs between, and
-/// the other two carry it from one to the other. The section has to land on
-/// those two and lie between the existing ones.
+/// the other two carry it from one to the other.
 ///
-/// The pieces keep the original surface and take sub-arcs of the original side
-/// edges, cut where the section meets them. The cylinder path builds those side
-/// pieces as straight lines, which is right for a ruling and wrong for anything
-/// else; a torus's sides are arcs, so they are cut rather than redrawn.
+/// Both pieces are built by walking the original wire in the order it is
+/// already in, keeping each edge's direction as that wire uses it. Reading the
+/// edges' own directions instead lets the two pieces come out wound opposite to
+/// one another whenever an edge happens to be stored the other way round, and
+/// the shell then fails to stitch with every shared edge used twice the same
+/// way. The sides are cut where the section meets them rather than redrawn as
+/// straight lines, which is right for a ruling and wrong for a torus's
+/// meridian arcs.
 fn split_patch_face_by_section_edge(
     face: &Face,
     surface: &NurbsSurface3,
@@ -1769,7 +1956,8 @@ fn split_patch_face_by_section_edge(
     if !face.inner_wires.is_empty() {
         return Err("NURBS face splitting with inner wires is not implemented yet".to_string());
     }
-    if face.outer_wire.edges.len() != 4 {
+    let boundary = &face.outer_wire.edges;
+    if boundary.len() != 4 {
         return Err("Only a four-sided patch face can be split by a section".to_string());
     }
 
@@ -1787,7 +1975,7 @@ fn split_patch_face_by_section_edge(
     }
 
     // 分割線そのものが軸を教えてくれる。円として当てはめれば、法線が軸、
-    // 中心が軸上の点。
+    // 中心が軸上の点。向きは断面の上下を呼び分けるだけに使う。
     let (center, _, normal) = fit_section_circle(&split_edge.curve, tol)
         .ok_or_else(|| "Section edge is not a circle about an axis".to_string())?;
     let axis = normal.ok_or_else(|| "Section edge has collapsed to a point".to_string())?;
@@ -1795,141 +1983,86 @@ fn split_patch_face_by_section_edge(
 
     let split_start = split_edge.start_vertex.point;
     let split_end = split_edge.end_vertex.point;
-    let split_axial = 0.5 * (axial(split_start) + axial(split_end));
     if (axial(split_start) - axial(split_end)).abs() > tol.linear * 10.0 * scale {
         return Err("Section edge does not stay at one level".to_string());
     }
+    let split_axial = 0.5 * (axial(split_start) + axial(split_end));
 
-    let mut arcs: Vec<(&Edge, f64)> = Vec::new();
-    let mut sides: Vec<&Edge> = Vec::new();
-    for oriented in &face.outer_wire.edges {
-        let edge = &oriented.edge;
+    // 境界の4辺のうち、両端の軸方向座標が等しいものが既存の断面。
+    let mut section_indices = Vec::new();
+    for (index, oriented) in boundary.iter().enumerate() {
         let (start_axial, end_axial) = (
-            axial(edge.start_vertex.point),
-            axial(edge.end_vertex.point),
+            axial(oriented.start_vertex().point),
+            axial(oriented.end_vertex().point),
         );
         if (start_axial - end_axial).abs() <= tol.linear * 10.0 * scale {
-            arcs.push((edge, 0.5 * (start_axial + end_axial)));
-        } else {
-            sides.push(edge);
+            section_indices.push((index, 0.5 * (start_axial + end_axial)));
         }
     }
-    if arcs.len() != 2 || sides.len() != 2 {
+    if section_indices.len() != 2 {
         return Err("Face boundary does not read as two sections and two sides".to_string());
     }
-
-    let (mut bottom, mut top) = (arcs[0], arcs[1]);
-    if bottom.1 > top.1 {
-        std::mem::swap(&mut bottom, &mut top);
+    // 巡回の上で断面と側辺が交互に並んでいなければ、四辺形として読めない。
+    if (section_indices[1].0 + 4 - section_indices[0].0) % 4 != 2 {
+        return Err("Face boundary sections are not opposite each other".to_string());
     }
+
+    let (bottom_index, bottom_axial) = if section_indices[0].1 <= section_indices[1].1 {
+        section_indices[0]
+    } else {
+        section_indices[1]
+    };
+    let top_axial = if section_indices[0].0 == bottom_index {
+        section_indices[1].1
+    } else {
+        section_indices[0].1
+    };
+
     let margin = tol.linear * scale;
-    if split_axial <= bottom.1 + margin || split_axial >= top.1 - margin {
+    if split_axial <= bottom_axial + margin || split_axial >= top_axial - margin {
         return Err("Section edge must cross the face interior".to_string());
     }
 
-    // 分割線の端点が、どちらの側辺に乗るか。乗る点で側辺を切る。
-    let mut cut_sides: Vec<(Point3, Edge, Edge)> = Vec::new();
-    for endpoint in [split_start, split_end] {
-        let mut matched = None;
-        for side in &sides {
-            if let Some((lower, upper)) = split_edge_at_point(side, endpoint, tol) {
-                matched = Some((endpoint, lower, upper));
-                break;
-            }
-        }
-        cut_sides.push(
-            matched.ok_or_else(|| "Section endpoints do not land on the face sides".to_string())?,
-        );
-    }
-    if cut_sides.len() != 2 {
-        return Err("Section edge does not meet both sides".to_string());
-    }
+    // 巡回の並び: 下の断面 -> 側辺A -> 上の断面 -> 側辺B。
+    let bottom = boundary[bottom_index].clone();
+    let side_a = boundary[(bottom_index + 1) % 4].clone();
+    let top = boundary[(bottom_index + 2) % 4].clone();
+    let side_b = boundary[(bottom_index + 3) % 4].clone();
 
-    // 下側の弧の両端に合わせて、どちらの切り口がどちらの側かを決める。
-    let bottom_start = bottom.0.start_vertex.point;
-    let bottom_end = bottom.0.end_vertex.point;
-    let ordered = |point: Point3| {
-        let (first, second) = (&cut_sides[0], &cut_sides[1]);
-        if side_reaches(&first.1, point, tol) || side_reaches(&first.2, point, tol) {
-            Some(first)
-        } else if side_reaches(&second.1, point, tol) || side_reaches(&second.2, point, tol) {
-            Some(second)
-        } else {
-            None
-        }
+    // 分割線の端点のどちらがどちらの側辺に乗るか。
+    let (point_a, point_b) = if edge_reaches_point(&side_a, split_start, tol) {
+        (split_start, split_end)
+    } else if edge_reaches_point(&side_a, split_end, tol) {
+        (split_end, split_start)
+    } else {
+        return Err("Section endpoints do not land on the face sides".to_string());
     };
-    let left = ordered(bottom_start)
-        .ok_or_else(|| "Could not match a cut side to the bottom arc".to_string())?;
-    let right = ordered(bottom_end)
-        .ok_or_else(|| "Could not match a cut side to the bottom arc".to_string())?;
-    if std::ptr::eq(left, right) {
-        return Err("Both section endpoints landed on the same side".to_string());
+    if !edge_reaches_point(&side_b, point_b, tol) {
+        return Err("Section endpoints do not land on the face sides".to_string());
     }
 
-    let top_start = far_end_of(&left.1, &left.2, bottom_start, tol)
-        .ok_or_else(|| "Could not follow the left side to the top arc".to_string())?;
-    let top_end = far_end_of(&right.1, &right.2, bottom_end, tol)
-        .ok_or_else(|| "Could not follow the right side to the top arc".to_string())?;
+    let (a_first, a_second) = cut_oriented_edge(&side_a, point_a, tol)
+        .ok_or_else(|| "Could not cut the first side at the section".to_string())?;
+    let (b_first, b_second) = cut_oriented_edge(&side_b, point_b, tol)
+        .ok_or_else(|| "Could not cut the second side at the section".to_string())?;
 
-    let left_lower = piece_between(&left.1, &left.2, bottom_start, left.0, tol)
-        .ok_or_else(|| "Could not cut the left side below the section".to_string())?;
-    let left_upper = piece_between(&left.1, &left.2, left.0, top_start, tol)
-        .ok_or_else(|| "Could not cut the left side above the section".to_string())?;
-    let right_lower = piece_between(&right.1, &right.2, bottom_end, right.0, tol)
-        .ok_or_else(|| "Could not cut the right side below the section".to_string())?;
-    let right_upper = piece_between(&right.1, &right.2, right.0, top_end, tol)
-        .ok_or_else(|| "Could not cut the right side above the section".to_string())?;
-
-    let split_forward = orient_edge_for_points(split_edge, left.0, right.0, tol)
+    let split_a_to_b = orient_edge_for_points(split_edge, point_a, point_b, tol)
         .ok_or_else(|| "Section endpoints do not match the cut sides".to_string())?;
-    let split_reversed = OrientedEdge::new(
-        split_forward.edge.clone(),
-        split_forward.orientation.reversed(),
+    let split_b_to_a = OrientedEdge::new(
+        split_a_to_b.edge.clone(),
+        split_a_to_b.orientation.reversed(),
     );
-    let bottom_oriented = orient_edge_for_points(bottom.0, bottom_start, bottom_end, tol)
-        .ok_or_else(|| "Bottom section does not match the face corners".to_string())?;
-    let top_oriented = orient_edge_for_points(top.0, top_start, top_end, tol)
-        .ok_or_else(|| "Top section does not match the face corners".to_string())?;
-
-    let orient_wire = |edges: Vec<OrientedEdge>| {
-        if face.orientation.is_forward() {
-            Wire::new(edges)
-        } else {
-            Wire::new(
-                edges
-                    .into_iter()
-                    .rev()
-                    .map(|oriented| {
-                        OrientedEdge::new(oriented.edge, oriented.orientation.reversed())
-                    })
-                    .collect(),
-            )
-        }
-    };
 
     let lower = Face::new(
         face.geometry.clone(),
-        orient_wire(vec![
-            bottom_oriented,
-            right_lower,
-            split_reversed,
-            OrientedEdge::new(left_lower.edge.clone(), left_lower.orientation.reversed()),
-        ]),
+        Wire::new(vec![bottom, a_first, split_a_to_b, b_second]),
         Vec::new(),
         face.orientation,
         face.tolerance,
     );
     let upper = Face::new(
         face.geometry.clone(),
-        orient_wire(vec![
-            split_forward,
-            right_upper,
-            OrientedEdge::new(
-                top_oriented.edge.clone(),
-                top_oriented.orientation.reversed(),
-            ),
-            OrientedEdge::new(left_upper.edge.clone(), left_upper.orientation.reversed()),
-        ]),
+        Wire::new(vec![a_second, top, b_first, split_b_to_a]),
         Vec::new(),
         face.orientation,
         face.tolerance,
@@ -1960,77 +2093,49 @@ fn sampled_edge_extent(edge: &Edge) -> f64 {
         .fold(0.0f64, |worst, sample| worst.max((sample - origin).norm()))
 }
 
-/// Cuts an edge at a point lying on it, into the part before and the part after.
-fn split_edge_at_point(edge: &Edge, point: Point3, tol: &Tolerance) -> Option<(Edge, Edge)> {
+/// Whether a point lies on an edge, anywhere along it.
+fn edge_reaches_point(oriented: &OrientedEdge, point: Point3, tol: &Tolerance) -> bool {
+    let scale = sampled_edge_extent(&oriented.edge).max(1.0);
+    ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 64, tol.parametric)
+        .map(|projection| projection.distance <= tol.linear * 10.0 * scale)
+        .unwrap_or(false)
+}
+
+/// Cuts an edge use at a point on it, into the part reached first and the part
+/// reached second, both facing the way the wire already walks them.
+fn cut_oriented_edge(
+    oriented: &OrientedEdge,
+    point: Point3,
+    tol: &Tolerance,
+) -> Option<(OrientedEdge, OrientedEdge)> {
     let projection =
-        ExtremumEngine::point_to_curve(point, &edge.curve, 64, tol.parametric).ok()?;
-    let scale = sampled_edge_extent(edge).max(1.0);
+        ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 64, tol.parametric).ok()?;
+    let scale = sampled_edge_extent(&oriented.edge).max(1.0);
     if projection.distance > tol.linear * 10.0 * scale {
         return None;
     }
-    // 端に当たった場合は切っても意味が無い。
-    let (lower, upper) = edge.curve.split_bezier_at(projection.parameter)?;
+
+    let (first_half, second_half) = oriented.edge.curve.split_bezier_at(projection.parameter)?;
     let middle = Vertex::new(point, tol.linear);
-    Some((
-        Edge::new(
-            lower,
-            edge.start_vertex.clone(),
-            middle.clone(),
-            tol.linear,
-        ),
-        Edge::new(upper, middle, edge.end_vertex.clone(), tol.linear),
-    ))
-}
+    let lower = Edge::new(
+        first_half,
+        oriented.edge.start_vertex.clone(),
+        middle.clone(),
+        tol.linear,
+    );
+    let upper = Edge::new(
+        second_half,
+        middle,
+        oriented.edge.end_vertex.clone(),
+        tol.linear,
+    );
 
-/// Whether one of an edge's own ends is at the given point.
-fn side_reaches(edge: &Edge, point: Point3, tol: &Tolerance) -> bool {
-    (edge.start_vertex.point - point).norm() <= tol.linear * 10.0
-        || (edge.end_vertex.point - point).norm() <= tol.linear * 10.0
-}
-
-/// The end of a cut side that is not the given one.
-fn far_end_of(lower: &Edge, upper: &Edge, near: Point3, tol: &Tolerance) -> Option<Point3> {
-    for edge in [lower, upper] {
-        for candidate in [edge.start_vertex.point, edge.end_vertex.point] {
-            if (candidate - near).norm() > tol.linear * 10.0
-                && !side_reaches_both(lower, upper, candidate, near, tol)
-            {
-                return Some(candidate);
-            }
-        }
+    if oriented.orientation.is_forward() {
+        Some((OrientedEdge::forward(lower), OrientedEdge::forward(upper)))
+    } else {
+        // 逆向きに使われている辺では、先に通るのは曲線の後半のほう。
+        Some((OrientedEdge::reversed(upper), OrientedEdge::reversed(lower)))
     }
-    None
-}
-
-fn side_reaches_both(
-    lower: &Edge,
-    upper: &Edge,
-    candidate: Point3,
-    near: Point3,
-    tol: &Tolerance,
-) -> bool {
-    // 切り口そのものは両方の断片が共有している。端点として選んではいけない。
-    let shared = [lower.end_vertex.point, upper.start_vertex.point];
-    shared
-        .iter()
-        .any(|point| (point - candidate).norm() <= tol.linear * 10.0)
-        && (candidate - near).norm() > tol.linear * 10.0
-}
-
-/// The one of two cut pieces that runs between the given points.
-fn piece_between(
-    lower: &Edge,
-    upper: &Edge,
-    from: Point3,
-    to: Point3,
-    tol: &Tolerance,
-) -> Option<OrientedEdge> {
-    for edge in [lower, upper] {
-        if let Some(oriented) = orient_edge_for_points(edge, from, to, tol) {
-            return Some(oriented);
-        }
-    }
-    None
 }
 
 /// The extent a cylinder-side face actually occupies, read from its boundary
