@@ -53,6 +53,7 @@ cargo run --release -p zenith_algo --example boolean_envelope     # ブーリア
 cargo run --release -p zenith_algo --example step_import_audit    # STEP 往復と他カーネルファイルの読み込み
 cargo run --release -p zenith_algo --example mass_convergence     # 質量積分の収束
 cargo run --release -p zenith_algo --example slice_probe          # 断面積と解析解の差
+cargo run --release -p zenith_algo --example pcurve_fidelity_probe # p-curve が本当に辺の上にあるか
 ```
 
 外部カーネルとの突き合わせ（不一致で非ゼロ終了するのでリリースゲートに使えます）:
@@ -110,14 +111,66 @@ OpenCASCADE が書いた参照ファイルに対する実測（すべて OCC の
 cargo run --release -p zenith_algo --example step_import_audit
 ```
 
-### 3-2. インポーター: トリム B-spline 面の境界近似 ★次に確実
+### 3-2. p-curve 検証が、作った点の上でしか測っていない ★最優先
 
-**現状**: 曲線でトリムされた B-spline 面は、トリム境界をポリゴン近似するため
-面積に数%の誤差が出ます（OCC の NURBS 円柱でキャップが 282.47、正しくは 314.16）。
+**これは精度の話ではなく、検証が効いていないという話です。**
 
-**手がかり**: 曲線自体は厳密に読めています（`imported_curve_probe` で確認済み。
-円周 62.8315、半径ちょうど10）。問題は `zenith_tess` 側のトリム領域の三角形分割です。
-断面スライサーで解決したのと同じ性質の問題です。
+`Face::new` は NURBS 面の p-curve を `derive_nurbs_boundary_pcurves(tol, 8)` で
+作ります。辺を8等分して投影し、その9点を通る1次のポリラインにします。
+シェル検証は `face.validate_pcurves(tol, 8)` を呼びます。**同じ8等分**です。
+つまり検証は、p-curve が構成上ぴったり通ることが分かっている点だけを見ています。
+間のどこも見ていません。
+
+実測してください。
+
+```bash
+cargo run --release -p zenith_algo --example pcurve_fidelity_probe
+```
+
+```
+file                                   face          8          9         16         37         64
+occ_reference_cylinder_nurbs.step      face  1 nurbs   5.515e-12   8.344e-1   8.892e-1   8.881e-1   8.892e-1
+occ_reference_sphere_capped.step       face  0 nurbs   3.534e-11    7.002e0    2.000e1    1.956e1    2.000e1
+```
+
+8のところだけ 1e-11、他はすべて 0.89 と 20.0 です。半球の 20.0 は半径10の球の
+**直径**で、投影が裏側に落ちている点があるという意味です。ポリラインが粗いと
+いう話ではありません。
+
+**効いていないのは投影経路だけです。** 他の面はすべてどの列でも 1e-15 です。
+`match_nurbs_boundary_pcurve` は、まず辺が曲面の等パラメータ境界に乗るかを試し
+（`match_nurbs_outer_boundary_pcurve`、これは厳密）、駄目なら
+`project_edge_to_nurbs_pcurve` に落ちます。壊れているのは後者だけです。
+
+**やること**（この順で、まとめて）:
+
+1. 投影が裏側に落ちる件。`ExtremumEngine::point_to_surface` が最も近い点を
+   返していない、あるいは球の継ぎ目でどちらの端にも写る点を選び損ねている。
+   まずここを潰さないと、後の2つを入れても数字は良くなりません。
+2. ポリラインを辺に追従させる。今の8等分は、点が曲面に乗っているかしか
+   見ておらず、**点と点の間が辺から離れていないかを一度も見ていません**。
+   円が八角形として通っているのはこれです（NURBS円柱のキャップ 282.47、
+   正しくは 314.16）。
+3. 検証のサンプル数を、構成に使った数と**別の数**にする。
+   `shell.rs:132` の `validate_pcurves(tol, 8)` を変えるだけで露見します。
+
+**先に3だけ入れないでください。** 1と2が無い状態で 37 に変えると、
+いま体積・面積が正しく読めているファイルが軒並み弾かれます（実測済み）。
+順序が要ります。
+
+**試して取り下げたもの**: 2 だけを先に入れました（弦の中点が辺から離れて
+いる区間を割る適応細分）。p-curve 自体は良くなりました（2D長 61.2091 →
+62.8315、囲む面積 282.4690 → 314.1512、いずれも厳密値と一致）。
+ですが分割点が等間隔でなくなるため、検証が前提にしている
+「p-curve のパラメータ比 = 辺のパラメータ比」が崩れ、半球が弾かれました。
+差分は残していません。入れ直すなら、点を辺のパラメータに合わせた
+ノットベクトルで張り（1次なら `[t0,t0,t1,...,tn,tn]`）、比例関係を保つこと。
+
+なお面積にはもう一段の損失があります。p-curve を厳密にしても、キャップの
+積分面積は 312.10 でした（正しくは 314.16）。残りは
+`zenith_tess` の `loop_deflection_target` で、トリムループを
+`diagonal / (divisions * 4)` まで粗く折ってよいことにしているためです。
+これは全テッセレーションに効くので、触る前に既存の測定値を控えてください。
 
 ### 3-3. ブーリアン: 曲面同士の交差（SSI）★最も大きい
 
