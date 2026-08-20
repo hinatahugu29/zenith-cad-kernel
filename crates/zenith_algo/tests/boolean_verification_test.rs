@@ -173,7 +173,7 @@ fn test_cone_box_difference_and_intersection_now_split_the_cone_correctly() {
 }
 
 #[test]
-fn test_gate_rejects_torus_box_union_smaller_than_an_operand() {
+fn test_a_torus_box_union_is_never_smaller_than_either_operand() {
     let tol = Tolerance::default();
     let torus = PrimitiveBuilder::make_torus(12.0, 4.0).unwrap();
     let boxed = BrepTransform::translate_solid(
@@ -181,11 +181,37 @@ fn test_gate_rejects_torus_box_union_smaller_than_an_operand() {
         Vec3::new(-10.0, -10.0, -2.0),
     );
 
-    // 和集合が 4210.072 で、ボックス単体の 8000 を下回っていた。
-    assert!(
+    // この試験はもともと「成功したと言ってはならない」を主張していた。当時の
+    // 和は 4210.072 で、ボックス単体の 8000 を下回っていたからである。交線を
+    // 面のトリム境界で切れるようになって通るようになったので、いまは**守って
+    // いた当のもの**——和は片方より小さくなり得ない——を直接見る。
+    //
+    // 値そのものは `boolean_torus_box_test` が独立な求積と突き合わせている。
+    let Ok(result) =
         BooleanEngine::boolean_solids_exact_result(&torus, &boxed, BooleanOpType::Union, &tol)
-            .is_err(),
-        "a union smaller than one of its operands must not report success"
+    else {
+        // 対応範囲外をエラーで返すのは仕様。誤答でなければよい。
+        return;
+    };
+
+    let volume: f64 = result
+        .solids
+        .iter()
+        .map(|solid| MassCalculator::compute_from_brep(solid, &fine_tessellation()).volume)
+        .sum();
+    let torus_volume = 2.0 * std::f64::consts::PI * std::f64::consts::PI * 12.0 * 16.0;
+
+    assert!(
+        volume >= 8000.0 * (1.0 - 1e-6),
+        "a union cannot be smaller than the box it contains: {volume} against 8000"
+    );
+    assert!(
+        volume >= torus_volume * (1.0 - 1e-6),
+        "a union cannot be smaller than the torus it contains: {volume} against {torus_volume}"
+    );
+    assert!(
+        volume <= 8000.0 + torus_volume,
+        "a union cannot be larger than its operands put together: {volume}"
     );
 }
 

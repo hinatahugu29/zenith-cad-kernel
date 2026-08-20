@@ -60,11 +60,15 @@ fn test_a_plane_sections_a_torus_on_the_two_circles_it_should() {
             (0..=8).all(|step| (edge.evaluate(step as f64 / 8.0).z + 2.0).abs() < 1e-9)
         })
         .collect();
-    // 16枚のうち z = -2 を含むのは下半分の8枚。
+    // 16枚のうち z = -2 を含むのは下半分の8枚だが、**面に載るのは4本だけ**で
+    // ある。外側の円は半径 12 + 3.4641 = 15.4641 で、箱の底面（20 角、隅まで
+    // sqrt(200) = 14.1421）の外を通る。交線は面のトリム境界で切られるので、
+    // 内側の円の4本だけが残る。切らずに渡していた頃はここが8本で、その4本は
+    // どの面にも載らないまま分割を邪魔していた。
     assert_eq!(
         sections.len(),
-        8,
-        "the plane should meet eight of the torus's sixteen patches"
+        4,
+        "only the inner circle lies on the box's bottom face"
     );
 
     let offset = (16.0f64 - 4.0).sqrt();
@@ -92,7 +96,10 @@ fn test_a_plane_sections_a_torus_on_the_two_circles_it_should() {
     }
 
     assert_eq!(on_inner, 4, "four quarter arcs on the inner circle");
-    assert_eq!(on_outer, 4, "four quarter arcs on the outer circle");
+    assert_eq!(
+        on_outer, 0,
+        "the outer circle runs outside the face and is clipped away"
+    );
 }
 
 #[test]

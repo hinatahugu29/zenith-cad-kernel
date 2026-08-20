@@ -3407,8 +3407,171 @@ fn clip_candidate_to_planar_trims(
                 segment_end: segment_start + segment_vec * interval.1,
             })
         }
+        FaceIntersectionKind::Curve { edge } => {
+            let pieces = clip_curve_to_both_planar_trims(&edge, face_a, face_b, tol);
+            match pieces.len() {
+                0 => None,
+                1 => Some(FaceIntersectionKind::Curve {
+                    edge: pieces.into_iter().next().unwrap(),
+                }),
+                _ => Some(FaceIntersectionKind::Curves { edges: pieces }),
+            }
+        }
+        FaceIntersectionKind::Curves { edges } => {
+            let pieces: Vec<Edge> = edges
+                .iter()
+                .flat_map(|edge| clip_curve_to_both_planar_trims(edge, face_a, face_b, tol))
+                .collect();
+            match pieces.len() {
+                0 => None,
+                1 => Some(FaceIntersectionKind::Curve {
+                    edge: pieces.into_iter().next().unwrap(),
+                }),
+                _ => Some(FaceIntersectionKind::Curves { edges: pieces }),
+            }
+        }
         other => Some(other),
     }
+}
+
+fn clip_curve_to_both_planar_trims(
+    edge: &Edge,
+    face_a: &Face,
+    face_b: &Face,
+    tol: &Tolerance,
+) -> Vec<Edge> {
+    let mut pieces = vec![edge.clone()];
+    for face in [face_a, face_b] {
+        pieces = pieces
+            .iter()
+            .flat_map(|piece| {
+                clip_curve_to_planar_face_trim(piece, face, tol)
+                    .unwrap_or_else(|| vec![piece.clone()])
+            })
+            .collect();
+    }
+    pieces
+}
+
+/// 交線を、平面の面のトリム境界で切る。
+///
+/// 曲面と平面が交わっても、その交線が平面の**面**の中に収まっているとは
+/// 限らない。トーラスを箱の底面が切ると、断面は入れ子の2つの円になり、
+/// 外側（半径 15.464）は面（|x|, |y| <= 10）からはみ出す。はみ出したまま
+/// 渡すと、面の内側で閉じるループとしても、境界から境界へ届く切り込みとしても
+/// 読めず、面はそこで割れない。
+///
+/// `None` は「切る必要が無い、または切れない」で、呼び手は元のまま使う。
+/// 全部が外なら空の `Vec` を返す。
+fn clip_curve_to_planar_face_trim(
+    edge: &Edge,
+    face: &Face,
+    tol: &Tolerance,
+) -> Option<Vec<Edge>> {
+    let FaceGeometry::Plane(plane) = &face.geometry else {
+        return None;
+    };
+    let pcurves = face.pcurves(tol).ok()?;
+    let polygon = sample_pcurve_loop(&pcurves.outer_loop, 48);
+    if polygon.len() < 3 {
+        return None;
+    }
+
+    let (t0, t1) = edge.curve.param_range();
+    let span = t1 - t0;
+    if span <= f64::EPSILON {
+        return None;
+    }
+    // 面の広がりに対する余裕。境界の上に乗った点は内側として扱う。
+    let margin = tol.parametric.max(1e-9);
+    let inside = |t: f64| -> bool {
+        let point = edge.curve.evaluate(t.clamp(t0, t1));
+        point_in_polygon_2d(project_to_plane_uv(point, plane), &polygon, margin)
+    };
+
+    const SAMPLES: usize = 257;
+    let flags: Vec<bool> = (0..=SAMPLES)
+        .map(|step| inside(t0 + span * step as f64 / SAMPLES as f64))
+        .collect();
+
+    // 全部内側なら切る必要が無い。ここで返さないと、多角形近似のぶんだけ
+    // 端が削れて、いま通っている切り方が変わってしまう。
+    if flags.iter().all(|value| *value) {
+        return None;
+    }
+    if flags.iter().all(|value| !*value) {
+        return Some(Vec::new());
+    }
+
+    // 内側と外側が入れ替わる区間を二分で詰める。
+    let crossing = |a: f64, b: f64| -> f64 {
+        let (mut low, mut high) = (a, b);
+        let low_inside = inside(low);
+        for _ in 0..60 {
+            let middle = (low + high) * 0.5;
+            if inside(middle) == low_inside {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        (low + high) * 0.5
+    };
+
+    let mut intervals: Vec<(f64, f64)> = Vec::new();
+    let mut current: Option<f64> = if flags[0] { Some(t0) } else { None };
+    for step in 1..=SAMPLES {
+        let previous = t0 + span * (step - 1) as f64 / SAMPLES as f64;
+        let here = t0 + span * step as f64 / SAMPLES as f64;
+        if flags[step] == flags[step - 1] {
+            continue;
+        }
+        let boundary = crossing(previous, here);
+        match current.take() {
+            Some(start) => intervals.push((start, boundary)),
+            None => current = Some(boundary),
+        }
+    }
+    if let Some(start) = current {
+        intervals.push((start, t1));
+    }
+
+    let mut pieces = Vec::new();
+    for (start, end) in intervals {
+        if end - start <= span * 1e-9 {
+            continue;
+        }
+        let Some(piece) = subcurve_between(&edge.curve, start, end) else {
+            continue;
+        };
+        let (a, b) = piece.param_range();
+        let start_point = piece.evaluate(a);
+        let end_point = piece.evaluate(b);
+        if (end_point - start_point).norm() <= tol.linear {
+            continue;
+        }
+        pieces.push(Edge::new(
+            piece,
+            Vertex::new(start_point, tol.linear),
+            Vertex::new(end_point, tol.linear),
+            edge.tolerance,
+        ));
+    }
+    Some(pieces)
+}
+
+/// 曲線の `a` から `b` までを取り出す。
+fn subcurve_between(curve: &NurbsCurve3, a: f64, b: f64) -> Option<NurbsCurve3> {
+    let (t0, t1) = curve.param_range();
+    let span = (t1 - t0).abs().max(1.0);
+    let mut piece = curve.clone();
+    if a > t0 + span * 1e-12 {
+        piece = piece.split_at(a)?.1;
+    }
+    if b < t1 - span * 1e-12 {
+        piece = piece.split_at(b)?.0;
+    }
+    Some(piece)
 }
 
 fn clip_segment_to_planar_face_trim(
