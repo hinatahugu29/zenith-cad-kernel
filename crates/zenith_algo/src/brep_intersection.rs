@@ -144,6 +144,12 @@ pub struct BooleanFaceAssembly {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BooleanShellAssembly {
+    /// 組み立てに使った面の組の候補の数。
+    ///
+    /// 数え上げのためだけに走査をやり直さなくて済むよう、ここに残す。
+    pub face_pair_candidate_count: usize,
+    /// 組み立てに使った交線の候補そのもの。同上。
+    pub edge_candidates: Vec<IntersectionEdgeCandidate>,
     pub selection: BooleanFaceSelection,
     pub cap_generation: PlanarCapGeneration,
     pub assembly: BooleanFaceAssembly,
@@ -261,7 +267,21 @@ impl BrepIntersectionBuilder {
         faces_b: &[Face],
         tol: &Tolerance,
     ) -> Vec<IntersectionEdgeCandidate> {
-        Self::collect_face_pair_candidates(faces_a, faces_b, tol)
+        Self::intersection_edge_candidates_from_face_pairs(
+            Self::collect_face_pair_candidates(faces_a, faces_b, tol),
+            tol,
+        )
+    }
+
+    /// 既に求めてある面の組の交わりから、辺の候補を組む。
+    ///
+    /// 面の組を探す段は組ごとにマーチングを走らせるので、同じ問いを二度
+    /// 走らせないために、求めた候補を渡せる形に分けてある。
+    pub fn intersection_edge_candidates_from_face_pairs(
+        candidates: Vec<FaceIntersectionCandidate>,
+        tol: &Tolerance,
+    ) -> Vec<IntersectionEdgeCandidate> {
+        candidates
             .into_iter()
             .filter_map(|candidate| {
                 let edge = match candidate.kind {
@@ -312,7 +332,22 @@ impl BrepIntersectionBuilder {
         faces_b: &[Face],
         tol: &Tolerance,
     ) -> Vec<PlanarFaceSplitCandidate> {
-        Self::collect_intersection_edge_candidates(faces_a, faces_b, tol)
+        Self::planar_face_split_candidates_from_edge_candidates(
+            faces_a,
+            faces_b,
+            Self::collect_intersection_edge_candidates(faces_a, faces_b, tol),
+            tol,
+        )
+    }
+
+    /// 既に求めてある交線の候補から、面の分割候補を組む。
+    pub fn planar_face_split_candidates_from_edge_candidates(
+        faces_a: &[Face],
+        faces_b: &[Face],
+        candidates: Vec<IntersectionEdgeCandidate>,
+        tol: &Tolerance,
+    ) -> Vec<PlanarFaceSplitCandidate> {
+        candidates
             .into_iter()
             .filter_map(|candidate| {
                 let split_faces_a = Self::split_face_by_edge(
@@ -383,14 +418,25 @@ impl BrepIntersectionBuilder {
         solid_b: &Solid,
         tol: &Tolerance,
     ) -> Vec<ClassifiedPlanarFaceSplitCandidate> {
-        let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
-        let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
-
-        Self::collect_planar_face_split_candidates(
+        let splits = Self::collect_planar_face_split_candidates(
             &solid_a.outer_shell.faces,
             &solid_b.outer_shell.faces,
             tol,
-        )
+        );
+        Self::classified_planar_face_split_candidates_from_splits(solid_a, solid_b, splits, tol)
+    }
+
+    /// 既に求めてある面の分割候補を、相手の立体に対して内外で色分けする。
+    pub fn classified_planar_face_split_candidates_from_splits(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        splits: Vec<PlanarFaceSplitCandidate>,
+        tol: &Tolerance,
+    ) -> Vec<ClassifiedPlanarFaceSplitCandidate> {
+        let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
+        let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
+
+        splits
         .into_iter()
         .map(|candidate| {
             let split_faces_a = candidate
@@ -607,12 +653,16 @@ impl BrepIntersectionBuilder {
         tol: &Tolerance,
     ) -> BooleanShellAssembly {
         // 交線は一度だけ求め、選別とキャップの両方で使う。以前はここで
-        // 二度走っていた。
-        let edge_candidates = Self::collect_intersection_edge_candidates(
+        // 二度走っていた。面の組の候補も、数え上げのために外から
+        // 求め直されないよう、ここで数えて結果に載せる。
+        let face_pair_candidates = Self::collect_face_pair_candidates(
             &solid_a.outer_shell.faces,
             &solid_b.outer_shell.faces,
             tol,
         );
+        let face_pair_candidate_count = face_pair_candidates.len();
+        let edge_candidates =
+            Self::intersection_edge_candidates_from_face_pairs(face_pair_candidates, tol);
         let selection = Self::selected_face_pieces_from_candidates(
             solid_a,
             solid_b,
@@ -629,6 +679,8 @@ impl BrepIntersectionBuilder {
         );
 
         BooleanShellAssembly {
+            face_pair_candidate_count,
+            edge_candidates,
             selection,
             cap_generation,
             assembly,

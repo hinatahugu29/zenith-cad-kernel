@@ -247,7 +247,8 @@ impl BooleanEngine {
             .map(ExactBooleanResult::single);
         }
 
-        let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;
+        let report =
+            Self::preparation_report_from_shell_assembly(solid_a, solid_b, &shell_assembly, tol)?;
         Err(format!(
             "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} skipped batch splits, {} classified split candidates, {} selected face pieces, {} cap loops, and {} cap faces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses; with caps it has {} face pieces, {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
             report.face_pair_candidate_count,
@@ -427,40 +428,49 @@ impl BooleanEngine {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
         }
 
-        let face_pair_candidate_count =
-            crate::BrepIntersectionBuilder::collect_face_pair_candidates(
-                &solid_a.outer_shell.faces,
-                &solid_b.outer_shell.faces,
-                tol,
-            )
-            .len();
+        let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
+            solid_a, solid_b, op, tol,
+        );
+        Self::preparation_report_from_shell_assembly(solid_a, solid_b, &shell_assembly, tol)
+    }
+
+    /// 既に組み立ててあるシェルから、そのままの数え上げを返す。
+    ///
+    /// この報告は数え上げのためだけにあるのに、以前はここで面の組の走査を
+    /// 5回やり直していました（面の組・交線・分割候補・色分け・シェルの
+    /// 組み立てが順に呼ばれ、後ろのものは前のものを内側でやり直します）。
+    /// 走査は面の組ごとにマーチングを走らせるので、報告を出す代償が
+    /// 演算そのものより大きくなっていました。組み立てが済んでいるなら、
+    /// その中身を数えれば同じ答えが出ます。
+    fn preparation_report_from_shell_assembly(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        shell_assembly: &crate::BooleanShellAssembly,
+        tol: &Tolerance,
+    ) -> Result<ExactBooleanPreparationReport, String> {
+        let face_pair_candidate_count = shell_assembly.face_pair_candidate_count;
         if face_pair_candidate_count == 0 {
             return Err(
                 "Exact B-Rep boolean found no face-pair intersection candidates".to_string(),
             );
         }
 
-        let intersection_edge_candidate_count =
-            crate::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        let intersection_edge_candidate_count = shell_assembly.edge_candidates.len();
+        let planar_splits =
+            crate::BrepIntersectionBuilder::planar_face_split_candidates_from_edge_candidates(
                 &solid_a.outer_shell.faces,
                 &solid_b.outer_shell.faces,
+                shell_assembly.edge_candidates.clone(),
                 tol,
-            )
-            .len();
-        let planar_split_candidate_count =
-            crate::BrepIntersectionBuilder::collect_planar_face_split_candidates(
-                &solid_a.outer_shell.faces,
-                &solid_b.outer_shell.faces,
-                tol,
-            )
-            .len();
-        let classified_splits =
-            crate::BrepIntersectionBuilder::collect_classified_planar_face_split_candidates(
-                solid_a, solid_b, tol,
             );
-        let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
-            solid_a, solid_b, op, tol,
-        );
+        let planar_split_candidate_count = planar_splits.len();
+        let classified_splits =
+            crate::BrepIntersectionBuilder::classified_planar_face_split_candidates_from_splits(
+                solid_a,
+                solid_b,
+                planar_splits,
+                tol,
+            );
         let planar_batch_split_face_count = shell_assembly.selection.batch_splits.splits_a.len()
             + shell_assembly.selection.batch_splits.splits_b.len();
         let planar_batch_applied_split_count = shell_assembly
