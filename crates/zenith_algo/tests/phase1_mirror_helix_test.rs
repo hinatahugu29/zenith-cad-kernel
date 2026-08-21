@@ -293,3 +293,43 @@ fn test_helix_height_error_falls_with_the_cube_of_the_step_angle() {
          (coarse {coarse:.3e}, fine {fine:.3e})"
     );
 }
+
+#[test]
+fn test_round_wire_spring_is_valid_closed_solid_and_matches_analytic_volume() {
+    let tol = Tolerance::default();
+    let radius = 15.0;
+    let pitch = 8.0;
+    let turns = 2.5;
+    let wire_radius = 1.5;
+
+    let spring = HelixBuilder::make_round_wire_spring(
+        radius,
+        pitch,
+        turns,
+        wire_radius,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        &tol,
+    )
+    .expect("make_round_wire_spring");
+
+    assert!(spring.is_topologically_valid(&tol), "round wire spring must be valid closed solid");
+
+    let params = TessellationParams {
+        u_divisions: 16,
+        v_divisions: 16,
+    };
+    let mesh = tessellate_solid(&spring, &params);
+    let mass = MassCalculator::compute_from_mesh(&mesh);
+
+    let helix_length = turns * ((2.0 * std::f64::consts::PI * radius).powi(2) + pitch.powi(2)).sqrt();
+    let expected_vol = std::f64::consts::PI * wire_radius * wire_radius * helix_length;
+    let rel_err = (mass.volume - expected_vol).abs() / expected_vol;
+    assert!(
+        rel_err < 0.02,
+        "round wire spring volume relative error too large: got {}, expected {}, rel_err {}",
+        mass.volume,
+        expected_vol,
+        rel_err
+    );
+}

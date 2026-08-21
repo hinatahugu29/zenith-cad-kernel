@@ -162,4 +162,26 @@ impl HelixBuilder {
         let sections = num_sections.max((turns * 64.0).ceil() as usize);
         crate::SweepBuilder::sweep_wire_along_curve(profile_wire, &helix_path, sections, tol)
     }
+
+    /// 円形断面（丸線ワイヤ）のヘリカルスプリング（圧縮・引張コイルスプリング）ソリッドを生成
+    pub fn make_round_wire_spring(
+        radius: f64,
+        pitch: f64,
+        turns: f64,
+        wire_radius: f64,
+        axis_origin: Point3,
+        axis_dir: Vec3,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if wire_radius <= 1e-9 {
+            return Err("Wire radius must be positive".to_string());
+        }
+        if wire_radius >= radius {
+            return Err("Wire radius must be smaller than helix radius to prevent self-intersection".to_string());
+        }
+        let helix_path =
+            Self::build_helix_curve(radius, pitch, turns, axis_origin, axis_dir, tol)?;
+        let sections = (turns * 64.0).ceil().max(32.0) as usize;
+        crate::SweepBuilder::sweep_circle_along_curve(&helix_path, wire_radius, sections)
+    }
 }
