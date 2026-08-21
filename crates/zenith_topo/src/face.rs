@@ -738,12 +738,15 @@ fn project_edge_to_nurbs_pcurve(
 
         let uv = project(middle, Some(chord))?;
         // 継ぎ目をまたぐ区間は、割っても弦が縮まない。無限に割らないよう抜ける。
+        // パラメータ空間で湾曲する曲線（有理パッチ上の直線など）の膨らみを
+        // 誤認してスキップしないよう、区間長に応じたマージンを設ける。
         let before = uv_points[index];
         let after = uv_points[index + 1];
-        let inside = (uv.x - before.x.min(after.x)) >= -1e-9
-            && (uv.x - before.x.max(after.x)) <= 1e-9
-            && (uv.y - before.y.min(after.y)) >= -1e-9
-            && (uv.y - before.y.max(after.y)) <= 1e-9;
+        let margin = ((after.x - before.x).abs().max((after.y - before.y).abs()) * 0.5).max(1e-4);
+        let inside = uv.x >= before.x.min(after.x) - margin
+            && uv.x <= before.x.max(after.x) + margin
+            && uv.y >= before.y.min(after.y) - margin
+            && uv.y <= before.y.max(after.y) + margin;
         if !inside {
             index += 1;
             continue;

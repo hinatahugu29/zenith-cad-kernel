@@ -619,7 +619,11 @@ impl IntersectionMarcher {
                         step.abs() * 2.0,
                         tol,
                     ) {
-                        points.push(Self::sample(s1, s2, &edge_state));
+                        let here = s1.evaluate(edge_state[0], edge_state[1]);
+                        let previous = s1.evaluate(state[0], state[1]);
+                        if (here - previous).norm() > tol.linear {
+                            points.push(Self::sample(s1, s2, &edge_state));
+                        }
                     }
                     hit_boundary = true;
                     break;
@@ -757,7 +761,12 @@ impl IntersectionMarcher {
         marched: &MarchedIntersection,
         degree: usize,
     ) -> Option<(crate::nurbs_curve::NurbsCurve3, f64)> {
-        let points: Vec<Point3> = marched.points.iter().map(|sample| sample.point).collect();
+        let mut points: Vec<Point3> = Vec::with_capacity(marched.points.len());
+        for sample in &marched.points {
+            if points.last().map(|p| (*p - sample.point).norm() > 1e-9).unwrap_or(true) {
+                points.push(sample.point);
+            }
+        }
         if points.len() < 2 {
             return None;
         }
