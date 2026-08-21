@@ -1193,6 +1193,13 @@ cargo run --release -p zenith_algo --example connectivity_check   # 立体が何
   - `BooleanEngine::boolean_solids_batch`: 1つのベース立体に対して複数のツール立体（ボルト穴列、ピン列、補強リブ群など）を一括で連続適用する安全なバッチ演算APIを提供。
 - **実測**: `hole_feature_test.rs`（六角ナット体積解析解）および `batch_boolean_test.rs`（4穴ボルトプレート差分・2本リブ結合）にて完全合格を検証（5/5 パス）。
 
+#### 10. 出力物一括再生成・Git管理クリーン化・正規化パイプラインの検証
+- **作業**:
+  - `.gitignore` を整備し、ルートの `.step` ファイルやスクラッチ検証ツールを無視対象に追加して `git status` を完全クリーン化。
+  - `export_showcase`（24形状）、`export_validation_suite`（15形状）、`foreign_reexport`（7形状）を最新幾何エンジンで一括再生成。
+  - `regularize_probe` を実行し、全11検体で最悪体積移動 8.696e-10、p-curve 保護面（体積移動 0.00e0）のフェイルセーフが完璧に機能していることを実証。
+  - 外部CADクロス検証（`verify_showcase.py` 24/24、`freecad_cross_validate.py` 15/15、`verify_reexport.py` 7/7）すべて完全合格を再確認。
+
 ---
 
 ## 5. 踏んだ落とし穴（繰り返さないために）
