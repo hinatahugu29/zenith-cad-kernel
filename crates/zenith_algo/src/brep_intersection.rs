@@ -535,7 +535,7 @@ impl BrepIntersectionBuilder {
         let batch_splits = Self::batch_splits_from_candidates(
             &faces_a,
             &faces_b,
-            candidates,
+            candidates.clone(),
             tol,
         );
         let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
@@ -567,11 +567,7 @@ impl BrepIntersectionBuilder {
         // 縫合が合わない。相手が持つ頂点を境界辺へ刻み込んで対応させる。
         // 面の形は変わらず、境界に頂点が増えるだけ。
         let mut imprint_points = Vec::new();
-        for candidate in Self::collect_intersection_edge_candidates(
-            &faces_a,
-            &faces_b,
-            tol,
-        ) {
+        for candidate in &candidates {
             imprint_points.push(candidate.edge.start_vertex.point);
             imprint_points.push(candidate.edge.end_vertex.point);
         }
