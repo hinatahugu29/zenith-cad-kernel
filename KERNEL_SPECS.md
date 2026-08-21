@@ -195,6 +195,8 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | `cargo run --release -p zenith_algo --example foreign_reexport` | 他カーネルのファイルを読んで書き戻す一周 |
 | `cargo run --release -p zenith_algo --example boolean_topology_probe` | ブーリアンの結果が稜を**実体として**共有しているか（共有されていない稜が1本でもあれば非ゼロ終了するのでリリースゲートに使える） |
 | `cargo run --release -p zenith_algo --example mesh_watertight_probe` | 出力用メッシュが閉じた三角形メッシュになっているか（9通りの分割数で、開いた辺・非多様体・退化三角形・体積のずれを出す） |
+| `cargo run --release -p zenith_algo --example boolean_gate_probe` | ブーリアンの検証ゲートの判定が、テッセレーションの設定で変わらないか。正しい結果が全部通り、誤答（体積の境界では捕まらないものを含む）が全部落ちることを 4〜32 分割で確かめる |
+| `cargo run --release -p zenith_algo --example slice_robustness_probe` | 断面が、平面が格子行に乗るかどうかと分割数によらず閉じるか（閉じなければ非ゼロ終了） |
 | `cargo run --release -p zenith_algo --example inertia_probe` | 重心・慣性・慣性積・主慣性モーメントが閉じた式に乗るか（主値が剛体変換で不変かも見る） |
 | `cargo run --release -p zenith_algo --example planar_face_audit` | 平面なのに NURBS で持っている面を返すビルダーが無いか（1枚でもあれば非ゼロ終了） |
 | `cargo run --release -p zenith_algo --example countersink_range_probe` | 皿モミ穴が、下穴・比・角度を振っても作れるか（64組の表） |
