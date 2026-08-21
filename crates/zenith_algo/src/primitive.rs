@@ -929,4 +929,103 @@ impl PrimitiveBuilder {
 
         crate::validated_solid(Shell::closed(faces))
     }
+
+    /// 正多角柱（正N角柱: 正六角柱、正八角柱など）ソリッドの生成
+    ///
+    /// `sides`: 角数（3以上）
+    /// `radius`: 外接円半径
+    /// `height`: 柱の高さ（Z方向）
+    pub fn make_regular_prism(sides: usize, radius: f64, height: f64) -> Result<Solid, String> {
+        if sides < 3 {
+            return Err(format!("Regular prism must have at least 3 sides, got {sides}"));
+        }
+        if radius <= 1e-9 || height <= 1e-9 {
+            return Err(format!(
+                "Prism radius and height must be positive, got radius={radius}, height={height}"
+            ));
+        }
+
+        let n = sides;
+        let mut pts_b = Vec::with_capacity(n);
+        let mut pts_t = Vec::with_capacity(n);
+
+        for i in 0..n {
+            let theta = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
+            let x = radius * theta.cos();
+            let y = radius * theta.sin();
+            pts_b.push(Point3::new(x, y, 0.0));
+            pts_t.push(Point3::new(x, y, height));
+        }
+
+        let vb: Vec<Vertex> = pts_b.iter().map(|&p| Vertex::from_point(p)).collect();
+        let vt: Vec<Vertex> = pts_t.iter().map(|&p| Vertex::from_point(p)).collect();
+
+        // 1. 底面エッジ群 (i -> i+1)
+        let mut eb = Vec::with_capacity(n);
+        for i in 0..n {
+            let next = (i + 1) % n;
+            eb.push(Edge::line_between(vb[i].clone(), vb[next].clone())?);
+        }
+
+        // 2. 天面エッジ群 (i -> i+1)
+        let mut et = Vec::with_capacity(n);
+        for i in 0..n {
+            let next = (i + 1) % n;
+            et.push(Edge::line_between(vt[i].clone(), vt[next].clone())?);
+        }
+
+        // 3. 垂直エッジ群 (vb[i] -> vt[i])
+        let mut ev = Vec::with_capacity(n);
+        for i in 0..n {
+            ev.push(Edge::line_between(vb[i].clone(), vt[i].clone())?);
+        }
+
+        let mut faces = Vec::with_capacity(n + 2);
+
+        // 4. 側面 N面（外向き法線）
+        // 巡回: vb[i] -> vb[next] -> vt[next] -> vt[i]
+        for i in 0..n {
+            let next = (i + 1) % n;
+            let u_axis = pts_b[next] - pts_b[i];
+            let v_axis = Vec3::new(0.0, 0.0, height);
+            let plane = PlaneSurface3::new(pts_b[i], u_axis, v_axis)
+                .ok_or("Failed to create prism side plane")?;
+
+            let wire = Wire::new(vec![
+                OrientedEdge::forward(eb[i].clone()),
+                OrientedEdge::forward(ev[next].clone()),
+                OrientedEdge::reversed(et[i].clone()),
+                OrientedEdge::reversed(ev[i].clone()),
+            ]);
+            faces.push(Face::simple(FaceGeometry::Plane(plane), wire));
+        }
+
+        // 5. 底面（法線 -Z: CCW は逆順 n-1 -> 0）
+        let plane_b = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+        )
+        .ok_or("Failed to create prism bottom plane")?;
+        let mut wire_b_edges = Vec::with_capacity(n);
+        for i in (0..n).rev() {
+            wire_b_edges.push(OrientedEdge::reversed(eb[i].clone()));
+        }
+        faces.push(Face::simple(FaceGeometry::Plane(plane_b), Wire::new(wire_b_edges)));
+
+        // 6. 天面（法線 +Z: CCW は正順 0 -> n-1）
+        let plane_t = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, height),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .ok_or("Failed to create prism top plane")?;
+        let mut wire_t_edges = Vec::with_capacity(n);
+        for i in 0..n {
+            wire_t_edges.push(OrientedEdge::forward(et[i].clone()));
+        }
+        faces.push(Face::simple(FaceGeometry::Plane(plane_t), Wire::new(wire_t_edges)));
+
+        crate::validated_solid(Shell::closed(faces))
+    }
 }
