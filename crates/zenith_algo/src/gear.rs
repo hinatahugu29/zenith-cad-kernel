@@ -81,6 +81,27 @@ impl GearBuilder {
         Self::prism_from_profile(&profile, thickness)
     }
 
+    /// 軸穴（貫通穴）が開いたインボリュート平歯車を作る。
+    ///
+    /// 歯車ソリッドを生成した後、中心軸に沿った半径 `bore_radius` の円柱との
+    /// ブーリアン差分により、正確な円筒貫通穴を開けます。
+    pub fn make_drilled_spur_gear(
+        module: f64,
+        teeth: usize,
+        pressure_angle_deg: f64,
+        thickness: f64,
+        bore_radius: f64,
+    ) -> Result<Solid, String> {
+        let gear = Self::make_spur_gear(module, teeth, pressure_angle_deg, thickness, bore_radius)?;
+        if bore_radius <= 0.0 {
+            return Ok(gear);
+        }
+        let tol = zenith_math::Tolerance::default();
+        let drill = crate::PrimitiveBuilder::make_cylinder(bore_radius, thickness + 2.0)?;
+        let drill = crate::BrepTransform::translate_solid(&drill, Vec3::new(0.0, 0.0, -1.0));
+        crate::BooleanEngine::boolean_solids_exact(&gear, &drill, crate::BooleanOpType::Difference, &tol)
+    }
+
     /// インボリュート歯車の断面積。**閉じた式**である。
     ///
     /// 極形式のグリーンの定理 `A = (1/2) ∮ r^2 dθ` を、境界の3種類に分けて積む。

@@ -332,3 +332,23 @@ fn the_bore_radius_does_not_actually_bore_a_hole() {
     );
     assert!(d.tip_radius > d.root_radius);
 }
+
+#[test]
+fn test_drilled_spur_gear_actually_has_a_bore() {
+    let drilled_gear =
+        GearBuilder::make_drilled_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE).expect("drilled gear");
+    let tol = zenith_math::Tolerance::default();
+    assert!(drilled_gear.is_topologically_valid(&tol), "drilled gear must be valid solid");
+
+    let solid_gear = GearBuilder::make_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE).expect("solid gear");
+    let solid_vol = MassCalculator::compute_from_brep(&solid_gear, &TessellationParams::default()).volume;
+    let drilled_vol = MassCalculator::compute_from_brep(&drilled_gear, &TessellationParams::default()).volume;
+
+    let hole_vol = PI * BORE * BORE * THICKNESS;
+    let expected_vol = solid_vol - hole_vol;
+    let diff = (drilled_vol - expected_vol).abs();
+    assert!(
+        diff / expected_vol < 1e-4,
+        "drilled gear volume {drilled_vol} differed from expected {expected_vol} by {diff}"
+    );
+}
