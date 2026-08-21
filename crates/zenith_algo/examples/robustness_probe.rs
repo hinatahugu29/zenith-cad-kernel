@@ -226,6 +226,84 @@ fn cases() -> Vec<Case> {
             expected: [Some(16000.0), Some(8000.0), Some(0.0)],
         },
         Case {
+            // **自分の出力を入力に戻す。** 実務のモデリングは逐次的で、
+            // ブーリアンの結果にさらにブーリアンをかける。結果の立体は
+            // プリミティブと面構成が違うので、通るかどうかは別の問いになる。
+            // 箱の連鎖はショーケースにあるが、**曲面ブーリアンの結果を
+            // 入力に戻す検体は1つも無い。**
+            name: "a drilled block, drilled again",
+            build: Box::new(|| {
+                let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0)?;
+                let drill = PrimitiveBuilder::make_cylinder(5.0, 60.0)?;
+                let once = BooleanEngine::boolean_solids_exact(
+                    &block,
+                    &shifted(&drill, 12.0, 20.0, -20.0),
+                    BooleanOpType::Difference,
+                    &Tolerance::default(),
+                )?;
+                Ok((once, shifted(&drill, 28.0, 20.0, -20.0)))
+            }),
+            expected: [None, None, None],
+        },
+        Case {
+            // 曲面同士の結果を入力に戻す。円柱を円柱で貫いたものに、
+            // さらに箱を当てる。
+            name: "crossed cylinders, then cut by a box",
+            build: Box::new(|| {
+                let tol = Tolerance::default();
+                let upright = PrimitiveBuilder::make_cylinder(10.0, 40.0)?;
+                let rotation = zenith_math::Transform3::from_axis_angle(
+                    &Vec3::new(0.0, 1.0, 0.0),
+                    std::f64::consts::FRAC_PI_2,
+                );
+                let along_x = BrepTransform::transform_solid(
+                    &PrimitiveBuilder::make_cylinder(6.0, 40.0)?,
+                    &rotation,
+                )?;
+                let crossed = BooleanEngine::boolean_solids_exact(
+                    &upright,
+                    &shifted(&along_x, -20.0, 0.0, 20.0),
+                    BooleanOpType::Union,
+                    &tol,
+                )?;
+                let slab = shifted(&PrimitiveBuilder::make_box(60.0, 60.0, 10.0)?, -30.0, -30.0, 30.0);
+                Ok((crossed, slab))
+            }),
+            expected: [None, None, None],
+        },
+        Case {
+            // 空洞を持つ立体（内側シェル）を入力にする。差で出来た空洞入りの
+            // 立体は、次の演算で内側シェルを正しく扱えないと壊れる。
+            name: "a solid with a cavity, cut again",
+            build: Box::new(|| {
+                let tol = Tolerance::default();
+                let outer = PrimitiveBuilder::make_box(40.0, 40.0, 40.0)?;
+                let inner = shifted(&PrimitiveBuilder::make_box(10.0, 10.0, 10.0)?, 15.0, 15.0, 15.0);
+                let hollow =
+                    BooleanEngine::boolean_solids_exact(&outer, &inner, BooleanOpType::Difference, &tol)?;
+                let knife = shifted(&PrimitiveBuilder::make_box(60.0, 60.0, 10.0)?, -10.0, -10.0, 35.0);
+                Ok((hollow, knife))
+            }),
+            expected: [None, None, None],
+        },
+        Case {
+            // 45度回した箱どうし。軸平行の近道を確実に外して一般経路へ流す。
+            name: "boxes both rotated 45 degrees",
+            build: Box::new(|| {
+                let rotation = zenith_math::Transform3::from_axis_angle(
+                    &Vec3::new(0.0, 0.0, 1.0),
+                    std::f64::consts::FRAC_PI_4,
+                );
+                let a = BrepTransform::transform_solid(
+                    &PrimitiveBuilder::make_box(20.0, 20.0, 20.0)?,
+                    &rotation,
+                )?;
+                let b = shifted(&a, 10.0, 10.0, 0.0);
+                Ok((a, b))
+            }),
+            expected: [None, None, None],
+        },
+        Case {
             // 曲面どうしで桁が離れている。上で直したゲートの件が、曲面でも
             // 通るかを見る。
             name: "a big cylinder against a tiny one",

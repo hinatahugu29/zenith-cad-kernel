@@ -162,6 +162,58 @@ fn a_solid_minus_a_copy_moved_by_a_hair_is_still_empty() {
 }
 
 #[test]
+fn a_solid_with_a_cavity_is_refused_rather_than_silently_flattened() {
+    // ブーリアンの経路はどれも `outer_shell` しか見ません。空洞を持つ立体を
+    // 通すと**空洞が黙って消え**、体積が空洞ぶん増えます。実測では
+    // 40^3 から 10^3 を抜いた立体（63000）に箱を足すと 92000、差でも 56000 で、
+    // どちらも 1000 ちょうど多い——空洞の体積そのものです。
+    //
+    // **384点のゲートは通ります。** 空洞は境界箱の 0.6% しかなく、許容して
+    // いる食い違い 1% に収まるからです。ゲートには寸法比で決まる盲点があり、
+    // 小さい特徴の消失は原理的に見えません。
+    //
+    // 作るほうは正しく動きます。**作れるが消費できない**、が現状です。
+    let tol = Tolerance::default();
+    let outer = PrimitiveBuilder::make_box(40.0, 40.0, 40.0).expect("outer");
+    let inner = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(10.0, 10.0, 10.0).expect("inner"),
+        Vec3::new(15.0, 15.0, 15.0),
+    );
+    let hollow =
+        BooleanEngine::boolean_solids_exact(&outer, &inner, BooleanOpType::Difference, &tol)
+            .expect("subtracting a fully enclosed box makes a cavity");
+
+    // まず、作るほうが本当に空洞になっていることを確かめます。ここが
+    // 崩れていると、下の検査は何も見ていないことになります。
+    assert_eq!(
+        hollow.inner_shells.len(),
+        1,
+        "the difference should leave one cavity"
+    );
+    let hollow_volume = MassCalculator::compute_from_brep(&hollow, &params()).volume;
+    assert!(
+        (hollow_volume - 63000.0).abs() < 1e-6,
+        "the hollow solid should measure 63000, got {hollow_volume}"
+    );
+
+    let knife = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(60.0, 60.0, 10.0).expect("knife"),
+        Vec3::new(-10.0, -10.0, 35.0),
+    );
+    for op in [
+        BooleanOpType::Union,
+        BooleanOpType::Difference,
+        BooleanOpType::Intersection,
+    ] {
+        let outcome = BooleanEngine::boolean_solids_exact_result(&hollow, &knife, op, &tol);
+        assert!(
+            outcome.is_err(),
+            "{op:?} on a solid with a cavity must refuse rather than drop the cavity"
+        );
+    }
+}
+
+#[test]
 fn the_gate_still_refuses_a_result_that_really_is_empty_when_it_should_not_be() {
     // ゼロ判定を緩めた側に倒したので、**本当に空であってはいけない場合を
     // 見逃していないか**を反対から確かめます。重なる2つの箱の積に空を

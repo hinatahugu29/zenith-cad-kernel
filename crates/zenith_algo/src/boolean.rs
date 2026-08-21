@@ -196,6 +196,26 @@ impl BooleanEngine {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
         }
 
+        // 空洞（内側シェル）を持つ立体は、まだブーリアンの**入力**にできません。
+        //
+        // 下のどの経路も `outer_shell` しか見ないので、通すと**空洞が黙って
+        // 消えます**。40^3 から 10^3 を抜いた立体（体積 63000）に箱を足すと、
+        // 空洞ぶんの 1000 が戻ってきて 92000 になり、差でも同じだけ増えます。
+        //
+        // **しかも384点のゲートを通ります。** 空洞は境界箱の 0.6% しかなく、
+        // 許容している食い違い 1% に収まるからです。誤答として出るので、
+        // 呼び出し側はそれと気づけません。断るほうが安全です（4-23）。
+        //
+        // 作るほうは正しく動きます。`A - B` で B が A の内側に完全に入って
+        // いれば、空洞を持つ立体が返ります。**作れるが消費できない**、が
+        // いまの状態です。
+        if !solid_a.inner_shells.is_empty() || !solid_b.inner_shells.is_empty() {
+            return Err(
+                "Exact B-Rep boolean does not carry cavities through yet: an operand has an inner shell"
+                    .to_string(),
+            );
+        }
+
         // 境界箱が体積を持って重ならないなら、積は空だと確かめられる。
         // 面が触れているだけの配置はここに落ちる: 交線の候補はあるので
         // 下の経路に入ってしまい、「未実装」と報告されていた。
