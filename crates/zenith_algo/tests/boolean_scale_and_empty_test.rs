@@ -296,17 +296,9 @@ fn a_drilled_plate_can_be_cut_by_a_slab() {
 }
 
 #[test]
-fn a_solid_with_a_cavity_is_refused_rather_than_silently_flattened() {
-    // ブーリアンの経路はどれも `outer_shell` しか見ません。空洞を持つ立体を
-    // 通すと**空洞が黙って消え**、体積が空洞ぶん増えます。実測では
-    // 40^3 から 10^3 を抜いた立体（63000）に箱を足すと 92000、差でも 56000 で、
-    // どちらも 1000 ちょうど多い——空洞の体積そのものです。
-    //
-    // **384点のゲートは通ります。** 空洞は境界箱の 0.6% しかなく、許容して
-    // いる食い違い 1% に収まるからです。ゲートには寸法比で決まる盲点があり、
-    // 小さい特徴の消失は原理的に見えません。
-    //
-    // 作るほうは正しく動きます。**作れるが消費できない**、が現状です。
+fn a_solid_with_a_cavity_carries_the_cavity_through_a_boolean() {
+    // 空洞（inner_shells）を持つ立体に対しても、全シェルを考慮して
+    // ブーリアン処理を行い、空洞が保持されることを検証する。
     let tol = Tolerance::default();
     let outer = PrimitiveBuilder::make_box(40.0, 40.0, 40.0).expect("outer");
     let inner = BrepTransform::translate_solid(
@@ -334,17 +326,23 @@ fn a_solid_with_a_cavity_is_refused_rather_than_silently_flattened() {
         &PrimitiveBuilder::make_box(60.0, 60.0, 10.0).expect("knife"),
         Vec3::new(-10.0, -10.0, 35.0),
     );
-    for op in [
-        BooleanOpType::Union,
-        BooleanOpType::Difference,
-        BooleanOpType::Intersection,
-    ] {
-        let outcome = BooleanEngine::boolean_solids_exact_result(&hollow, &knife, op, &tol);
-        assert!(
-            outcome.is_err(),
-            "{op:?} on a solid with a cavity must refuse rather than drop the cavity"
-        );
-    }
+    let diff = BooleanEngine::boolean_solids_exact(&hollow, &knife, BooleanOpType::Difference, &tol)
+        .expect("difference on hollow solid");
+    assert_eq!(diff.inner_shells.len(), 1, "difference should keep the cavity");
+    let diff_vol = MassCalculator::compute_from_brep(&diff, &params()).volume;
+    assert!((diff_vol - 55000.0).abs() < 1e-4, "expected 55000, got {diff_vol}");
+
+    let union = BooleanEngine::boolean_solids_exact(&hollow, &knife, BooleanOpType::Union, &tol)
+        .expect("union on hollow solid");
+    assert_eq!(union.inner_shells.len(), 1, "union should keep the cavity");
+    let union_vol = MassCalculator::compute_from_brep(&union, &params()).volume;
+    assert!((union_vol - 91000.0).abs() < 1e-4, "expected 91000, got {union_vol}");
+
+    let inter = BooleanEngine::boolean_solids_exact(&hollow, &knife, BooleanOpType::Intersection, &tol)
+        .expect("intersection on hollow solid");
+    assert_eq!(inter.inner_shells.len(), 0, "intersection does not contain cavity");
+    let inter_vol = MassCalculator::compute_from_brep(&inter, &params()).volume;
+    assert!((inter_vol - 8000.0).abs() < 1e-4, "expected 8000, got {inter_vol}");
 }
 
 #[test]

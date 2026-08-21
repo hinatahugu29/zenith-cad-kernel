@@ -1,4 +1,5 @@
 use crate::cap::CapBuilder;
+use crate::MassCalculator;
 use std::collections::BTreeMap;
 use zenith_geom::{
     ControlPoint3, ExtremumEngine, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3,
@@ -529,9 +530,11 @@ impl BrepIntersectionBuilder {
         op: crate::BooleanOpType,
         tol: &Tolerance,
     ) -> BooleanFaceSelection {
+        let faces_a = all_solid_faces(solid_a);
+        let faces_b = all_solid_faces(solid_b);
         let batch_splits = Self::batch_splits_from_candidates(
-            &solid_a.outer_shell.faces,
-            &solid_b.outer_shell.faces,
+            &faces_a,
+            &faces_b,
             candidates,
             tol,
         );
@@ -540,7 +543,7 @@ impl BrepIntersectionBuilder {
 
         let mut selected_face_pieces = Vec::new();
         selected_face_pieces.extend(select_operand_faces_after_batch_split(
-            &solid_a.outer_shell.faces,
+            &faces_a,
             &batch_splits.splits_a,
             BooleanOperand::A,
             &mesh_b,
@@ -548,7 +551,7 @@ impl BrepIntersectionBuilder {
             tol,
         ));
         selected_face_pieces.extend(select_operand_faces_after_batch_split(
-            &solid_b.outer_shell.faces,
+            &faces_b,
             &batch_splits.splits_b,
             BooleanOperand::B,
             &mesh_a,
@@ -565,8 +568,8 @@ impl BrepIntersectionBuilder {
         // 面の形は変わらず、境界に頂点が増えるだけ。
         let mut imprint_points = Vec::new();
         for candidate in Self::collect_intersection_edge_candidates(
-            &solid_a.outer_shell.faces,
-            &solid_b.outer_shell.faces,
+            &faces_a,
+            &faces_b,
             tol,
         ) {
             imprint_points.push(candidate.edge.start_vertex.point);
@@ -652,12 +655,11 @@ impl BrepIntersectionBuilder {
         op: crate::BooleanOpType,
         tol: &Tolerance,
     ) -> BooleanShellAssembly {
-        // 交線は一度だけ求め、選別とキャップの両方で使う。以前はここで
-        // 二度走っていた。面の組の候補も、数え上げのために外から
-        // 求め直されないよう、ここで数えて結果に載せる。
+        let faces_a = all_solid_faces(solid_a);
+        let faces_b = all_solid_faces(solid_b);
         let face_pair_candidates = Self::collect_face_pair_candidates(
-            &solid_a.outer_shell.faces,
-            &solid_b.outer_shell.faces,
+            &faces_a,
+            &faces_b,
             tol,
         );
         let face_pair_candidate_count = face_pair_candidates.len();
@@ -753,7 +755,7 @@ impl BrepIntersectionBuilder {
                 group.into_iter().map(|index| pieces[index].clone()).collect();
             solids.push(Self::build_solid_from_selected_face_pieces(&subset, tol)?);
         }
-        Ok(solids)
+        Ok(nest_cavity_shells_into_solids(solids, tol))
     }
 
     pub fn build_planar_cap_from_edge_loop(
@@ -3179,6 +3181,70 @@ fn connected_piece_groups(pieces: &[SelectedBooleanFacePiece], tol: &Tolerance) 
         groups.push(group);
     }
     groups
+}
+
+pub(crate) fn all_solid_faces(solid: &Solid) -> Vec<Face> {
+    let mut faces = solid.outer_shell.faces.clone();
+    for inner in &solid.inner_shells {
+        faces.extend(inner.faces.clone());
+    }
+    faces
+}
+
+fn nest_cavity_shells_into_solids(mut simple_solids: Vec<Solid>, _tol: &Tolerance) -> Vec<Solid> {
+    if simple_solids.len() <= 1 {
+        return simple_solids;
+    }
+
+    let params = TessellationParams::default();
+    simple_solids.sort_by(|a, b| {
+        let vol_a = MassCalculator::compute_from_brep(a, &params).volume;
+        let vol_b = MassCalculator::compute_from_brep(b, &params).volume;
+        vol_b.partial_cmp(&vol_a).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let meshes: Vec<TriangleMesh> = simple_solids
+        .iter()
+        .map(|s| tessellate_solid(s, &params))
+        .collect();
+
+    let mut contained_in: Vec<Option<usize>> = vec![None; simple_solids.len()];
+
+    for j in 0..simple_solids.len() {
+        if simple_solids[j].outer_shell.faces.is_empty() {
+            continue;
+        }
+        let sample = representative_face_point(&simple_solids[j].outer_shell.faces[0]);
+        for i in 0..j {
+            if crate::BooleanEngine::is_point_inside_mesh(sample, &meshes[i]) {
+                contained_in[j] = Some(i);
+                break;
+            }
+        }
+    }
+
+    let mut outer_to_inners: BTreeMap<usize, Vec<Shell>> = BTreeMap::new();
+    let mut root_indices = Vec::new();
+
+    for (j, parent) in contained_in.iter().enumerate() {
+        if let Some(p) = parent {
+            outer_to_inners
+                .entry(*p)
+                .or_default()
+                .push(simple_solids[j].outer_shell.clone());
+        } else {
+            root_indices.push(j);
+        }
+    }
+
+    let mut result = Vec::new();
+    for root in root_indices {
+        let outer_shell = simple_solids[root].outer_shell.clone();
+        let inner_shells = outer_to_inners.remove(&root).unwrap_or_default();
+        result.push(Solid::new(outer_shell, inner_shells));
+    }
+
+    result
 }
 
 fn reverse_face_orientation(face: &Face) -> Face {
