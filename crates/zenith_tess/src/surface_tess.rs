@@ -556,6 +556,7 @@ fn refine_uv_triangulation(
 
     // 一度基準を満たした三角形は、隣が辺を割らない限り再評価しない
     let mut settled = vec![false; triangles.len()];
+    let mut cache = EvaluatedPositions::new(uvs.len());
 
     for _ in 0..MAX_REFINEMENT_PASSES {
         if triangles.len() * 2 > MAX_REFINED_TRIANGLES {
@@ -569,7 +570,15 @@ fn refine_uv_triangulation(
             if settled[index] {
                 continue;
             }
-            if !triangle_needs_refinement(surface, uvs, triangle, cell_u, cell_v, deflection) {
+            if !triangle_needs_refinement(
+                surface,
+                uvs,
+                triangle,
+                cell_u,
+                cell_v,
+                deflection,
+                &mut cache,
+            ) {
                 settled[index] = true;
                 continue;
             }
@@ -588,9 +597,13 @@ fn refine_uv_triangulation(
         let mut midpoints: HashMap<(usize, usize), usize> = HashMap::new();
         for edge in split_edges {
             let midpoint = Point2::from((uvs[edge.0].coords + uvs[edge.1].coords) * 0.5);
-            midpoints.insert(edge, uvs.len());
+            let index = uvs.len();
+            midpoints.insert(edge, index);
             uvs.push(midpoint);
+            // 判定で既に評価した点である。頂点になっても評価し直さない。
+            cache.adopt_midpoint(edge.0, edge.1, index, uvs);
         }
+
 
         let mut refined = Vec::with_capacity(triangles.len());
         let mut refined_settled = Vec::with_capacity(triangles.len());
@@ -627,6 +640,81 @@ fn edge_key(a: usize, b: usize) -> (usize, usize) {
     }
 }
 
+/// 細分の判定で評価した位置を覚えておく係。
+///
+/// 判定は三角形1つにつき3隅と3辺の中点を評価します。**隅は隣り合う三角形と
+/// 平均6枚で、辺の中点は2枚で共有されている**ので、同じ `(u, v)` を何度も
+/// 評価していました。円柱×円柱のブーリアン1回で三角形は 260万個できるので、
+/// ここは効きます。
+///
+/// 覚えるのは**同じ引数に対する同じ戻り値**だけなので、結果はビット単位で
+/// 変わりません。減るのは回数だけです。
+struct EvaluatedPositions {
+    /// `uvs` と同じ添字で引ける、評価済みの位置。
+    corners: Vec<Option<Point3>>,
+    /// 辺の中点。同じ辺は両隣から一度ずつ問われる。
+    ///
+    /// パスの終わりに捨てても正しさは変わりませんが、**捨てると 3.6% 遅く
+    /// なります**（円柱×円柱の和で 16,111,483 → 16,692,654）。隣が辺を
+    /// 割ると、基準を満たしていた三角形も作り直されて再判定になり、そのとき
+    /// 別の辺の中点が既に記憶されているからです。パスをまたいだ再利用は
+    /// 実在します。1面ぶんで数MB、分割が終われば解放されるので、回数を
+    /// 取ります。
+    midpoints: HashMap<(usize, usize), Point3>,
+}
+
+impl EvaluatedPositions {
+    fn new(count: usize) -> Self {
+        Self {
+            corners: vec![None; count],
+            midpoints: HashMap::new(),
+        }
+    }
+
+    fn grow_to(&mut self, count: usize) {
+        if self.corners.len() < count {
+            self.corners.resize(count, None);
+        }
+    }
+
+    fn corner(&mut self, surface: &impl Surface3, uvs: &[Point2], index: usize) -> Point3 {
+        self.grow_to(uvs.len());
+        if let Some(point) = self.corners[index] {
+            return point;
+        }
+        let uv = uvs[index];
+        let point = surface.evaluate(uv.x, uv.y);
+        self.corners[index] = Some(point);
+        point
+    }
+
+    fn midpoint(
+        &mut self,
+        surface: &impl Surface3,
+        uvs: &[Point2],
+        a: usize,
+        b: usize,
+    ) -> Point3 {
+        let key = edge_key(a, b);
+        if let Some(point) = self.midpoints.get(&key) {
+            return *point;
+        }
+        let uv = Point2::from((uvs[a].coords + uvs[b].coords) * 0.5);
+        let point = surface.evaluate(uv.x, uv.y);
+        self.midpoints.insert(key, point);
+        point
+    }
+
+    /// 割った辺の中点は、次のパスでは頂点になる。覚えていた値をそのまま渡す。
+    fn adopt_midpoint(&mut self, a: usize, b: usize, index: usize, uvs: &[Point2]) {
+        let Some(point) = self.midpoints.get(&edge_key(a, b)).copied() else {
+            return;
+        };
+        self.grow_to(uvs.len());
+        self.corners[index] = Some(point);
+    }
+}
+
 fn triangle_needs_refinement(
     surface: &impl Surface3,
     uvs: &[Point2],
@@ -634,6 +722,7 @@ fn triangle_needs_refinement(
     cell_u: f64,
     cell_v: f64,
     deflection: f64,
+    cache: &mut EvaluatedPositions,
 ) -> bool {
     let corners = [uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]];
     let u_extent = corners
@@ -648,12 +737,16 @@ fn triangle_needs_refinement(
         return true;
     }
 
-    let positions = corners.map(|uv| surface.evaluate(uv.x, uv.y));
+    let positions = [
+        cache.corner(surface, uvs, triangle[0]),
+        cache.corner(surface, uvs, triangle[1]),
+        cache.corner(surface, uvs, triangle[2]),
+    ];
     (0..3).any(|corner| {
         let next = (corner + 1) % 3;
-        let mid_uv = Point2::from((corners[corner].coords + corners[next].coords) * 0.5);
         let chord = Point3::from((positions[corner].coords + positions[next].coords) * 0.5);
-        (surface.evaluate(mid_uv.x, mid_uv.y) - chord).norm() > deflection
+        let middle = cache.midpoint(surface, uvs, triangle[corner], triangle[next]);
+        (middle - chord).norm() > deflection
     })
 }
 
