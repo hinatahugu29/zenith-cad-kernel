@@ -129,7 +129,7 @@ cargo run --release -p zenith_algo --example boolean_envelope
 残る6件は**すべて接線配置**で、答えの定義が決まっていないためにエラーを
 返しています。実装が足りないのではありません。
 
-**所要時間は5〜8分です。** 曲面同士の交線を面の組ごとに探すためで、以前の
+**所要時間は4〜8分です。** 曲面同士の交線を面の組ごとに探すためで、以前の
 数秒とは桁が違います。遅いことと壊れていることを取り違えないでください。
 
 **そして、この幅は測定の揺れです。** 同じバイナリで同じ45ケースを2回走らせて
@@ -141,11 +141,29 @@ cargo run --release -p zenith_algo --example boolean_envelope
 末尾に出る積算を使います。
 
 ```text
-solve work: 176674143 surface evaluations, 2890068 marching Newton iterations, 11928 marches
+supported: 39   wrong-result: 0   unsupported/error: 6   (total 45)
+worst analytic agreement: 6.75e-8  (sphere x sphere intersection)
+solve work: 120566157 surface evaluations, 2890068 marching Newton iterations, 11928 marches
+            720 seed searches, 1055814 point-surface projections (67380 of them
+            searching the whole domain for a start), 144 whole-solid tessellations
 ```
 
 これは走らせるたびに同じ値になります。重複を消したなら必ず減り、形を変えて
 いないなら45行の表は動きません。この2つは壁時計なしで確かめられます。
+
+**`worst analytic agreement` を必ず見てください。** 45行の表は体積を3桁でしか
+出さないので、精度が3桁落ちても表は同じに見えます。この行は解析解を持つ
+25ケースのうち最悪のものを出します。曲面同士は 5.92e-9 〜 6.75e-8 で、
+これは交線の当てはめ精度（1e-7 台、4-12）から従う値です。
+
+**`wrong-result` は全期間ゼロです。** 1件でも出たら、それは性能改善であっても
+入れてはいけない変更です（4-21 に、そうなった実例があります）。
+
+1回のブーリアンだけを見たいなら、45ケースを待たずに済みます。
+
+```bash
+cargo run --release -p zenith_algo --example boolean_work_probe
+```
 逆に、**数が減ったことは時間が減ったことの証明にはなりません**——数えている
 単位の重さが一定とは限らないからです。時間を主張したいなら時間を測る必要が
 あり、そのためにはまず揺れないやり方で測る必要があります。
