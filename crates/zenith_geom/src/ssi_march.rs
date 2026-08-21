@@ -155,6 +155,13 @@ impl IntersectionMarcher {
         grid: usize,
         limit: usize,
     ) -> Vec<(f64, f64)> {
+        // 制御点の凸包が交差していなければ、NURBSの凸包性により曲面同士は絶対に交差しない
+        let bbox_a = surface_control_bbox(s1);
+        let bbox_b = surface_control_bbox(s2);
+        if !bboxes_overlap(bbox_a, bbox_b, 1e-6) {
+            return Vec::new();
+        }
+
         crate::work_counter::count_seed_search();
         let steps = grid.max(4);
         let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
@@ -1165,4 +1172,29 @@ mod tests {
             "two cylinders 500 apart must not produce an intersection curve"
         );
     }
+}
+
+fn surface_control_bbox(s: &NurbsSurface3) -> (Point3, Point3) {
+    let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for row in &s.control_points {
+        for cp in row {
+            min.x = min.x.min(cp.point.x);
+            min.y = min.y.min(cp.point.y);
+            min.z = min.z.min(cp.point.z);
+            max.x = max.x.max(cp.point.x);
+            max.y = max.y.max(cp.point.y);
+            max.z = max.z.max(cp.point.z);
+        }
+    }
+    (min, max)
+}
+
+fn bboxes_overlap(a: (Point3, Point3), b: (Point3, Point3), tol: f64) -> bool {
+    a.0.x <= b.1.x + tol
+        && a.1.x >= b.0.x - tol
+        && a.0.y <= b.1.y + tol
+        && a.1.y >= b.0.y - tol
+        && a.0.z <= b.1.z + tol
+        && a.1.z >= b.0.z - tol
 }
