@@ -150,3 +150,19 @@ fn refining_the_sampling_brings_the_distance_down_toward_the_truth() {
         "refining should close the gap to {truth}"
     );
 }
+
+#[test]
+fn test_interference_checker_check_exact_returns_exact_brep_solid() {
+    let tol = Tolerance::default();
+    let cube_a = cube(20.0);
+    let cube_b = shifted(&cube(20.0), 10.0, 10.0, 10.0);
+
+    let (report, clash_solid) = InterferenceChecker::check_exact(&cube_a, &cube_b, &tol);
+    assert_eq!(report.status, ClashStatus::Clash);
+    assert!(clash_solid.is_some(), "clash solid should be extracted");
+
+    let solid = clash_solid.unwrap();
+    assert!(solid.is_topologically_valid(&tol), "clash solid must be valid solid");
+    let diff = (report.overlap_volume - 1000.0).abs();
+    assert!(diff < 1e-6, "exact overlap volume should be 1000.0, got {}, diff {}", report.overlap_volume, diff);
+}

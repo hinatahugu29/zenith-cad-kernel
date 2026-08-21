@@ -149,6 +149,38 @@ impl InterferenceChecker {
             }
         }
     }
+
+    /// 高速篩いと厳密 B-Rep ブーリアン積を組み合わせたハイブリッド干渉解析
+    ///
+    /// 食い込み（`Clash`）が検出された場合、可能であれば [`crate::BooleanEngine`] の
+    /// 厳密な積（Intersection）を計算して、真の干渉体積を算出します。
+    pub fn check_exact(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        tol: &Tolerance,
+    ) -> (InterferenceReport, Option<Solid>) {
+        let mut report = Self::check(solid_a, solid_b, tol);
+        if report.status != ClashStatus::Clash {
+            return (report, None);
+        }
+
+        if let Ok(intersection_solid) = crate::BooleanEngine::boolean_solids_exact(
+            solid_a,
+            solid_b,
+            crate::BooleanOpType::Intersection,
+            tol,
+        ) {
+            let params = TessellationParams::default();
+            let mass = crate::MassCalculator::compute_from_brep(&intersection_solid, &params);
+            if mass.volume > 0.0 {
+                report.overlap_volume = mass.volume;
+                report.message = format!("Solids overlap by exact {:.6} mm^3 (B-Rep intersection)", mass.volume);
+                return (report, Some(intersection_solid));
+            }
+        }
+
+        (report, None)
+    }
 }
 
 fn empty_report(divisions: usize, message: &str) -> InterferenceReport {
