@@ -92,7 +92,10 @@ fn test_two_overlapping_spheres_give_the_closed_form_or_an_error_but_never_one_o
             "{op:?} returned one sphere untouched ({volume})"
         );
         assert!(
-            (volume - expected).abs() / expected < 1e-3,
+            // 実測 1.25e-8（和で 7068.58355866 対 7068.58347058）。許容は
+            // 1e-3 だった。上の「片方をそのまま返していないか」の 1e-3 とは
+            // 役割が違う——あちらは大きく外れることを求める側なので緩くてよい。
+            (volume - expected).abs() / expected < 1e-7,
             "{op:?} volume {volume} does not match the closed form {expected}"
         );
     }

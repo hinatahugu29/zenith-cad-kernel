@@ -104,14 +104,16 @@ fn test_cylinder_section_approaches_the_analytic_circle() {
 
     let expected_area = PI * 100.0;
     assert!(
-        relative_error(result.total_area, expected_area) < 1e-4,
+        // 実測 4.83e-11（314.15926534 対 314.15926536）。許容は 1e-4 だった。
+        relative_error(result.total_area, expected_area) < 1e-10,
         "cylinder section area {} should approach {expected_area}",
         result.total_area
     );
 
     let expected_perimeter = 2.0 * PI * 10.0;
     assert!(
-        relative_error(result.total_perimeter, expected_perimeter) < 1e-4,
+        // 実測 2.41e-11（62.831853070 対 62.831853072）。許容は 1e-4 だった。
+        relative_error(result.total_perimeter, expected_perimeter) < 1e-10,
         "cylinder section perimeter {} should approach {expected_perimeter}",
         result.total_perimeter
     );
@@ -164,7 +166,8 @@ fn test_drilled_box_section_subtracts_the_hole() {
 
     let expected = 900.0 - PI * 25.0;
     assert!(
-        relative_error(result.total_area, expected) < 1e-4,
+        // 実測 4.62e-12（821.46018366405 対 821.46018366026）。許容は 1e-4 だった。
+        relative_error(result.total_area, expected) < 1e-11,
         "drilled box section area {} should be {expected}, not the sum of both loops",
         result.total_area
     );

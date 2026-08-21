@@ -42,9 +42,14 @@ fn test_mirror_box_and_cylinder() {
     let mesh_mir = tessellate_solid(&mirrored_box, &TessellationParams::default());
     let mass_orig = MassCalculator::compute_from_mesh(&mesh_orig);
     let mass_mir = MassCalculator::compute_from_mesh(&mesh_mir);
+    // 鏡映はアフィンなので、体積は近いのではなく厳密に一致する。実測は
+    // 差 1e-15 未満（許容 1e-3 でも通っていたが、それは 12桁ぶん何も見て
+    // いない）。ここが崩れるとしたら丸めではなく、写し方が壊れたときである。
     assert!(
-        (mass_orig.volume - mass_mir.volume).abs() < 1e-3,
-        "Volume must match after mirror"
+        (mass_orig.volume - mass_mir.volume).abs() < 1e-12,
+        "mirrored volume {} against {}",
+        mass_mir.volume,
+        mass_orig.volume
     );
 
     // 2. 円柱の斜め平面ミラー
