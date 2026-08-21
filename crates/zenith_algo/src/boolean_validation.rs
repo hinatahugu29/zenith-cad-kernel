@@ -163,7 +163,23 @@ impl BooleanResultVerifier {
         let vr = report.volume_result;
         let eps = params.volume_relative_tolerance * va.abs().max(vb.abs()).max(1.0);
 
-        if !result.is_empty() && vr <= eps {
+        // 「体積が正か」を見る閾値は、境界の比較に使う `eps` と**別の量で
+        // 正規化しなければなりません**。両方に `eps`（大きいほうの立体で
+        // 正規化）を使っていたので、桁の離れた2立体では正しい答えが弾かれて
+        // いました。1e6 の箱と 1 の箱の積は単位立方体で、体積 1.0 が正解です。
+        // ところが閾値が 1e-6 x 1e18 = 1e12 になり、「正でない」と報告されて
+        // いました。実務のアセンブリは桁の違う部品を含むので、これは効きます。
+        //
+        // 結果が取りうる上限で正規化します。積は小さいほうを超えられず、
+        // 差は A を超えられません。和だけが大きいほうと同じ桁になります。
+        let result_upper_bound = match op {
+            BooleanOpType::Union => va.abs().max(vb.abs()),
+            BooleanOpType::Intersection => va.abs().min(vb.abs()),
+            BooleanOpType::Difference => va.abs(),
+        };
+        let zero_eps = params.volume_relative_tolerance * result_upper_bound.max(1.0);
+
+        if !result.is_empty() && vr <= zero_eps {
             report
                 .errors
                 .push(format!("result volume {vr:.6} is not positive"));

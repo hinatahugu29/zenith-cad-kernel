@@ -214,12 +214,12 @@ impl BooleanEngine {
         {
             return Ok(result);
         }
-        if let Some(solid) =
+        if let Some(result) =
             crate::orthogonal_boolean::OrthogonalBoxBoolean::boolean_axis_aligned_boxes_exact(
                 solid_a, solid_b, op, tol,
             )?
         {
-            return Ok(ExactBooleanResult::single(solid));
+            return Ok(result);
         }
 
         // 面で接しているだけで中身が重なっていない場合、差は A そのもの。
