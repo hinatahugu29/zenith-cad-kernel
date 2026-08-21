@@ -108,35 +108,35 @@ fn the_split_up_faces_of_a_boolean_result_come_back_as_one_each() {
 }
 
 #[test]
-fn a_drilled_box_stops_being_all_nurbs_and_becomes_filletable() {
+fn a_drilled_box_is_filletable_and_simplifies_to_ten_faces() {
     // `make_drilled_box` は 16 面すべてを NURBS で持っていた。平面しか受け
-    // 付けない演算はどれも掛からず、フィレットの候補は **0 本**だった。
+    // 付けない演算はどれも掛からず、フィレットの候補は 0 本だった。いまは
+    // ビルダーの共通出口（`validated_solid`）が平面を平面として持ち直す。
     let tol = Tolerance::default();
     let drilled = HoleBuilder::make_drilled_box(40.0, 40.0, 20.0, 8.0).unwrap();
 
     assert_eq!(drilled.outer_shell.faces.len(), 16);
-    assert!(
-        drilled
-            .outer_shell
-            .faces
-            .iter()
-            .all(|face| !matches!(face.geometry, FaceGeometry::Plane(_))),
-        "this test needs the builder to still hand back all-NURBS faces"
+    let planes = drilled
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| matches!(face.geometry, FaceGeometry::Plane(_)))
+        .count();
+    assert_eq!(
+        planes, 12,
+        "the twelve flat faces must be held as planes, not as NURBS"
     );
+    // 平面として持つだけでは足りない。上下面が扇形に割れたままなので、
+    // 稜の端の頂点に3枚目の面が1枚に定まらず、まだ1本も丸められない。
     assert_eq!(
         EdgeBlender::blendable_edges(&drilled).len(),
         0,
-        "nothing on an all-NURBS solid can be blended"
+        "split up faces still block every edge"
     );
     let before = volume_of(&drilled);
 
     let (simplified, report) = FaceMerger::simplify_solid(&drilled, &tol).expect("simplify");
 
-    assert!(
-        report.planarized_faces >= 12,
-        "the flat faces should be recognised as planes: {}",
-        report.summary()
-    );
     // 側面4 + 環状の上下面2 + 円筒の4分割4
     assert_eq!(
         simplified.outer_shell.faces.len(),
@@ -195,21 +195,71 @@ fn a_drilled_box_stops_being_all_nurbs_and_becomes_filletable() {
 
 #[test]
 fn a_planar_face_kept_as_nurbs_is_recognised_without_moving_it() {
+    // ビルダーの出口で直すようになったので、素材は手で作る。ここで測るのは
+    // 「制御点が同一平面に乗る NURBS 面を平面として見抜けるか」と、
+    // 「曲面を平面と取り違えないか」の2つ。
     let tol = Tolerance::default();
-    let drilled = HoleBuilder::make_drilled_box(30.0, 30.0, 10.0, 5.0).unwrap();
-    let before = volume_of(&drilled);
-    let before_faces = drilled.outer_shell.faces.len();
 
-    let (flat, converted) = FaceMerger::planarize(&drilled, &tol).expect("planarize");
+    // 直方体の6面を、すべて 1 x 1 次の NURBS パッチとして持ち直したもの
+    let boxed = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap();
+    let disguised_faces: Vec<zenith_topo::Face> = boxed
+        .outer_shell
+        .faces
+        .iter()
+        .map(|face| {
+            let zenith_topo::FaceGeometry::Plane(plane) = &face.geometry else {
+                panic!("a box should be made of planes");
+            };
+            let corner = |u: f64, v: f64| plane.origin + plane.u_axis * u + plane.v_axis * v;
+            let rows = vec![
+                vec![
+                    zenith_geom::ControlPoint3::unweighted(corner(-100.0, -100.0)),
+                    zenith_geom::ControlPoint3::unweighted(corner(-100.0, 100.0)),
+                ],
+                vec![
+                    zenith_geom::ControlPoint3::unweighted(corner(100.0, -100.0)),
+                    zenith_geom::ControlPoint3::unweighted(corner(100.0, 100.0)),
+                ],
+            ];
+            let surface = zenith_geom::NurbsSurface3::new(
+                1,
+                1,
+                rows,
+                zenith_geom::KnotVector::clamped_uniform(2, 1),
+                zenith_geom::KnotVector::clamped_uniform(2, 1),
+            )
+            .expect("a flat NURBS patch");
+            zenith_topo::Face::new(
+                zenith_topo::FaceGeometry::Nurbs(surface),
+                face.outer_wire.clone(),
+                face.inner_wires.clone(),
+                face.orientation,
+                face.tolerance,
+            )
+        })
+        .collect();
 
-    assert!(converted > 0, "some faces should have been recognised");
+    let disguised = zenith_topo::Solid::new(zenith_topo::Shell::closed(disguised_faces), vec![]);
+    assert!(
+        disguised
+            .outer_shell
+            .faces
+            .iter()
+            .all(|face| matches!(face.geometry, FaceGeometry::Nurbs(_))),
+        "the subject must start out entirely as NURBS"
+    );
+    let before = volume_of(&disguised);
+
+    let (flat, converted) = FaceMerger::planarize(&disguised, &tol).expect("planarize");
+
+    assert_eq!(converted, 6, "all six flat patches should be recognised");
     assert_eq!(
         flat.outer_shell.faces.len(),
-        before_faces,
+        6,
         "planarizing changes how a face is held, not how many there are"
     );
     assert!(
-        (volume_of(&flat) - before).abs() / before < 1e-12,
+        (volume_of(&flat) - before).abs() / before.abs() < 1e-12,
         "planarizing moved the volume: {} against {before}",
         volume_of(&flat)
     );
@@ -218,12 +268,23 @@ fn a_planar_face_kept_as_nurbs_is_recognised_without_moving_it() {
         "planarizing left an invalid shell"
     );
 
-    // 円筒側面は平面ではないので、そのまま NURBS で残る
-    assert!(
-        flat.outer_shell
+    // 曲面は取り違えない
+    let cylinder = PrimitiveBuilder::make_cylinder(6.0, 15.0).unwrap();
+    let curved_before = cylinder
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+        .count();
+    let (untouched, converted) = FaceMerger::planarize(&cylinder, &tol).expect("planarize");
+    assert_eq!(converted, 0, "a cylinder wall is not a plane");
+    assert_eq!(
+        untouched
+            .outer_shell
             .faces
             .iter()
-            .any(|face| matches!(face.geometry, FaceGeometry::Nurbs(_))),
-        "the bore wall must not be mistaken for a plane"
+            .filter(|face| matches!(face.geometry, FaceGeometry::Nurbs(_)))
+            .count(),
+        curved_before
     );
 }

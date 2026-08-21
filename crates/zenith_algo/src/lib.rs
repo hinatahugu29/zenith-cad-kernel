@@ -104,6 +104,19 @@ pub use sweep::SweepBuilder;
 pub use thicken::ThickenBuilder;
 
 
+/// ビルダーの共通出口。
+///
+/// ここで**平面を平面として持ち直す**。制御点が公差内で同一平面に乗る有理
+/// NURBS 面は、像が制御点の凸包に入る以上その平面に乗っているので、これは
+/// 近似ではなく持ち方を直しているだけ。
+///
+/// 直しておかないと、平面しか受け付けない演算（面の併合、稜のフィレット・
+/// 面取り）がその立体に一切掛からない。実測で `HoleBuilder::make_drilled_box`
+/// は 16 面すべてが NURBS でフィレットの候補が **0 本**、`GearBuilder` は
+/// 110 面中 36 面が平面なのに NURBS だった。`planar_face_audit` が全ビルダー
+/// について常時数えている。
 pub(crate) fn validated_solid(shell: Shell) -> Result<Solid, String> {
-    Solid::try_simple(shell, &Tolerance::default()).map_err(|err| err.to_string())
+    let tol = Tolerance::default();
+    let (shell, _converted) = merge_faces::FaceMerger::planarize_shell(&shell, &tol);
+    Solid::try_simple(shell, &tol).map_err(|err| err.to_string())
 }

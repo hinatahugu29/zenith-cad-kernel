@@ -102,36 +102,43 @@ impl FaceMerger {
     /// NURBS で持っており、**1本もフィレットを掛けられない**状態でした。
     pub fn planarize(solid: &Solid, tol: &Tolerance) -> Result<(Solid, usize), String> {
         let mut converted = 0;
-        let convert = |shell: &Shell, converted: &mut usize| -> Shell {
-            let faces = shell
-                .faces
-                .iter()
-                .map(|face| match plane_behind_nurbs(face, tol) {
-                    Some(plane) => {
-                        *converted += 1;
-                        Face::new(
-                            FaceGeometry::Plane(plane),
-                            face.outer_wire.clone(),
-                            face.inner_wires.clone(),
-                            Orientation::Forward,
-                            face.tolerance,
-                        )
-                    }
-                    None => face.clone(),
-                })
-                .collect();
-            Shell::new(faces, shell.is_closed)
-        };
-
-        let outer = convert(&solid.outer_shell, &mut converted);
-        let inners: Vec<Shell> = solid
-            .inner_shells
-            .iter()
-            .map(|shell| convert(shell, &mut converted))
-            .collect();
+        let (outer, count) = Self::planarize_shell(&solid.outer_shell, tol);
+        converted += count;
+        let mut inners = Vec::with_capacity(solid.inner_shells.len());
+        for shell in &solid.inner_shells {
+            let (planar, count) = Self::planarize_shell(shell, tol);
+            converted += count;
+            inners.push(planar);
+        }
 
         let solid = Solid::try_new(outer, inners, tol).map_err(|err| err.to_string())?;
         Ok((solid, converted))
+    }
+
+    /// 1つのシェルについて、平面なのに NURBS で持っている面を平面に直す。
+    ///
+    /// ビルダーの出口（`crate::validated_solid`）から呼ばれるので、どのビルダー
+    /// が作った立体でも、平面は平面として出てくる。
+    pub fn planarize_shell(shell: &Shell, tol: &Tolerance) -> (Shell, usize) {
+        let mut converted = 0;
+        let faces = shell
+            .faces
+            .iter()
+            .map(|face| match plane_behind_nurbs(face, tol) {
+                Some(plane) => {
+                    converted += 1;
+                    Face::new(
+                        FaceGeometry::Plane(plane),
+                        face.outer_wire.clone(),
+                        face.inner_wires.clone(),
+                        Orientation::Forward,
+                        face.tolerance,
+                    )
+                }
+                None => face.clone(),
+            })
+            .collect();
+        (Shell::new(faces, shell.is_closed), converted)
     }
 
     /// 同一平面の隣接面だけを併合する（稜はそのまま）

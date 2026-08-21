@@ -635,6 +635,12 @@ fn match_nurbs_outer_boundary_pcurve(
         (Point2::new(u_max, v_max), Point2::new(u_max, v_min)),
     ];
 
+    // 候補は「パラメータ空間の直線」なので、辺のパラメータ付けがその直線に
+    // アフィンに乗っているときしか正しくない。ここは構成と同じ分割数で
+    // 測っているので、乗っていない辺が節点だけで一致して通る余地がある。
+    // その場合でも 37 点で測り直す `validate_pcurves` が落とすため、誤答には
+    // ならない（明示的なエラーになる）。実際にそれで落ちる検体はまだ
+    // 見つかっていないので、直す根拠が測れるまで触らない。
     let samples = samples_per_edge.max(2);
     let mut best: Option<(f64, Point2, Point2)> = None;
 
@@ -721,39 +727,61 @@ fn project_edge_to_nurbs_pcurve(
 
     // 弦の中点が辺から離れている区間を割る。継ぎ目をまたぐ区間はここでは
     // 詰められないので、割らずに残す。
+    //
+    // 走査は**通しで何度も回す**。1回の通しで各区間はたかだか1度しか割らない
+    // （割った点の先へ進む）ので、詰まらない区間が予算を独り占めしない。
+    //
+    // 以前は1本の走査で、割った直後に同じ左半分を見直していた。辺自身が曲面
+    // から公差ぎりぎり（実測 9.78e-7）離れている区間は、いくら割っても弦が
+    // 公差 1e-6 を切れない。そこで **最初の区間だけを 4096 点の上限まで割り
+    // 続け、残りの区間は最初の8分割のまま**という p-curve が出来ていた。
+    // 3D の辺から最大 8.5e-3 離れる。皿モミ穴は 64 組中 7 組がこれで落ちて
+    // いた（`countersink_range_probe`）。
     let deflection = tol.linear;
     const MAX_POINTS: usize = 4096;
-    let mut index = 0;
-    while index + 1 < parameters.len() && parameters.len() < MAX_POINTS {
-        let (t0, t1) = (parameters[index], parameters[index + 1]);
-        let middle = (t0 + t1) * 0.5;
-        let chord = uv_points[index] + (uv_points[index + 1] - uv_points[index]) * 0.5;
-        let strayed =
-            (surface.evaluate(chord.x, chord.y) - edge.evaluate_normalized(middle)).norm();
+    const MAX_PASSES: usize = 24;
+    for _pass in 0..MAX_PASSES {
+        let mut split_any = false;
+        let mut index = 0;
+        while index + 1 < parameters.len() && parameters.len() < MAX_POINTS {
+            let (t0, t1) = (parameters[index], parameters[index + 1]);
+            let middle = (t0 + t1) * 0.5;
+            let chord = uv_points[index] + (uv_points[index + 1] - uv_points[index]) * 0.5;
+            let strayed =
+                (surface.evaluate(chord.x, chord.y) - edge.evaluate_normalized(middle)).norm();
 
-        if strayed <= deflection || (t1 - t0) <= 1e-9 {
-            index += 1;
-            continue;
+            if strayed <= deflection || (t1 - t0) <= 1e-9 {
+                index += 1;
+                continue;
+            }
+
+            let uv = project(middle, Some(chord))?;
+            // 継ぎ目をまたぐ区間は、割っても弦が縮まない。無限に割らないよう抜ける。
+            // パラメータ空間で湾曲する曲線（有理パッチ上の直線など）の膨らみを
+            // 誤認してスキップしないよう、区間長に応じたマージンを設ける。
+            let before = uv_points[index];
+            let after = uv_points[index + 1];
+            let margin =
+                ((after.x - before.x).abs().max((after.y - before.y).abs()) * 0.5).max(1e-4);
+            let inside = uv.x >= before.x.min(after.x) - margin
+                && uv.x <= before.x.max(after.x) + margin
+                && uv.y >= before.y.min(after.y) - margin
+                && uv.y <= before.y.max(after.y) + margin;
+            if !inside {
+                index += 1;
+                continue;
+            }
+
+            parameters.insert(index + 1, middle);
+            uv_points.insert(index + 1, uv);
+            split_any = true;
+            // 割ってできた点の先へ進む。両側の半分は次の通しで見る。
+            index += 2;
         }
 
-        let uv = project(middle, Some(chord))?;
-        // 継ぎ目をまたぐ区間は、割っても弦が縮まない。無限に割らないよう抜ける。
-        // パラメータ空間で湾曲する曲線（有理パッチ上の直線など）の膨らみを
-        // 誤認してスキップしないよう、区間長に応じたマージンを設ける。
-        let before = uv_points[index];
-        let after = uv_points[index + 1];
-        let margin = ((after.x - before.x).abs().max((after.y - before.y).abs()) * 0.5).max(1e-4);
-        let inside = uv.x >= before.x.min(after.x) - margin
-            && uv.x <= before.x.max(after.x) + margin
-            && uv.y >= before.y.min(after.y) - margin
-            && uv.y <= before.y.max(after.y) + margin;
-        if !inside {
-            index += 1;
-            continue;
+        if !split_any || parameters.len() >= MAX_POINTS {
+            break;
         }
-
-        parameters.insert(index + 1, middle);
-        uv_points.insert(index + 1, uv);
     }
 
     if max_distance > on_surface_limit {
