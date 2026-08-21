@@ -311,4 +311,57 @@ impl HoleBuilder {
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)
     }
+
+    /// 直方体にザグリ穴（Counterbore: ボルト頭沈め穴）を開けたソリッドを生成
+    ///
+    /// `dx`, `dy`, `dz`: 箱の寸法
+    /// `hole_radius`: 貫通下穴の半径
+    /// `cb_radius`: ザグリ部（大径）の半径
+    /// `cb_depth`: ザグリ部の深さ（上面から下向き）
+    pub fn make_counterbore_hole_box(
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        hole_radius: f64,
+        cb_radius: f64,
+        cb_depth: f64,
+    ) -> Result<Solid, String> {
+        if cb_radius <= hole_radius {
+            return Err("Counterbore radius must be larger than hole radius".to_string());
+        }
+        if cb_depth <= 0.0 || cb_depth >= dz {
+            return Err("Counterbore depth must be between 0 and box thickness".to_string());
+        }
+        let tol = zenith_math::Tolerance::default();
+        let box_solid = crate::PrimitiveBuilder::make_box(dx, dy, dz)?;
+
+        let cx = dx * 0.5;
+        let cy = dy * 0.5;
+
+        // 1. 貫通下穴
+        let through_drill = crate::PrimitiveBuilder::make_cylinder(hole_radius, dz + 2.0)?;
+        let through_drill = crate::BrepTransform::translate_solid(
+            &through_drill,
+            zenith_math::Vec3::new(cx, cy, -1.0),
+        );
+        let drilled = crate::BooleanEngine::boolean_solids_exact(
+            &box_solid,
+            &through_drill,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )?;
+
+        // 2. ザグリ穴（上面 dz から深さ cb_depth）
+        let cb_drill = crate::PrimitiveBuilder::make_cylinder(cb_radius, cb_depth + 1.0)?;
+        let cb_drill = crate::BrepTransform::translate_solid(
+            &cb_drill,
+            zenith_math::Vec3::new(cx, cy, dz - cb_depth),
+        );
+        crate::BooleanEngine::boolean_solids_exact(
+            &drilled,
+            &cb_drill,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )
+    }
 }
