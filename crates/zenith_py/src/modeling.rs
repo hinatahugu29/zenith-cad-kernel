@@ -1317,6 +1317,150 @@ pub fn make_exact_drill_boolean(
     })
 }
 
+/// 丸線ヘリカルスプリング（Round-Wire Spring）ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (radius = 10.0, pitch = 8.0, turns = 3.0, wire_radius = 1.5, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_round_wire_spring(
+    radius: f64,
+    pitch: f64,
+    turns: f64,
+    wire_radius: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let tol = Tolerance::default();
+    let solid = zenith_algo::HelixBuilder::make_round_wire_spring(
+        radius,
+        pitch,
+        turns,
+        wire_radius,
+        Point3::origin(),
+        Vec3::z(),
+        &tol,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Round wire spring generation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_ROUND_WIRE_SPRING")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// ボルト頭沈めザグリ穴（Counterbore Hole）直方体ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (dx = 50.0, dy = 50.0, dz = 25.0, hole_radius = 4.0, cb_radius = 8.0, cb_depth = 5.0, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_counterbore_hole_box(
+    dx: f64,
+    dy: f64,
+    dz: f64,
+    hole_radius: f64,
+    cb_radius: f64,
+    cb_depth: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::HoleBuilder::make_counterbore_hole_box(
+        dx,
+        dy,
+        dz,
+        hole_radius,
+        cb_radius,
+        cb_depth,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Counterbore box generation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_COUNTERBORE_BOX")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 正六角ナット（Hex Nut）ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (across_flats = 16.0, hole_radius = 4.25, thickness = 8.0, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_hex_nut(
+    across_flats: f64,
+    hole_radius: f64,
+    thickness: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::HoleBuilder::make_hex_nut(across_flats, hole_radius, thickness)
+        .map_err(|e| PyValueError::new_err(format!("Hex nut generation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_HEX_NUT")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 2つの直方体間のハイブリッド厳密干渉解析（B-Rep積計算による干渉体積算出）
+#[pyfunction]
+#[pyo3(signature = (min_a, max_a, min_b, max_b))]
+pub fn check_exact_boxes_interference(
+    min_a: [f64; 3],
+    max_a: [f64; 3],
+    min_b: [f64; 3],
+    max_b: [f64; 3],
+) -> PyResult<(String, f64)> {
+    let box_a = zenith_algo::PrimitiveBuilder::make_box(
+        max_a[0] - min_a[0],
+        max_a[1] - min_a[1],
+        max_a[2] - min_a[2],
+    )
+    .map_err(|e| PyValueError::new_err(format!("Box A creation failed: {}", e)))?;
+    let box_a = zenith_algo::BrepTransform::translate_solid(
+        &box_a,
+        Vec3::new(min_a[0], min_a[1], min_a[2]),
+    );
+
+    let box_b = zenith_algo::PrimitiveBuilder::make_box(
+        max_b[0] - min_b[0],
+        max_b[1] - min_b[1],
+        max_b[2] - min_b[2],
+    )
+    .map_err(|e| PyValueError::new_err(format!("Box B creation failed: {}", e)))?;
+    let box_b = zenith_algo::BrepTransform::translate_solid(
+        &box_b,
+        Vec3::new(min_b[0], min_b[1], min_b[2]),
+    );
+
+    let tol = Tolerance::default();
+    let (report, _exact_solid) = zenith_algo::InterferenceChecker::check_exact(&box_a, &box_b, &tol);
+
+    let status_str = match report.status {
+        zenith_algo::ClashStatus::Clearance => "Clearance",
+        zenith_algo::ClashStatus::Touching => "Touching",
+        zenith_algo::ClashStatus::Clash => "Clash",
+    };
+
+    Ok((status_str.to_string(), report.overlap_volume))
+}
+
 
 
 

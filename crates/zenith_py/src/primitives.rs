@@ -177,3 +177,30 @@ pub fn make_torus(
     let mesh = tessellate_solid(&solid, &params);
     Ok(PyMesh { mesh })
 }
+
+/// 正多角柱（Prism）ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (num_sides, radius, height, u_divisions = 4, v_divisions = 4, step_path = None))]
+pub fn make_regular_prism(
+    num_sides: usize,
+    radius: f64,
+    height: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = PrimitiveBuilder::make_regular_prism(num_sides, radius, height)
+        .map_err(|e| PyValueError::new_err(format!("Regular prism creation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_PRISM")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}

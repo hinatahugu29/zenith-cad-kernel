@@ -98,8 +98,6 @@ fn test_make_hex_nut_matches_analytic_volume() {
     let params = TessellationParams::default();
     let mass = MassCalculator::compute_from_brep(&nut, &params);
 
-    // 解析体積: 正六角柱体積 - 貫通円柱穴体積
-    // 六角形面積 = (sqrt(3) / 2) * S^2
     let hex_area = (3.0f64.sqrt() / 2.0) * across_flats * across_flats;
     let hole_area = PI * hole_radius * hole_radius;
     let expected_vol = (hex_area - hole_area) * thickness;
