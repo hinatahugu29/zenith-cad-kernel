@@ -29,6 +29,8 @@ static PROJECTION_DAMPING_TRIALS: AtomicU64 = AtomicU64::new(0);
 static FACE_INTEGRALS: AtomicU64 = AtomicU64::new(0);
 static UV_TRIANGULATIONS: AtomicU64 = AtomicU64::new(0);
 static UV_TRIANGLES: AtomicU64 = AtomicU64::new(0);
+static UV_BOUNDARY_POINTS: AtomicU64 = AtomicU64::new(0);
+static UV_WORST_BOUNDARY: AtomicU64 = AtomicU64::new(0);
 static SOLID_TESSELLATIONS: AtomicU64 = AtomicU64::new(0);
 
 /// ある時点までに積み上がった仕事の量。
@@ -63,6 +65,10 @@ pub struct WorkCounters {
     pub uv_triangulations: u64,
     /// そこで出来た三角形の総数。
     pub uv_triangles: u64,
+    /// トリム境界の折れ線が持っていた点の総数。
+    pub uv_boundary_points: u64,
+    /// そのうち、いちばん多かった1ループぶん。
+    pub uv_worst_boundary: u64,
     /// 立体をまるごとテッセレートした回数。
     ///
     /// 内外判定はメッシュに対して行われるので、同じ立体を何度も刻んで
@@ -97,6 +103,10 @@ impl WorkCounters {
             face_integrals: self.face_integrals.saturating_sub(earlier.face_integrals),
             uv_triangulations: self.uv_triangulations.saturating_sub(earlier.uv_triangulations),
             uv_triangles: self.uv_triangles.saturating_sub(earlier.uv_triangles),
+            uv_boundary_points: self
+                .uv_boundary_points
+                .saturating_sub(earlier.uv_boundary_points),
+            uv_worst_boundary: self.uv_worst_boundary.max(earlier.uv_worst_boundary),
             solid_tessellations: self
                 .solid_tessellations
                 .saturating_sub(earlier.solid_tessellations),
@@ -118,6 +128,8 @@ pub fn snapshot() -> WorkCounters {
         face_integrals: FACE_INTEGRALS.load(Ordering::Relaxed),
         uv_triangulations: UV_TRIANGULATIONS.load(Ordering::Relaxed),
         uv_triangles: UV_TRIANGLES.load(Ordering::Relaxed),
+        uv_boundary_points: UV_BOUNDARY_POINTS.load(Ordering::Relaxed),
+        uv_worst_boundary: UV_WORST_BOUNDARY.load(Ordering::Relaxed),
         solid_tessellations: SOLID_TESSELLATIONS.load(Ordering::Relaxed),
     }
 }
@@ -135,6 +147,8 @@ pub fn reset() {
     FACE_INTEGRALS.store(0, Ordering::Relaxed);
     UV_TRIANGULATIONS.store(0, Ordering::Relaxed);
     UV_TRIANGLES.store(0, Ordering::Relaxed);
+    UV_BOUNDARY_POINTS.store(0, Ordering::Relaxed);
+    UV_WORST_BOUNDARY.store(0, Ordering::Relaxed);
     SOLID_TESSELLATIONS.store(0, Ordering::Relaxed);
 }
 
@@ -192,4 +206,10 @@ pub fn count_face_integral() {
 pub fn count_uv_triangulation(triangles: usize) {
     UV_TRIANGULATIONS.fetch_add(1, Ordering::Relaxed);
     UV_TRIANGLES.fetch_add(triangles as u64, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn count_uv_boundary(points: usize) {
+    UV_BOUNDARY_POINTS.fetch_add(points as u64, Ordering::Relaxed);
+    UV_WORST_BOUNDARY.fetch_max(points as u64, Ordering::Relaxed);
 }

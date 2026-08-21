@@ -66,6 +66,10 @@ fn main() {
             work.projection_damping_trials
         );
         println!(
+            "  trim boundaries carried {} points in total, worst single loop {}",
+            work.uv_boundary_points, work.uv_worst_boundary
+        );
+        println!(
             "  {} uv triangulations producing {} triangles ({:.0} each)",
             work.uv_triangulations,
             work.uv_triangles,

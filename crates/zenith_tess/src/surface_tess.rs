@@ -499,6 +499,7 @@ fn trimmed_uv_triangulation(
         return UvTriangulation::default();
     };
     let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, fidelity);
+    zenith_geom::work_counter::count_uv_boundary(outer_uvs.len());
     if outer_uvs.len() < 3 {
         return UvTriangulation::default();
     }
