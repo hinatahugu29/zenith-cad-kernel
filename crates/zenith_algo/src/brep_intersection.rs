@@ -4394,7 +4394,7 @@ fn marched_runs_along_a_patch_edge(
         .points
         .iter()
         .all(|p| at(p.uv2.0, ub0, ub1) || at(p.uv2.1, vb0, vb1));
-    on_a_edge || on_b_edge
+    on_a_edge && on_b_edge
 }
 
 /// パッチの広がり。歩幅を形の大きさに合わせるために使う。
