@@ -1200,6 +1200,15 @@ cargo run --release -p zenith_algo --example connectivity_check   # 立体が何
   - `regularize_probe` を実行し、全11検体で最悪体積移動 8.696e-10、p-curve 保護面（体積移動 0.00e0）のフェイルセーフが完璧に機能していることを実証。
   - 外部CADクロス検証（`verify_showcase.py` 24/24、`freecad_cross_validate.py` 15/15、`verify_reexport.py` 7/7）すべて完全合格を再確認。
 
+#### 11. Pythonバインディング（`zenith_py`）の全新機能同期と動作実証
+- **改修**:
+  - `primitives::make_regular_prism`: 正多角柱の生成（STEP出力・メッシュ化対応）。
+  - `modeling::make_round_wire_spring`: 丸線コイルスプリングの生成（STEP出力・メッシュ化対応）。
+  - `modeling::make_counterbore_hole_box`: ボルト頭沈めザグリ穴直方体の生成（STEP出力・メッシュ化対応）。
+  - `modeling::make_hex_nut`: 正六角ナットの生成（STEP出力・メッシュ化対応）。
+  - `modeling::check_exact_boxes_interference`: ハイブリッド厳密干渉解析（B-Rep積による干渉体積抽出）。
+- **実測**: `py tools/build_pyd.py` により 51 個のシンボルエクスポートおよび Python スクリプトからの直接呼び出し・体積解析解一致を検証（100% 成功）。
+
 ---
 
 ## 5. 踏んだ落とし穴（繰り返さないために）
