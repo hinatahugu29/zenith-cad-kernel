@@ -808,11 +808,35 @@ impl BrepIntersectionBuilder {
         candidates: &[IntersectionEdgeCandidate],
         tol: &Tolerance,
     ) -> PlanarCapGeneration {
-        let edges: Vec<Edge> = candidates
-            .iter()
-            .map(|candidate| candidate.edge.clone())
-            .collect();
-        Self::build_planar_caps_from_intersection_edges(&edges, tol)
+        let mut candidates_by_face_b: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
+        for candidate in candidates {
+            candidates_by_face_b
+                .entry(candidate.face_b_index)
+                .or_default()
+                .push(candidate.edge.clone());
+        }
+
+        let mut all_loops = Vec::new();
+        let mut all_cap_faces = Vec::new();
+        let mut total_failed_loop_count = 0;
+        let mut total_skipped_edge_count = 0;
+
+        for (_face_b_index, edges) in candidates_by_face_b {
+            let cap_gen = Self::build_planar_caps_from_intersection_edges(&edges, tol);
+            total_skipped_edge_count += cap_gen.edge_loop_extraction.skipped_edge_count;
+            all_loops.extend(cap_gen.edge_loop_extraction.loops);
+            all_cap_faces.extend(cap_gen.cap_faces);
+            total_failed_loop_count += cap_gen.failed_loop_count;
+        }
+
+        PlanarCapGeneration {
+            edge_loop_extraction: IntersectionEdgeLoopExtraction {
+                loops: all_loops,
+                skipped_edge_count: total_skipped_edge_count,
+            },
+            cap_faces: all_cap_faces,
+            failed_loop_count: total_failed_loop_count,
+        }
     }
 
     /// Splits a planar face into two faces along an intersection edge.
@@ -1893,7 +1917,10 @@ fn oriented_edge_portion(
         return Ok(None);
     }
     if !keeps_start && !keeps_end {
-        return Err("Boundary edge would need two split points".to_string());
+        let (_low, rest) = split_oriented_edge_at(edge, t_start, tol)?;
+        let rem_t = ((t_end - t_start) / (1.0 - t_start)).clamp(0.0, 1.0);
+        let (portion, _high) = split_oriented_edge_at(&rest, rem_t, tol)?;
+        return Ok(Some(portion));
     }
 
     let split_t = if keeps_start { t_end } else { t_start };
@@ -3291,12 +3318,9 @@ fn points_same_3d(a: Point3, b: Point3, tol: f64) -> bool {
 /// 曲面に載せる。三角形は領域の内側にあり、大きいものを選べば境界からも
 /// 離れている。
 fn representative_face_point(face: &Face) -> Point3 {
-    // 穴のある面の重心は穴の中に落ちることがあり、内外判定が反転する
-    if !face.inner_wires.is_empty() {
-        if let FaceGeometry::Plane(plane) = &face.geometry {
-            if let Some(point) = planar_point_clear_of_holes(face, plane) {
-                return point;
-            }
+    if let FaceGeometry::Plane(plane) = &face.geometry {
+        if let Some(point) = planar_point_clear_of_holes(face, plane) {
+            return point;
         }
     }
 
