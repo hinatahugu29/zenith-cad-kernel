@@ -535,7 +535,13 @@ fn trimmed_uv_triangulation(
         .map(|chunk| [chunk[0], chunk[1], chunk[2]])
         .collect();
 
-    refine_uv_triangulation(surface, params, &mut uvs, &mut triangles);
+    refine_uv_triangulation_protected(
+        surface,
+        params,
+        &mut uvs,
+        &mut triangles,
+        &HashSet::new(),
+    );
     UvTriangulation { uvs, triangles }
 }
 
@@ -544,11 +550,16 @@ fn trimmed_uv_triangulation(
 const MAX_REFINED_TRIANGLES: usize = 200_000;
 const MAX_REFINEMENT_PASSES: usize = 24;
 
-fn refine_uv_triangulation(
+/// 最長辺二分でトリム領域を細かくする。
+///
+/// `protected` に入っている辺は割らない。隣の面と共有している境界を割ると、
+/// 相手側に対応する点が無く、そこでメッシュが開くため。
+pub(crate) fn refine_uv_triangulation_protected(
     surface: &impl Surface3,
     params: &TessellationParams,
     uvs: &mut Vec<Point2>,
     triangles: &mut Vec<[usize; 3]>,
+    protected: &HashSet<(usize, usize)>,
 ) {
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
     let cell_u = (u_max - u_min) / params.u_divisions.max(2) as f64;
@@ -584,11 +595,21 @@ fn refine_uv_triangulation(
                 continue;
             }
             let longest = (0..3)
+                .filter(|corner| {
+                    !protected.contains(&edge_key(
+                        triangle[*corner],
+                        triangle[(*corner + 1) % 3],
+                    ))
+                })
                 .max_by(|left, right| {
                     scaled_edge_length(uvs, triangle, *left, cell_u, cell_v)
                         .total_cmp(&scaled_edge_length(uvs, triangle, *right, cell_u, cell_v))
-                })
-                .unwrap_or(0);
+                });
+            let Some(longest) = longest else {
+                // 3辺とも共有境界。これ以上は割れない。
+                settled[index] = true;
+                continue;
+            };
             split_edges.insert(edge_key(triangle[longest], triangle[(longest + 1) % 3]));
         }
         if split_edges.is_empty() {
@@ -1033,6 +1054,16 @@ pub fn tessellate_shell(shell: &Shell, params: &TessellationParams) -> TriangleM
 }
 
 /// B-Rep Solid のテッセレーション（Rayon によるマルチコア超並列処理）
+///
+/// **面ごとに独立して刻むので、出来上がりのメッシュは稜に沿って開いている。**
+/// 平面のキャップはたわみ基準で適応的に、曲面のパッチは指定分割数で刻むため、
+/// 同じ円を別々の細かさで刻む。実測で円柱・円錐・穴あき直方体が 16 分割で
+/// 1152 本開き、球には非多様体 66 本と退化三角形 128 枚がある
+/// （`cargo run -p zenith_algo --example mesh_watertight_probe`）。
+/// STL はそのままではスライスできない。
+///
+/// 稜を共有して刻む `stitched::tessellate_solid_stitched` を書いたが、
+/// 分割数によっては非多様体が出るため既定にしていない。経緯は HANDOVER 4-34。
 pub fn tessellate_solid(solid: &Solid, params: &TessellationParams) -> TriangleMesh {
     zenith_geom::work_counter::count_solid_tessellation();
     let mut total_mesh = tessellate_shell(&solid.outer_shell, params);

@@ -146,7 +146,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | フォーマット | 入出力 | 実装仕様 |
 | :--- | :---: | :--- |
 | **STEP (ISO 10303-21)** | **双方向 (Read / Write)** | AP203 / AP214 準拠。`MANIFOLD_SOLID_BREP`, `ADVANCED_FACE`, `B_SPLINE_SURFACE_WITH_KNOTS`, `PLANE`, `FACE_OUTER_BOUND` の完全出力および自前インポーター（`StepImporter`）。`EDGE_CURVE` 100% ID共有、公差 `1.E-05` 適合。複合エンティティは全スーパータイプを列挙する（`CURVE()` を落とすと、OpenCASCADE がスプライン円弧で囲まれた平面の境界ループを丸ごと破棄し、面積が発散してソリッドが Compound に落ちる）。曲面の閉フラグは制御網から判定して出力。p-curve は出力しない（OpenCASCADE 自身も出力せず、なくても厳密に往復することを実測で確認済み）。<br>**読み込み**: 自前ファイルは面数・シェル妥当性・体積を保って往復（多面体は厳密、曲面系は 1e-13）。他カーネルのファイルについては、`FACE_OUTER_BOUND` が無く素の `FACE_BOUND` だけの面、`FACE_BOUND` の向きフラグ、始終点が一致する完全円エッジ、解析曲面（`CYLINDRICAL_SURFACE` / `CONICAL_SURFACE` / `SPHERICAL_SURFACE` / `TOROIDAL_SURFACE`）を面の境界から実寸に合わせて構築する処理、縫い目だけで囲まれた面、および `VERTEX_LOOP`（球を1面で書いたときの極）に対応済み。OpenCASCADE が書いた円柱・円錐・頂点まで届く円錐・球・半球・トーラス・トーラス区分を、いずれも体積と面積が OpenCASCADE の値と一致する形で読める（`crates/zenith_algo/tests/fixtures/` に実ファイルを置き、`foreign_analytic_surface_test` で常時検証）。B-spline曲面＋曲線トリムのファイルは読めるが、トリム境界をポリゴン近似するため面積に数%の誤差が残る（`cargo run -p zenith_algo --example step_import_audit` で測定できる）。 |
-| **STL** | **Write** | 3Dプリント用標準フォーマット。高精度バイナリおよびASCIIエクスポート。 |
+| **STL** | **Write** | 高精度バイナリおよびASCIIエクスポート。<br>**既知の欠陥**: テッセレーションが面ごとに独立して刻むため、曲面と平面キャップを持つ立体のメッシュは稜に沿って開いている（円柱・円錐・穴あき直方体が16分割で 1152 本、球に非多様体66本・退化三角形128枚）。**そのままではスライサが受け付けない。** 多面体だけの立体は閉じている。測定は `cargo run -p zenith_algo --example mesh_watertight_probe`、経緯は HANDOVER 4-34。 |
 | **OBJ** | **Write** | 頂点座標、法線ベクトル、UVテクスチャ座標を含む OBJ 出力。 |
 | **glTF 2.0** | **Write** | Web 3D標準フォーマット。PBR対応、BASE64バイナリ埋め込み自己完結型 `.gltf` 出力。 |
 | **IGES 5.3** | **Write** | レガシーCAD互換。Type 186 Manifold Solid B-Rep フォーマット出力。 |
@@ -194,6 +194,7 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | `cargo run --release -p zenith_algo --example pcurve_fidelity_probe` | p-curve が本当に 3D エッジの上にあるか（検証が見ている点の外でも測る） |
 | `cargo run --release -p zenith_algo --example foreign_reexport` | 他カーネルのファイルを読んで書き戻す一周 |
 | `cargo run --release -p zenith_algo --example boolean_topology_probe` | ブーリアンの結果が稜を**実体として**共有しているか（共有されていない稜が1本でもあれば非ゼロ終了するのでリリースゲートに使える） |
+| `cargo run --release -p zenith_algo --example mesh_watertight_probe` | 出力用メッシュが閉じた三角形メッシュになっているか（9通りの分割数で、開いた辺・非多様体・退化三角形・体積のずれを出す） |
 | `cargo run --release -p zenith_algo --example inertia_probe` | 重心・慣性・慣性積・主慣性モーメントが閉じた式に乗るか（主値が剛体変換で不変かも見る） |
 | `cargo run --release -p zenith_algo --example planar_face_audit` | 平面なのに NURBS で持っている面を返すビルダーが無いか（1枚でもあれば非ゼロ終了） |
 | `cargo run --release -p zenith_algo --example countersink_range_probe` | 皿モミ穴が、下穴・比・角度を振っても作れるか（64組の表） |
