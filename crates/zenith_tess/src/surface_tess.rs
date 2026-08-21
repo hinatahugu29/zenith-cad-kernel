@@ -934,6 +934,7 @@ pub fn tessellate_shell(shell: &Shell, params: &TessellationParams) -> TriangleM
 
 /// B-Rep Solid のテッセレーション（Rayon によるマルチコア超並列処理）
 pub fn tessellate_solid(solid: &Solid, params: &TessellationParams) -> TriangleMesh {
+    zenith_geom::work_counter::count_solid_tessellation();
     let mut total_mesh = tessellate_shell(&solid.outer_shell, params);
     // 空洞シェルは通常のソリッド外殻と同じ向きで保持されるため、ここで反転する
     for inner in &solid.inner_shells {

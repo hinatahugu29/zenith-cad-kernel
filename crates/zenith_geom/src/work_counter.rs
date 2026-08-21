@@ -21,6 +21,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static SURFACE_EVALUATIONS: AtomicU64 = AtomicU64::new(0);
 static MARCHING_NEWTON_ITERATIONS: AtomicU64 = AtomicU64::new(0);
 static MARCHING_CALLS: AtomicU64 = AtomicU64::new(0);
+static SEED_SEARCHES: AtomicU64 = AtomicU64::new(0);
+static POINT_SURFACE_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+static SOLID_TESSELLATIONS: AtomicU64 = AtomicU64::new(0);
 
 /// ある時点までに積み上がった仕事の量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -31,6 +34,15 @@ pub struct WorkCounters {
     pub marching_newton_iterations: u64,
     /// 交線を辿り始めた回数。
     pub marching_calls: u64,
+    /// 種を探すために格子を走らせた回数。
+    pub seed_searches: u64,
+    /// 点から曲面への最近傍射影の回数。
+    pub point_surface_projections: u64,
+    /// 立体をまるごとテッセレートした回数。
+    ///
+    /// 内外判定はメッシュに対して行われるので、同じ立体を何度も刻んで
+    /// いないかがここに出る。
+    pub solid_tessellations: u64,
 }
 
 impl WorkCounters {
@@ -44,6 +56,13 @@ impl WorkCounters {
                 .marching_newton_iterations
                 .saturating_sub(earlier.marching_newton_iterations),
             marching_calls: self.marching_calls.saturating_sub(earlier.marching_calls),
+            seed_searches: self.seed_searches.saturating_sub(earlier.seed_searches),
+            point_surface_projections: self
+                .point_surface_projections
+                .saturating_sub(earlier.point_surface_projections),
+            solid_tessellations: self
+                .solid_tessellations
+                .saturating_sub(earlier.solid_tessellations),
         }
     }
 }
@@ -54,6 +73,9 @@ pub fn snapshot() -> WorkCounters {
         surface_evaluations: SURFACE_EVALUATIONS.load(Ordering::Relaxed),
         marching_newton_iterations: MARCHING_NEWTON_ITERATIONS.load(Ordering::Relaxed),
         marching_calls: MARCHING_CALLS.load(Ordering::Relaxed),
+        seed_searches: SEED_SEARCHES.load(Ordering::Relaxed),
+        point_surface_projections: POINT_SURFACE_PROJECTIONS.load(Ordering::Relaxed),
+        solid_tessellations: SOLID_TESSELLATIONS.load(Ordering::Relaxed),
     }
 }
 
@@ -62,6 +84,9 @@ pub fn reset() {
     SURFACE_EVALUATIONS.store(0, Ordering::Relaxed);
     MARCHING_NEWTON_ITERATIONS.store(0, Ordering::Relaxed);
     MARCHING_CALLS.store(0, Ordering::Relaxed);
+    SEED_SEARCHES.store(0, Ordering::Relaxed);
+    POINT_SURFACE_PROJECTIONS.store(0, Ordering::Relaxed);
+    SOLID_TESSELLATIONS.store(0, Ordering::Relaxed);
 }
 
 #[inline]
@@ -77,4 +102,19 @@ pub fn count_marching_newton_iteration() {
 #[inline]
 pub fn count_marching_call() {
     MARCHING_CALLS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn count_seed_search() {
+    SEED_SEARCHES.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn count_point_surface_projection() {
+    POINT_SURFACE_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn count_solid_tessellation() {
+    SOLID_TESSELLATIONS.fetch_add(1, Ordering::Relaxed);
 }

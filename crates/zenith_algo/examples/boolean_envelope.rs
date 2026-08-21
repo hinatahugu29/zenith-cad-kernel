@@ -270,6 +270,9 @@ fn main() {
     let mut boolean_seconds_total = 0.0f64;
     let mut check_seconds_total = 0.0f64;
     let mut solve_work_total = zenith_geom::WorkCounters::default();
+    // 解析解を持つケースのうち、いちばん外れているもの。45行を読まなくても
+    // 劣化に気づけるように、要約に出す。
+    let mut worst_analytic: Option<(String, f64)> = None;
 
     // 壁時計はこの環境では振れる（同じ仕事が 6分13秒 から 6分39秒 まで）。
     // evals は曲面の評価回数で、走らせるたびに同じ値になる。速さの主張は
@@ -338,7 +341,19 @@ fn main() {
                             notes.push(format!("EXPECTED {expected:.3}"));
                             is_wrong = true;
                         } else {
-                            notes.push("volume matches analytic".to_string());
+                            // 「合っている」ではなく、どれだけ合っているかを出す。
+                            // 二値にすると、1e-6 のすぐ内側にいるのか 1e-13 まで
+                            // 来ているのかが分からず、良くなっても悪くなっても
+                            // 同じ字面になる。
+                            notes.push(format!("analytic {relative:.2e}"));
+                        }
+                        if worst_analytic
+                            .as_ref()
+                            .map(|(_, worst)| relative > *worst)
+                            .unwrap_or(true)
+                        {
+                            worst_analytic =
+                                Some((format!("{} {}", case.name.trim(), op_name), relative));
                         }
                     }
 
@@ -355,6 +370,10 @@ fn main() {
                     solve_work_total.marching_newton_iterations +=
                         solve_work.marching_newton_iterations;
                     solve_work_total.marching_calls += solve_work.marching_calls;
+                    solve_work_total.seed_searches += solve_work.seed_searches;
+                    solve_work_total.point_surface_projections +=
+                        solve_work.point_surface_projections;
+                    solve_work_total.solid_tessellations += solve_work.solid_tessellations;
                     timings.push((
                         format!("{} {}", case.name, op_name),
                         solve_seconds,
@@ -382,6 +401,10 @@ fn main() {
                     solve_work_total.marching_newton_iterations +=
                         solve_work.marching_newton_iterations;
                     solve_work_total.marching_calls += solve_work.marching_calls;
+                    solve_work_total.seed_searches += solve_work.seed_searches;
+                    solve_work_total.point_surface_projections +=
+                        solve_work.point_surface_projections;
+                    solve_work_total.solid_tessellations += solve_work.solid_tessellations;
                     timings.push((
                         format!("{} {}", case.name, op_name),
                         solve_seconds,
@@ -415,11 +438,20 @@ fn main() {
     println!(
         "solve {boolean_seconds_total:.1}s   check {check_seconds_total:.1}s   (check = mass integration, shell closure, and the 384-point gate)"
     );
+    if let Some((name, relative)) = &worst_analytic {
+        println!("worst analytic agreement: {relative:.2e}  ({name})");
+    }
     println!(
         "solve work: {} surface evaluations, {} marching Newton iterations, {} marches   (deterministic; compare these across runs, not the seconds)",
         solve_work_total.surface_evaluations,
         solve_work_total.marching_newton_iterations,
         solve_work_total.marching_calls
+    );
+    println!(
+        "            {} seed searches, {} point-surface projections, {} whole-solid tessellations",
+        solve_work_total.seed_searches,
+        solve_work_total.point_surface_projections,
+        solve_work_total.solid_tessellations
     );
     timings.sort_by(|a, b| {
         (b.1 + b.2)

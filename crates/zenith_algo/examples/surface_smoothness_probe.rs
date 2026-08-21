@@ -1,15 +1,30 @@
 //! Hunts for discontinuities in surface evaluation.
 //!
-//! The swept pipe's side patches refuse to converge under quadrature refinement
-//! even at 131072 triangles, which a smooth surface cannot do. This walks the
-//! parameter domain at fine steps and reports the largest jump in position and
-//! in tangent between neighbouring samples, relative to the local step, so a
-//! break in the evaluator shows up as an outlier.
+//! # この探索の前提は外れていました（解決済み）
+//!
+//! 元の問いは「掃引パイプの側面が 131072 三角形でも収束しないのは、滑らかな
+//! 曲面には起こりえないから、評価器が壊れているのではないか」でした。
+//! 評価器は壊れていません。折れは**実在し、しかも正当**でした——下の出力が
+//! 見せているとおり、この側面は v 方向に内部ノットを13本持ちます。B-spline が
+//! 滑らかなのは各ノット区間の内側だけです。
+//!
+//! 直すべきだったのは曲面ではなく**積分のほう**で、三角形をノット線で割って
+//! から求積するようにしました（4-20）。掃引パイプの面積はいま24分割から
+//! 1e-12 の刻みで動きません。
+//!
+//! **「滑らかなはずのものが収束しないなら評価器が壊れている」は、
+//! 「滑らかなはず」が正しいときにだけ成り立ちます。** ここではその前提の
+//! ほうが違っていました。プローブは残してあります——評価器に本物の折れが
+//! 入ったときには、やはりここに出ます。
+//!
+//! This walks the parameter domain at fine steps and reports the largest jump in
+//! position and in tangent between neighbouring samples, relative to the local
+//! step, so a break in the evaluator shows up as an outlier.
 //!
 //! Run with: cargo run --release -p zenith_algo --example surface_smoothness_probe
 
 use zenith_algo::{PrimitiveBuilder, SweepBuilder};
-use zenith_geom::{NurbsCurve3, Surface3};
+use zenith_geom::NurbsCurve3;
 use zenith_math::Point3;
 use zenith_topo::{FaceGeometry, Solid};
 

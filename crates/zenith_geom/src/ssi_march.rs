@@ -155,6 +155,7 @@ impl IntersectionMarcher {
         grid: usize,
         limit: usize,
     ) -> Vec<(f64, f64)> {
+        crate::work_counter::count_seed_search();
         let steps = grid.max(4);
         let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
         let ((s_min, s_max), (t_min, t_max)) = s2.param_range();

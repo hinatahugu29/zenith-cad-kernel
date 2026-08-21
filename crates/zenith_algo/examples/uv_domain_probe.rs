@@ -8,7 +8,7 @@
 //! Run with: cargo run --release -p zenith_algo --example uv_domain_probe
 
 use zenith_algo::{PrimitiveBuilder, SweepBuilder};
-use zenith_geom::{NurbsCurve3, Surface3};
+use zenith_geom::NurbsCurve3;
 use zenith_math::Point3;
 use zenith_tess::{face_uv_triangulation, TessellationParams};
 use zenith_topo::{FaceGeometry, Solid};

@@ -101,6 +101,7 @@ impl ExtremumEngine {
         max_iterations: usize,
         tolerance: f64,
     ) -> Result<PointSurfaceProjection, String> {
+        crate::work_counter::count_point_surface_projection();
         let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
 
         // 1. 粗いサンプリングで初期パラメータ (u, v) を決定
@@ -165,6 +166,7 @@ impl ExtremumEngine {
         max_iterations: usize,
         tolerance: f64,
     ) -> Result<PointSurfaceProjection, String> {
+        crate::work_counter::count_point_surface_projection();
         let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
         let start_u = seed_u.clamp(u_min, u_max);
         let start_v = seed_v.clamp(v_min, v_max);

@@ -9,7 +9,7 @@ fn non_manifold_vertices(shell: &Shell, tol: &Tolerance) -> usize {
     let mut vertex_points: Vec<Point3> = Vec::new();
     let mut junctions: Vec<Vec<(u64, u64)>> = Vec::new();
 
-    let mut key_of = |point: Point3, points: &mut Vec<Point3>, js: &mut Vec<Vec<(u64, u64)>>| -> usize {
+    let key_of = |point: Point3, points: &mut Vec<Point3>, js: &mut Vec<Vec<(u64, u64)>>| -> usize {
         if let Some(i) = points.iter().position(|p| (p - point).norm() <= tol.linear * 10.0) {
             return i;
         }
