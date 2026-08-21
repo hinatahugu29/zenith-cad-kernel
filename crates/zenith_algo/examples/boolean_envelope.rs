@@ -263,15 +263,38 @@ fn main() {
     let mut failed = 0usize;
     let mut wrong = 0usize;
 
+    // 走査にかかる時間の内訳。「この例が遅い」ことと「ブーリアンが遅い」ことは
+    // 別の主張で、この例はブーリアンのほかに質量積分・閉性検証・384点の検証
+    // ゲートも回している。どれが効いているかは測らないと分からない。
+    let mut timings: Vec<(String, f64, f64)> = Vec::new();
+    let mut boolean_seconds_total = 0.0f64;
+    let mut check_seconds_total = 0.0f64;
+    let mut solve_work_total = zenith_geom::WorkCounters::default();
+
+    // 壁時計はこの環境では振れる（同じ仕事が 6分13秒 から 6分39秒 まで）。
+    // evals は曲面の評価回数で、走らせるたびに同じ値になる。速さの主張は
+    // こちらで判定する。
     println!(
-        "{:<42} {:<13} {:<9} {:>12}  {}",
-        "case", "op", "result", "volume", "note"
+        "{:<42} {:<13} {:<9} {:>12} {:>8} {:>8} {:>12}  {}",
+        "case", "op", "result", "volume", "solve", "check", "evals", "note"
     );
-    println!("{}", "-".repeat(110));
+    println!("{}", "-".repeat(128));
 
     for case in &cases {
         for (op_index, (op_name, op)) in ops.iter().enumerate() {
-            match BooleanEngine::boolean_solids_exact_result(&case.a, &case.b, *op, &tol) {
+            // ゲートは自分で掛ける。検証つきの入口を呼ぶと、ゲートに落ちた
+            // 結果は Err になって「未実装」と同じ箱に入り、下の gate 列は
+            // 決して REJECT にならない——通らなかったものは Ok で返って
+            // こないからです。それでは列が何も確かめません。しかも同じ
+            // 384点をこの例がもう一度払うことになります。
+            let work_start = zenith_geom::work_counter::snapshot();
+            let solve_start = std::time::Instant::now();
+            let outcome =
+                BooleanEngine::boolean_solids_exact_result_unverified(&case.a, &case.b, *op, &tol);
+            let solve_seconds = solve_start.elapsed().as_secs_f64();
+            let solve_work = zenith_geom::work_counter::snapshot().since(&work_start);
+            let check_start = std::time::Instant::now();
+            match outcome {
                 Ok(result) => {
                     let volume: f64 = result
                         .solids
@@ -307,7 +330,7 @@ fn main() {
                         notes.push("SHELL NOT VALID".to_string());
                     }
 
-                    let mut is_wrong = !closed;
+                    let mut is_wrong = !closed || !gate.is_valid();
                     if let Some(expected) = case.expected[op_index] {
                         let error = (volume - expected).abs();
                         let relative = error / expected.max(1e-9);
@@ -325,31 +348,89 @@ fn main() {
                         ok += 1;
                     }
 
+                    let check_seconds = check_start.elapsed().as_secs_f64();
+                    boolean_seconds_total += solve_seconds;
+                    check_seconds_total += check_seconds;
+                    solve_work_total.surface_evaluations += solve_work.surface_evaluations;
+                    solve_work_total.marching_newton_iterations +=
+                        solve_work.marching_newton_iterations;
+                    solve_work_total.marching_calls += solve_work.marching_calls;
+                    timings.push((
+                        format!("{} {}", case.name, op_name),
+                        solve_seconds,
+                        check_seconds,
+                    ));
+
                     println!(
-                        "{:<42} {:<13} {:<9} {:>12.3}  {}",
+                        "{:<42} {:<13} {:<9} {:>12.3} {:>7.2}s {:>7.2}s {:>12}  {}",
                         case.name,
                         op_name,
                         if is_wrong { "WRONG" } else { "ok" },
                         volume,
+                        solve_seconds,
+                        check_seconds,
+                        solve_work.surface_evaluations,
                         notes.join(", ")
                     );
                 }
                 Err(err) => {
                     failed += 1;
+                    let check_seconds = check_start.elapsed().as_secs_f64();
+                    boolean_seconds_total += solve_seconds;
+                    check_seconds_total += check_seconds;
+                    solve_work_total.surface_evaluations += solve_work.surface_evaluations;
+                    solve_work_total.marching_newton_iterations +=
+                        solve_work.marching_newton_iterations;
+                    solve_work_total.marching_calls += solve_work.marching_calls;
+                    timings.push((
+                        format!("{} {}", case.name, op_name),
+                        solve_seconds,
+                        check_seconds,
+                    ));
                     let short = err.split(';').next().unwrap_or(&err);
                     let short = short.chars().take(60).collect::<String>();
                     println!(
-                        "{:<42} {:<13} {:<9} {:>12}  {}",
-                        case.name, op_name, "ERROR", "-", short
+                        "{:<42} {:<13} {:<9} {:>12} {:>7.2}s {:>7.2}s {:>12}  {}",
+                        case.name,
+                        op_name,
+                        "ERROR",
+                        "-",
+                        solve_seconds,
+                        check_seconds,
+                        solve_work.surface_evaluations,
+                        short
                     );
                 }
             }
         }
     }
 
-    println!("{}", "-".repeat(110));
+    println!("{}", "-".repeat(128));
     println!(
         "supported: {ok}   wrong-result: {wrong}   unsupported/error: {failed}   (total {})",
         ok + wrong + failed
     );
+
+    println!();
+    println!(
+        "solve {boolean_seconds_total:.1}s   check {check_seconds_total:.1}s   (check = mass integration, shell closure, and the 384-point gate)"
+    );
+    println!(
+        "solve work: {} surface evaluations, {} marching Newton iterations, {} marches   (deterministic; compare these across runs, not the seconds)",
+        solve_work_total.surface_evaluations,
+        solve_work_total.marching_newton_iterations,
+        solve_work_total.marching_calls
+    );
+    timings.sort_by(|a, b| {
+        (b.1 + b.2)
+            .partial_cmp(&(a.1 + a.2))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    println!("slowest cases:");
+    for (name, solve_seconds, check_seconds) in timings.iter().take(8) {
+        println!(
+            "  {:<56} solve {:>7.2}s   check {:>7.2}s",
+            name, solve_seconds, check_seconds
+        );
+    }
 }

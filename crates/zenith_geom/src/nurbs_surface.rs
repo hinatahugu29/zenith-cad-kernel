@@ -273,6 +273,7 @@ impl NurbsSurface3 {
 
     /// 曲面上の3次元座標を評価（Algorithm A3.5 / A4.3 from The NURBS Book）
     pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
+        crate::work_counter::count_surface_evaluation();
         let num_u = self.control_points.len();
         let num_v = self.control_points[0].len();
 
@@ -379,6 +380,7 @@ impl NurbsSurface3 {
 
     /// 曲面上の点および U方向・V方向の偏導関数 (Du, Dv) を評価
     pub fn evaluate_derivatives_1st(&self, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
+        crate::work_counter::count_surface_evaluation();
         let num_u = self.control_points.len();
         let num_v = self.control_points[0].len();
 

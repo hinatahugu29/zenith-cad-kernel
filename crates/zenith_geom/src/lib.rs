@@ -14,6 +14,7 @@ pub mod surface;
 pub mod surface_blend;
 pub mod triangular_patch;
 pub mod trimmed_surface;
+pub mod work_counter;
 
 pub use bspline_basis::KnotVector;
 pub use coons_patch::CoonsPatch3;
@@ -31,3 +32,4 @@ pub use surface::{PlaneSurface3, Surface3};
 pub use surface_blend::SurfaceBlend3;
 pub use triangular_patch::TriangularPatch3;
 pub use trimmed_surface::{TrimLoop2D, TrimmedSurface3};
+pub use work_counter::WorkCounters;

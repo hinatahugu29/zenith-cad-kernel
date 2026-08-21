@@ -72,6 +72,7 @@ impl IntersectionMarcher {
         max_points: usize,
         tol: &Tolerance,
     ) -> Option<MarchedIntersection> {
+        crate::work_counter::count_marching_call();
         let start = Self::land_on_curve(s1, s2, seed_u, seed_v, tol)?;
 
         let mut forward = Self::run(s1, s2, start, step, max_points, tol);
@@ -273,6 +274,7 @@ impl IntersectionMarcher {
         let limit = tol.linear.min(1e-10);
 
         for _ in 0..40 {
+            crate::work_counter::count_marching_newton_iteration();
             let (p1, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
             let (p2, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
 
@@ -458,6 +460,7 @@ impl IntersectionMarcher {
         state[which] = value;
 
         for _ in 0..40 {
+            crate::work_counter::count_marching_newton_iteration();
             let (p1, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
             let (p2, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
             let gap = p1 - p2;
