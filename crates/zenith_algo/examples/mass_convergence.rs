@@ -73,8 +73,14 @@ fn main() {
         ],
     )
     .unwrap();
+    // 他カーネルの読みをここに写さないこと。かつて「OCC reads 1275.086556
+    // for the area」と書いてありましたが、実際の OCC は 1276.598256 で、
+    // 自前の 1276.600032 と 1.39e-6 で一致します。写した数字は、対象が
+    // 変わっても、カーネルが直っても、そのまま残ります。**存在しない
+    // 1.19e-3 の食い違いを報告し続けていました。** 突き合わせは
+    // `tools/freecad_cross_validate.py` にあり、そこは実際に両方を測ります。
     report(
-        "swept pipe (OCC reads 1275.086556 for the area)",
+        "swept pipe (cross-checked in freecad_cross_validate: area 1.39e-6)",
         &SweepBuilder::sweep_circle_along_curve(&path, 3.5, 16).unwrap(),
         None,
     );
@@ -90,5 +96,16 @@ fn main() {
         &tol,
     )
     .unwrap();
-    report("helix spring (OCC reads 768.397883)", &helix, Some(768.397883));
+    // 同じく写した数字でした。「OCC reads 768.397883」に対し、実際の OCC は
+    // 770.039001732、自前は 770.039017238 で 2.01e-8 の一致です。0.2% の
+    // 食い違いは幻で、それを信じて原因を探すと何日でも溶けます。
+    //
+    // この断面は重心が経路から外れている（x=10 が中心）ので `V = A x L` は
+    // 成り立ちません。閉じた式が要るなら `builder_audit` の螺旋のほうを
+    // 見てください。あちらは原点中心の断面で、2.20e-7 で式に乗ります。
+    report(
+        "helix spring (cross-checked in freecad_cross_validate: volume 2.01e-8)",
+        &helix,
+        None,
+    );
 }
