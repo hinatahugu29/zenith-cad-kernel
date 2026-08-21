@@ -55,7 +55,7 @@ impl OrthogonalBoxBoolean {
                     Self::make_box_from_bounds(union)
                         .map(|solid| Some(crate::ExactBooleanResult::single(solid)))
                 } else if bounds_a.intersection(bounds_b, tol).is_some() {
-                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol).map(Some)
+                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol)
                 } else {
                     Ok(None)
                 }
@@ -65,7 +65,7 @@ impl OrthogonalBoxBoolean {
                     Self::make_box_from_bounds(difference)
                         .map(|solid| Some(crate::ExactBooleanResult::single(solid)))
                 } else if bounds_a.intersection(bounds_b, tol).is_some() {
-                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol).map(Some)
+                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol)
                 } else {
                     Ok(None)
                 }
@@ -78,7 +78,7 @@ impl OrthogonalBoxBoolean {
         bounds_b: AxisAlignedBoxBounds,
         op: BooleanOpType,
         tol: &Tolerance,
-    ) -> Result<crate::ExactBooleanResult, String> {
+    ) -> Result<Option<crate::ExactBooleanResult>, String> {
         let xs = sorted_unique_coords(
             &[
                 bounds_a.min.x,
@@ -136,12 +136,13 @@ impl OrthogonalBoxBoolean {
         if occupied.iter().all(|is_occupied| !*is_occupied) {
             // どのセルも残らなかった。`A - A` がこれで、答えは空です。
             // 求められなかったのではないので、エラーにしません（4-6）。
-            return Ok(crate::ExactBooleanResult::from_solids(Vec::new()));
+            return Ok(Some(crate::ExactBooleanResult::from_solids(Vec::new())));
         }
         if !occupied_cells_are_connected(&occupied, nx, ny, nz) {
-            return Err(
-                "Exact axis-aligned box boolean produced multiple disjoint regions".to_string(),
-            );
+            // 離れた塊は、この近道では表せません（占有セルの外周から1枚の
+            // 閉じたシェルを組むため）。**表せないことは、答えが無いことでは
+            // ありません。** 一般経路は塊ごとに立体を返せるので、譲ります。
+            return Ok(None);
         }
 
         let mut faces = Vec::new();
@@ -161,9 +162,18 @@ impl OrthogonalBoxBoolean {
             }
         }
 
-        Solid::try_simple(Shell::closed(faces), tol)
-            .map(crate::ExactBooleanResult::single)
-            .map_err(|err| err.to_string())
+        // ここで組めない形がひとつあります。**結果が2つ以上に分かれるとき**
+        // です。この近道は占有したセルの外周から1枚の閉じたシェルを組むので、
+        // 離れた塊は表せません。板を貫くスロットで切ると素の箱は2つに割れ、
+        // ここが失敗していました——**同じスロットが穴あきの板では通ります**。
+        // あちらは近道を外れて一般経路へ落ちるからです。
+        //
+        // 組めないことは「この近道の出番ではない」であって、答えが無いことでは
+        // ありません。エラーにせず、一般経路へ譲ります。
+        match Solid::try_simple(Shell::closed(faces), tol) {
+            Ok(solid) => Ok(Some(crate::ExactBooleanResult::single(solid))),
+            Err(_) => Ok(None),
+        }
     }
 
     fn make_box_from_bounds(bounds: AxisAlignedBoxBounds) -> Result<Solid, String> {

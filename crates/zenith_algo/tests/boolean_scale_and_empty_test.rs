@@ -161,6 +161,106 @@ fn a_solid_minus_a_copy_moved_by_a_hair_is_still_empty() {
     );
 }
 
+/// 面を辺で繋いで塊を数える。位置で繋ぐのは、分割された面が同じ稜を別々の
+/// `Edge` として持つことがあるからです。
+fn connected_pieces(solid: &zenith_topo::Solid, grid: f64) -> usize {
+    use std::collections::{HashMap, HashSet};
+    let key = |point: zenith_math::Point3| {
+        (
+            (point.x / grid).round() as i64,
+            (point.y / grid).round() as i64,
+            (point.z / grid).round() as i64,
+        )
+    };
+    let faces = &solid.outer_shell.faces;
+    let mut users: HashMap<((i64, i64, i64), (i64, i64, i64)), Vec<usize>> = HashMap::new();
+    for (index, face) in faces.iter().enumerate() {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for edge in &wire.edges {
+                let (start, end) = edge.edge.curve.param_range();
+                let a = key(edge.edge.curve.evaluate(start));
+                let b = key(edge.edge.curve.evaluate(end));
+                users.entry(if a <= b { (a, b) } else { (b, a) }).or_default().push(index);
+            }
+        }
+    }
+    let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); faces.len()];
+    for sharing in users.values() {
+        for (position, left) in sharing.iter().enumerate() {
+            for right in sharing.iter().skip(position + 1) {
+                if left != right {
+                    neighbours[*left].push(*right);
+                    neighbours[*right].push(*left);
+                }
+            }
+        }
+    }
+    let mut seen: HashSet<usize> = HashSet::new();
+    let mut components = 0;
+    for start in 0..faces.len() {
+        if seen.contains(&start) {
+            continue;
+        }
+        components += 1;
+        let mut stack = vec![start];
+        seen.insert(start);
+        while let Some(index) = stack.pop() {
+            for next in &neighbours[index] {
+                if seen.insert(*next) {
+                    stack.push(*next);
+                }
+            }
+        }
+    }
+    components
+}
+
+#[test]
+fn a_cut_that_splits_a_solid_returns_separate_bodies() {
+    // 板をスロットで分断すると答えは2つの塊です。以前はそれを1枚のシェルに
+    // まとめて**1つの `Solid`** として返していました。
+    //
+    // **ゲートのどの検査にも掛かりません。** 体積は発散定理が両方を足すので
+    // 正しく出て、各塊が閉じているのでシェルは「閉じている」と判定され、
+    // 384点の内外判定も通ります。位相だけが違い、それを見る検査が無いのです。
+    // 他カーネルは非連結なシェルを `MANIFOLD_SOLID_BREP` として読めません。
+    let tol = Tolerance::default();
+    let plate = PrimitiveBuilder::make_box(30.0, 30.0, 15.0).expect("plate");
+    let slot = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(60.0, 6.0, 40.0).expect("slot"),
+        Vec3::new(-15.0, 12.0, -10.0),
+    );
+
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&plate, &slot, BooleanOpType::Difference, &tol)
+            .expect("a slot right through the plate is an answer, not a failure");
+
+    assert_eq!(
+        result.solids.len(),
+        2,
+        "the slot leaves two bodies, so the result should carry two solids"
+    );
+    let grid = tol.linear.max(1e-9);
+    for (index, solid) in result.solids.iter().enumerate() {
+        assert_eq!(
+            connected_pieces(solid, grid),
+            1,
+            "solid {index} should be a single connected body"
+        );
+    }
+
+    let total: f64 = result
+        .solids
+        .iter()
+        .map(|solid| MassCalculator::compute_from_brep(solid, &params()).volume)
+        .sum();
+    let expected = 30.0 * 30.0 * 15.0 - 30.0 * 6.0 * 15.0;
+    assert!(
+        (total - expected).abs() / expected < 1e-9,
+        "the two halves should total {expected}, measured {total}"
+    );
+}
+
 #[test]
 fn a_solid_with_a_cavity_is_refused_rather_than_silently_flattened() {
     // ブーリアンの経路はどれも `outer_shell` しか見ません。空洞を持つ立体を

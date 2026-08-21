@@ -253,18 +253,18 @@ impl BooleanEngine {
             solid_a, solid_b, op, tol,
         );
         if shell_assembly.selection.stitch_report.is_closed_manifold() {
-            return crate::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(
+            return crate::BrepIntersectionBuilder::build_solids_from_selected_face_pieces(
                 &shell_assembly.selection.selected_face_pieces,
                 tol,
             )
-            .map(ExactBooleanResult::single);
+            .map(ExactBooleanResult::from_solids);
         }
         if shell_assembly.assembly.stitch_report.is_closed_manifold() {
-            return crate::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(
+            return crate::BrepIntersectionBuilder::build_solids_from_selected_face_pieces(
                 &shell_assembly.assembly.selected_face_pieces,
                 tol,
             )
-            .map(ExactBooleanResult::single);
+            .map(ExactBooleanResult::from_solids);
         }
 
         let report =

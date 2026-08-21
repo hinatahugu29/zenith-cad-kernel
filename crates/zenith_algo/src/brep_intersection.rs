@@ -728,6 +728,34 @@ impl BrepIntersectionBuilder {
         Solid::try_simple(Shell::closed(faces), tol).map_err(|err| err.to_string())
     }
 
+    /// 選んだ面から立体を組む。**離れた塊は別々の立体にします。**
+    ///
+    /// 板をスロットで分断すると、答えは2つの塊です。以前はそれを1枚のシェルに
+    /// まとめて**1つの `Solid`** として返していました。
+    ///
+    /// **どの検査にも掛かりません。** 体積は発散定理が両方を足すので正しく
+    /// 出ますし（実測 10464.5286、閉じた式どおり）、各塊が閉じているので
+    /// シェルは「閉じている」と判定され、384点の内外判定も通ります。
+    /// **位相だけが違い、位相を見る検査がありませんでした。**
+    pub fn build_solids_from_selected_face_pieces(
+        pieces: &[SelectedBooleanFacePiece],
+        tol: &Tolerance,
+    ) -> Result<Vec<Solid>, String> {
+        let groups = connected_piece_groups(pieces, tol);
+        if groups.len() <= 1 {
+            return Self::build_solid_from_selected_face_pieces(pieces, tol)
+                .map(|solid| vec![solid]);
+        }
+
+        let mut solids = Vec::with_capacity(groups.len());
+        for group in groups {
+            let subset: Vec<SelectedBooleanFacePiece> =
+                group.into_iter().map(|index| pieces[index].clone()).collect();
+            solids.push(Self::build_solid_from_selected_face_pieces(&subset, tol)?);
+        }
+        Ok(solids)
+    }
+
     pub fn build_planar_cap_from_edge_loop(
         edges: &[Edge],
         tol: &Tolerance,
@@ -3054,6 +3082,71 @@ fn collect_wire_stitch_edge_uses(
             edge_uses.push(StitchEdgeUse { start, end });
         }
     }
+}
+
+/// 面を辺で繋いで、離れた塊ごとに添字をまとめる。
+///
+/// 辺の同一性は端点の座標で見ます。分割された面は同じ稜を別々の `Edge` として
+/// 持つことがあり（`unify_coincident_edges` が一本化するのはこの後です）、
+/// 実体で繋ぐと全部が離れて見えます。
+fn connected_piece_groups(pieces: &[SelectedBooleanFacePiece], tol: &Tolerance) -> Vec<Vec<usize>> {
+    let grid = tol.linear.max(1e-9);
+    let key = |point: Point3| {
+        (
+            (point.x / grid).round() as i64,
+            (point.y / grid).round() as i64,
+            (point.z / grid).round() as i64,
+        )
+    };
+
+    let mut users: BTreeMap<((i64, i64, i64), (i64, i64, i64)), Vec<usize>> = BTreeMap::new();
+    for (index, piece) in pieces.iter().enumerate() {
+        let face = &piece.face;
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for edge in &wire.edges {
+                let (start, end) = edge.edge.curve.param_range();
+                let a = key(edge.edge.curve.evaluate(start));
+                let b = key(edge.edge.curve.evaluate(end));
+                let pair = if a <= b { (a, b) } else { (b, a) };
+                users.entry(pair).or_default().push(index);
+            }
+        }
+    }
+
+    let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); pieces.len()];
+    for sharing in users.values() {
+        for (position, left) in sharing.iter().enumerate() {
+            for right in sharing.iter().skip(position + 1) {
+                if left != right {
+                    neighbours[*left].push(*right);
+                    neighbours[*right].push(*left);
+                }
+            }
+        }
+    }
+
+    let mut seen = vec![false; pieces.len()];
+    let mut groups = Vec::new();
+    for start in 0..pieces.len() {
+        if seen[start] {
+            continue;
+        }
+        let mut group = Vec::new();
+        let mut stack = vec![start];
+        seen[start] = true;
+        while let Some(index) = stack.pop() {
+            group.push(index);
+            for next in &neighbours[index] {
+                if !seen[*next] {
+                    seen[*next] = true;
+                    stack.push(*next);
+                }
+            }
+        }
+        group.sort_unstable();
+        groups.push(group);
+    }
+    groups
 }
 
 fn reverse_face_orientation(face: &Face) -> Face {
