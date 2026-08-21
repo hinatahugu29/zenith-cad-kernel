@@ -1461,6 +1461,141 @@ pub fn check_exact_boxes_interference(
     Ok((status_str.to_string(), report.overlap_volume))
 }
 
+/// 六角ボルト（Hex Bolt）ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (across_flats = 16.0, head_thickness = 6.4, shank_radius = 5.0, shank_length = 30.0, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_hex_bolt(
+    across_flats: f64,
+    head_thickness: f64,
+    shank_radius: f64,
+    shank_length: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::BoltBuilder::make_hex_bolt(
+        across_flats,
+        head_thickness,
+        shank_radius,
+        shank_length,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Hex bolt generation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_HEX_BOLT")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 段付きシャフト（Stepped Shaft）ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (sections, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_stepped_shaft(
+    sections: Vec<(f64, f64)>,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::ShaftBuilder::make_stepped_shaft(&sections)
+        .map_err(|e| PyValueError::new_err(format!("Stepped shaft generation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_STEPPED_SHAFT")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// キー溝（Keyway）付き軸ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (radius = 12.0, length = 50.0, key_width = 6.0, key_depth = 3.5, key_length = 20.0, key_z_pos = 15.0, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_shaft_with_keyway(
+    radius: f64,
+    length: f64,
+    key_width: f64,
+    key_depth: f64,
+    key_length: f64,
+    key_z_pos: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let base_shaft = zenith_algo::ShaftBuilder::make_stepped_shaft(&[(radius, length)])
+        .map_err(|e| PyValueError::new_err(format!("Base shaft generation failed: {}", e)))?;
+
+    let solid = zenith_algo::ShaftBuilder::make_shaft_with_keyway(
+        &base_shaft,
+        radius,
+        key_width,
+        key_depth,
+        key_length,
+        key_z_pos,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Keyway shaft generation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_KEYWAY_SHAFT")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 2つの直方体間の表面最短距離探索
+#[pyfunction]
+#[pyo3(signature = (min_a, max_a, min_b, max_b))]
+pub fn compute_boxes_min_distance(
+    min_a: [f64; 3],
+    max_a: [f64; 3],
+    min_b: [f64; 3],
+    max_b: [f64; 3],
+) -> PyResult<f64> {
+    let box_a = zenith_algo::PrimitiveBuilder::make_box(
+        max_a[0] - min_a[0],
+        max_a[1] - min_a[1],
+        max_a[2] - min_a[2],
+    )
+    .map_err(|e| PyValueError::new_err(format!("Box A creation failed: {}", e)))?;
+    let box_a = zenith_algo::BrepTransform::translate_solid(
+        &box_a,
+        Vec3::new(min_a[0], min_a[1], min_a[2]),
+    );
+
+    let box_b = zenith_algo::PrimitiveBuilder::make_box(
+        max_b[0] - min_b[0],
+        max_b[1] - min_b[1],
+        max_b[2] - min_b[2],
+    )
+    .map_err(|e| PyValueError::new_err(format!("Box B creation failed: {}", e)))?;
+    let box_b = zenith_algo::BrepTransform::translate_solid(
+        &box_b,
+        Vec3::new(min_b[0], min_b[1], min_b[2]),
+    );
+
+    let tol = Tolerance::default();
+    let result = zenith_algo::DistanceEngine::compute_min_distance(&box_a, &box_b, &tol);
+
+    Ok(result.min_distance)
+}
+
 
 
 

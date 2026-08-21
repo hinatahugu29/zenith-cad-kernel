@@ -30,6 +30,9 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::make_drilled_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_counterbore_hole_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_hex_nut, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_hex_bolt, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_stepped_shaft, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_shaft_with_keyway, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_hollow_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_through_hollow_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_hollow_extrusion, m)?)?;
@@ -53,6 +56,7 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::compute_box_mass_properties, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::check_boxes_interference, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::check_exact_boxes_interference, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::compute_boxes_min_distance, m)?)?;
 
     m.add_function(wrap_pyfunction!(modeling::make_boolean, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_exact_box_boolean, m)?)?;

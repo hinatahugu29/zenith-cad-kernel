@@ -2,12 +2,14 @@
 
 pub mod boolean;
 pub mod boolean_validation;
+pub mod bolt;
 pub mod brep_intersection;
 pub mod brep_transform;
 pub mod cap;
 pub mod chamfer;
 mod cylinder_boolean;
 pub mod direct_edit;
+pub mod distance;
 pub mod extrude;
 pub mod face_split;
 pub mod feature_tree;
@@ -27,6 +29,7 @@ pub mod pattern;
 pub mod polyline;
 pub mod primitive;
 pub mod regularize;
+pub mod shaft;
 
 
 pub mod revolve;
@@ -46,6 +49,7 @@ pub use boolean::{
 pub use boolean_validation::{
     BooleanResultReport, BooleanResultVerifier, BooleanVerificationParams,
 };
+pub use bolt::BoltBuilder;
 pub use brep_intersection::{
     BooleanFaceAssembly, BooleanFaceSelection, BooleanOperand, BooleanShellAssembly,
     BrepIntersectionBuilder, ClassifiedFacePiece, ClassifiedPlanarFaceSplitCandidate,
@@ -55,6 +59,7 @@ pub use brep_intersection::{
     PlanarOperandBatchSplits, SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };
 pub use brep_transform::BrepTransform;
+pub use distance::{DistanceEngine, DistanceResult};
 pub use face_split::{FaceSplitReport, FaceSplitter, MultiSplitReport};
 pub use regularize::{RegularizeReport, Regularizer, StepInterop};
 pub use cap::CapBuilder;
@@ -75,6 +80,7 @@ pub use patch_builder::CurvePatchBuilder;
 pub use pattern::PatternBuilder;
 pub use polyline::{PathSegment, PolylineBuilder};
 pub use primitive::PrimitiveBuilder;
+pub use shaft::ShaftBuilder;
 
 
 pub use revolve::RevolveBuilder;
