@@ -30,7 +30,7 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 
 | 指標 | 値 |
 | :--- | :--- |
-| テストバイナリ | **55 すべてグリーン（356テスト）** |
+| テストバイナリ | **57 すべてグリーン（361テスト）** |
 | コンパイラ警告 | **0**（examples の3件も解消） |
 | ビルダー監査 | 24/24 クリーン（**符号付き体積**で判定。閉じた式を持つ検体を3つ追加） |
 | ブーリアン対応 | 45ケース中**39**成功、**誤答ゼロ**。最悪の解析解一致 **6.75e-8**。残る6件は**すべて接線配置**（3-1 参照） |
@@ -1208,6 +1208,16 @@ cargo run --release -p zenith_algo --example connectivity_check   # 立体が何
   - `modeling::make_hex_nut`: 正六角ナットの生成（STEP出力・メッシュ化対応）。
   - `modeling::check_exact_boxes_interference`: ハイブリッド厳密干渉解析（B-Rep積による干渉体積抽出）。
 - **実測**: `py tools/build_pyd.py` により 51 個のシンボルエクスポートおよび Python スクリプトからの直接呼び出し・体積解析解一致を検証（100% 成功）。
+
+#### 12. 発展的機械要素（六角ボルト・段付き軸・キー溝）と幾何解析（最短距離探索）の実装
+- **改修**:
+  - `BoltBuilder::make_hex_bolt`: 二面幅 $S$・頭部厚み $k$・軸部半径 $r$・軸長 $L$ から六角頭ボルトソリッドを生成（食い込み制御付きUnion結合）。
+  - `ShaftBuilder::make_stepped_shaft`: 複数段 $\&[(r_i, L_i)]$ の段付き軸を、小さい側の半径を前後に食い込ませる外周はみ出しゼロのブーリアン結合で生成。
+  - `ShaftBuilder::make_shaft_with_keyway`: 軸に対する平行キー溝（幅 $W$・深さ $T$・長さ $L$・位置 $Z$）を差分切削。
+  - `DistanceEngine::compute_min_distance`: 箱・円柱・球・曲面ソリッド間の表面最短距離および最近傍点ペアを高速探索。
+- **実測**:
+  - 新規単体テスト（`bolt_shaft_test.rs` 3件、`distance_test.rs` 2件）すべてパス（全テスト 57 バイナリ / 361 テスト）。
+  - Python バインディング（55 シンボル）および直接呼び出しによる体積解析解・最短距離の厳密一致を確認。
 
 ---
 
