@@ -12,6 +12,20 @@ pub trait Surface3: std::fmt::Debug + Send + Sync {
     /// UV座標における法線ベクトルの評価（正規化）
     fn normal(&self, u: f64, v: f64) -> Option<Vec3>;
 
+    /// 積分をここで切らなければならないパラメータ値（内部ノット）。
+    ///
+    /// B-spline が滑らかなのは各ノット区間の**内側だけ**である。区間を
+    /// またぐ三角形の上で高次の求積を当てると、折れた被積分関数を見ることに
+    /// なり、次数が効かず2次までしか落ちない。実測では、他カーネルの円柱の
+    /// 側面（有理2次・3スパン）が、**12分割で 1.98e-9、16分割で 1.72e-4**
+    /// になる。12 は 1/3 と 2/3 にちょうど乗り、16 は乗らない。乗らない側は
+    /// 512分割まで刻んでも 1.68e-7 で、12分割に届かない。
+    ///
+    /// 既定は空で、ノットを持たない曲面は何も払わない。
+    fn integration_breaks(&self) -> (Vec<f64>, Vec<f64>) {
+        (Vec::new(), Vec::new())
+    }
+
     /// UV座標における点と1階偏微分 (S, dS/du, dS/dv)
     ///
     /// 面積分（面積・体積・重心）に必要な面素 `dS/du x dS/dv` を得るための
@@ -85,6 +99,34 @@ impl Surface3 for PlaneSurface3 {
 }
 
 impl Surface3 for NurbsSurface3 {
+    fn integration_breaks(&self) -> (Vec<f64>, Vec<f64>) {
+        fn interior(knots: &[f64], start: f64, end: f64) -> Vec<f64> {
+            let mut values: Vec<f64> = Vec::new();
+            for knot in knots {
+                if *knot <= start || *knot >= end {
+                    continue;
+                }
+                // 重複ノットは1本の線である。二重ノットをそのまま並べると
+                // 幅ゼロの帯を作ってしまう。
+                if values
+                    .last()
+                    .map(|last| (*last - *knot).abs() <= 1e-12)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                values.push(*knot);
+            }
+            values
+        }
+
+        let ((u_min, u_max), (v_min, v_max)) = self.param_range();
+        (
+            interior(&self.knots_u.knots, u_min, u_max),
+            interior(&self.knots_v.knots, v_min, v_max),
+        )
+    }
+
     fn param_range(&self) -> ((f64, f64), (f64, f64)) {
         self.param_range()
     }

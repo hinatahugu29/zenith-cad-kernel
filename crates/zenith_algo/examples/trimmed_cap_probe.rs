@@ -41,13 +41,28 @@ fn main() {
         "div", "cap area", "rel", "volume", "rel"
     );
     println!("(lat = 側面。真値 2 pi r h = {:.6})", 2.0 * std::f64::consts::PI * 10.0 * 40.0);
-    for divisions in [16usize, 32, 64, 128, 256, 512] {
+    println!("(3の倍数はノット線に乗る。乗らない分割数と比べる)");
+    let mut previous: Option<f64> = None;
+    for divisions in [12usize, 24, 48, 96, 192, 384] {
         let params = TessellationParams { u_divisions: divisions, v_divisions: divisions };
         let lateral = MassCalculator::compute_face_integral(&solid.outer_shell.faces[0], &params).0;
         let exact_lateral = 2.0 * std::f64::consts::PI * 10.0 * 40.0;
+        let error = (lateral - exact_lateral).abs() / exact_lateral;
+        let ratio = previous.map(|p: f64| p / error).unwrap_or(f64::NAN);
+        println!("  lat(3x) div {divisions:>4}: {lateral:>16.9}  rel {error:>11.2e}  ratio {ratio:>7.2}");
+        previous = Some(error);
+    }
+    let mut previous: Option<f64> = None;
+    for divisions in [16usize, 32, 64, 128, 256, 512] {
+        let params = TessellationParams { u_divisions: divisions, v_divisions: divisions };
+        let lateral = MassCalculator::compute_face_integral(&solid.outer_shell.faces[0], &params).0;
+        let exact_l = 2.0 * std::f64::consts::PI * 10.0 * 40.0;
+        let err = (lateral - exact_l).abs() / exact_l;
+        let ratio = previous.map(|p: f64| p / err).unwrap_or(f64::NAN);
+        previous = Some(err);
+        let _ = ratio;
         println!(
-            "  lat div {divisions:>4}: {lateral:>16.9}  rel {:>11.2e}",
-            (lateral - exact_lateral) / exact_lateral
+            "  lat    div {divisions:>4}: {lateral:>16.9}  rel {err:>11.2e}  ratio {ratio:>7.2}"
         );
     }
     for divisions in [16usize, 32, 64, 128, 256, 512] {

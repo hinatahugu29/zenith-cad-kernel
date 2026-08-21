@@ -204,11 +204,14 @@ fn test_a_solid_converted_to_b_splines_keeps_its_size() {
     }
     assert_eq!(caps, 2);
 
-    // 残るのは側面の求積だけで、こちらは偏りではないので分割数で落ちる。
-    // **値の小ささではなく、落ち方を見ます。** かつてこの検体は 64分割で
-    // 1.38e-6 と、512分割の 8.43e-6 より「良い」値を出していました。キャップの
-    // 不足（負)と側面の求積誤差（正）が、その分割数でたまたま打ち消し合った
-    // からです。小さいほうを引用すると、偏りが消えたときに「悪化」に見えます。
+    // 側面も分割数に依存しなくなった。かつてはここが求積の粗さで残っていて、
+    // 16分割で 1.72e-4、512分割まで刻んでも 1.68e-7 だった。三角形が
+    // ノット区間をまたいだまま次数4の則を当てていたためで、次数が効いて
+    // いなかった。積分の前にノット線で割るようにしてからは、**16分割で
+    // 1.49e-9、64分割で 2.66e-14** になる。
+    //
+    // したがって見るべきは「落ち方」ではなく「分割数を変えても動かないこと」
+    // に変わった。落ち方を見るテストはもう成立しない——落ちる余地が無い。
     let exact = std::f64::consts::PI * 100.0 * 40.0;
     let error_at = |divisions: usize| {
         let params = TessellationParams {
@@ -218,18 +221,22 @@ fn test_a_solid_converted_to_b_splines_keeps_its_size() {
         (MassCalculator::compute_from_brep(&solid, &params).volume - exact).abs() / exact
     };
 
-    let coarse = error_at(64);
-    let fine = error_at(512);
+    for divisions in [16usize, 24, 32, 64, 96] {
+        let error = error_at(divisions);
+        assert!(
+            error < 1e-8,
+            "converted cylinder volume is off by {error:.2e} at {divisions} divisions"
+        );
+    }
+
+    // 3の倍数かどうかで変わってはいけない。この側面は3スパンなので、
+    // 以前は 12分割が 1.98e-9、16分割が 1.72e-4 と、5桁も違っていた。
+    // 分割数がたまたまノットに乗るかどうかが答えを決めていた。
+    let on_knots = error_at(24);
+    let off_knots = error_at(32);
     assert!(
-        fine < 3e-7,
-        "converted cylinder volume is off by {fine:.2e} at 512 divisions"
-    );
-    // 分割数を8倍にすれば、2次収束なら 64分の1 になる。偏りが残っていると
-    // 頭打ちになるので、比そのものを見る。
-    assert!(
-        coarse / fine > 30.0,
-        "the error should fall with the division count (64 div {coarse:.2e},          512 div {fine:.2e}, ratio {:.1}); a ratio near 1 means a bias that          refining cannot reach",
-        coarse / fine
+        (on_knots.max(off_knots)) < 1e-9,
+        "a division count that lands on the knots ({on_knots:.2e}) and one that          does not ({off_knots:.2e}) must both be exact; if they differ by orders          the integration is straddling knot spans again"
     );
 }
 

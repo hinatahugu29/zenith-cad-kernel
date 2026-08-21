@@ -152,6 +152,85 @@ impl MassCalculator {
     }
 }
 
+/// パラメータ三角形を、またいでいるノット線で割る。
+///
+/// 割った断片は元の三角形をちょうど覆う（重なりも隙間もない）。切り口は
+/// 直線なので、面積の和は元と厳密に等しい。またいでいなければ何もしない
+/// ので、内部ノットを持たない曲面には費用が乗らない。
+fn split_triangle_at_breaks(
+    triangle: [Point2; 3],
+    u_breaks: &[f64],
+    v_breaks: &[f64],
+    out: &mut Vec<[Point2; 3]>,
+) {
+    let mut current = vec![triangle];
+    for (axis, breaks) in [(0usize, u_breaks), (1usize, v_breaks)] {
+        for value in breaks {
+            let mut next = Vec::with_capacity(current.len());
+            for piece in current.drain(..) {
+                split_triangle_on_axis(piece, axis, *value, &mut next);
+            }
+            current = next;
+        }
+    }
+    out.append(&mut current);
+}
+
+fn split_triangle_on_axis(
+    triangle: [Point2; 3],
+    axis: usize,
+    value: f64,
+    out: &mut Vec<[Point2; 3]>,
+) {
+    let coordinate = |point: &Point2| if axis == 0 { point.x } else { point.y };
+    let signed: [f64; 3] = [
+        coordinate(&triangle[0]) - value,
+        coordinate(&triangle[1]) - value,
+        coordinate(&triangle[2]) - value,
+    ];
+    // またいでいなければ触らない。境界に乗っているだけの頂点は「またぎ」に
+    // 数えない——幅ゼロの断片を作るだけだからである。
+    let has_below = signed.iter().any(|d| *d < 0.0);
+    let has_above = signed.iter().any(|d| *d > 0.0);
+    if !(has_below && has_above) {
+        out.push(triangle);
+        return;
+    }
+
+    let mut below: Vec<Point2> = Vec::with_capacity(4);
+    let mut above: Vec<Point2> = Vec::with_capacity(4);
+    for index in 0..3 {
+        let next = (index + 1) % 3;
+        let (a, b) = (triangle[index], triangle[next]);
+        let (da, db) = (signed[index], signed[next]);
+
+        if da <= 0.0 {
+            below.push(a);
+        }
+        if da >= 0.0 {
+            above.push(a);
+        }
+        if (da < 0.0 && db > 0.0) || (da > 0.0 && db < 0.0) {
+            let t = da / (da - db);
+            let crossing = a + (b - a) * t;
+            below.push(crossing);
+            above.push(crossing);
+        }
+    }
+
+    fan(&below, out);
+    fan(&above, out);
+}
+
+fn fan(polygon: &[Point2], out: &mut Vec<[Point2; 3]>) {
+    if polygon.len() < 3 {
+        return;
+    }
+    for index in 1..polygon.len() - 1 {
+        out.push([polygon[0], polygon[index], polygon[index + 1]]);
+    }
+}
+
 /// 曲面が `(u, v)` についてアフィンなら、その枠 `(origin, u_axis, v_axis)` を返す。
 ///
 /// `p(u, v) = origin + u * u_axis + v * v_axis` が全域で成り立つときだけ、
@@ -363,12 +442,23 @@ impl SurfaceIntegral {
         orientation_sign: f64,
     ) {
         let domain = face_uv_triangulation(face, params);
+        // 三角形がノット区間をまたいでいたら、そこで割ってから当てる。
+        // B-spline が滑らかなのは区間の内側だけで、またいだまま次数4の
+        // 則を当てても次数が効かない。トリムされた面の三角形は earcut と
+        // 細分で作られていて、ノット線を知らない。
+        let (u_breaks, v_breaks) = surface.integration_breaks();
+        let mut pieces: Vec<[Point2; 3]> = Vec::new();
         for triangle in &domain.triangles {
             let corners = [
                 domain.uvs[triangle[0]],
                 domain.uvs[triangle[1]],
                 domain.uvs[triangle[2]],
             ];
+            split_triangle_at_breaks(corners, &u_breaks, &v_breaks, &mut pieces);
+        }
+
+        for corners in &pieces {
+            let corners = *corners;
             let parametric_area = 0.5
                 * ((corners[1] - corners[0]).x * (corners[2] - corners[0]).y
                     - (corners[1] - corners[0]).y * (corners[2] - corners[0]).x);
