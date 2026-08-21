@@ -174,35 +174,62 @@ fn test_a_solid_converted_to_b_splines_keeps_its_size() {
     // 体積 12144.19（正しくは 12566.37）だった。原因は二つ重なっていて、
     // p-curve が折れ線近似だったことと、テッセレータがトリムループを
     // 分割数に比例した粗さでしか折らなかったこと。
+    //
+    // そのあとも 314.1512 で止まっていた。厳密な平面の線積分は既にあったのに、
+    // この面は種別が Nurbs なので通っていなかった。いまは幾何を測って
+    // アフィンだと分かればそこへ通す。
     let solid = read_fixture("cylinder_nurbs");
-    let params = TessellationParams {
-        u_divisions: 64,
-        v_divisions: 64,
-    };
 
+    // キャップは真の円であって内接多角形ではない。ここは分割数に依存しない。
     let exact_cap = std::f64::consts::PI * 100.0;
     let mut caps = 0;
-    for face in &solid.outer_shell.faces {
-        let area = MassCalculator::compute_face_integral(face, &params).0;
-        if (area - exact_cap).abs() / exact_cap < 1e-3 {
-            caps += 1;
+    for divisions in [16usize, 64, 256] {
+        let params = TessellationParams {
+            u_divisions: divisions,
+            v_divisions: divisions,
+        };
+        caps = 0;
+        for face in &solid.outer_shell.faces {
+            let area = MassCalculator::compute_face_integral(face, &params).0;
+            if (area - exact_cap).abs() / exact_cap < 1e-3 {
+                caps += 1;
+                let relative = (area - exact_cap).abs() / exact_cap;
+                assert!(
+                    relative < 1e-10,
+                    "cap area {area:.9} against {exact_cap:.9} at {divisions} divisions                      (relative {relative:.2e}); a chorded trim boundary reads short and                      does not move with the division count"
+                );
+            }
         }
+        assert_eq!(caps, 2, "both caps should come out at pi r^2");
     }
-    assert_eq!(caps, 2, "both caps should come out at pi r^2");
+    assert_eq!(caps, 2);
 
-    let measured = volume(&solid);
+    // 残るのは側面の求積だけで、こちらは偏りではないので分割数で落ちる。
+    // **値の小ささではなく、落ち方を見ます。** かつてこの検体は 64分割で
+    // 1.38e-6 と、512分割の 8.43e-6 より「良い」値を出していました。キャップの
+    // 不足（負)と側面の求積誤差（正）が、その分割数でたまたま打ち消し合った
+    // からです。小さいほうを引用すると、偏りが消えたときに「悪化」に見えます。
     let exact = std::f64::consts::PI * 100.0 * 40.0;
-    let relative = (measured - exact).abs() / exact;
-    // ここだけ他より緩い。トリムされた B-spline に残る既知の残差である。
-    // 解析曲面から読んだ6検体は 2.4e-12 以内に入るが、この検体は入らない。
-    //
-    // 実測は 12566.353308（解析値 12566.370614）で相対 1.38e-6。HANDOVER.md 3-5
-    // は「12566.6236、相対 2.0e-5」と書いているが、この物差し（64x64 の質量積分）
-    // では再現しない。値の大小も逆で、いまは解析解より小さく出る。文書の数字は
-    // 別の経路で測ったものか、既に古い。緩いこと自体が情報なので隠さない。
+    let error_at = |divisions: usize| {
+        let params = TessellationParams {
+            u_divisions: divisions,
+            v_divisions: divisions,
+        };
+        (MassCalculator::compute_from_brep(&solid, &params).volume - exact).abs() / exact
+    };
+
+    let coarse = error_at(64);
+    let fine = error_at(512);
     assert!(
-        relative < 2e-6,
-        "converted cylinder volume {measured:.6} against {exact:.6} (relative {relative:.2e})"
+        fine < 3e-7,
+        "converted cylinder volume is off by {fine:.2e} at 512 divisions"
+    );
+    // 分割数を8倍にすれば、2次収束なら 64分の1 になる。偏りが残っていると
+    // 頭打ちになるので、比そのものを見る。
+    assert!(
+        coarse / fine > 30.0,
+        "the error should fall with the division count (64 div {coarse:.2e},          512 div {fine:.2e}, ratio {:.1}); a ratio near 1 means a bias that          refining cannot reach",
+        coarse / fine
     );
 }
 

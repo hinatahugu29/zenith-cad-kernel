@@ -1,4 +1,4 @@
-use zenith_geom::{PlaneSurface3, Surface3};
+use zenith_geom::Surface3;
 use zenith_math::{Point2, Point3, Vec3};
 use zenith_tess::{face_uv_triangulation, TessellationParams, TriangleMesh};
 use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, Shell, Solid};
@@ -152,6 +152,59 @@ impl MassCalculator {
     }
 }
 
+/// 曲面が `(u, v)` についてアフィンなら、その枠 `(origin, u_axis, v_axis)` を返す。
+///
+/// `p(u, v) = origin + u * u_axis + v * v_axis` が全域で成り立つときだけ、
+/// グリーンの定理で領域積分を境界の線積分に落とせる。落とせれば、円形の
+/// トリム境界は内接多角形ではなく真の値に積まれる。
+///
+/// **次数で判定してはいけません。** 1x1 次のパッチは一般には双1次で、
+/// `uv` の交差項を持つ。4隅が平行四辺形でなければ位置はアフィンではなく、
+/// 定理の前提が崩れる。有理パッチも重みが一定でなければアフィンではない。
+/// どちらも「1次だから平面のはず」を通すと静かに間違う。格子の**全点**で
+/// 測って確かめる。角だけを見ると、双1次のパッチは4隅では必ず一致する。
+fn affine_frame_of(surface: &impl Surface3) -> Option<(Point3, Vec3, Vec3)> {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    if !(u_min.is_finite() && u_max.is_finite() && v_min.is_finite() && v_max.is_finite()) {
+        return None;
+    }
+    let u_span = u_max - u_min;
+    let v_span = v_max - v_min;
+    if u_span <= 0.0 || v_span <= 0.0 {
+        return None;
+    }
+
+    let corner = surface.evaluate(u_min, v_min);
+    let u_axis = (surface.evaluate(u_max, v_min) - corner) / u_span;
+    let v_axis = (surface.evaluate(u_min, v_max) - corner) / v_span;
+    if u_axis.cross(&v_axis).norm() <= f64::EPSILON {
+        return None;
+    }
+    let origin = corner - u_axis * u_min - v_axis * v_min;
+
+    // 許容はパッチの実寸に対する比で決める。絶対値で決めると、大きな面では
+    // 甘く、小さな面では通らない。
+    let extent = (u_axis.norm() * u_span).max(v_axis.norm() * v_span);
+    let limit = extent * 1e-12;
+
+    // 標本数は次数やノットと互いに素になるように選ぶ。等分点は制御点や
+    // ノットに当たりやすく、そこは構成上一致することがある。
+    const U_SAMPLES: usize = 17;
+    const V_SAMPLES: usize = 19;
+    for i in 0..=U_SAMPLES {
+        let u = u_min + u_span * (i as f64) / (U_SAMPLES as f64);
+        for j in 0..=V_SAMPLES {
+            let v = v_min + v_span * (j as f64) / (V_SAMPLES as f64);
+            let predicted = origin + u_axis * u + v_axis * v;
+            if (surface.evaluate(u, v) - predicted).norm() > limit {
+                return None;
+            }
+        }
+    }
+
+    Some((origin, u_axis, v_axis))
+}
+
 /// Running totals of the divergence-theorem surface integrals.
 #[derive(Debug, Default, Clone, Copy)]
 struct SurfaceIntegral {
@@ -177,12 +230,31 @@ impl SurfaceIntegral {
         match &face.geometry {
             FaceGeometry::Plane(surface) => {
                 // 平面はトリム境界の線積分で解析的に積める
-                if self.add_planar_face(face, surface, orientation_sign) {
+                if self.add_affine_face(
+                    face,
+                    surface.origin,
+                    surface.u_axis,
+                    surface.v_axis,
+                    orientation_sign,
+                ) {
                     return;
                 }
                 self.add_surface(face, surface, params, orientation_sign)
             }
             FaceGeometry::Nurbs(surface) => {
+                // 他カーネルは平面を 1x1 次のパッチとして書くことがある。
+                // 幾何は平面なのに種別が Nurbs なので、そのままでは下の
+                // 求積に落ち、トリム境界が弦の折れ線になる。円形のキャップは
+                // 内接多角形として積まれ、**分割数を上げても動かない**
+                // 一方向の不足が残る（実測 -2.56e-5、16分割でも512分割でも
+                // 小数9桁目まで同じ値）。厳密な経路は既にあるので、そこへ通す。
+                if face.pcurves.is_some() {
+                    if let Some((origin, u_axis, v_axis)) = affine_frame_of(surface) {
+                        if self.add_affine_face(face, origin, u_axis, v_axis, orientation_sign) {
+                            return;
+                        }
+                    }
+                }
                 self.add_surface(face, surface, params, orientation_sign)
             }
             FaceGeometry::Coons(surface) => {
@@ -207,10 +279,12 @@ impl SurfaceIntegral {
     ///
     /// Returns false when the face has no usable p-curves, so the caller can
     /// fall back to domain quadrature.
-    fn add_planar_face(
+    fn add_affine_face(
         &mut self,
         face: &Face,
-        plane: &PlaneSurface3,
+        origin: Point3,
+        u_axis: Vec3,
+        v_axis: Vec3,
         orientation_sign: f64,
     ) -> bool {
         let Ok(pcurves) = face.plane_pcurves() else {
@@ -240,7 +314,7 @@ impl SurfaceIntegral {
             *moment *= normalization;
         }
 
-        let jacobian_vector = plane.u_axis.cross(&plane.v_axis);
+        let jacobian_vector = u_axis.cross(&v_axis);
         let jacobian = jacobian_vector.norm();
         if jacobian <= f64::EPSILON {
             return false;
@@ -249,12 +323,12 @@ impl SurfaceIntegral {
 
         let area = jacobian * moments[index_uv(0, 0)];
         self.area += area;
-        self.volume += plane.origin.coords.dot(&normal) * area / 3.0;
+        self.volume += origin.coords.dot(&normal) * area / 3.0;
 
         for axis in 0..3 {
-            let base = plane.origin.coords[axis];
-            let du = plane.u_axis[axis];
-            let dv = plane.v_axis[axis];
+            let base = origin.coords[axis];
+            let du = u_axis[axis];
+            let dv = v_axis[axis];
 
             let squared = base * base * moments[index_uv(0, 0)]
                 + du * du * moments[index_uv(2, 0)]
