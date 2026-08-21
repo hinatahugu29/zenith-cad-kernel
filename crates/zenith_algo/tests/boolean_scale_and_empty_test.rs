@@ -63,6 +63,60 @@ fn an_intersection_much_smaller_than_its_operands_is_not_read_as_zero() {
 }
 
 #[test]
+fn a_small_but_correct_intersection_is_not_read_as_zero() {
+    // 上の検査を通した最初の修正には、`.max(1.0)` という**絶対値の床**が
+    // 残っていました。桁差だけを見て、絶対的な小ささを見ていなかったのです。
+    // 1e6 対 1 は直りましたが、80000 対 0.008 は直っていませんでした。
+    //
+    // 200x200x2 の板を 0.02x0.02x20 の針が貫くと、積は 0.0008 です。閾値が
+    // 1e-3 x 1.0 = 0.001 になっていたので、正解がその下に来ていました。
+    // 床は寸法から引いた `tol.linear^3` にしてあります。
+    let tol = Tolerance::default();
+    let plate = PrimitiveBuilder::make_box(200.0, 200.0, 2.0).expect("plate");
+    let needle = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(0.02, 0.02, 20.0).expect("needle"),
+        Vec3::new(100.0, 100.0, -9.0),
+    );
+
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&plate, &needle, BooleanOpType::Intersection, &tol)
+            .expect("a needle through a plate has a small but real intersection");
+
+    let volume: f64 = result
+        .solids
+        .iter()
+        .map(|solid| MassCalculator::compute_from_brep(solid, &params()).volume)
+        .sum();
+    let expected = 0.02 * 0.02 * 2.0;
+    assert!(
+        (volume - expected).abs() / expected < 1e-9,
+        "the intersection should be {expected}, measured {volume}"
+    );
+}
+
+#[test]
+fn the_volume_bounds_still_bite_on_a_small_model() {
+    // 同じ床は逆方向にも効いていました。体積が 1 を下回るモデルでは
+    // `eps` が体積そのものより大きくなり、`vr < max(va, vb) - eps` のような
+    // 境界チェックが**恒真になって何も見なくなります**。大きい側では正解を
+    // 弾き、小さい側では検査が消える——絶対値の床は、スケールの両端で
+    // 別々に壊れます。
+    //
+    // 一辺 0.2 の箱2つ（体積 0.008）で、和として片方だけを差し出します。
+    // 境界チェックが生きていれば「大きいほうの立体より小さい」で弾かれます。
+    let tol = Tolerance::default();
+    let a = PrimitiveBuilder::make_box(0.2, 0.2, 0.2).expect("small box a");
+    let b = BrepTransform::translate_solid(&a, Vec3::new(0.1, 0.0, 0.0));
+
+    let report =
+        BooleanResultVerifier::verify(&a, &b, std::slice::from_ref(&a), BooleanOpType::Union, &tol);
+    assert!(
+        !report.is_valid(),
+        "a union that hands back one operand must be refused even when the model is small"
+    );
+}
+
+#[test]
 fn a_solid_minus_itself_is_empty_rather_than_an_error() {
     // 4-6 が一般経路について「空の交差は答えであって失敗ではない」と直した
     // のに、軸平行の箱の近道には入っていませんでした。戻り値が

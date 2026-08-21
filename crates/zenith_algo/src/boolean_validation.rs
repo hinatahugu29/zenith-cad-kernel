@@ -161,7 +161,14 @@ impl BooleanResultVerifier {
         let va = report.volume_a;
         let vb = report.volume_b;
         let vr = report.volume_result;
-        let eps = params.volume_relative_tolerance * va.abs().max(vb.abs()).max(1.0);
+        // 床は寸法から引きます。以前は `.max(1.0)` という**絶対値の床**が
+        // 入っていて、体積が 1 を下回るモデルでは `eps` が体積そのものより
+        // 大きくなり、下の境界チェックが何も見なくなっていました。
+        // `tol.linear` の3乗より小さい体積は数値的にゼロと見なせるので、
+        // そこを床にします。
+        let zero_floor = tol.linear.powi(3);
+        let eps =
+            (params.volume_relative_tolerance * va.abs().max(vb.abs())).max(zero_floor);
 
         // 「体積が正か」を見る閾値は、境界の比較に使う `eps` と**別の量で
         // 正規化しなければなりません**。両方に `eps`（大きいほうの立体で
@@ -172,12 +179,17 @@ impl BooleanResultVerifier {
         //
         // 結果が取りうる上限で正規化します。積は小さいほうを超えられず、
         // 差は A を超えられません。和だけが大きいほうと同じ桁になります。
+        //
+        // 200x200x2 の板を 0.02x0.02x20 の針が貫くとき、積は 0.0008 が正解
+        // です。上限で正規化していても、絶対値 1 の床が残っていると閾値が
+        // 0.001 になり、正解が「ゼロ」と判定されていました。
         let result_upper_bound = match op {
             BooleanOpType::Union => va.abs().max(vb.abs()),
             BooleanOpType::Intersection => va.abs().min(vb.abs()),
             BooleanOpType::Difference => va.abs(),
         };
-        let zero_eps = params.volume_relative_tolerance * result_upper_bound.max(1.0);
+        let zero_eps =
+            (params.volume_relative_tolerance * result_upper_bound).max(zero_floor);
 
         if !result.is_empty() && vr <= zero_eps {
             report

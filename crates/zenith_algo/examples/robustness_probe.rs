@@ -149,6 +149,93 @@ fn cases() -> Vec<Case> {
             }),
             expected: [None, None, None],
         },
+        Case {
+            // 角と角だけが触れている。共有するのは1点で、面でも辺でもない。
+            // 和は非多様体になり、積は点しか持たない。古典的に落ちる配置。
+            name: "boxes touching at one corner",
+            build: Box::new(|| {
+                let a = PrimitiveBuilder::make_box(20.0, 20.0, 20.0)?;
+                let b = shifted(&a, 20.0, 20.0, 20.0);
+                Ok((a, b))
+            }),
+            expected: [Some(16000.0), Some(8000.0), Some(0.0)],
+        },
+        Case {
+            // 辺だけを共有する。積は線分で、体積は0。
+            name: "boxes touching along one edge",
+            build: Box::new(|| {
+                let a = PrimitiveBuilder::make_box(20.0, 20.0, 20.0)?;
+                let b = shifted(&a, 20.0, 20.0, 0.0);
+                Ok((a, b))
+            }),
+            expected: [Some(16000.0), Some(8000.0), Some(0.0)],
+        },
+        Case {
+            // 小さい箱が大きい箱の中に完全に入っている。実務では「中にある
+            // 部品」そのもので、差は空洞を作るはず。
+            name: "a box fully inside another",
+            build: Box::new(|| {
+                let outer = PrimitiveBuilder::make_box(20.0, 20.0, 20.0)?;
+                let inner = shifted(&PrimitiveBuilder::make_box(4.0, 4.0, 4.0)?, 8.0, 8.0, 8.0);
+                Ok((outer, inner))
+            }),
+            expected: [Some(8000.0), Some(8000.0 - 64.0), Some(64.0)],
+        },
+        Case {
+            // 上と逆。A が B に完全に含まれるので、差は空。
+            name: "a box fully containing the other",
+            build: Box::new(|| {
+                let outer = PrimitiveBuilder::make_box(20.0, 20.0, 20.0)?;
+                let inner = shifted(&PrimitiveBuilder::make_box(4.0, 4.0, 4.0)?, 8.0, 8.0, 8.0);
+                Ok((inner, outer))
+            }),
+            expected: [Some(8000.0), Some(0.0), Some(64.0)],
+        },
+        Case {
+            // 1e-9 ラジアンだけ回した箱。軸平行の近道が「軸平行だ」と
+            // 誤認すると、返るのは**回していない答え**になる。誤認しても
+            // 体積はほぼ同じなので、体積だけ見ていると気づけない。
+            name: "a box rotated by 1e-9 radians",
+            build: Box::new(|| {
+                let a = PrimitiveBuilder::make_box(20.0, 20.0, 20.0)?;
+                let rotation =
+                    zenith_math::Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), 1e-9);
+                let b = BrepTransform::transform_solid(&shifted(&a, 10.0, 0.0, 0.0), &rotation)?;
+                Ok((a, b))
+            }),
+            expected: [None, None, None],
+        },
+        Case {
+            // 縦横比 1e4。細長い棒が板を貫く。
+            name: "a needle through a plate",
+            build: Box::new(|| {
+                let plate = PrimitiveBuilder::make_box(200.0, 200.0, 2.0)?;
+                let needle = shifted(&PrimitiveBuilder::make_box(0.02, 0.02, 20.0)?, 100.0, 100.0, -9.0);
+                Ok((plate, needle))
+            }),
+            expected: [None, None, None],
+        },
+        Case {
+            // 面をぴったり共有する。同一平面の扱いがそのまま出る。
+            name: "boxes sharing a whole face",
+            build: Box::new(|| {
+                let a = PrimitiveBuilder::make_box(20.0, 20.0, 20.0)?;
+                let b = shifted(&a, 20.0, 0.0, 0.0);
+                Ok((a, b))
+            }),
+            expected: [Some(16000.0), Some(8000.0), Some(0.0)],
+        },
+        Case {
+            // 曲面どうしで桁が離れている。上で直したゲートの件が、曲面でも
+            // 通るかを見る。
+            name: "a big cylinder against a tiny one",
+            build: Box::new(|| {
+                let big = PrimitiveBuilder::make_cylinder(1000.0, 2000.0)?;
+                let small = PrimitiveBuilder::make_cylinder(0.5, 4000.0)?;
+                Ok((big, shifted(&small, 0.0, 0.0, -1000.0)))
+            }),
+            expected: [None, None, None],
+        },
     ]
 }
 
