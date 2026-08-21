@@ -1596,6 +1596,155 @@ pub fn compute_boxes_min_distance(
     Ok(result.min_distance)
 }
 
+/// 皿モミ穴（Countersink Hole）付き直方体ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (box_w = 40.0, box_d = 40.0, box_h = 20.0, hole_r = 3.0, cs_r = 6.0, cs_angle_deg = 90.0, center_x = 20.0, center_y = 20.0, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_countersink_hole_box(
+    box_w: f64,
+    box_d: f64,
+    box_h: f64,
+    hole_r: f64,
+    cs_r: f64,
+    cs_angle_deg: f64,
+    center_x: f64,
+    center_y: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::HoleBuilder::make_countersink_hole_box(
+        box_w,
+        box_d,
+        box_h,
+        hole_r,
+        cs_r,
+        cs_angle_deg,
+        center_x,
+        center_y,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Countersink hole generation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_COUNTERSINK_BOX")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// PCD等配ボルト穴付き円形フランジソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (outer_radius = 40.0, thickness = 10.0, center_hole_radius = 15.0, pcd_radius = 28.0, num_bolt_holes = 4, bolt_hole_radius = 3.5, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_circular_flange(
+    outer_radius: f64,
+    thickness: f64,
+    center_hole_radius: f64,
+    pcd_radius: f64,
+    num_bolt_holes: usize,
+    bolt_hole_radius: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::FlangeBuilder::make_circular_flange(
+        outer_radius,
+        thickness,
+        center_hole_radius,
+        pcd_radius,
+        num_bolt_holes,
+        bolt_hole_radius,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Circular flange generation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_CIRCULAR_FLANGE")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 環状溝（Annular Groove / 止め輪・Oリング溝）付き軸ソリッドの生成（STEP対応）
+#[pyfunction]
+#[pyo3(signature = (shaft_radius = 15.0, shaft_length = 60.0, groove_width = 4.0, groove_depth = 2.5, groove_z_pos = 25.0, u_divisions = 16, v_divisions = 16, step_path = None))]
+pub fn make_shaft_with_annular_groove(
+    shaft_radius: f64,
+    shaft_length: f64,
+    groove_width: f64,
+    groove_depth: f64,
+    groove_z_pos: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let base_shaft = zenith_algo::ShaftBuilder::make_stepped_shaft(&[(shaft_radius, shaft_length)])
+        .map_err(|e| PyValueError::new_err(format!("Base shaft generation failed: {}", e)))?;
+
+    let solid = zenith_algo::ShaftBuilder::make_shaft_with_annular_groove(
+        &base_shaft,
+        shaft_radius,
+        groove_width,
+        groove_depth,
+        groove_z_pos,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Grooved shaft generation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_GROOVED_SHAFT")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
+/// 直方体断面を 2D DXF ファイルへ出力
+#[pyfunction]
+#[pyo3(signature = (box_w, box_d, box_h, plane_origin, plane_normal, dxf_path))]
+pub fn export_box_section_dxf(
+    box_w: f64,
+    box_d: f64,
+    box_h: f64,
+    plane_origin: [f64; 3],
+    plane_normal: [f64; 3],
+    dxf_path: &str,
+) -> PyResult<usize> {
+    let solid = zenith_algo::PrimitiveBuilder::make_box(box_w, box_d, box_h)
+        .map_err(|e| PyValueError::new_err(format!("Box generation failed: {}", e)))?;
+
+    let origin = zenith_math::Point3::new(plane_origin[0], plane_origin[1], plane_origin[2]);
+    let normal = zenith_math::Vec3::new(plane_normal[0], plane_normal[1], plane_normal[2]);
+
+    let tol = Tolerance::default();
+    let result = zenith_algo::SectionSlicer::slice_solid(&solid, origin, normal, &tol)
+        .map_err(|e| PyValueError::new_err(format!("Section slicing failed: {}", e)))?;
+
+    let loops: Vec<Vec<zenith_math::Point3>> = result
+        .section_wires
+        .iter()
+        .map(|w| w.edges.iter().map(|oe| oe.edge.start_vertex.point).collect())
+        .collect();
+
+    zenith_io::DxfExporter::export_loops_to_file(&loops, dxf_path)
+        .map_err(|e| PyValueError::new_err(format!("DXF export failed: {}", e)))?;
+
+    Ok(loops.len())
+}
+
 
 
 

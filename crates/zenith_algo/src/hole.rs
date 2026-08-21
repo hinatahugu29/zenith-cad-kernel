@@ -408,4 +408,68 @@ impl HoleBuilder {
             &tol,
         )
     }
+
+    /// 皿モミ穴（Countersink Hole）付き直方体ソリッドの生成
+    ///
+    /// `box_w`, `box_d`, `box_h`: 直方体の幅・奥行・高さ
+    /// `hole_r`: 貫通下穴の半径
+    /// `cs_r`: 皿モミ上面の最大半径 (cs_r > hole_r)
+    /// `cs_angle_deg`: 皿モミ開き角（通常 90.0 度）
+    /// `center_x`, `center_y`: 穴の中心座標
+    pub fn make_countersink_hole_box(
+        box_w: f64,
+        box_d: f64,
+        box_h: f64,
+        hole_r: f64,
+        cs_r: f64,
+        cs_angle_deg: f64,
+        center_x: f64,
+        center_y: f64,
+    ) -> Result<Solid, String> {
+        if hole_r <= 1e-9 || cs_r <= hole_r || cs_angle_deg <= 1e-9 || cs_angle_deg >= 180.0 {
+            return Err(format!(
+                "Invalid countersink dimensions: hole_r={hole_r}, cs_r={cs_r}, cs_angle_deg={cs_angle_deg}"
+            ));
+        }
+
+        let tol = zenith_math::Tolerance::default();
+        let base_box = crate::PrimitiveBuilder::make_box(box_w, box_d, box_h)?;
+
+        // 1. 貫通下穴円柱
+        let drill = crate::PrimitiveBuilder::make_cylinder(hole_r, box_h + 2.0)?;
+        let drill = crate::BrepTransform::translate_solid(
+            &drill,
+            zenith_math::Vec3::new(center_x, center_y, -1.0),
+        );
+
+        let drilled = crate::BooleanEngine::boolean_solids_exact(
+            &base_box,
+            &drill,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )?;
+
+        // 2. 皿モミ円錐台（下穴内壁および箱天面を完全に突き抜けるように上下に拡張）
+        let half_angle_rad = (cs_angle_deg * 0.5).to_radians();
+        let tan_half = half_angle_rad.tan();
+        let cs_depth = (cs_r - hole_r) / tan_half;
+
+        let h_ext = (hole_r * 0.4).min(0.5);
+        let r_bot = hole_r - h_ext * tan_half;
+        let r_top = cs_r + h_ext * tan_half;
+        let total_h = cs_depth + 2.0 * h_ext;
+
+        let cone = crate::PrimitiveBuilder::make_cone(r_bot, r_top, total_h)?;
+        let cone = crate::BrepTransform::translate_solid(
+            &cone,
+            zenith_math::Vec3::new(center_x, center_y, box_h - cs_depth - h_ext),
+        );
+
+        crate::BooleanEngine::boolean_solids_exact(
+            &drilled,
+            &cone,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )
+    }
 }

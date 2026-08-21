@@ -113,4 +113,62 @@ impl ShaftBuilder {
             &tol,
         )
     }
+
+    /// 軸に対する環状溝（Annular Groove / 止め輪・Oリング溝）の差分加工
+    ///
+    /// `shaft`: 対象の軸ソリッド
+    /// `shaft_radius`: 環状溝加工位置の軸半径
+    /// `groove_width`: 溝幅 W
+    /// `groove_depth`: 溝深さ T（外周面から半径方向内向き）
+    /// `groove_z_pos`: 溝の始点 Z 座標
+    pub fn make_shaft_with_annular_groove(
+        shaft: &Solid,
+        shaft_radius: f64,
+        groove_width: f64,
+        groove_depth: f64,
+        groove_z_pos: f64,
+    ) -> Result<Solid, String> {
+        if groove_width <= 1e-9 || groove_depth <= 1e-9 {
+            return Err(format!(
+                "Groove dimensions must be positive, got width={groove_width}, depth={groove_depth}"
+            ));
+        }
+        if groove_depth >= shaft_radius {
+            return Err(format!(
+                "Groove depth ({groove_depth}) must be less than shaft radius ({shaft_radius})"
+            ));
+        }
+
+        let tol = Tolerance::default();
+
+        // 環状溝カッター（外径 shaft_radius + 1.0, 内径 shaft_radius - groove_depth, 高さ groove_width）
+        let outer_r = shaft_radius + 1.0;
+        let inner_r = shaft_radius - groove_depth;
+
+        let outer_cyl = crate::PrimitiveBuilder::make_cylinder(outer_r, groove_width)?;
+        let inner_cyl = crate::PrimitiveBuilder::make_cylinder(inner_r, groove_width + 0.2)?;
+        let inner_cyl = crate::BrepTransform::translate_solid(
+            &inner_cyl,
+            Vec3::new(0.0, 0.0, -0.1),
+        );
+
+        let ring_cutter = crate::BooleanEngine::boolean_solids_exact(
+            &outer_cyl,
+            &inner_cyl,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )?;
+
+        let ring_cutter = crate::BrepTransform::translate_solid(
+            &ring_cutter,
+            Vec3::new(0.0, 0.0, groove_z_pos),
+        );
+
+        crate::BooleanEngine::boolean_solids_exact(
+            shaft,
+            &ring_cutter,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )
+    }
 }
