@@ -37,6 +37,14 @@ pub struct ShellValidationReport {
     pub max_boundary_surface_distance: f64,
     pub pcurve_mismatch_count: usize,
     pub max_pcurve_distance: f64,
+    /// 幾何的には対になっているのに、**別の稜の実体**を指している辺の使用数。
+    ///
+    /// 閉性は座標で判定されるので、同じ位置に別々の `Edge` が並んでいても
+    /// 「閉じている」と出る。その立体には「この稜を共有する2面」が引けず、
+    /// 稜を選ぶ演算（フィレット・面取り・履歴）が掛からない。これは**診断**
+    /// であってゲートではない（`is_valid` には影響しない）。
+    #[serde(default)]
+    pub unshared_edge_entity_use_count: usize,
     pub errors: Vec<String>,
 }
 
@@ -48,6 +56,7 @@ impl ShellValidationReport {
 
 #[derive(Debug, Clone, Copy)]
 struct EdgeUse {
+    edge_id: u64,
     face_index: usize,
     wire_index: usize,
     edge_index: usize,
@@ -112,6 +121,7 @@ impl Shell {
             max_boundary_surface_distance: 0.0,
             pcurve_mismatch_count: 0,
             max_pcurve_distance: 0.0,
+            unshared_edge_entity_use_count: 0,
             errors: Vec::new(),
         };
 
@@ -220,7 +230,13 @@ impl Shell {
                     "Edge use f{}:w{}:e{} has {mate_count} matching mates",
                     edge_use.face_index, edge_use.wire_index, edge_use.edge_index
                 ));
-            } else if !opposite_direction_edge(edge_use, mates[0], tol.linear) {
+            } else if mates[0].edge_id != edge_use.edge_id {
+                // 座標では対になっているが、実体が別。閉じてはいるが、この稜
+                // からもう一方の面を引くことはできない。診断として数だけ残す。
+                report.unshared_edge_entity_use_count += 1;
+            }
+
+            if mate_count == 1 && !opposite_direction_edge(edge_use, mates[0], tol.linear) {
                 report.same_direction_edge_use_count += 1;
                 report.errors.push(format!(
                     "Edge use f{}:w{}:e{} and f{}:w{}:e{} share the same direction",
@@ -283,6 +299,7 @@ fn collect_wire_edge_uses(
         }
 
         edge_uses.push(EdgeUse {
+            edge_id: edge.edge.id,
             face_index,
             wire_index,
             edge_index,

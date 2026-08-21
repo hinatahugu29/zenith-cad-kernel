@@ -93,7 +93,9 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **厳密物性値・質量特性 (Mass)** | `mass_properties` | ガウス・グリーンの発散定理に基づく体積・表面積・3D重心・慣性モーメントテンソル計算。B-Rep面上で直接積分し、積分領域はノット区間に整合させる（区間をまたぐセルで求積すると、いくら細分しても誤差が減らない）。解析解を持つ全ビルダーで相対誤差 1e-12 以下、分割数を4倍にしても値は 1e-8 未満しか動かない。 |
 | **ヘリックス (Helix)** | `helix` | リード角・ピッチ・巻数指定の3次元螺旋スプリング。角断面スプリングに加え、`make_round_wire_spring` により RMF 最小回転標架と4象限NURBS端面キャップによる丸線ワイヤコイルスプリングの完全閉多様体ソリッド生成に対応。 |
 | **パターン＆ミラー (Pattern / Mirror)** | `pattern`, `mirror` | 線形/円形パターン、任意平面に対する幾何ミラー反転＆Compound対称ケーシング。 |
-| **フィレット / 面取り** | `fillet`, `chamfer` | 単一エッジおよび直方体コーナーエッジの連続丸め・C面取り（7面〜10面B-Repソリッド化）。 |
+| **フィレット / 面取り（直方体専用ビルダー）** | `fillet`, `chamfer` | 単一エッジおよび直方体コーナーエッジの連続丸め・C面取り（7面〜10面B-Repソリッド化）。**寸法から作り直すビルダー**であり、既存の立体は編集しない。任意の立体を編集する場合は下の `EdgeBlender` を使う。 |
+| **任意ソリッドの稜フィレット / 面取り** | `edge_blend::EdgeBlender` | `fillet_edge(&solid, edge_id, r)` / `chamfer_edge(&solid, edge_id, c)` で**既にある立体のトポロジーを編集して**丸める。ブーリアン・押し出し・角柱の結果にそのまま掛かる。直角に固めず、二面角 $\theta$ に対して後退距離 $r\cot(\theta/2)$、円弧の重み $\sin(\theta/2)$、削れ体積はフィレット $L r^2(\cot(\theta/2)-(\pi-\theta)/2)$、面取り $L c^2 \sin\theta / 2$ を使う。実測は直方体(90°)・正六角柱(120°)・**ブーリアンで初めて生まれた稜**のいずれも閉じた式と **1e-11 以内**。対象は `blendable_edges()` で上限半径つきに事前列挙できる。扱えるのは「稜が直線・両側の面が平面・両端に3枚目の平面が稜と直交して1枚・凸」の配置で、外れる配置（凹稜、接線配置、直交しない端面、隣接稜を食い切る指定）は**近い別形状を返さず理由を返して失敗**する。 |
+| **稜の縫い合わせ (Sewing)** | `sew::Sewer` | 座標が公差内で一致する頂点を1つに束ね、**形も一致する**稜を1本の実体に束ね、逆向きに格納されていた側は参照の向きを反転する。ブーリアンの面片組み立ては面を1枚ずつ作るため、同じ位置に別々の `Edge` が並んだまま出てくる。閉性の検査は座標で対にするのでそれを通してしまい、通った立体には「この稜を共有する2面」が引けない（稜を選ぶ演算が一切掛からない）。`boolean_solids_exact_result` の出口に入っており、縫い残しがあればエラーになる。実測で 56→28 / 24→12 に束ね、全稜がちょうど2面に共有される。体積は 1e-14 以内で不動。 |
 | **ダイレクトモデリング** | `direct_edit` | プッシュプル（面オフセット移動）、テーパー（抜き勾配傾斜）、ドーム/平面ワイヤキャッピング。 |
 | **球体 (Sphere)** | `PrimitiveBuilder::make_sphere` | 4経度 × 2半球 = **8枚**の有理NURBSパッチによる真球ソリッド。極側は1行が1点に潰れた退化パッチで、境界は子午線2本＋赤道円弧1本。単一の巻き付き面だと OpenCASCADE が体積0の不正ソリッドとして読むため、正則分割してある。体積は解析解と 1e-14。 |
 | **円錐 / 円錐台 (Cone)** | `PrimitiveBuilder::make_cone` | 底面半径 $R_1$、天面半径 $R_2$、高さ $H$ の有理NURBS円錐台ソリッド（全6面）。 |
@@ -105,6 +107,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **自由曲面厚み付け (Thicken)** | `ThickenBuilder::thicken_face` | 開いたシートに厚み $t$ を与えてソリッド化。曲面は**各点の法線でずらして補間し直す**（厳密なオフセット曲面は NURBS では表せないので近似で、誤差は標本の4乗で縮む。既定16標本で四半シェルの閉じた式と 1.8e-6〜2.0e-5）。側面は4境界の Coons パッチなので、弧の縁にもそのまま乗る。平面のシートは厳密（1e-12）。 |
 | **CSGブーリアン演算** | `BooleanEngine` | Union（結合）、Difference（差分）、Intersection（交差）。**対応範囲は限定的で、範囲外は誤答ではなくエラーを返す**。実測45ケース中39が成功し、誤答はゼロ。対応済みは**任意角度の多面体同士（同一平面の重なりを含む）**、**円柱による貫通穴・止まり穴・偏心穴（任意軸）とその連鎖・座ぐり・角ブロック切断**、**空洞（`inner_shells`）を持つ立体の二次ブーリアン消費と階層包含ネスト**、**軸に垂直な平面による回転面（円柱・円錐・球・トーラス）の切断**、離れた立体の和（複数ソリッド結果）、面で接するだけの立体の差、交わらない立体の積（空の結果として返す）。断面が面のパラメータ線になる切り方は形を問わず同じ経路で扱い、極が退化した三辺パッチも割れる。**曲面同士の交差**は交線を辿って面を割る経路が入り、球×球・円柱×円柱が3演算とも通る（いずれも閉じた式と一致。円柱同士の交わりは完全楕円積分）。球×球・円柱×円柱・トーラス×箱が3演算とも通る（前2つは閉じた式、トーラス×箱は独立な2次元求積と一致）。重複交線探索の解消により45ケース走査時の曲面評価回数は **110,602,293回**（マーチング半減）。**残る未対応6件はすべて接線配置**。詳細は `cargo run -p zenith_algo --example boolean_envelope` で随時測定できる。 |
 | **ブーリアン結果の検証ゲート** | `BooleanResultVerifier` | 結果を①全シェルの閉性②演算が含意する体積境界③384点の内外一貫性で検証し、通らなければエラーにする。閉多様体であることは正しさの十分条件ではなく、片方のオペランドをそのまま返しても閉多様体になるため。 |
+| **パラメトリック履歴ツリー** | `feature_tree::FeatureTree` | 上流から順に再計算する非破壊履歴。`FeatureOp::Boolean { op, tool }` の `tool` は**それ自身がフィーチャー列**で、`Translate` / `Rotate` で位置合わせして組み立てる（`FeatureTree::evaluate` が両方を同じ語彙で評価する）。`FilletSolidEdge` / `ChamferSolidEdge` は稜を ID ではなく `EdgeSignature` で指すので、上流の寸法を変えて作り直しても同じ稜に付き直す。一致度 0.9 未満、または1位と2位が同着のときは**別の稜を黙って丸めずに失敗**する。実測: dx を 20→26 に変えても面数7のまま、体積が新しい寸法の閉じた式と 1e-11。ブーリアンの後に面取りを重ねても 1e-10。 |
 
 ---
 
@@ -115,7 +118,8 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | :--- | :--- | :--- |
 | **面の幾何インスペクション** | `DirectModeling::inspect_face` | 厳密表面積（$\text{mm}^2$）、重心座標、法線ベクトル、XY/XZ/YZ傾斜角（deg）を即時計算。 |
 | **辺の幾何インスペクション** | `DirectModeling::inspect_edge` | 厳密弧長（Arc Length）、端点・中点座標、接線ベクトル（Tangent）を即時計算。 |
-| **二面角判定 (Dihedral Angle)** | `DirectModeling::inspect_solid_edge` | 共有エッジにおける隣接2面のなす角度、凸（Convex）/ 凹（Concave）/ スムーズの自動判定。 |
+| **二面角判定 (Dihedral Angle)** | `DirectModeling::inspect_solid_edge` | 二面角を**材料の側から** 0〜360 度で返し、凸（180度未満）/ 凹（180度超）/ スムーズ（180度）を判定する。凸凹は「各面のワイヤがその稜をどちら向きに辿るか」で決めるので、面の列挙順にも稜の格納向きにも依存しない。曲面の法線は p-curve から $(u,v)$ を引いて**稜の上**で測る。内側ワイヤ（穴）の稜も探索対象。実測: 直方体の12稜が Convex/90°（面の並びを逆にしても同じ）、切り欠きの内角が Concave/270°、貫通穴の口が Convex/90° で円筒の継ぎ目が Smooth/180°。 |
+| **稜のシグネチャ (Edge Signature)** | `zenith_topo::EdgeSignature` | 中点・向き・長さ・二面角による稜の指し方。始点と終点の入れ替えで変わらない。稜 ID は作り直すたびに変わるため、履歴に稜を記録するときはこちらを使う。 |
 | **面 Push-Pull（押し出し）** | `DirectModeling::push_pull_face` | 選択面を法線方向に $d$ mm 移動し、隣接する側面エッジ・平面を自動連動伸長。 |
 | **面 Taper（抜き勾配傾斜）** | `DirectModeling::taper_face` | 選択面を指定回転軸まわりに角度 $\theta^\circ$ 傾斜（金型抜き勾配対応）。 |
 | **単一エッジ・ダイレクトフィレット** | `DirectModeling::fillet_box_single_edge` | 特定エッジ1本を選択して半径 $R$ の動的角丸め（7面B-Repソリッド化）。 |
@@ -145,6 +149,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **glTF 2.0** | **Write** | Web 3D標準フォーマット。PBR対応、BASE64バイナリ埋め込み自己完結型 `.gltf` 出力。 |
 | **IGES 5.3** | **Write** | レガシーCAD互換。Type 186 Manifold Solid B-Rep フォーマット出力。 |
 | **Blender 5.x C拡張** | **Python C 拡張 (`zenith_cad.pyd`)** | PyO3 0.23 / abi3 \| 全 **45** 個のネイティブ関数を単一の超高速バイナリ（~2.9MB）としてエクスポート。厳密ブーリアンは `make_exact_box_boolean`（箱同士）と `make_exact_drill_boolean`（任意軸の円柱による貫通穴・止まり穴）で公開。対応範囲外は例外を送出する。<br>ビルド時、`pyo3` は PATH から Python を探す。見つからない環境では `PYO3_PYTHON` に実行ファイルを指定する。 |
+| **Python 立体ハンドル** | **`zenith_cad.Solid`** | 立体そのものを Python 側で持ち回るための不変オブジェクト。**すべてのメソッドが新しい立体を返す**。生成（`box` / `cylinder` / `sphere` / `cone` / `torus` / `regular_prism` / `from_step` / `all_from_step`）、変換（`translated` / `rotated` / `mirrored`）、ブーリアン（`union` / `difference` / `intersection` / `difference_all`）、稜（`edges` / `blendable_edges` / `fillet_edge` / `chamfer_edge` / `fillet_edges` / `chamfer_edges`）、面（`faces` / `push_pull_face` / `taper_face`）、計測（`mass_properties` / `validate` / `clash_status` / `volume` / `face_count`）、出力（`tessellate` / `to_step` / `to_step_string`）、後片付け（`sewn`）。これが入るまで、Python 側は `make_X(...) -> Mesh` のワンショットしか無く、作った立体を次の演算に渡す手段が無かった（組み合わせが要るたびに Rust 側へ専用関数を足していた）。`validate()` の `unshared_edge_entity_uses` が 0 でない立体は、閉じてはいるが稜を選べない状態を指す。<br>一周の検証: `py tools/test_solid_api.py`（20項目。作る → ブーリアン → 稜を選ぶ → 丸める → STEP → 読み直すで体積が閉じた式と一致）。 |
 
 ---
 
@@ -186,6 +191,8 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | `cargo run --release -p zenith_algo --example step_import_audit` | STEP の往復と、他カーネルが書いたファイルを読めるか |
 | `cargo run --release -p zenith_algo --example pcurve_fidelity_probe` | p-curve が本当に 3D エッジの上にあるか（検証が見ている点の外でも測る） |
 | `cargo run --release -p zenith_algo --example foreign_reexport` | 他カーネルのファイルを読んで書き戻す一周 |
+| `cargo run --release -p zenith_algo --example boolean_topology_probe` | ブーリアンの結果が稜を**実体として**共有しているか（共有されていない稜が1本でもあれば非ゼロ終了するのでリリースゲートに使える） |
+| `py tools/test_solid_api.py` | Python 側で「作る → ブーリアン → 稜を選ぶ → 丸める → STEP → 読み直す」が一周し、体積が閉じた式と一致するか（先に `cargo build --release -p zenith_py`） |
 
 **不具合を追うための診断**
 

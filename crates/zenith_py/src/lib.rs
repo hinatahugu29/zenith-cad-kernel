@@ -6,14 +6,17 @@ pub mod mesh;
 pub mod modeling;
 pub mod payload;
 pub mod primitives;
+pub mod solid;
 
 pub use mesh::PyMesh;
+pub use solid::PySolid;
 use pyo3::prelude::*;
 
 /// Zenith CAD Pythonモジュール
 #[pymodule]
 fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMesh>()?;
+    m.add_class::<PySolid>()?;
 
     // Primitives
     m.add_function(wrap_pyfunction!(primitives::make_box, m)?)?;

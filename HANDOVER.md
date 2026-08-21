@@ -30,8 +30,13 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 
 | 指標 | 値 |
 | :--- | :--- |
-| テストバイナリ | **59 すべてグリーン（365テスト）** |
+| テストバイナリ | **58 + doctest 6 すべてグリーン（388テスト）** |
 | コンパイラ警告 | **0**（examples の3件も解消） |
+| **ブーリアン結果の稜の共有** | **全ケースで稜がちょうど2面に共有される単一実体**（従来は差・積の結果が座標では閉じているのに稜が全部二重化していた。4-26 参照） |
+| **任意ソリッドの稜フィレット / 面取り** | 直方体(90°)・正六角柱(120°)・ブーリアンで生まれた稜のいずれも、削れ体積が**閉じた式と 1e-11 以内**（4-27 参照） |
+| **稜の凸凹判定** | 面の列挙順にも稜の格納向きにも依存しない。二面角は材料側から 0〜360 度（4-28 参照） |
+| **履歴ツリー** | ブーリアンを含む列が一続きに評価され、上流の寸法を変えても下流のフィレットが同じ稜に付き直す（4-29 参照） |
+| **Python の立体ハンドル** | `zenith_cad.Solid` で「作る → ブーリアン → 稜を選ぶ → 丸める → STEP」が一周する（`tools/test_solid_api.py` 20項目） |
 | ビルダー監査 | 24/24 クリーン（**符号付き体積**で判定。閉じた式を持つ検体を3つ追加） |
 | ブーリアン対応 | 45ケース中**39**成功、**誤答ゼロ**。最悪の解析解一致 **6.75e-8**。残る6件は**すべて接線配置**（3-1 参照） |
 | 端の配置（`robustness_probe`、21配置） | **誤答0・パニック0**（ok 50 / clean error 7 / build refused 5）。空洞立体の再切断も3演算すべて完全パス（4-22, 4-23 参照） |
@@ -72,6 +77,18 @@ cargo run --release -p zenith_algo --example regularize_probe      # 全周を�
 cargo run --release -p zenith_algo --example pcurve_derivation_probe # p-curve を導出し直すと答えが変わる面
 cargo run --release -p zenith_algo --example face_split_probe      # パラメータ線でない曲線で面を割れるか
 cargo run --release -p zenith_algo --example ssi_probe             # 曲面同士の交線が両曲面に乗るか
+cargo run --release -p zenith_algo --example boolean_topology_probe # ブーリアンの結果が稜を実体として共有しているか
+```
+
+`boolean_topology_probe` は共有されていない稜が1本でもあれば非ゼロ終了します。
+リリースゲートに使えます（4-26）。
+
+Python 側の一周（作る → ブーリアン → 稜を選ぶ → 丸める → STEP → 読み直す）は
+こちらです。
+
+```bash
+cargo build --release -p zenith_py
+py tools/test_solid_api.py
 ```
 
 `boolean_envelope` は45ケースの走査に**2〜3分**かかります。面の組ごとに
@@ -106,6 +123,31 @@ cargo run --release -p zenith_algo --example foreign_reexport
 ## 3. 次にやること
 
 残りは性質の違う塊に分かれます。上から順に大きい仕事です。
+
+### 3-A. 同一平面の隣接面がマージされていない（未着手・実測あり）
+
+面と稜が、実形状の2倍近くあります。
+
+| 立体 | いまの面数 | 妥当な面数 |
+| :--- | --: | --: |
+| `HoleBuilder::make_drilled_box(40, 40, 20, 8)` | **15** | 7（上下面2＋側面4＋円筒1） |
+| 直方体 − 隅の直方体（L 字角柱） | **14** | 8（側面6＋上下面2） |
+
+上下面が扇形の平面片に割られ、その間に 180 度の人工的な稜が残ります
+（`edge_inspection_test` が Smooth / 180° として実測しています）。B-Rep としては
+妥当ですが、
+
+- 稜と面の選択が「実形状に無いもの」だらけになる
+- STEP のエンティティ数が倍になる
+- `EdgeBlender` の対象列挙にノイズが混じる（L 字角柱で 9 本出るが、実形状の
+  ブレンド可能な縦稜は 5 本）
+
+という実害があります。入れるべきものは「支持平面が公差内で一致する隣接面を
+1枚に併合し、間の稜を落とす」パスです。併合でできる内側ループ（環状の
+上下面など）を正しく作れるかが山です。`Sewer`（4-26）と同じ層に置けます。
+
+**注意**: これは `Regularizer` とは別物です。`Regularizer` は「全周1枚の
+パッチを刻む」ほうで、向きが逆です。
 
 ### 3-0. 実務で先に当たるのは、45ケースに無い形です
 
@@ -1228,6 +1270,212 @@ cargo run --release -p zenith_algo --example connectivity_check   # 立体が何
 - **実測**:
   - 新規単体テスト（`flange_countersink_test.rs` 3件、`dxf_export_test.rs` 1件）すべてパス（全テスト 59 バイナリ / 365 テスト）。
   - Python バインディング（59 シンボル）および直接呼び出しによる体積解析解・DXFファイル出力の正常動作を確認。
+
+---
+
+### 4-26. ブーリアンの結果が、閉じているのに B-Rep ではなかった（2026/08/22）
+
+`cargo run --release -p zenith_algo --example boolean_topology_probe` で測れます。
+不一致があれば非ゼロ終了するので、リリースゲートに使えます。
+
+**症状**（修正前の実測）:
+
+| 立体 | 面 | 稜の実体数 | 2面で共有 | 1面だけ | 同じ位置に複数 ID |
+| :--- | --: | --: | --: | --: | --: |
+| 直方体（ビルダー出力） | 6 | 12 | 12 | 0 | 0 |
+| 直方体 − 隅の直方体 | 14 | **56** | **0** | **56** | **28箇所** |
+| 直方体 ∩ ずらした直方体 | 6 | **24** | **0** | **24** | **12箇所** |
+
+閉性の検査（`Shell::validate_closed`）は辺の使用を**座標**で対にするので、
+同じ位置に別々の `Edge` が並んでいても通ります。通ってしまうと、その立体
+からは「この稜を共有する2面」が引けません。稜を選ぶ演算（フィレット・
+面取り・稜の選択・履歴の追従）は、そこで全部止まります。ビルダーの出力は
+最初から共有されていたので、テストでは表に出ませんでした。
+
+**直し方**: `crates/zenith_algo/src/sew.rs`（`Sewer`）。公差内で一致する頂点を
+束ね、**形も一致する**稜を1本に束ね、逆向きに格納されていた側は参照の向きを
+反転して同じ実体を指すようにします。端点が同じでも途中の形が違う稜（同じ
+2点を結ぶ円弧と直線）は別物なので束ねません。`boolean_solids_exact_result`
+の出口に入れ、縫い残し（2面で共有されない稜）が出たらエラーにします。
+
+**結果**: 56 → 28、24 → 12。全ケースで全稜がちょうど2面に共有される単一実体に
+なりました。体積は 1e-14 以内で不動。`boolean_envelope` の 45ケース走査は
+39/45・誤答0・最悪 6.75e-8・曲面評価 110,602,293 回で**変化なし**（縫い代は
+計測できるコストになっていません）。
+
+`ShellValidationReport` に `unshared_edge_entity_use_count` を足しました。
+**診断であってゲートではありません**（`is_valid()` は変えていません）。
+この数が 0 でない立体は「閉じているが稜を選べない」状態です。
+
+---
+
+### 4-27. フィレットと面取りが、立体を編集していなかった（2026/08/22）
+
+修正前の署名を見れば分かります。
+
+```
+FilletBuilder::fillet_box_z_edges(dx, dy, dz, radius, tol)
+DirectModeling::fillet_box_single_edge(dx, dy, dz, edge_index, radius)
+ChamferBuilder::chamfer_box_z_edges(dx, dy, dz, distance, tol)
+```
+
+いずれも `&Solid` を取らず**寸法**を取ります。つまり「丸めた直方体を作る
+ビルダー」であって、稜を丸める演算子ではありません。ブーリアン・押し出し・
+ロフトの結果には掛けられず、渡す寸法も存在しません。
+
+**入れたもの**: `crates/zenith_algo/src/edge_blend.rs`（`EdgeBlender`）。
+
+```
+EdgeBlender::fillet_edge(&solid, edge_id, radius)
+EdgeBlender::chamfer_edge(&solid, edge_id, distance)
+EdgeBlender::blendable_edges(&solid)   // 対象を先に列挙できる
+```
+
+扱える配置は「稜が直線、共有する2面がどちらも平面、両端の頂点に3枚目の面が
+ちょうど1枚あってそれが平面かつ稜と直交、稜が凸」。押し出し・角柱・それらの
+ブーリアン結果の縦稜がすべて入ります。満たさない配置は**近い別の形を返さず、
+理由を返して失敗**します。
+
+幾何は直角に固めていません。二面角 θ に対して
+
+- 後退距離 `r cot(θ/2)`、円弧の重み `sin(θ/2)`
+- 削れ体積 フィレット `L r^2 (cot(θ/2) - (π-θ)/2)` / 面取り `L c^2 sin(θ) / 2`
+
+を使います。θ = 90° を入れると `L r^2 (1 - π/4)` と `L c^2 / 2` になり、
+直方体版のテストが使っていた式に一致します。
+
+**測った値**（`crates/zenith_algo/tests/edge_blend_test.rs`、9件）:
+
+| 検体 | 二面角 | 体積の一致 |
+| :--- | :--- | :--- |
+| 直方体 20×30×40 の縦稜（r = 0.5〜9） | 90° | 1e-12 |
+| 正六角柱 r10 h25 の縦稜（r = 0.5〜3） | 120° | 1e-11 |
+| 同 面取り（c = 0.5〜4） | 120° | 1e-11 |
+| **ブーリアンの差で初めて生まれた縦稜** | 90° | 1e-11 |
+| 縦稜4本を続けて丸める | 90° | 1e-11 |
+
+フィレット後の立体は STEP に書いて読み直しても体積が 1e-9 以内。凹稜・接線
+配置・端の面が直交しない配置・後退が隣接稜を食い切る指定は、いずれも理由
+つきで拒否されます（`blendable_edges` にも出てきません）。
+
+方向の決め方は、面の重心ではなく**各面のワイヤがその稜をどちら向きに辿るか**
+です。ワイヤは外向き法線まわりに反時計回りなので、進行方向の左がその面の
+内側になります。重心を使うと L 字のような凹形の面で答えを間違えます。
+
+---
+
+### 4-28. 凸凹の判定が、面の列挙順で反転していた（2026/08/22）
+
+`DirectModeling::inspect_solid_edge` は
+
+```rust
+let cross = n_a.cross(&n_b);
+let is_convex = cross.dot(&insp.tangent) >= -1e-6;
+```
+
+で判定していました。`n_a` と `n_b` はどちらの面が先に見つかったかで入れ替わり、
+`tangent` は稜の格納向き（始点→終点）で反転します。どちらが変わっても答えが
+裏返ります。直方体の縦稜は、面の並び順によって Concave と出ていました。
+
+二面角も `180 - 法線間角度` だったので、外角 90° と切り欠きの内角 270° が
+**両方 90°** になり、区別が付きませんでした。
+
+加えて、探索が `outer_wire` だけで内側ワイヤ（穴）の稜を見ておらず、曲面の
+法線は面の中央 `(0.5, 0.5)` 固定でした。円筒の側面では、稜の上の向きとは
+まったく別の場所を測っていたことになります。
+
+**直したこと**:
+
+- 判定を「各面のワイヤがその稜をどちら向きに辿るか」に変更（格納順・面順に非依存）
+- 二面角を**材料の側から** 0〜360 度で返す
+- 内側ワイヤも探索する
+- p-curve からその稜の `(u, v)` を引き、**稜の上**で曲面の法線を測る（`face_normal_at_edge`）
+
+**測った値**（`crates/zenith_algo/tests/edge_inspection_test.rs`、4件）:
+直方体の12稜すべてが Convex / 90°、面の並びを逆にしても同じ答え。ブーリアンで
+作った切り欠きの内側の縦稜が Concave / 270°。φ16 の貫通穴では、口の円弧が
+Convex / 90°、円筒の継ぎ目が Smooth / 180° と正しく分かれます。
+
+---
+
+### 4-29. 履歴ツリーがパラメトリックでなかった（2026/08/22）
+
+`FeatureTree::recompute` は、ほとんどの `FeatureOp` で `current_solid` を
+**上書き**していました。前段を受け取るのは `PushPullFace` と `ThickenFace` の
+2つだけで、**ブーリアン演算子がツリーに存在しません**でした。`FilletEdge` も
+`{dx, dy, dz, edge_index, radius}` で直方体を作り直します。つまり
+「作る → 穴をあける → 角を丸める」という形は履歴で表せず、上流の寸法を変えて
+下流を追従させることもできませんでした。
+
+**足したもの**（既存の `FeatureOp` は1つも変えていないので、従来の履歴は
+そのまま通ります）:
+
+- `FeatureOp::Boolean { op, tool: Vec<FeatureOp> }` — ツール側が**それ自身
+  フィーチャー列**で、`Translate` / `Rotate`（これも新設）で位置合わせして
+  組み立てます。`recompute` は `FeatureTree::evaluate(&[FeatureOp])` に切り出し、
+  ツール側も同じ語彙で評価されます。
+- `FeatureOp::FilletSolidEdge / ChamferSolidEdge` — 稜を ID ではなく
+  `EdgeSignature`（中点・向き・長さ・二面角。始終点の入れ替えに非依存）で
+  指します。ID は作り直すたびに変わるので、履歴に書いても次の再計算で
+  指すものがありません。
+
+一致度が 0.9 未満のとき、および1位と2位が同着のときは、**別の稜を黙って
+丸めずに失敗**します。間違った稜を丸めた結果は「閉じた別の形」になり、
+後から見て気付けないためです。
+
+**測った値**（`crates/zenith_algo/tests/feature_tree_parametric_test.rs`、4件）:
+
+| 確認したこと | 結果 |
+| :--- | :--- |
+| ブーリアンを含む履歴が一続きに評価される | 40×40×20 − φ12 貫通が解析解と 1e-9 |
+| 上流の寸法を変えると下流のフィレットが同じ稜に付き直す | dx 20→26 で面数7のまま、体積が新しい寸法の閉じた式と 1e-11 |
+| 稜が消えたら別の稜を丸めない | `No edge matches...` で失敗 |
+| ブーリアンの後に面取りを重ねられる | 解析解と 1e-10 |
+
+---
+
+### 4-30. Python から立体を持ち回れなかった（2026/08/22）
+
+`zenith_py` の関数はすべて `make_X(...) -> Mesh` のワンショットでした。立体を
+受け取って返す型が無いので、Python 側では作った立体を次の演算に渡せません。
+組み合わせが要るたびに Rust 側へ専用関数（`make_exact_drill_boolean` など）を
+足すしかなく、今回の `EdgeBlender` も公開できませんでした。
+
+**入れたもの**: `crates/zenith_py/src/solid.rs`（`zenith_cad.Solid`）。すべての
+メソッドが**新しい立体を返す**不変オブジェクトです。
+
+```python
+import zenith_cad as z
+
+part = z.Solid.box(40, 40, 20).difference(
+    z.Solid.cylinder(6, 20).translated(20, 20, 0)
+)
+for edge in part.blendable_edges():
+    part = part.fillet_edge(edge["edge_id"], 2.0)
+part.to_step("part.step")
+```
+
+生成（`box` / `cylinder` / `sphere` / `cone` / `torus` / `regular_prism` /
+`from_step` / `all_from_step`）、変換（`translated` / `rotated` / `mirrored`）、
+ブーリアン（`union` / `difference` / `intersection` / `difference_all`）、
+稜（`edges` / `blendable_edges` / `fillet_edge` / `chamfer_edge` / `fillet_edges` /
+`chamfer_edges`）、面（`faces` / `push_pull_face` / `taper_face`）、
+計測（`mass_properties` / `validate` / `clash_status` / `volume` / `face_count`）、
+出力（`tessellate` / `to_step` / `to_step_string`）、後片付け（`sewn`）。
+
+`validate()` は `unshared_edge_entity_uses` を返します。0 でなければ、その立体は
+閉じてはいるが稜を選べない状態です（4-26）。
+
+**測り方**:
+
+```bash
+cargo build --release -p zenith_py     # PYO3_PYTHON が要る環境ではそれも指定
+py tools/test_solid_api.py
+```
+
+20項目すべてグリーン。「作る → ブーリアン → 稜を選ぶ → 丸める → STEP →
+読み直す」が一周し、体積が閉じた式と一致したまま戻ります。凹稜の指定は
+`ValueError` に理由が入って返ります。
 
 ---
 

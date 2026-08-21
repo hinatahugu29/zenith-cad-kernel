@@ -163,6 +163,26 @@ impl BooleanEngine {
     ) -> Result<ExactBooleanResult, String> {
         let result = Self::boolean_solids_exact_result_unverified(solid_a, solid_b, op, tol)?;
 
+        // 面片の組み立ては面を1枚ずつ作るので、同じ位置に別々の稜の実体が
+        // 並んだまま出てくる。閉性の検査は座標で見るので通ってしまうが、
+        // その立体には「この稜を共有する2面」が引けず、稜を選ぶ演算子
+        // （フィレット・面取り・履歴）が一切掛からない。ここで縫い合わせて
+        // から返す。形は動かない（頂点は公差内で一致するものだけを束ねる）。
+        let mut sewn_solids = Vec::with_capacity(result.solids.len());
+        for solid in &result.solids {
+            let (sewn, sew_report) = crate::Sewer::sew_solid(solid, tol).map_err(|err| {
+                format!("Exact B-Rep boolean produced a result that will not sew: {err}")
+            })?;
+            if !sew_report.is_watertight() {
+                return Err(format!(
+                    "Exact B-Rep boolean produced a result whose edges do not pair up: {}",
+                    sew_report.summary()
+                ));
+            }
+            sewn_solids.push(sewn);
+        }
+        let result = ExactBooleanResult::from_solids(sewn_solids);
+
         let report = crate::BooleanResultVerifier::verify(solid_a, solid_b, &result.solids, op, tol);
         if !report.is_valid() {
             return Err(format!(

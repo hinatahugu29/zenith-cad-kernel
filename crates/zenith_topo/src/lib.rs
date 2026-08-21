@@ -17,7 +17,9 @@ pub use face::{
     Face, FaceBoundaryValidationReport, FaceGeometry, FacePcurveLoop, FacePcurveSegment,
     FacePcurves, PcurveValidationReport,
 };
-pub use persistent_id::{GeometricMatcher, GeometricSignature, PersistentId, SemanticTag};
+pub use persistent_id::{
+    EdgeSignature, GeometricMatcher, GeometricSignature, PersistentId, SemanticTag,
+};
 pub use shader_payload::{ShaderBRepPayload, ShaderEdgeData, ShaderFaceData, ShaderSurfaceType};
 pub use shape::Shape;
 pub use shell::{Shell, ShellValidationReport};

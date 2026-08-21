@@ -9,6 +9,7 @@ pub mod cap;
 pub mod chamfer;
 mod cylinder_boolean;
 pub mod direct_edit;
+pub mod edge_blend;
 pub mod distance;
 pub mod extrude;
 pub mod face_split;
@@ -34,6 +35,7 @@ pub mod shaft;
 
 
 pub mod revolve;
+pub mod sew;
 pub mod shell;
 pub mod shelling;
 pub mod sketch_solver;
@@ -66,8 +68,11 @@ pub use regularize::{RegularizeReport, Regularizer, StepInterop};
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;
 pub use direct_edit::{DirectModeling, EdgeInspection, EdgeKind, FaceInspection};
+pub use edge_blend::{BlendKind, BlendableEdge, EdgeBlendReport, EdgeBlender};
 pub use extrude::ExtrudeBuilder;
-pub use feature_tree::{FeatureNode, FeatureOp, FeatureTree};
+pub use feature_tree::{
+    edge_signature, match_edge, BooleanKind, FeatureNode, FeatureOp, FeatureTree,
+};
 pub use fillet::FilletBuilder;
 pub use flange::FlangeBuilder;
 pub use gear::GearBuilder;
@@ -86,6 +91,7 @@ pub use shaft::ShaftBuilder;
 
 
 pub use revolve::RevolveBuilder;
+pub use sew::{SewReport, Sewer};
 pub use shell::ShellBuilder;
 pub use shelling::ShellingBuilder;
 pub use sketch_solver::{
