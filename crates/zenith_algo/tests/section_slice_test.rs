@@ -132,8 +132,11 @@ fn test_sphere_equator_section_is_not_empty() {
     .expect("sphere equator section");
 
     assert_eq!(result.section_wires.len(), 1);
+    // 許容は 1e-2 だった。断面は 4-10 で B-Rep の上で測るようになっており、
+    // ここも実測は 4.83e-11（314.15926534 対 314.15926536）。8桁ぶん緩い許容は、
+    // そこが崩れても何も言わない。
     assert!(
-        relative_error(result.total_area, PI * 100.0) < 1e-2,
+        relative_error(result.total_area, PI * 100.0) < 1e-10,
         "sphere equator area {} should approach {}",
         result.total_area,
         PI * 100.0

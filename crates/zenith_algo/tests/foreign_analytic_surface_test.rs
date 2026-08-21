@@ -7,10 +7,15 @@
 //! this kernel could show that, because our own exporter writes these shapes as
 //! B-splines and never takes the analytic path.
 //!
-//! The fixtures were written by OpenCASCADE 7.8 (`tools/occ_reference_export.py`)
-//! and the expected volumes are what OpenCASCADE itself reports for them, so a
-//! disagreement here is a disagreement with another kernel rather than with a
-//! number this repository chose.
+//! The fixtures were written by OpenCASCADE 7.8 (`tools/occ_reference_export.py`),
+//! so a disagreement here is a disagreement with another kernel rather than with
+//! a number this repository chose.
+//!
+//! 期待値は OpenCASCADE の出力ではなく**閉じた式**で書く。以前はここに OCC が
+//! 印字した4桁の数（`3267.2564` など）を写していた。その literal は自分自身が
+//! 3e-8 の粗さを持つので、許容をそれより締められない。実際の許容は 1e-3 に
+//! 置かれていて、5桁の劣化を素通りさせる幅だった。これらの形はすべて閉じた式を
+//! 持つのだから、外れようのないものを比較相手に置く。
 
 use zenith_algo::MassCalculator;
 use zenith_io::{StepExporter, StepImporter};
@@ -55,26 +60,35 @@ fn read_fixture(name: &str) -> Solid {
     solid
 }
 
-fn assert_volume(name: &str, expected: f64) {
+fn assert_volume(name: &str, expected: f64, allowed: f64) {
     let measured = volume(&read_fixture(name));
     let relative = (measured - expected).abs() / expected.abs();
     assert!(
-        relative < 1e-3,
-        "{name}: read {measured:.4}, OpenCASCADE says {expected:.4} (relative {relative:.2e})"
+        relative < allowed,
+        "{name}: read {measured:.9}, closed form {expected:.9} (relative {relative:.2e}, allowed {allowed:.1e})"
     );
+}
+
+const PI: f64 = std::f64::consts::PI;
+
+/// 円錐台の体積 `pi h (R^2 + R r + r^2) / 3`。
+fn frustum_volume(big: f64, small: f64, height: f64) -> f64 {
+    PI * height * (big * big + big * small + small * small) / 3.0
 }
 
 #[test]
 fn test_a_conical_face_is_sized_from_its_boundary() {
     // Part.makeCone(10, 4, 20)
-    assert_volume("cone", 3267.2564);
+    // Part.makeCone(10, 4, 20): pi h (R^2 + R r + r^2) / 3 = 1040 pi
+    assert_volume("cone", frustum_volume(10.0, 4.0, 20.0), 1e-11);
 }
 
 #[test]
 fn test_a_conical_face_running_to_the_apex_is_readable() {
     // Part.makeCone(10, 0, 20). The apex end has zero radius, which is a
     // degenerate row rather than a reason to refuse the face.
-    assert_volume("cone_full", 2094.3951);
+    // 頂点まで走る円錐: pi r^2 h / 3
+    assert_volume("cone_full", PI * 100.0 * 20.0 / 3.0, 1e-11);
 }
 
 #[test]
@@ -82,13 +96,15 @@ fn test_a_spherical_face_bounded_by_real_edges_is_readable() {
     // A sphere of radius 10 cut in half. The spherical face's loop walks its
     // seam meridian up and back down again before going round the equator, so
     // one edge is used twice by the one face.
-    assert_volume("sphere_capped", 2094.3951);
+    // 半球: (2/3) pi r^3
+    assert_volume("sphere_capped", 2.0 / 3.0 * PI * 1000.0, 1e-11);
 }
 
 #[test]
 fn test_a_toroidal_face_is_sized_from_its_boundary() {
     // A quarter of a torus, R=12 r=4: the elbow shape a pipe run is made of.
-    assert_volume("torus_segment", 947.4820);
+    // 四半トーラス: 2 pi^2 R r^2 / 4
+    assert_volume("torus_segment", 2.0 * PI * PI * 12.0 * 16.0 / 4.0, 1e-11);
 }
 
 #[test]
@@ -98,7 +114,8 @@ fn test_a_torus_written_as_one_face_is_readable() {
     // whole parameter domain, but its p-curves cannot say so, because a point
     // on the seam maps to both ends of the domain. Read from the p-curves the
     // face came out at exactly half the surface, and so did the volume.
-    assert_volume("torus", 3789.9281);
+    // 全周トーラス: 2 pi^2 R r^2
+    assert_volume("torus", 2.0 * PI * PI * 12.0 * 16.0, 1e-11);
 
     let solid = read_fixture("torus");
     assert_eq!(solid.outer_shell.faces.len(), 1);
@@ -113,7 +130,7 @@ fn test_a_torus_written_as_one_face_is_readable() {
     // 4 pi^2 R r
     let expected = 4.0 * std::f64::consts::PI * std::f64::consts::PI * 12.0 * 4.0;
     assert!(
-        (area - expected).abs() / expected < 1e-3,
+        (area - expected).abs() / expected < 1e-11,
         "torus surface area {area:.4}, closed form {expected:.4}"
     );
 }
@@ -124,7 +141,8 @@ fn test_a_sphere_written_as_one_face_with_no_boundary_is_readable() {
     // a single point at the south pole and no edges at all. That is not a loop
     // missing its edges, it is a face with nothing to trim away, and the point
     // is the only thing saying where on the sphere the face sits.
-    assert_volume("sphere", 4188.7902);
+    // 球: (4/3) pi r^3
+    assert_volume("sphere", 4.0 / 3.0 * PI * 1000.0, 1e-11);
 
     let solid = read_fixture("sphere");
     assert_eq!(solid.outer_shell.faces.len(), 1);
@@ -141,7 +159,7 @@ fn test_a_sphere_written_as_one_face_with_no_boundary_is_readable() {
     // 4 pi r^2
     let expected = 4.0 * std::f64::consts::PI * 100.0;
     assert!(
-        (area - expected).abs() / expected < 1e-3,
+        (area - expected).abs() / expected < 1e-11,
         "sphere surface area {area:.4}, closed form {expected:.4}"
     );
 }
@@ -175,9 +193,16 @@ fn test_a_solid_converted_to_b_splines_keeps_its_size() {
     let measured = volume(&solid);
     let exact = std::f64::consts::PI * 100.0 * 40.0;
     let relative = (measured - exact).abs() / exact;
+    // ここだけ他より緩い。トリムされた B-spline に残る既知の残差である。
+    // 解析曲面から読んだ6検体は 2.4e-12 以内に入るが、この検体は入らない。
+    //
+    // 実測は 12566.353308（解析値 12566.370614）で相対 1.38e-6。HANDOVER.md 3-5
+    // は「12566.6236、相対 2.0e-5」と書いているが、この物差し（64x64 の質量積分）
+    // では再現しない。値の大小も逆で、いまは解析解より小さく出る。文書の数字は
+    // 別の経路で測ったものか、既に古い。緩いこと自体が情報なので隠さない。
     assert!(
-        relative < 1e-3,
-        "converted cylinder volume {measured:.4} against {exact:.4} (relative {relative:.2e})"
+        relative < 2e-6,
+        "converted cylinder volume {measured:.6} against {exact:.6} (relative {relative:.2e})"
     );
 }
 
@@ -246,7 +271,7 @@ fn test_the_analytic_faces_carry_their_analytic_area() {
             .fold(0.0f64, f64::max);
         let relative = (largest - expected).abs() / expected;
         assert!(
-            relative < 1e-3,
+            relative < 1e-11,
             "{name}: analytic face area {largest:.4}, closed form {expected:.4} (relative {relative:.2e})"
         );
     }
