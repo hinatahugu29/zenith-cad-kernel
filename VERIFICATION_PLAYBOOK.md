@@ -143,8 +143,8 @@ cargo run --release -p zenith_algo --example boolean_envelope
 ```text
 supported: 39   wrong-result: 0   unsupported/error: 6   (total 45)
 worst analytic agreement: 6.75e-8  (sphere x sphere intersection)
-solve work: 120566157 surface evaluations, 2890068 marching Newton iterations, 11928 marches
-            720 seed searches, 1055814 point-surface projections (67380 of them
+solve work: 118261845 surface evaluations, 2269776 marching Newton iterations, 11448 marches
+            720 seed searches, 1035106 point-surface projections (65940 of them
             searching the whole domain for a start), 144 whole-solid tessellations
 ```
 
