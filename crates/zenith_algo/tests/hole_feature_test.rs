@@ -82,3 +82,34 @@ fn test_counterbore_hole_box_shallow_and_deep_cases() {
         );
     }
 }
+
+#[test]
+fn test_make_hex_nut_matches_analytic_volume() {
+    let tol = Tolerance::default();
+    let across_flats = 16.0; // 二面幅 S = 16mm (M10ナット相当)
+    let hole_radius = 4.25;  // 下穴半径 r = 4.25mm
+    let thickness = 8.0;     // 厚み H = 8mm
+
+    let nut = HoleBuilder::make_hex_nut(across_flats, hole_radius, thickness)
+        .expect("make_hex_nut");
+
+    assert!(nut.is_topologically_valid(&tol), "hex nut must be valid closed solid");
+
+    let params = TessellationParams::default();
+    let mass = MassCalculator::compute_from_brep(&nut, &params);
+
+    // 解析体積: 正六角柱体積 - 貫通円柱穴体積
+    // 六角形面積 = (sqrt(3) / 2) * S^2
+    let hex_area = (3.0f64.sqrt() / 2.0) * across_flats * across_flats;
+    let hole_area = PI * hole_radius * hole_radius;
+    let expected_vol = (hex_area - hole_area) * thickness;
+
+    let diff = (mass.volume - expected_vol).abs();
+    assert!(
+        diff / expected_vol < 1e-4,
+        "hex nut volume {} vs expected {}, diff {}",
+        mass.volume,
+        expected_vol,
+        diff
+    );
+}

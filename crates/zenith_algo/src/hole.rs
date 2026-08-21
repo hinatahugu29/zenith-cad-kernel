@@ -364,4 +364,48 @@ impl HoleBuilder {
             &tol,
         )
     }
+
+    /// 正六角ナット（Hex Nut）ソリッドの生成
+    ///
+    /// `across_flats`: 二面幅 S（対辺距離、ミリメートル）
+    /// `hole_radius`: 内径穴の半径（ミリメートル）
+    /// `thickness`: ナットの厚み（高さ、ミリメートル）
+    pub fn make_hex_nut(
+        across_flats: f64,
+        hole_radius: f64,
+        thickness: f64,
+    ) -> Result<Solid, String> {
+        if across_flats <= 1e-9 || hole_radius <= 1e-9 || thickness <= 1e-9 {
+            return Err(format!(
+                "Hex nut dimensions must be positive, got across_flats={across_flats}, hole_radius={hole_radius}, thickness={thickness}"
+            ));
+        }
+        if hole_radius >= across_flats * 0.5 {
+            return Err(format!(
+                "Hex nut hole radius ({hole_radius}) must be smaller than half of across_flats ({})",
+                across_flats * 0.5
+            ));
+        }
+
+        let tol = zenith_math::Tolerance::default();
+        // 二面幅 S に対する外接円半径 R = S / sqrt(3)
+        let circum_radius = across_flats / 3.0f64.sqrt();
+
+        // 1. 六角柱外形
+        let hex_body = crate::PrimitiveBuilder::make_regular_prism(6, circum_radius, thickness)?;
+
+        // 2. 貫通下穴
+        let drill = crate::PrimitiveBuilder::make_cylinder(hole_radius, thickness + 2.0)?;
+        let drill = crate::BrepTransform::translate_solid(
+            &drill,
+            zenith_math::Vec3::new(0.0, 0.0, -1.0),
+        );
+
+        crate::BooleanEngine::boolean_solids_exact(
+            &hex_body,
+            &drill,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )
+    }
 }

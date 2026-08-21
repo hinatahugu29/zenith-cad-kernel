@@ -113,6 +113,39 @@ impl BooleanEngine {
         Self::boolean_solids_exact_result(solid_a, solid_b, op, tol)?.try_single()
     }
 
+    /// 1つのベース立体に対して複数のツール立体を一括で連続適用するバッチブーリアン演算
+    ///
+    /// `base`: ベースとなるソリッド
+    /// `tools`: 適用するツール立体群（複数の穴用円柱、複数の結合用リブなど）
+    /// `op`: ブーリアン演算種別
+    pub fn boolean_solids_batch(
+        base: &Solid,
+        tools: &[Solid],
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if tools.is_empty() {
+            return Ok(base.clone());
+        }
+
+        let mut current = base.clone();
+        for (idx, tool) in tools.iter().enumerate() {
+            match Self::boolean_solids_exact(&current, tool, op, tol) {
+                Ok(next) => {
+                    current = next;
+                }
+                Err(err) => {
+                    return Err(format!(
+                        "Batch boolean failed at tool index {idx} / {}: {err}",
+                        tools.len()
+                    ));
+                }
+            }
+        }
+
+        Ok(current)
+    }
+
     /// Computes an exact B-Rep boolean and verifies the answer before handing
     /// it back.
     ///
