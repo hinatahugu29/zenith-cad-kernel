@@ -102,6 +102,7 @@ impl ExtremumEngine {
         tolerance: f64,
     ) -> Result<PointSurfaceProjection, String> {
         crate::work_counter::count_point_surface_projection();
+        crate::work_counter::count_point_surface_coarse_search();
         let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
 
         // 1. 粗いサンプリングで初期パラメータ (u, v) を決定
@@ -213,6 +214,7 @@ impl ExtremumEngine {
         let distance_sq_at = |u: f64, v: f64| (surface.evaluate(u, v) - point).norm_squared();
 
         for _ in 0..max_iterations {
+            crate::work_counter::count_projection_newton_iteration();
             let (pt, su, sv) = surface.evaluate_derivatives_1st(cur_u, cur_v);
             let diff = pt - point;
 
@@ -248,6 +250,7 @@ impl ExtremumEngine {
             let mut damping = 1.0;
             let mut moved = false;
             for _ in 0..24 {
+                crate::work_counter::count_projection_damping_trial();
                 let next_u = closed.settle_u(cur_u - step_u * damping, u_min, u_max);
                 let next_v = closed.settle_v(cur_v - step_v * damping, v_min, v_max);
                 let next = distance_sq_at(next_u, next_v);

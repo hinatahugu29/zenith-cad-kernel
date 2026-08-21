@@ -301,6 +301,7 @@ impl SurfaceIntegral {
     }
 
     fn add_face(&mut self, face: &Face, params: &TessellationParams, sign: f64) {
+        zenith_geom::work_counter::count_face_integral();
         let orientation_sign = if face.orientation.is_forward() {
             sign
         } else {
@@ -446,6 +447,8 @@ impl SurfaceIntegral {
         // B-spline が滑らかなのは区間の内側だけで、またいだまま次数4の
         // 則を当てても次数が効かない。トリムされた面の三角形は earcut と
         // 細分で作られていて、ノット線を知らない。
+        //
+        // **セル線でも切ろうとして、二度外しました。** 経緯は 4-21 に。
         let (u_breaks, v_breaks) = surface.integration_breaks();
         let mut pieces: Vec<[Point2; 3]> = Vec::new();
         for triangle in &domain.triangles {

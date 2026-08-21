@@ -895,18 +895,50 @@ impl IntersectionMarcher {
     ///
     /// **辿るのに使った (u, v) では測らない。** そこは構成上ぴったりなので、
     /// 何も分からない。改めて曲面へ射影して測る。
+    /// 辿った点が、両方の曲面からどれだけ離れているか。最悪値を返す。
+    ///
+    /// **辿るのに使った `(u, v)` では測りません。** そこは構成上ぴったりなので、
+    /// 何を作っても 0 が出ます。改めて曲面へ射影して測る必要があります。
+    ///
+    /// ただし**探索の出発点**としてなら、構成パラメータ以外の近い値を使えます。
+    /// ここでは1つ前の点の射影結果から始めます。連続する辿り点は歩幅ぶんしか
+    /// 離れていないので、そのままで良い出発点になります。
+    ///
+    /// この温めは検証を緩めません。射影が返すのは局所最小での距離で、これは
+    /// 定義上**真の最近傍距離以上**です。ここは最大値を取り、呼び出し側は
+    /// 「小さいこと」を要求します。したがって出発点を外しても**過大に報告
+    /// するだけ**で、離れている点を近いと言うことはありません。外れ方が
+    /// 安全側に固定されているので、安く測れます。
+    ///
+    /// 安くする理由は実測です。45ケースの走査で、曲面の評価 1.77 億回のうち
+    /// **96%が点から曲面への射影**でした。種を渡さない `point_to_surface` は、
+    /// 出発点を決めるためだけに 17x17 の格子と8段の詰めで 353 回評価します。
     pub fn worst_distance(
         s1: &NurbsSurface3,
         s2: &NurbsSurface3,
         points: &[SurfaceIntersectionPoint],
     ) -> f64 {
         let mut worst: f64 = 0.0;
+        // 曲面ごとに、直前の点で見つかった (u, v) を覚えておく。
+        let mut previous: [Option<(f64, f64)>; 2] = [None, None];
         for sample in points {
-            for surface in [s1, s2] {
-                if let Ok(projection) =
-                    ExtremumEngine::point_to_surface(sample.point, surface, 64, 1e-13)
-                {
+            for (index, surface) in [s1, s2].into_iter().enumerate() {
+                let projection = match previous[index] {
+                    Some((seed_u, seed_v)) => ExtremumEngine::point_to_surface_seeded(
+                        sample.point,
+                        surface,
+                        seed_u,
+                        seed_v,
+                        64,
+                        1e-13,
+                    ),
+                    // 最初の1点だけは、どこから始めるべきか分からないので
+                    // 全域を粗く見る。
+                    None => ExtremumEngine::point_to_surface(sample.point, surface, 64, 1e-13),
+                };
+                if let Ok(projection) = projection {
                     worst = worst.max(projection.distance);
+                    previous[index] = Some((projection.u, projection.v));
                 }
             }
         }

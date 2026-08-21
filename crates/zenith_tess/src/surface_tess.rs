@@ -46,6 +46,12 @@ impl UvTriangulation {
 /// cannot be used, and surface classes without p-curve support, fall back to a
 /// uniform grid over the whole parameter rectangle.
 pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTriangulation {
+    let result = face_uv_triangulation_inner(face, params);
+    zenith_geom::work_counter::count_uv_triangulation(result.triangles.len());
+    result
+}
+
+fn face_uv_triangulation_inner(face: &Face, params: &TessellationParams) -> UvTriangulation {
     match &face.geometry {
         FaceGeometry::Plane(_) => {
             let trimmed = planar_uv_triangulation(face, params);

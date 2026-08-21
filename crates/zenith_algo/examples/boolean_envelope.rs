@@ -373,6 +373,8 @@ fn main() {
                     solve_work_total.seed_searches += solve_work.seed_searches;
                     solve_work_total.point_surface_projections +=
                         solve_work.point_surface_projections;
+                    solve_work_total.point_surface_coarse_searches +=
+                        solve_work.point_surface_coarse_searches;
                     solve_work_total.solid_tessellations += solve_work.solid_tessellations;
                     timings.push((
                         format!("{} {}", case.name, op_name),
@@ -404,6 +406,8 @@ fn main() {
                     solve_work_total.seed_searches += solve_work.seed_searches;
                     solve_work_total.point_surface_projections +=
                         solve_work.point_surface_projections;
+                    solve_work_total.point_surface_coarse_searches +=
+                        solve_work.point_surface_coarse_searches;
                     solve_work_total.solid_tessellations += solve_work.solid_tessellations;
                     timings.push((
                         format!("{} {}", case.name, op_name),
@@ -448,9 +452,10 @@ fn main() {
         solve_work_total.marching_calls
     );
     println!(
-        "            {} seed searches, {} point-surface projections, {} whole-solid tessellations",
+        "            {} seed searches, {} point-surface projections ({} of them searching the whole domain for a start), {} whole-solid tessellations",
         solve_work_total.seed_searches,
         solve_work_total.point_surface_projections,
+        solve_work_total.point_surface_coarse_searches,
         solve_work_total.solid_tessellations
     );
     timings.sort_by(|a, b| {

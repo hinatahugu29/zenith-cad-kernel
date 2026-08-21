@@ -23,6 +23,12 @@ static MARCHING_NEWTON_ITERATIONS: AtomicU64 = AtomicU64::new(0);
 static MARCHING_CALLS: AtomicU64 = AtomicU64::new(0);
 static SEED_SEARCHES: AtomicU64 = AtomicU64::new(0);
 static POINT_SURFACE_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+static POINT_SURFACE_COARSE_SEARCHES: AtomicU64 = AtomicU64::new(0);
+static PROJECTION_NEWTON_ITERATIONS: AtomicU64 = AtomicU64::new(0);
+static PROJECTION_DAMPING_TRIALS: AtomicU64 = AtomicU64::new(0);
+static FACE_INTEGRALS: AtomicU64 = AtomicU64::new(0);
+static UV_TRIANGULATIONS: AtomicU64 = AtomicU64::new(0);
+static UV_TRIANGLES: AtomicU64 = AtomicU64::new(0);
 static SOLID_TESSELLATIONS: AtomicU64 = AtomicU64::new(0);
 
 /// ある時点までに積み上がった仕事の量。
@@ -38,6 +44,25 @@ pub struct WorkCounters {
     pub seed_searches: u64,
     /// 点から曲面への最近傍射影の回数。
     pub point_surface_projections: u64,
+    /// そのうち、出発点を渡されずに全域を粗く見た回数。
+    ///
+    /// 1回につき 17x17 の格子と8段の詰めで 353 回の曲面評価を払う。
+    /// ニュートン法本体はその後の数回なので、**費用のほとんどが
+    /// 「どこから始めるか」に消える**。ここが減れば全体が減る。
+    pub point_surface_coarse_searches: u64,
+    /// 射影のニュートン反復の回数。
+    pub projection_newton_iterations: u64,
+    /// そのうち、歩幅を半分にして試した回数。1回につき曲面評価1回。
+    pub projection_damping_trials: u64,
+    /// 面を1枚まるごと積分した回数。
+    ///
+    /// ブーリアンは分割の正しさを面積の和で確かめるので、演算の途中で
+    /// ここが何度も回る。1回につき三角形の数 x 6 点の評価を払う。
+    pub face_integrals: u64,
+    /// 面のパラメータ領域を三角形に割った回数。
+    pub uv_triangulations: u64,
+    /// そこで出来た三角形の総数。
+    pub uv_triangles: u64,
     /// 立体をまるごとテッセレートした回数。
     ///
     /// 内外判定はメッシュに対して行われるので、同じ立体を何度も刻んで
@@ -60,6 +85,18 @@ impl WorkCounters {
             point_surface_projections: self
                 .point_surface_projections
                 .saturating_sub(earlier.point_surface_projections),
+            point_surface_coarse_searches: self
+                .point_surface_coarse_searches
+                .saturating_sub(earlier.point_surface_coarse_searches),
+            projection_newton_iterations: self
+                .projection_newton_iterations
+                .saturating_sub(earlier.projection_newton_iterations),
+            projection_damping_trials: self
+                .projection_damping_trials
+                .saturating_sub(earlier.projection_damping_trials),
+            face_integrals: self.face_integrals.saturating_sub(earlier.face_integrals),
+            uv_triangulations: self.uv_triangulations.saturating_sub(earlier.uv_triangulations),
+            uv_triangles: self.uv_triangles.saturating_sub(earlier.uv_triangles),
             solid_tessellations: self
                 .solid_tessellations
                 .saturating_sub(earlier.solid_tessellations),
@@ -75,6 +112,12 @@ pub fn snapshot() -> WorkCounters {
         marching_calls: MARCHING_CALLS.load(Ordering::Relaxed),
         seed_searches: SEED_SEARCHES.load(Ordering::Relaxed),
         point_surface_projections: POINT_SURFACE_PROJECTIONS.load(Ordering::Relaxed),
+        point_surface_coarse_searches: POINT_SURFACE_COARSE_SEARCHES.load(Ordering::Relaxed),
+        projection_newton_iterations: PROJECTION_NEWTON_ITERATIONS.load(Ordering::Relaxed),
+        projection_damping_trials: PROJECTION_DAMPING_TRIALS.load(Ordering::Relaxed),
+        face_integrals: FACE_INTEGRALS.load(Ordering::Relaxed),
+        uv_triangulations: UV_TRIANGULATIONS.load(Ordering::Relaxed),
+        uv_triangles: UV_TRIANGLES.load(Ordering::Relaxed),
         solid_tessellations: SOLID_TESSELLATIONS.load(Ordering::Relaxed),
     }
 }
@@ -86,6 +129,12 @@ pub fn reset() {
     MARCHING_CALLS.store(0, Ordering::Relaxed);
     SEED_SEARCHES.store(0, Ordering::Relaxed);
     POINT_SURFACE_PROJECTIONS.store(0, Ordering::Relaxed);
+    POINT_SURFACE_COARSE_SEARCHES.store(0, Ordering::Relaxed);
+    PROJECTION_NEWTON_ITERATIONS.store(0, Ordering::Relaxed);
+    PROJECTION_DAMPING_TRIALS.store(0, Ordering::Relaxed);
+    FACE_INTEGRALS.store(0, Ordering::Relaxed);
+    UV_TRIANGULATIONS.store(0, Ordering::Relaxed);
+    UV_TRIANGLES.store(0, Ordering::Relaxed);
     SOLID_TESSELLATIONS.store(0, Ordering::Relaxed);
 }
 
@@ -117,4 +166,30 @@ pub fn count_point_surface_projection() {
 #[inline]
 pub fn count_solid_tessellation() {
     SOLID_TESSELLATIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn count_point_surface_coarse_search() {
+    POINT_SURFACE_COARSE_SEARCHES.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn count_projection_newton_iteration() {
+    PROJECTION_NEWTON_ITERATIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn count_projection_damping_trial() {
+    PROJECTION_DAMPING_TRIALS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn count_face_integral() {
+    FACE_INTEGRALS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn count_uv_triangulation(triangles: usize) {
+    UV_TRIANGULATIONS.fetch_add(1, Ordering::Relaxed);
+    UV_TRIANGLES.fetch_add(triangles as u64, Ordering::Relaxed);
 }
