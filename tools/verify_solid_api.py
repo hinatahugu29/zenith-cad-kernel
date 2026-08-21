@@ -193,6 +193,42 @@ def test_mesh_still_available():
     check("the mesh volume agrees", close(mesh.volume, 1000.0, 1e-9), mesh.volume)
 
 
+def test_inertia():
+    print("[inertia]")
+    part = z.Solid.box(20.0, 30.0, 40.0)
+    mass = part.mass_properties()
+    volume = 20.0 * 30.0 * 40.0
+
+    check(
+        "the diagonal is about the origin, not the centre of mass",
+        close(mass["inertia_diagonal_about_origin"][0], volume * (30.0**2 + 40.0**2) / 3.0, 1e-11),
+        mass["inertia_diagonal_about_origin"][0],
+    )
+
+    want = sorted(
+        [
+            volume * (30.0**2 + 40.0**2) / 12.0,
+            volume * (20.0**2 + 40.0**2) / 12.0,
+            volume * (20.0**2 + 30.0**2) / 12.0,
+        ]
+    )
+    check(
+        "the principal moments are about the centre of mass",
+        all(close(a, b, 1e-11) for a, b in zip(mass["principal_moments"], want)),
+        mass["principal_moments"],
+    )
+
+    turned = part.rotated([0.0, 0.0, 0.0], [1.0, 2.0, 3.0], 35.0)
+    check(
+        "turning the solid does not change the principal moments",
+        all(
+            close(a, b, 1e-10)
+            for a, b in zip(turned.mass_properties()["principal_moments"], want)
+        ),
+        turned.mass_properties()["principal_moments"],
+    )
+
+
 def test_simplify():
     print("[simplify]")
     block = z.Solid.box(40.0, 40.0, 20.0)
@@ -232,6 +268,7 @@ def main():
     test_step_round_trip()
     test_mesh_still_available()
     test_simplify()
+    test_inertia()
 
     print("=" * 60)
     if FAILURES:

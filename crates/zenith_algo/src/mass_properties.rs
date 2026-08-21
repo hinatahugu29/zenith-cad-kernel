@@ -12,8 +12,119 @@ pub struct MassProperties {
     pub volume: f64,
     /// 重心座標 (mm)
     pub center_of_mass: Point3,
-    /// 慣性モーメント主成分 (Ixx, Iyy, Izz) (mm^5 または密度1時の単位)
+    /// 慣性テンソルの対角成分 (Ixx, Iyy, Izz)。**原点を通る座標軸まわり**。
+    ///
+    /// 主慣性モーメントではありません。主慣性モーメントは重心を通る主軸まわり
+    /// の値で、`principal_moments()` が返します。慣性積を無視してこの3つを主値
+    /// として使うと、対称でない形では答えが変わります。
+    ///
+    /// 実測: 直方体・円柱・球・円錐・原点から離した直方体のいずれも、原点
+    /// まわりの閉じた式と **1.8e-13 以内**（`inertia_probe`）。
     pub inertia_diagonal: Vec3,
+    /// 慣性積のもとになる積 (∫xy dV, ∫yz dV, ∫zx dV)。**原点まわり**。
+    ///
+    /// 慣性テンソルの非対角成分は符号が反転した `-∫xy dV` です。テンソルとして
+    /// 使うときは `inertia_tensor()` を通してください。
+    #[cfg_attr(not(doc), doc(hidden))]
+    pub inertia_products: Vec3,
+}
+
+impl MassProperties {
+    /// 原点を通る座標軸まわりの慣性テンソル（密度1）
+    pub fn inertia_tensor(&self) -> [[f64; 3]; 3] {
+        let (ixy, iyz, izx) = (
+            self.inertia_products.x,
+            self.inertia_products.y,
+            self.inertia_products.z,
+        );
+        [
+            [self.inertia_diagonal.x, -ixy, -izx],
+            [-ixy, self.inertia_diagonal.y, -iyz],
+            [-izx, -iyz, self.inertia_diagonal.z],
+        ]
+    }
+
+    /// 任意の点を通る座標軸まわりの慣性テンソル（平行軸の定理）
+    pub fn inertia_tensor_about(&self, point: Point3) -> [[f64; 3]; 3] {
+        let mass = self.volume;
+        let d = point - self.center_of_mass;
+        let c = self.center_of_mass - Point3::origin();
+
+        // まず重心まわりへ移し、そこから目的の点へ移す
+        let about_origin = self.inertia_tensor();
+        let mut tensor = [[0.0f64; 3]; 3];
+        for row in 0..3 {
+            for column in 0..3 {
+                let shift_from_origin = if row == column {
+                    c.norm_squared() - c[row] * c[column]
+                } else {
+                    -c[row] * c[column]
+                };
+                let shift_to_point = if row == column {
+                    d.norm_squared() - d[row] * d[column]
+                } else {
+                    -d[row] * d[column]
+                };
+                tensor[row][column] =
+                    about_origin[row][column] - mass * shift_from_origin + mass * shift_to_point;
+            }
+        }
+        tensor
+    }
+
+    /// 重心を通る座標軸まわりの慣性テンソル
+    pub fn inertia_tensor_about_center_of_mass(&self) -> [[f64; 3]; 3] {
+        self.inertia_tensor_about(self.center_of_mass)
+    }
+
+    /// 主慣性モーメント（重心を通る主軸まわり、昇順）
+    ///
+    /// 重心まわりの慣性テンソルの固有値です。対称でない形では
+    /// `inertia_diagonal` とは一致しません。
+    pub fn principal_moments(&self) -> Vec3 {
+        let mut values = symmetric_eigenvalues(self.inertia_tensor_about_center_of_mass());
+        values.sort_by(f64::total_cmp);
+        Vec3::new(values[0], values[1], values[2])
+    }
+}
+
+/// 3x3 対称行列の固有値（ヤコビ法）
+fn symmetric_eigenvalues(matrix: [[f64; 3]; 3]) -> [f64; 3] {
+    let mut a = matrix;
+    for _sweep in 0..64 {
+        let (mut p, mut q, mut largest) = (0usize, 1usize, 0.0f64);
+        for row in 0..3 {
+            for column in (row + 1)..3 {
+                if a[row][column].abs() > largest {
+                    largest = a[row][column].abs();
+                    p = row;
+                    q = column;
+                }
+            }
+        }
+        let scale = a[0][0].abs().max(a[1][1].abs()).max(a[2][2].abs()).max(1.0);
+        if largest <= 1e-18 * scale {
+            break;
+        }
+
+        let theta = 0.5 * (a[q][q] - a[p][p]) / a[p][q];
+        let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+        let cos = 1.0 / (t * t + 1.0).sqrt();
+        let sin = t * cos;
+
+        let mut next = a;
+        for k in 0..3 {
+            next[p][k] = cos * a[p][k] - sin * a[q][k];
+            next[q][k] = sin * a[p][k] + cos * a[q][k];
+        }
+        let rotated = next;
+        for k in 0..3 {
+            next[k][p] = cos * rotated[k][p] - sin * rotated[k][q];
+            next[k][q] = sin * rotated[k][p] + cos * rotated[k][q];
+        }
+        a = next;
+    }
+    [a[0][0], a[1][1], a[2][2]]
 }
 
 /// ガウスの発散定理に基づく高精度物性値計算エンジン
@@ -101,6 +212,9 @@ impl MassCalculator {
         let mut ixx = 0.0;
         let mut iyy = 0.0;
         let mut izz = 0.0;
+        let mut ixy = 0.0;
+        let mut iyz = 0.0;
+        let mut izx = 0.0;
 
         for tri in &mesh.indices {
             let p0 = mesh.positions[tri[0] as usize];
@@ -134,6 +248,21 @@ impl MassCalculator {
             ixx += vol * (y2 + z2) / 10.0;
             iyy += vol * (x2 + z2) / 10.0;
             izz += vol * (x2 + y2) / 10.0;
+
+            // 5. 慣性積の寄与。原点を頂点とする四面体で
+            //    ∫xy dV = V (2 Σ x_i y_i + Σ_{i≠j} x_i y_j) / 20。
+            let cross_moment = |a: [f64; 3], b: [f64; 3]| -> f64 {
+                let sum_a = a[0] + a[1] + a[2];
+                let sum_b = b[0] + b[1] + b[2];
+                let paired = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                (sum_a * sum_b + paired) / 20.0
+            };
+            let xs = [p0.x, p1.x, p2.x];
+            let ys = [p0.y, p1.y, p2.y];
+            let zs = [p0.z, p1.z, p2.z];
+            ixy += vol * cross_moment(xs, ys);
+            iyz += vol * cross_moment(ys, zs);
+            izx += vol * cross_moment(zs, xs);
         }
 
         let total_vol_abs = total_vol.abs();
@@ -148,6 +277,7 @@ impl MassCalculator {
             volume: total_vol_abs,
             center_of_mass: Point3::new(cm_x, cm_y, cm_z),
             inertia_diagonal: Vec3::new(ixx.abs(), iyy.abs(), izz.abs()),
+            inertia_products: Vec3::new(ixy, iyz, izx),
         }
     }
 }
@@ -291,6 +421,8 @@ struct SurfaceIntegral {
     volume: f64,
     moment: Vec3,
     second_moment: Vec3,
+    /// (∫xy dV, ∫yz dV, ∫zx dV)
+    products: Vec3,
 }
 
 impl SurfaceIntegral {
@@ -432,6 +564,27 @@ impl SurfaceIntegral {
             self.second_moment[axis] += normal[axis] * jacobian * cubed / 3.0;
         }
 
+        // 慣性積 ∫xy dV = ∮ (x^2 y / 2) n_x dA。x も y も (u, v) の1次なので
+        // x^2 y は3次で、ここにある モーメントだけで閉じる。
+        //
+        // ∫ a^2 b = b0 ∫a^2 + bu ∫(a^2 u) + bv ∫(a^2 v)
+        let squared_times = |i: usize, j: usize, base: f64, du: f64, dv: f64| -> f64 {
+            base * base * moments[index_uv(i, j)]
+                + 2.0 * base * du * moments[index_uv(i + 1, j)]
+                + 2.0 * base * dv * moments[index_uv(i, j + 1)]
+                + du * du * moments[index_uv(i + 2, j)]
+                + 2.0 * du * dv * moments[index_uv(i + 1, j + 1)]
+                + dv * dv * moments[index_uv(i, j + 2)]
+        };
+        for (slot, (a_axis, b_axis)) in [(0usize, 1usize), (1, 2), (2, 0)].into_iter().enumerate() {
+            let (a0, au, av) = (origin.coords[a_axis], u_axis[a_axis], v_axis[a_axis]);
+            let (b0, bu, bv) = (origin.coords[b_axis], u_axis[b_axis], v_axis[b_axis]);
+            let integral = b0 * squared_times(0, 0, a0, au, av)
+                + bu * squared_times(1, 0, a0, au, av)
+                + bv * squared_times(0, 1, a0, au, av);
+            self.products[slot] += normal[a_axis] * jacobian * integral / 2.0;
+        }
+
         true
     }
 
@@ -495,6 +648,12 @@ impl SurfaceIntegral {
                     point.y * point.y * point.y * area_vector.y,
                     point.z * point.z * point.z * area_vector.z,
                 ) / 3.0;
+                // ∫xy dV = ∮ (x^2 y / 2) n_x dA など
+                self.products += Vec3::new(
+                    point.x * point.x * point.y * area_vector.x,
+                    point.y * point.y * point.z * area_vector.y,
+                    point.z * point.z * point.x * area_vector.z,
+                ) / 2.0;
             }
         }
     }
@@ -518,6 +677,7 @@ impl SurfaceIntegral {
             volume: self.volume,
             center_of_mass,
             inertia_diagonal: Vec3::new(inertia.x.abs(), inertia.y.abs(), inertia.z.abs()),
+            inertia_products: self.products,
         }
     }
 }

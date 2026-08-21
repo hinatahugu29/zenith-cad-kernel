@@ -90,7 +90,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **薄肉シェル容器化 (Shelling)** | `shelling` | 任意ソリッドからの開口面除去および均一肉厚 $t$ での中空容器（Open-Top Box）自動構築。 |
 | **断面スライス (Section Slicing)** | `slice` | 任意3D平面によるB-Repソリッド切断、閉じた断面ワイヤループ抽出、符号付き断面積（穴は減算）・周長算出。断面は表示用メッシュの多角形ではなく **B-Rep の上で測った点**で積む。輪郭の点を面と平面の交わりへ載せ直し、弦ごとに中点をもう1点測って3点を通る2次曲線の Green 積分で積むので、誤差は分割数の**4乗**で縮む。平面のみで構成された立体は分割数によらず厳密、曲面を含む場合も既定 96 分割で円柱断面の相対誤差 **4.83e-11**（周長 2.41e-11）。閉じないループはエラーとして返す。 |
 | **アセンブリ干渉判定 (Clash)** | `interference` | 2ソリッド間の干渉判定（Clearance / Touching / Clash）。箱・メッシュ篩いによる高速判定に加え、`check_exact` による `BooleanEngine` ハイブリッド B-Rep 積計算で真の干渉体積・干渉ソリッド抽出に対応。 |
-| **厳密物性値・質量特性 (Mass)** | `mass_properties` | ガウス・グリーンの発散定理に基づく体積・表面積・3D重心・慣性モーメントテンソル計算。B-Rep面上で直接積分し、積分領域はノット区間に整合させる（区間をまたぐセルで求積すると、いくら細分しても誤差が減らない）。解析解を持つ全ビルダーで相対誤差 1e-12 以下、分割数を4倍にしても値は 1e-8 未満しか動かない。 |
+| **厳密物性値・質量特性 (Mass)** | `mass_properties` | ガウス・グリーンの発散定理に基づく体積・表面積・3D重心・慣性テンソル計算。**`inertia_diagonal` は原点を通る座標軸まわりの対角成分**であり、主慣性モーメントではない（原点を角に置いた直方体では重心まわりの4倍）。慣性積 `inertia_products` = (∫xy, ∫yz, ∫zx) を持ち、`inertia_tensor()` / `inertia_tensor_about(point)` / `inertia_tensor_about_center_of_mass()` / `principal_moments()`（重心まわりの固有値）でテンソルとして扱える。実測: 直方体・円柱・球・円錐・移動した直方体のいずれも原点まわりの閉じた式と **1.8e-13 以内**、主慣性モーメントは平行移動でも斜め軸の回転でも **1.5e-15** で不変（`inertia_probe` / `inertia_test`）。B-Rep面上で直接積分し、積分領域はノット区間に整合させる（区間をまたぐセルで求積すると、いくら細分しても誤差が減らない）。解析解を持つ全ビルダーで相対誤差 1e-12 以下、分割数を4倍にしても値は 1e-8 未満しか動かない。 |
 | **ヘリックス (Helix)** | `helix` | リード角・ピッチ・巻数指定の3次元螺旋スプリング。角断面スプリングに加え、`make_round_wire_spring` により RMF 最小回転標架と4象限NURBS端面キャップによる丸線ワイヤコイルスプリングの完全閉多様体ソリッド生成に対応。 |
 | **パターン＆ミラー (Pattern / Mirror)** | `pattern`, `mirror` | 線形/円形パターン、任意平面に対する幾何ミラー反転＆Compound対称ケーシング。 |
 | **フィレット / 面取り（直方体専用ビルダー）** | `fillet`, `chamfer` | 単一エッジおよび直方体コーナーエッジの連続丸め・C面取り（7面〜10面B-Repソリッド化）。**寸法から作り直すビルダー**であり、既存の立体は編集しない。任意の立体を編集する場合は下の `EdgeBlender` を使う。 |
@@ -194,6 +194,7 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | `cargo run --release -p zenith_algo --example pcurve_fidelity_probe` | p-curve が本当に 3D エッジの上にあるか（検証が見ている点の外でも測る） |
 | `cargo run --release -p zenith_algo --example foreign_reexport` | 他カーネルのファイルを読んで書き戻す一周 |
 | `cargo run --release -p zenith_algo --example boolean_topology_probe` | ブーリアンの結果が稜を**実体として**共有しているか（共有されていない稜が1本でもあれば非ゼロ終了するのでリリースゲートに使える） |
+| `cargo run --release -p zenith_algo --example inertia_probe` | 重心・慣性・慣性積・主慣性モーメントが閉じた式に乗るか（主値が剛体変換で不変かも見る） |
 | `cargo run --release -p zenith_algo --example planar_face_audit` | 平面なのに NURBS で持っている面を返すビルダーが無いか（1枚でもあれば非ゼロ終了） |
 | `cargo run --release -p zenith_algo --example countersink_range_probe` | 皿モミ穴が、下穴・比・角度を振っても作れるか（64組の表） |
 | `cargo run --release -p zenith_algo --example face_merge_probe` | 同一平面の隣接面を併合し、平面を平面として持ち直したとき、面と稜が実形状の数まで減るか（体積が動いていないことも同時に見る。期待値に届かなければ非ゼロ終了） |

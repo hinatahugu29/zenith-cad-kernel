@@ -415,6 +415,16 @@ impl PySolid {
                 properties.center_of_mass.z,
             ],
         )?;
+        // 原点を通る座標軸まわりの対角成分。**主慣性モーメントではない**。
+        out.set_item(
+            "inertia_diagonal_about_origin",
+            [
+                properties.inertia_diagonal.x,
+                properties.inertia_diagonal.y,
+                properties.inertia_diagonal.z,
+            ],
+        )?;
+        // 従来の名前も残す（同じ値）
         out.set_item(
             "inertia_diagonal",
             [
@@ -423,6 +433,13 @@ impl PySolid {
                 properties.inertia_diagonal.z,
             ],
         )?;
+        out.set_item("inertia_tensor_about_origin", properties.inertia_tensor())?;
+        out.set_item(
+            "inertia_tensor_about_center_of_mass",
+            properties.inertia_tensor_about_center_of_mass(),
+        )?;
+        let principal = properties.principal_moments();
+        out.set_item("principal_moments", [principal.x, principal.y, principal.z])?;
         Ok(out)
     }
 
