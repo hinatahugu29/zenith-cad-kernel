@@ -30,7 +30,7 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 
 | 指標 | 値 |
 | :--- | :--- |
-| テストバイナリ | **57 すべてグリーン（361テスト）** |
+| テストバイナリ | **59 すべてグリーン（365テスト）** |
 | コンパイラ警告 | **0**（examples の3件も解消） |
 | ビルダー監査 | 24/24 クリーン（**符号付き体積**で判定。閉じた式を持つ検体を3つ追加） |
 | ブーリアン対応 | 45ケース中**39**成功、**誤答ゼロ**。最悪の解析解一致 **6.75e-8**。残る6件は**すべて接線配置**（3-1 参照） |
@@ -1218,6 +1218,16 @@ cargo run --release -p zenith_algo --example connectivity_check   # 立体が何
 - **実測**:
   - 新規単体テスト（`bolt_shaft_test.rs` 3件、`distance_test.rs` 2件）すべてパス（全テスト 57 バイナリ / 361 テスト）。
   - Python バインディング（55 シンボル）および直接呼び出しによる体積解析解・最短距離の厳密一致を確認。
+
+#### 13. 実務機械設計フィーチャー（皿モミ・フランジ・環状溝）および 2D DXF 図面エクスポートの実装
+- **改修**:
+  - `HoleBuilder::make_countersink_hole_box`: 皿ビス用のテーパー円錐座面（開き角90°）付き貫通穴フィーチャー。拡張円錐台差分により直方体天面と下穴内壁を貫通切削。
+  - `FlangeBuilder::make_circular_flange`: 中心穴付き円盤に対して PCD 等配 $N$ 穴を一括バッチブーリアン差分（`boolean_solids_batch`）で高速・高精度に切削。
+  - `ShaftBuilder::make_shaft_with_annular_groove`: 軸外周に対する止め輪・Oリング環状溝の円筒リング差分切削。
+  - `zenith_io::DxfExporter::export_loops_to_file`: 3D断面スライスで得た閉ループ群を標準 2D DXF（`LWPOLYLINE`）形式でファイル出力。
+- **実測**:
+  - 新規単体テスト（`flange_countersink_test.rs` 3件、`dxf_export_test.rs` 1件）すべてパス（全テスト 59 バイナリ / 365 テスト）。
+  - Python バインディング（59 シンボル）および直接呼び出しによる体積解析解・DXFファイル出力の正常動作を確認。
 
 ---
 
