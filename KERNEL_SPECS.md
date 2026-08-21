@@ -95,6 +95,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **パターン＆ミラー (Pattern / Mirror)** | `pattern`, `mirror` | 線形/円形パターン、任意平面に対する幾何ミラー反転＆Compound対称ケーシング。 |
 | **フィレット / 面取り（直方体専用ビルダー）** | `fillet`, `chamfer` | 単一エッジおよび直方体コーナーエッジの連続丸め・C面取り（7面〜10面B-Repソリッド化）。**寸法から作り直すビルダー**であり、既存の立体は編集しない。任意の立体を編集する場合は下の `EdgeBlender` を使う。 |
 | **任意ソリッドの稜フィレット / 面取り** | `edge_blend::EdgeBlender` | `fillet_edge(&solid, edge_id, r)` / `chamfer_edge(&solid, edge_id, c)` で**既にある立体のトポロジーを編集して**丸める。ブーリアン・押し出し・角柱の結果にそのまま掛かる。直角に固めず、二面角 $\theta$ に対して後退距離 $r\cot(\theta/2)$、円弧の重み $\sin(\theta/2)$、削れ体積はフィレット $L r^2(\cot(\theta/2)-(\pi-\theta)/2)$、面取り $L c^2 \sin\theta / 2$ を使う。実測は直方体(90°)・正六角柱(120°)・**ブーリアンで初めて生まれた稜**のいずれも閉じた式と **1e-11 以内**。対象は `blendable_edges()` で上限半径つきに事前列挙できる。扱えるのは「稜が直線・両側の面が平面・両端に3枚目の平面が稜と直交して1枚・凸」の配置で、外れる配置（凹稜、接線配置、直交しない端面、隣接稜を食い切る指定）は**近い別形状を返さず理由を返して失敗**する。 |
+| **面と稜の整理 (Simplify)** | `merge_faces::FaceMerger` | `simplify_solid` は3段。①**制御点が公差内で同一平面に乗り重みが正の NURBS 面を、平面として持ち直す**（有理 NURBS の像は制御点の凸包に入るので近似ではない） ②支持平面が一致して稜で繋がる面を1枚に併合する（塊の内側で2回使われる稜を落として境界ループを組み直し、内側に空いたループは内側ワイヤにする） ③継ぎ目の頂点に2本しか集まらず両側が一直線の稜を1本に繋ぐ。外側ループが2つ以上できる塊と曲面には手を付けず、理由をレポートに残す。<br>実測: 穴あき直方体 **16面→10面 / 32稜→24稜**、L 字角柱 **14面→8面 / 28稜→18稜**、体積のずれは 2.2e-14 以内。`make_drilled_box` は16面すべてを NURBS で持っていたため**フィレットの候補が0本**だったが、平面として認識した結果 **12本**になる。円筒側面が1枚にならないのは意図的（全周1枚のパッチを OpenCASCADE が正しく積めないため4分割のまま）。<br>**ビルダーやブーリアンの出口には自動では入っていない**（面数が変わるため）。外からの確認は `cargo run -p zenith_algo --example export_simplified` ＋ `tools/verify_simplified.py`（OpenCASCADE の測定で 1e-12 以内）。 |
 | **稜の縫い合わせ (Sewing)** | `sew::Sewer` | 座標が公差内で一致する頂点を1つに束ね、**形も一致する**稜を1本の実体に束ね、逆向きに格納されていた側は参照の向きを反転する。ブーリアンの面片組み立ては面を1枚ずつ作るため、同じ位置に別々の `Edge` が並んだまま出てくる。閉性の検査は座標で対にするのでそれを通してしまい、通った立体には「この稜を共有する2面」が引けない（稜を選ぶ演算が一切掛からない）。`boolean_solids_exact_result` の出口に入っており、縫い残しがあればエラーになる。実測で 56→28 / 24→12 に束ね、全稜がちょうど2面に共有される。体積は 1e-14 以内で不動。 |
 | **ダイレクトモデリング** | `direct_edit` | プッシュプル（面オフセット移動）、テーパー（抜き勾配傾斜）、ドーム/平面ワイヤキャッピング。 |
 | **球体 (Sphere)** | `PrimitiveBuilder::make_sphere` | 4経度 × 2半球 = **8枚**の有理NURBSパッチによる真球ソリッド。極側は1行が1点に潰れた退化パッチで、境界は子午線2本＋赤道円弧1本。単一の巻き付き面だと OpenCASCADE が体積0の不正ソリッドとして読むため、正則分割してある。体積は解析解と 1e-14。 |
@@ -149,7 +150,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **glTF 2.0** | **Write** | Web 3D標準フォーマット。PBR対応、BASE64バイナリ埋め込み自己完結型 `.gltf` 出力。 |
 | **IGES 5.3** | **Write** | レガシーCAD互換。Type 186 Manifold Solid B-Rep フォーマット出力。 |
 | **Blender 5.x C拡張** | **Python C 拡張 (`zenith_cad.pyd`)** | PyO3 0.23 / abi3 \| 全 **45** 個のネイティブ関数を単一の超高速バイナリ（~2.9MB）としてエクスポート。厳密ブーリアンは `make_exact_box_boolean`（箱同士）と `make_exact_drill_boolean`（任意軸の円柱による貫通穴・止まり穴）で公開。対応範囲外は例外を送出する。<br>ビルド時、`pyo3` は PATH から Python を探す。見つからない環境では `PYO3_PYTHON` に実行ファイルを指定する。 |
-| **Python 立体ハンドル** | **`zenith_cad.Solid`** | 立体そのものを Python 側で持ち回るための不変オブジェクト。**すべてのメソッドが新しい立体を返す**。生成（`box` / `cylinder` / `sphere` / `cone` / `torus` / `regular_prism` / `from_step` / `all_from_step`）、変換（`translated` / `rotated` / `mirrored`）、ブーリアン（`union` / `difference` / `intersection` / `difference_all`）、稜（`edges` / `blendable_edges` / `fillet_edge` / `chamfer_edge` / `fillet_edges` / `chamfer_edges`）、面（`faces` / `push_pull_face` / `taper_face`）、計測（`mass_properties` / `validate` / `clash_status` / `volume` / `face_count`）、出力（`tessellate` / `to_step` / `to_step_string`）、後片付け（`sewn`）。これが入るまで、Python 側は `make_X(...) -> Mesh` のワンショットしか無く、作った立体を次の演算に渡す手段が無かった（組み合わせが要るたびに Rust 側へ専用関数を足していた）。`validate()` の `unshared_edge_entity_uses` が 0 でない立体は、閉じてはいるが稜を選べない状態を指す。<br>一周の検証: `py tools/test_solid_api.py`（20項目。作る → ブーリアン → 稜を選ぶ → 丸める → STEP → 読み直すで体積が閉じた式と一致）。 |
+| **Python 立体ハンドル** | **`zenith_cad.Solid`** | 立体そのものを Python 側で持ち回るための不変オブジェクト。**すべてのメソッドが新しい立体を返す**。生成（`box` / `cylinder` / `sphere` / `cone` / `torus` / `regular_prism` / `from_step` / `all_from_step`）、変換（`translated` / `rotated` / `mirrored`）、ブーリアン（`union` / `difference` / `intersection` / `difference_all`）、稜（`edges` / `blendable_edges` / `fillet_edge` / `chamfer_edge` / `fillet_edges` / `chamfer_edges`）、面（`faces` / `push_pull_face` / `taper_face`）、計測（`mass_properties` / `validate` / `clash_status` / `volume` / `face_count`）、出力（`tessellate` / `to_step` / `to_step_string`）、後片付け（`sewn` / `simplified` / `simplify_report`）。これが入るまで、Python 側は `make_X(...) -> Mesh` のワンショットしか無く、作った立体を次の演算に渡す手段が無かった（組み合わせが要るたびに Rust 側へ専用関数を足していた）。`validate()` の `unshared_edge_entity_uses` が 0 でない立体は、閉じてはいるが稜を選べない状態を指す。<br>一周の検証: `py tools/verify_solid_api.py`（20項目。作る → ブーリアン → 稜を選ぶ → 丸める → STEP → 読み直すで体積が閉じた式と一致）。 |
 
 ---
 
@@ -192,7 +193,8 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | `cargo run --release -p zenith_algo --example pcurve_fidelity_probe` | p-curve が本当に 3D エッジの上にあるか（検証が見ている点の外でも測る） |
 | `cargo run --release -p zenith_algo --example foreign_reexport` | 他カーネルのファイルを読んで書き戻す一周 |
 | `cargo run --release -p zenith_algo --example boolean_topology_probe` | ブーリアンの結果が稜を**実体として**共有しているか（共有されていない稜が1本でもあれば非ゼロ終了するのでリリースゲートに使える） |
-| `py tools/test_solid_api.py` | Python 側で「作る → ブーリアン → 稜を選ぶ → 丸める → STEP → 読み直す」が一周し、体積が閉じた式と一致するか（先に `cargo build --release -p zenith_py`） |
+| `cargo run --release -p zenith_algo --example face_merge_probe` | 同一平面の隣接面を併合し、平面を平面として持ち直したとき、面と稜が実形状の数まで減るか（体積が動いていないことも同時に見る。期待値に届かなければ非ゼロ終了） |
+| `py tools/verify_solid_api.py` | Python 側で「作る → ブーリアン → 稜を選ぶ → 丸める → STEP → 読み直す」が一周し、体積が閉じた式と一致するか（先に `cargo build --release -p zenith_py`） |
 
 **不具合を追うための診断**
 

@@ -30,13 +30,14 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 
 | 指標 | 値 |
 | :--- | :--- |
-| テストバイナリ | **58 + doctest 6 すべてグリーン（388テスト）** |
+| テストバイナリ | **59 + doctest 6 すべてグリーン（392テスト）** |
 | コンパイラ警告 | **0**（examples の3件も解消） |
 | **ブーリアン結果の稜の共有** | **全ケースで稜がちょうど2面に共有される単一実体**（従来は差・積の結果が座標では閉じているのに稜が全部二重化していた。4-26 参照） |
 | **任意ソリッドの稜フィレット / 面取り** | 直方体(90°)・正六角柱(120°)・ブーリアンで生まれた稜のいずれも、削れ体積が**閉じた式と 1e-11 以内**（4-27 参照） |
 | **稜の凸凹判定** | 面の列挙順にも稜の格納向きにも依存しない。二面角は材料側から 0〜360 度（4-28 参照） |
 | **履歴ツリー** | ブーリアンを含む列が一続きに評価され、上流の寸法を変えても下流のフィレットが同じ稜に付き直す（4-29 参照） |
-| **Python の立体ハンドル** | `zenith_cad.Solid` で「作る → ブーリアン → 稜を選ぶ → 丸める → STEP」が一周する（`tools/test_solid_api.py` 20項目） |
+| **Python の立体ハンドル** | `zenith_cad.Solid` で「作る → ブーリアン → 稜を選ぶ → 丸める → STEP」が一周する（`tools/verify_solid_api.py` 25項目） |
+| **面と稜の整理** | 穴あき直方体 16面→10面（フィレット候補 **0→12本**）、L 字角柱 14面→8面。体積は 2.2e-14 以内で不動、OpenCASCADE でも valid closed solid（4-31 参照） |
 | ビルダー監査 | 24/24 クリーン（**符号付き体積**で判定。閉じた式を持つ検体を3つ追加） |
 | ブーリアン対応 | 45ケース中**39**成功、**誤答ゼロ**。最悪の解析解一致 **6.75e-8**。残る6件は**すべて接線配置**（3-1 参照） |
 | 端の配置（`robustness_probe`、21配置） | **誤答0・パニック0**（ok 50 / clean error 7 / build refused 5）。空洞立体の再切断も3演算すべて完全パス（4-22, 4-23 参照） |
@@ -78,6 +79,7 @@ cargo run --release -p zenith_algo --example pcurve_derivation_probe # p-curve �
 cargo run --release -p zenith_algo --example face_split_probe      # パラメータ線でない曲線で面を割れるか
 cargo run --release -p zenith_algo --example ssi_probe             # 曲面同士の交線が両曲面に乗るか
 cargo run --release -p zenith_algo --example boolean_topology_probe # ブーリアンの結果が稜を実体として共有しているか
+cargo run --release -p zenith_algo --example face_merge_probe      # 面と稜を実形状の数まで減らせるか
 ```
 
 `boolean_topology_probe` は共有されていない稜が1本でもあれば非ゼロ終了します。
@@ -88,7 +90,7 @@ Python 側の一周（作る → ブーリアン → 稜を選ぶ → 丸める 
 
 ```bash
 cargo build --release -p zenith_py
-py tools/test_solid_api.py
+py tools/verify_solid_api.py
 ```
 
 `boolean_envelope` は45ケースの走査に**2〜3分**かかります。面の組ごとに
@@ -105,6 +107,9 @@ cargo run --release -p zenith_algo --example export_showcase
 
 cargo run --release -p zenith_algo --example foreign_reexport
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_reexport.py
+
+cargo run --release -p zenith_algo --example export_simplified
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_simplified.py
 ```
 
 **STEP を書くときは `StepInterop` を通してください。** `StepExporter` を直接
@@ -124,30 +129,36 @@ cargo run --release -p zenith_algo --example foreign_reexport
 
 残りは性質の違う塊に分かれます。上から順に大きい仕事です。
 
-### 3-A. 同一平面の隣接面がマージされていない（未着手・実測あり）
+### 3-A. 整理（`FaceMerger::simplify_solid`）を既定にするかの判断
 
-面と稜が、実形状の2倍近くあります。
+面の併合・平面の認識・稜の連結は入りました（4-31）。**まだ自動では掛けて
+いません。** ブーリアンやビルダーの出口に入れると面数・稜数が変わり、面の
+添字で対象を指しているコード（`push_pull_face(solid, face_index, ..)` など）の
+意味が変わります。既定にするなら、
 
-| 立体 | いまの面数 | 妥当な面数 |
-| :--- | --: | --: |
-| `HoleBuilder::make_drilled_box(40, 40, 20, 8)` | **15** | 7（上下面2＋側面4＋円筒1） |
-| 直方体 − 隅の直方体（L 字角柱） | **14** | 8（側面6＋上下面2） |
+1. `boolean_solids_exact_result` の出口（`Sewer` の直後）
+2. `HoleBuilder` など、割ってから組み直すビルダーの出口
 
-上下面が扇形の平面片に割られ、その間に 180 度の人工的な稜が残ります
-（`edge_inspection_test` が Smooth / 180° として実測しています）。B-Rep としては
-妥当ですが、
-
-- 稜と面の選択が「実形状に無いもの」だらけになる
-- STEP のエンティティ数が倍になる
-- `EdgeBlender` の対象列挙にノイズが混じる（L 字角柱で 9 本出るが、実形状の
-  ブレンド可能な縦稜は 5 本）
-
-という実害があります。入れるべきものは「支持平面が公差内で一致する隣接面を
-1枚に併合し、間の稜を落とす」パスです。併合でできる内側ループ（環状の
-上下面など）を正しく作れるかが山です。`Sewer`（4-26）と同じ層に置けます。
+のどちらから入れるかを決めてから、全ゲートを通し直してください。判断材料は
+4-31 の表と `tools/verify_simplified.py` の結果です。
 
 **注意**: これは `Regularizer` とは別物です。`Regularizer` は「全周1枚の
 パッチを刻む」ほうで、向きが逆です。
+
+### 3-B. 割ってから組み直すビルダーが、平面を NURBS で持っている
+
+`FaceMerger::planarize` は後から直せますが、**そもそも平面として作るべき**です。
+`make_drilled_box` は 16 面すべてが NURBS でした（4-31）。同じ作りのビルダーが
+他にもあるかは、次のように数えれば分かります。
+
+```rust
+solid.outer_shell.faces.iter()
+    .filter(|f| matches!(f.geometry, FaceGeometry::Nurbs(_)))
+    .count()
+```
+
+平面のまま作れば、`planarize` を通す必要も、STEP に `B_SPLINE_SURFACE` が
+出ることもなくなります。
 
 ### 3-0. 実務で先に当たるのは、45ケースに無い形です
 
@@ -1470,12 +1481,76 @@ part.to_step("part.step")
 
 ```bash
 cargo build --release -p zenith_py     # PYO3_PYTHON が要る環境ではそれも指定
-py tools/test_solid_api.py
+py tools/verify_solid_api.py
 ```
 
 20項目すべてグリーン。「作る → ブーリアン → 稜を選ぶ → 丸める → STEP →
 読み直す」が一周し、体積が閉じた式と一致したまま戻ります。凹稜の指定は
 `ValueError` に理由が入って返ります。
+
+---
+
+### 4-31. 面と稜が実形状の2倍あった。平面を NURBS で持っていた面もあった（2026/08/22）
+
+`cargo run --release -p zenith_algo --example face_merge_probe` で測れます
+（期待した面数に届かなければ非ゼロ終了）。
+
+**症状**: 穴あけやブーリアンは平面を扇形・短冊に割ってから組み直すので、
+割った跡がそのまま残ります。実形状に無い面と稜が選択肢に並び、STEP の
+エンティティが倍になり、平面しか受け付けない演算に無関係な候補が混じります。
+
+その上でもっと重かったのが、**`HoleBuilder::make_drilled_box` が 16 面すべてを
+NURBS で持っていた**ことです。平面の上下面も側壁も NURBS でした。有理 NURBS の
+像は制御点の凸包に入るので幾何としては正しいのですが、
+
+- 平面しか受け付けない演算が一切掛からない
+  （**穴あき直方体はフィレットの候補が 0 本**でした）
+- 質量積分が線積分の閉じた経路ではなく求積に落ちる
+- STEP に `PLANE` ではなく `B_SPLINE_SURFACE` が出る
+
+**入れたもの**: `crates/zenith_algo/src/merge_faces.rs`（`FaceMerger`）。
+`simplify_solid` は3段です。
+
+1. `planarize` — 制御点が公差内で同一平面に乗り、重みが正の NURBS 面を
+   **平面として持ち直す**。凸包に入る以上、像はその平面に乗るので**近似では
+   ありません**。
+2. `merge_coplanar` — 支持平面が一致し稜で繋がっている面を1つの塊にまとめ、
+   塊の内側で2回使われている稜を落として境界ループを組み直す。内側に空いた
+   ループ（穴の口）は内側ワイヤになる。
+3. `merge_collinear_edges` — 併合の跡に残った継ぎ目のうち、頂点に2本しか
+   集まらず両側が一直線なものを1本に繋ぐ。
+
+外側ループが2つ以上できる塊は、1枚の面にすると領域が繋がっていないことに
+なるので**そのままにして理由をレポートに残します**。曲面は併合しません。
+
+**測った値**:
+
+| 立体 | 面 | 稜 | フィレット候補 | 体積のずれ |
+| :--- | :--- | :--- | :--- | :--- |
+| 直方体（併合対象なし） | 6 → 6 | 12 → 12 | 12 → 12 | 0 |
+| **穴あき直方体 φ16** | **16 → 10** | **32 → 24** | **0 → 12** | 2.2e-14 |
+| **L 字角柱（ブーリアンの差）** | **14 → 8** | **28 → 18** | 9 → 13 | 1.5e-16 |
+| 直方体 − 円柱 | 10 → 10 | 24 → 24 | 12 → 12 | 0 |
+| 直方体 ∪ 台座 | 11 → 11 | 24 → 24 | 20 → 20 | 0 |
+
+円筒側面が1枚にならないのは意図的です（全周1枚のパッチを OpenCASCADE が
+正しく積めないため、4分割のまま）。したがって穴あき直方体の 10 面
+（側面4＋環状の上下面2＋円筒4）が正解で、7 ではありません。
+
+**外からの確認**: 面と曲面の種類が変わるので、他カーネルが同じ形として
+読めるかを測ります。
+
+```bash
+cargo run --release -p zenith_algo --example export_simplified
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_simplified.py
+```
+
+4件すべて valid closed solid、面数・稜数も一致、体積は OpenCASCADE の測定で
+**1e-12 以内**。
+
+**まだ自動では掛けていません。** ブーリアンやビルダーの出口に入れると面数が
+変わるので、既定にするかは判断待ちです。いまは `FaceMerger::simplify_solid`
+と Python の `Solid.simplified()` / `Solid.simplify_report()` で明示的に呼びます。
 
 ---
 

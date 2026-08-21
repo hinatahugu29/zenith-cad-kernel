@@ -23,6 +23,7 @@ pub mod hole;
 pub mod interference;
 pub mod loft;
 pub mod mass_properties;
+pub mod merge_faces;
 pub mod mirror;
 mod orthogonal_boolean;
 
@@ -82,6 +83,7 @@ pub use interference::{ClashStatus, InterferenceChecker, InterferenceReport};
 
 pub use loft::LoftBuilder;
 pub use mass_properties::{MassCalculator, MassProperties};
+pub use merge_faces::{FaceMerger, MergeReport};
 pub use mirror::MirrorBuilder;
 pub use patch_builder::CurvePatchBuilder;
 pub use pattern::PatternBuilder;

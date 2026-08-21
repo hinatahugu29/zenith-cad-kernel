@@ -30,7 +30,8 @@ use pyo3::types::{PyDict, PyList};
 
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, DirectModeling, EdgeBlender, EdgeKind,
-    InterferenceChecker, MassCalculator, MirrorBuilder, PrimitiveBuilder, Sewer, StepInterop,
+    FaceMerger, InterferenceChecker, MassCalculator, MirrorBuilder, PrimitiveBuilder, Sewer,
+    StepInterop,
 };
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -451,6 +452,36 @@ impl PySolid {
         Sewer::sew_solid(&self.solid, &Tolerance::default())
             .map(|(solid, _report)| Self::wrap(solid))
             .map_err(invalid)
+    }
+
+    /// 面と稜を実形状の数まで減らした複製。
+    ///
+    /// ① 平面なのに NURBS として持たれている面を平面に直し
+    /// ② 同一平面の隣接面を1枚に併合し
+    /// ③ 一直線に並んだ稜を1本に繋ぐ。
+    ///
+    /// 穴あけやブーリアンは平面を割ってから組み直すので、割った跡が残る。
+    /// 実測で `make_drilled_box` は 16面 -> 10面（フィレット候補 0 -> 12本）、
+    /// L 字角柱は 14面 -> 8面。形は動かない。
+    pub fn simplified(&self) -> PyResult<Self> {
+        FaceMerger::simplify_solid(&self.solid, &Tolerance::default())
+            .map(|(solid, _report)| Self::wrap(solid))
+            .map_err(invalid)
+    }
+
+    /// 整理したら面と稜がいくつになるかを、実際に整理せずに見る
+    pub fn simplify_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let (_solid, report) = FaceMerger::simplify_solid(&self.solid, &Tolerance::default())
+            .map_err(invalid)?;
+        let out = PyDict::new(py);
+        out.set_item("faces_before", report.faces_before)?;
+        out.set_item("faces_after", report.faces_after)?;
+        out.set_item("edges_before", report.edges_before)?;
+        out.set_item("edges_after", report.edges_after)?;
+        out.set_item("merged_groups", report.merged_groups)?;
+        out.set_item("planarized_faces", report.planarized_faces)?;
+        out.set_item("skipped", report.skipped.clone())?;
+        Ok(out)
     }
 
     /// もう1つの立体との干渉状態: "clearance" / "touching" / "clash"
