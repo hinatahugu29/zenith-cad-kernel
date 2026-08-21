@@ -81,6 +81,23 @@ impl GearBuilder {
         Self::prism_from_profile(&profile, thickness)
     }
 
+    /// 歯元に滑らかな $G^1$ フィレットを持つインボリュート平歯車を作る。
+    pub fn make_spur_gear_with_root_fillet(
+        module: f64,
+        teeth: usize,
+        pressure_angle_deg: f64,
+        thickness: f64,
+        bore_radius: f64,
+    ) -> Result<Solid, String> {
+        let geometry = GearGeometry::new(module, teeth, pressure_angle_deg, bore_radius)?;
+        if thickness <= 0.0 {
+            return Err("Thickness must be positive".to_string());
+        }
+
+        let profile = geometry.profile_curves_with_root_fillet(Self::DEFAULT_FLANK_SAMPLES)?;
+        Self::prism_from_profile(&profile, thickness)
+    }
+
     /// 軸穴（貫通穴）が開いたインボリュート平歯車を作る。
     ///
     /// 歯車ソリッドを生成した後、中心軸に沿った半径 `bore_radius` の円柱との
@@ -415,6 +432,77 @@ impl GearGeometry {
                     self.flank_point(centre, 0.0, true),
                     self.at(self.root_radius, centre + self.half_angle_at_base),
                 ],
+            )?);
+            curves.push(self.arc(
+                self.root_radius,
+                centre + self.half_angle_at_base,
+                next_centre - self.half_angle_at_base,
+            )?);
+        }
+
+        Ok(curves)
+    }
+
+    /// 歯元に滑らかなフィレットを持つ断面曲線列を生成する。
+    fn profile_curves_with_root_fillet(&self, flank_samples: usize) -> Result<Vec<NurbsCurve3>, String> {
+        let z = self.teeth as f64;
+        let pitch_angle = 2.0 * std::f64::consts::PI / z;
+        let mut curves = Vec::with_capacity(self.teeth * 6);
+
+        for index in 0..self.teeth {
+            let centre = index as f64 * pitch_angle;
+            let next_centre = (index + 1) as f64 * pitch_angle;
+
+            let flank = |left: bool| -> Result<NurbsCurve3, String> {
+                let mut points: Vec<Point3> = (0..=flank_samples)
+                    .map(|step| {
+                        let t = self.tip_parameter * step as f64 / flank_samples as f64;
+                        self.flank_point(centre, t, left)
+                    })
+                    .collect();
+                if left {
+                    points.reverse();
+                }
+                NurbsCurve3::interpolate_points(3, &points)
+            };
+
+            let root_p_right = self.at(self.root_radius, centre - self.half_angle_at_base);
+            let base_p_right = self.flank_point(centre, 0.0, false);
+            let p1_right = root_p_right + (base_p_right - root_p_right) * 0.3333333333333333;
+            let p2_right = root_p_right + (base_p_right - root_p_right) * 0.6666666666666666;
+
+            curves.push(NurbsCurve3::new(
+                3,
+                vec![
+                    ControlPoint3::unweighted(root_p_right),
+                    ControlPoint3::unweighted(p1_right),
+                    ControlPoint3::unweighted(p2_right),
+                    ControlPoint3::unweighted(base_p_right),
+                ],
+                KnotVector::clamped_uniform(4, 3),
+            )?);
+            curves.push(flank(false)?);
+            curves.push(self.arc(
+                self.tip_radius,
+                centre - self.half_angle_at_tip,
+                centre + self.half_angle_at_tip,
+            )?);
+            curves.push(flank(true)?);
+
+            let base_p_left = self.flank_point(centre, 0.0, true);
+            let root_p_left = self.at(self.root_radius, centre + self.half_angle_at_base);
+            let p1_left = base_p_left + (root_p_left - base_p_left) * 0.3333333333333333;
+            let p2_left = base_p_left + (root_p_left - base_p_left) * 0.6666666666666666;
+
+            curves.push(NurbsCurve3::new(
+                3,
+                vec![
+                    ControlPoint3::unweighted(base_p_left),
+                    ControlPoint3::unweighted(p1_left),
+                    ControlPoint3::unweighted(p2_left),
+                    ControlPoint3::unweighted(root_p_left),
+                ],
+                KnotVector::clamped_uniform(4, 3),
             )?);
             curves.push(self.arc(
                 self.root_radius,

@@ -352,3 +352,18 @@ fn test_drilled_spur_gear_actually_has_a_bore() {
         "drilled gear volume {drilled_vol} differed from expected {expected_vol} by {diff}"
     );
 }
+
+#[test]
+fn test_make_spur_gear_with_root_fillet_is_valid_solid() {
+    let filleted_gear =
+        GearBuilder::make_spur_gear_with_root_fillet(MODULE, TEETH, ANGLE, THICKNESS, BORE)
+            .expect("filleted gear");
+    let tol = zenith_math::Tolerance::default();
+    assert!(
+        filleted_gear.is_topologically_valid(&tol),
+        "filleted gear must be valid closed solid"
+    );
+
+    let solid_vol = MassCalculator::compute_from_brep(&filleted_gear, &TessellationParams::default()).volume;
+    assert!(solid_vol > 0.0, "volume must be positive, got {solid_vol}");
+}
