@@ -6,8 +6,8 @@
 //! 両方を見つけました。ここはその再発を見張ります。
 
 use zenith_algo::{
-    BooleanEngine, BooleanOpType, BooleanResultVerifier, BrepTransform, MassCalculator,
-    PrimitiveBuilder,
+    BooleanEngine, BooleanOpType, BooleanResultVerifier, BrepTransform, HoleBuilder,
+    MassCalculator, PrimitiveBuilder,
 };
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
@@ -258,6 +258,40 @@ fn a_cut_that_splits_a_solid_returns_separate_bodies() {
     assert!(
         (total - expected).abs() / expected < 1e-9,
         "the two halves should total {expected}, measured {total}"
+    );
+}
+
+#[test]
+fn a_drilled_plate_can_be_cut_by_a_slab() {
+    // 穴あきの板をスラブで削ると、シェルは閉じて多様体なのに**同方向の辺使用**
+    // が16 残って止まっていました。入力は無傷（同方向0）なので、分割が向きを
+    // 変えています。
+    //
+    // 原因は、円柱面の分割が**辺の固有方向**を読んでいたことでした。`Edge` は
+    // 始点と終点を持ちますが、ワイヤはそれを逆向きに使うことがあります。元の
+    // 面が逆に巡回していた辺では、分割後の巡回が反転し、隣の無傷な面と同じ
+    // 向きで辺を共有します。4-5 が別の経路で直したのと同じ罠でした。
+    let tol = Tolerance::default();
+    let plate = HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).expect("drilled plate");
+    let slab = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(60.0, 60.0, 10.0).expect("slab"),
+        Vec3::new(-15.0, -15.0, 12.0),
+    );
+
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&plate, &slab, BooleanOpType::Difference, &tol)
+            .expect("taking the top off a drilled plate is an ordinary cut");
+
+    let volume: f64 = result
+        .solids
+        .iter()
+        .map(|solid| MassCalculator::compute_from_brep(solid, &params()).volume)
+        .sum();
+    // 30 x 30 x 12 から半径5・高さ12 の穴を抜いたもの。
+    let expected = 30.0 * 30.0 * 12.0 - std::f64::consts::PI * 25.0 * 12.0;
+    assert!(
+        (volume - expected).abs() / expected < 1e-9,
+        "the cut plate should measure {expected}, got {volume}"
     );
 }
 

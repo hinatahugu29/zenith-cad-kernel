@@ -89,7 +89,7 @@ fn main() {
                     let after: f64 = result.solids.iter().map(volume).sum();
                     format!("{after:.3} ({}s)", result.solids.len())
                 }
-                Err(err) => format!("ERR {}", err.chars().take(58).collect::<String>()),
+                Err(err) => format!("ERR {}", err.split("; selected").nth(1).unwrap_or("").chars().take(200).collect::<String>()),
             };
             cells.push(cell);
         }

@@ -2235,25 +2235,16 @@ fn split_cylinder_side_face_by_horizontal_edge(
         Vertex::new(top_end, tol.linear),
     )?;
 
-    // 境界は「面の外向きから見て反時計回り」で組む。向きフラグが Reversed の
-    // 面（前段のブーリアンで裏返された穴の内壁など）では外向きが逆なので、
-    // 同じ順序で組むと巡回だけが逆さになり、縫合で同方向のエッジ使用として
-    // 現れる。フラグに合わせて巡回を揃える。
-    let orient_wire = |edges: Vec<OrientedEdge>| {
-        if face.orientation.is_forward() {
-            Wire::new(edges)
-        } else {
-            Wire::new(
-                edges
-                    .into_iter()
-                    .rev()
-                    .map(|oriented| {
-                        OrientedEdge::new(oriented.edge, oriented.orientation.reversed())
-                    })
-                    .collect(),
-            )
-        }
-    };
+    // 巡回は `cylinder_face_bounds` が返す `bottom_start -> bottom_end` に
+    // 従います。これは**元のワイヤがその円弧を辿った向き**なので、下の順序で
+    // 組めば元の巡回がそのまま続きます。
+    //
+    // ここには以前、面の向きフラグが `Reversed` なら全体を逆順にする補正が
+    // 入っていました。**あれは固有方向を読んでいたことへの埋め合わせ**で、
+    // 独立して必要な処理ではありませんでした。巡回を正しく読むと二重補正に
+    // なり、穴あきの板をスラブで削る側が直ると counterbore が壊れます
+    // （両方を実測して確かめました）。片方を消して両方通ります。
+    let orient_wire = Wire::new;
 
     let lower = Face::new(
         face.geometry.clone(),
@@ -2650,13 +2641,23 @@ fn cylinder_face_bounds(
     }
 
     // 円弧側の辺は両端の軸方向座標が等しく、ルーリング側は異なる。
-    let mut arcs: Vec<(&Edge, f64)> = Vec::new();
+    //
+    // **ワイヤがその辺をどちら向きに巡回しているかを一緒に持ちます。**
+    // 以前は辺の固有方向だけを見ていました。ワイヤが逆向きに使っている辺では
+    // 分割後の巡回が反転し、隣の無傷な面と同じ向きで辺を共有します。実測では
+    // 穴あきの板をスラブで削ると、穴の内壁だけが反転して同方向の辺使用が
+    // 16 残り、組み立てが止まりました。4-5 が別の経路で直したのと同じ罠です。
+    let mut arcs: Vec<(&Edge, f64, bool)> = Vec::new();
     for oriented in &face.outer_wire.edges {
         let edge = &oriented.edge;
         let start_axial = patch.axial_coordinate(edge.start_vertex.point);
         let end_axial = patch.axial_coordinate(edge.end_vertex.point);
         if (start_axial - end_axial).abs() <= tol.linear * 10.0 {
-            arcs.push((edge, 0.5 * (start_axial + end_axial)));
+            arcs.push((
+                edge,
+                0.5 * (start_axial + end_axial),
+                oriented.orientation.is_forward(),
+            ));
         }
     }
 
@@ -2672,8 +2673,12 @@ fn cylinder_face_bounds(
         return None;
     }
 
-    let bottom_start = bottom.0.start_vertex.point;
-    let bottom_end = bottom.0.end_vertex.point;
+    // 巡回の向きに合わせて始点と終点を取る。
+    let (bottom_start, bottom_end) = if bottom.2 {
+        (bottom.0.start_vertex.point, bottom.0.end_vertex.point)
+    } else {
+        (bottom.0.end_vertex.point, bottom.0.start_vertex.point)
+    };
 
     // 上側の円弧の端点を、下側と同じルーリングに乗るように対応づける。
     let on_same_ruling = |point: Point3, base: Point3| patch.on_same_ruling(point, base, tol);
