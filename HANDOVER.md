@@ -40,7 +40,7 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 | **断面積 & 断面スライサー** | **解析解と 1.34e-11 以内**（相対誤差 $< 10^{-10}$）。平面のみの断面は従来どおり厳密 |
 | **重心と慣性** | 直方体・円柱・球・円錐・移動した直方体のいずれも、原点まわりの閉じた式と **1.8e-13 以内**。主慣性モーメントは平行移動でも斜め軸の回転でも動かない（1.5e-15） |
 | **平面を平面として持っているか** | 全23ビルダーで**該当ゼロ**。`FaceMerger` によりブーリアン出口で同一平面パッチを自動併合（L字角柱 14面➔8面、穴あき 16面➔10面） |
-| **自由曲面交差 (SSI)** | 4式4未知数ニュートン追跡 ➔ B-splineフィッティング ➔ FaceSplitter面分割（`ssi_probe` 3/3、`face_split_probe` 面積残差 1.46e-13）。**「複合シェル組み立て」はまだ検証されていない** — `ssi_boolean_surface_test` は円柱側しか割っておらず（球側の面は未使用）、最後の組み立て検査は `Shell::new(vec![a, b]).faces.len() == 2` という恒真アサーション（4-37） |
+| **自由曲面交差 (SSI)** | 4式4未知数ニュートン追跡 ➔ B-splineフィッティング ➔ FaceSplitter面分割（`ssi_probe` 3/3、`face_split_probe` 面積残差 1.46e-13）。フィットした交線が**両方の曲面に 1e-6 以内で乗る**ことを 65 点で検査（`ssi_boolean_surface_test`）。組み立ては面積の和で見ている。**面を割るのは片側だけ** — 検体の八分球は交線の端が境界に届かない（実測 3.024 手前）ので、両側を割る配置での検証は未了 |
 | **4辺ブレンド & N辺コーナーブレンド** | `CornerBlendN` は N = 3, 4, 5 で N 枚のパッチを返す（4-37 で修正。それまでは常に0枚だった）。ただし `GregoryPatch4` は**名前に反して Gregory パッチではない** — クロス接線を引数に取らず、`tangents` は全ゼロのまま未使用、内部点は4隅だけから決まる。$G^1$ 連続は達成していない |
 | **複数面シート厚み付け** | `ThickenBuilder::thicken_shell`。各面を個別に厚み付けして Union するだけで、テストは**同一平面の長方形2枚**（＝箱2つの和）のみ。非平面の隣接シートでの保証はない |
 | **ダイレクトモデリング** | `DirectModeling::fillet_solid_edge` などは既存 `EdgeBlender` の別名（各3行）。実体は `edge_blend` 側にある |
@@ -86,6 +86,8 @@ cargo run --release -p zenith_algo --example boolean_gate_probe     # ブーリ�
 cargo run --release -p zenith_algo --example slice_robustness_probe # 断面が平面の置き方と分割数によらず閉じるか
 cargo run --release -p zenith_algo --example distance_probe         # 最短距離が閉じた式に乗り、刻みで動かないか
 cargo run --release -p zenith_algo --example interference_depth_probe # どこまで浅い食い込みを検出できるか
+cargo run --release -p zenith_algo --example tess_density_probe     # 三角形数が頼んだ分割数に対して素直に増えるか
+cargo run --release -p zenith_algo --example export_iges_suite      # IGES を書き出す（突き合わせは tools/verify_iges.py）
 ```
 
 `boolean_topology_probe` は共有されていない稜が1本でもあれば非ゼロ終了します。
@@ -158,7 +160,7 @@ OpenCASCADE 自身に同じ形を書かせるための道具です。
 | **SketchSolver 自由度解析** | **完了** | ヤコビアンの列を自由変数に制限。階数が自由度を超える報告は出ない（4-37）。**「冗長」と「矛盾」は未分離** |
 | **FaceMerger ブーリアン統合** | **完了** | `BooleanEngine::boolean_solids_exact_simplified`（同一平面の自動併合 14面➔8面）。既定にするかは 3-A のまま未決 |
 | **N辺コーナーブレンド** | **完了** | N = 3, 4, 5 で N 枚のパッチを返す（それまでは常に0枚）。連続性は下記の制限つき |
-| **自由曲面交差 (SSI) 面分割** | 部分的 | マーチングと `FaceSplitter` は実測で健全（`ssi_probe` 3/3、面積残差 1.46e-13）。**複合シェルの組み立ては未検証**（4-37） |
+| **自由曲面交差 (SSI) 面分割** | 部分的 | マーチングと `FaceSplitter` は実測で健全（`ssi_probe` 3/3、面積残差 1.46e-13）。交線が両曲面に乗ることも検査済み。**両側の面を割る配置での検証は未了**（4-37） |
 | **4辺パッチの $G^1$ 連続** | **未達** | `GregoryPatch4` はクロス接線を受け取らない。`tangents` は全ゼロで未使用、内部点は4隅のみから決まる |
 | **歯元トロコイド** | **未達** | S 字にはなったが、半径を線形・角度を smoothstep で補間したもの。創成運動は計算していない |
 | **複数面シート厚み付け** | 部分的 | `thicken_shell` は各面を個別に厚み付けして Union するだけ。検体は同一平面の長方形2枚のみ |
@@ -183,6 +185,33 @@ OpenCASCADE 自身に同じ形を書かせるための道具です。
 ---
 
 残りは性質の違う塊に分かれます。上から順に大きい仕事です。
+
+### 3-Z. ブーリアン結果のメッシュが重い（測定済み・未着手）
+
+同じ形をビルダーで作ったものとブーリアンで作ったものを、同じ分割数で刻んで
+比べた実測です（`tess_density_probe`）。
+
+| 分割数 | 8 | 16 | 32 | 48 | 64 | 96 | 128 | 192 | 256 | 単調 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :-: |
+| ビルダーの穴あき箱 | 592 | 2192 | 8464 | 18832 | 33296 | 74512 | 132112 | 296464 | 526352 | yes |
+| ブーリアンの穴あき箱 | 1472 | 11616 | 89904 | 329640 | 491904 | 658656 | 465072 | 745880 | 425856 | **NO** |
+| 比 | 2.5 | 5.3 | 10.6 | **17.5** | 14.8 | 8.8 | 3.5 | 2.5 | 0.8 | |
+
+**同じ形なのに最大 17.5 倍**で、しかも 96分割で 658656 枚、128分割で 465072 枚
+——**細かく頼むと粗く返ってきます**。
+
+原因の在り処は分かっています。`SamplePlan::segments_for_edge` は稜ごとに
+「その稜自身のたわみ」が目標を下回るまで刻みを倍々にします（上限 4096）。
+頼んだ分割数は**下限としてしか効きません**。曲がった稜が1本あると格子全体が
+引っ張られ、どの稜が勝つかが分割数で入れ替わるので単調性も崩れます。
+
+この形は元々「螺旋の掃引のように長く曲がった稜が全く足りない」問題への対処
+なので（`stitched.rs` のコメント参照）、単純に上限を下げると丸線ばねの体積が
+また外れます。**触るなら、稜ごとの刻みと格子全体の刻みを分けてください。**
+
+断面はもう影響を受けません（位相で繋ぐようにしたので、4-37）。残っているのは
+重さと、STL / OBJ / glTF に出る枚数です。**先に `tess_density_probe` の数字を
+取ってから手を付けてください。** 壁時計ではなくこの表が物差しです。
 
 ### 3-A. 整理（`FaceMerger::simplify_solid`）を既定にするかの判断
 
@@ -2592,7 +2621,7 @@ IGES は引数を読まずに固定文字列を返していました。手掛か
 | `crates/zenith_io` | STEP 読み書き、STL/OBJ/glTF/DXF/IGES |
 | `crates/zenith_py` | PyO3 バインディング（`#[pyfunction]` 58個 ＋ `#[pymethods]` 2ブロック） |
 | `crates/zenith_server` | Seamless プロトコルの TCP 骨組み。**中身は未実装**で、常に空メッシュを返す（`write_generate_mesh_empty`）。カーネルは呼んでいない |
-| `crates/zenith_algo/examples/` | **測定・診断ツール**（48個） |
+| `crates/zenith_algo/examples/` | **測定・診断ツール**（49個） |
 | `crates/zenith_algo/tests/fixtures/` | OpenCASCADE が書いた STEP 10本。`include_str!` で読むので `target/` を消しても検査は走る |
 | `tools/*.py` | FreeCAD ヘッドレス検証（`verify_*` はゲート、`occ_*` は診断・検体生成用） |
 | `target/showcase/` | 代表24形状の STEP。作り方は 7 章 |
