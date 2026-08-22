@@ -654,6 +654,13 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `export_showcase` ＋ `tools/verify_showcase.py` | 代表24形状が Solid として読めるか（ゲート） |
 | `occ_reference_export.py` | OpenCASCADE 自身に解析曲面の STEP を書かせる |
 | `foreign_reexport` ＋ `tools/verify_reexport.py` | 読んで書き戻した一周が解析解に乗るか（**ゲート**） |
+| `export_iges_suite` ＋ `tools/verify_iges.py` | IGES を OpenCASCADE が読み、曲面の枚数と境界箱が合うか（**ゲート**） |
+
+**突き合わせ相手は、相手の実装が書いたファイルに置いてください。** 自前の
+出力どうしを比べているあいだは、寛容な読み手が受け取ってしまう構文違反が
+見えません。STEP の複合エンティティの括弧抜けは、24/24 も 7/7 も緑のまま
+1度も検出されず、OpenCASCADE が書いた同じ行を並べた瞬間に分かりました
+（HANDOVER 4-37）。`occ_reference_export.py` はそのための道具です。
 
 ---
 

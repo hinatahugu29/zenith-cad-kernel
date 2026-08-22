@@ -30,19 +30,22 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 
 | 指標 | 値 |
 | :--- | :--- |
-| テストバイナリ | **64 + doctest 6 すべてグリーン（422テスト 100%合格、0 failed）** |
-| **出力用メッシュ** | **全分割数で完全閉多様体（Watertight Manifold）**。4〜32分割の全9通りですべての立体（box, cylinder, sphere, cone, torus, drilled box, L-prism）が open: 0, non-manifold: 0, degenerate: 0（4-34 解消完了） |
+| テストバイナリ | **78（doctest 込み）すべてグリーン（437テスト 100%合格、0 failed、0 ignored）** |
+| 診断プローブ | 常設16本すべて exit 0（`builder_audit`, `planar_face_audit`, `boolean_topology_probe`, `mesh_watertight_probe`, `slice_probe`, `slice_robustness_probe`, `sketch_solver_probe`, `pcurve_fidelity_probe`, `inertia_probe`, `distance_probe`, `interference_depth_probe`, `regularize_probe`, `countersink_range_probe`, `face_split_probe`, `ssi_probe`, `boolean_gate_probe`） |
+| Python 往復 | `tools/verify_solid_api.py` 全合格（作る → ブーリアン → 稜を丸める → STEP → 読み直す） |
+| **出力用メッシュ** | **測った全分割数で完全閉多様体（Watertight Manifold）**。4〜32分割の全9通り（`mesh_watertight_probe`）に加え、48・64・96・128・192・256 でも open: 0, non-manifold: 0, degenerate: 0 を実測（4-34 解消、4-37 で範囲を確認）。格子パッチ内は適応細分を掛けないので、弦誤差は分割数で決まる（32分割で体積差 1e-3 台） |
+| **断面の輪郭連結** | 溶接距離ではなく**メッシュの位相**（頂点添字・辺添字）で繋ぐ。公差を持たないので、分割数を 4〜256 のどこに振っても閉じる（4-37） |
 | **干渉判定** | 食い込み 5〜0.001 mm の21配置すべてで `Clash`、最近傍B-Rep射影により浅い食い込みも確実検出。隙間のある5配置すべてで報告距離が閉じた式と一致 |
 | **最短距離** | 板の中央の上の小球・板の上の角材・めり込んだ立体を含む7配置すべてで**閉じた式と厳密に一致**し、刻みを振っても動かない |
 | **断面積 & 断面スライサー** | **解析解と 1.34e-11 以内**（相対誤差 $< 10^{-10}$）。平面のみの断面は従来どおり厳密 |
 | **重心と慣性** | 直方体・円柱・球・円錐・移動した直方体のいずれも、原点まわりの閉じた式と **1.8e-13 以内**。主慣性モーメントは平行移動でも斜め軸の回転でも動かない（1.5e-15） |
 | **平面を平面として持っているか** | 全23ビルダーで**該当ゼロ**。`FaceMerger` によりブーリアン出口で同一平面パッチを自動併合（L字角柱 14面➔8面、穴あき 16面➔10面） |
-| **自由曲面交差 (SSI)** | 4式4未知数ニュートン追跡 ➔ B-splineフィッティング ➔ FaceSplitter面分割 ➔ 複合シェル組み立て（`ssi_boolean_surface_test` 面積残差 $< 10^{-6}$） |
-| **Gregoryパッチ & N辺ブレンド** | Chiyokura-Kimura有理ツイスト補間による4辺グレゴリーパッチおよびN辺コーナーブレンド（`GregoryPatch4`, `CornerBlendN`）を実装 |
-| **複数面シート厚み付け** | 開いた複数面シートシェル全体を一括で完全閉ソリッド化（`ThickenBuilder::thicken_shell`） |
-| **ダイレクトモデリング** | 任意ソリッドの凸稜自動検出 & 直感的なエッジフィレット/面取り（`DirectModeling::fillet_solid_edge`） |
-| **歯元トロコイド曲線** | ホブカッター歯先丸み創成運動による滑らかなS字歯元フィレット曲線を実装（`GearBuilder`） |
-| **非STEP/CAD入出力** | バイナリSTL、OBJ、glTF 2.0、IGES 5.3、**レイヤー付きAutoCAD DXF（OUTLINE/HOLE/CENTERLINE/HATCH）** |
+| **自由曲面交差 (SSI)** | 4式4未知数ニュートン追跡 ➔ B-splineフィッティング ➔ FaceSplitter面分割（`ssi_probe` 3/3、`face_split_probe` 面積残差 1.46e-13）。**「複合シェル組み立て」はまだ検証されていない** — `ssi_boolean_surface_test` は円柱側しか割っておらず（球側の面は未使用）、最後の組み立て検査は `Shell::new(vec![a, b]).faces.len() == 2` という恒真アサーション（4-37） |
+| **4辺ブレンド & N辺コーナーブレンド** | `CornerBlendN` は N = 3, 4, 5 で N 枚のパッチを返す（4-37 で修正。それまでは常に0枚だった）。ただし `GregoryPatch4` は**名前に反して Gregory パッチではない** — クロス接線を引数に取らず、`tangents` は全ゼロのまま未使用、内部点は4隅だけから決まる。$G^1$ 連続は達成していない |
+| **複数面シート厚み付け** | `ThickenBuilder::thicken_shell`。各面を個別に厚み付けして Union するだけで、テストは**同一平面の長方形2枚**（＝箱2つの和）のみ。非平面の隣接シートでの保証はない |
+| **ダイレクトモデリング** | `DirectModeling::fillet_solid_edge` などは既存 `EdgeBlender` の別名（各3行）。実体は `edge_blend` 側にある |
+| **歯元フィレット** | `make_spur_gear_with_root_fillet` の S 字は、半径を線形・角度を smoothstep で補間したもの。**ホブ創成トロコイドではない**（4-37） |
+| **非STEP/CAD入出力** | バイナリSTL、OBJ、glTF 2.0、**IGES 5.3（Entity 128、OpenCASCADE が5検体すべてを読み枚数・境界箱とも一致。トリムは未出力）**、AutoCAD DXF（レイヤーは4種定義するが自動割り当ては OUTLINE / HOLE のみ） |
 | **Pythonバインディング** | `zenith_cad.pyd`（**わずか 3.85 MB 単一DLL**）による完全インメモリ In-Process 連携 |
 | コンパイラ警告 | **0** |
 | ビルダー監査 | **24/24 すべてクリーン** |
@@ -113,7 +116,16 @@ cargo run --release -p zenith_algo --example foreign_reexport
 
 cargo run --release -p zenith_algo --example export_simplified
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_simplified.py
+
+cargo run --release -p zenith_algo --example export_iges_suite
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_iges.py
 ```
+
+**突き合わせ相手は、相手の実装が書いたファイルに置いてください。** 自前の
+出力どうしを比べているあいだは、寛容な読み手が受け取ってしまう構文違反が
+見えません。書き出す STEP がすべて Part 21 の構文に反していたのに、24/24 も
+7/7 も緑のままでした（4-37）。`tools/occ_reference_export.py` は
+OpenCASCADE 自身に同じ形を書かせるための道具です。
 
 **STEP を書くときは `StepInterop` を通してください。** `StepExporter` を直接
 呼ぶと、読み込んだままの形——全周1枚のパッチ、全周1本の辺——で書き出します。
@@ -132,17 +144,26 @@ cargo run --release -p zenith_algo --example export_simplified
 
 ### 3-0-0. 完了した重要品質課題と今後の開発領域
 
-| 項目 | 状態 | 達成内容 |
+**2026年8月22日の監査で、この表の「完了」は実測に合わせて書き直しました。**
+経緯は 4-37 にあります。ここに書いてある「完了」は、**外の物差しに当てた
+結果が残っているもの**だけです。
+
+| 項目 | 状態 | 実測で言えること |
 | :--- | :---: | :--- |
-| **出力用メッシュの完全密閉化** | **完了** | `stitched.rs` の格子規則性維持により、全9通りの分割数ですべてのモデルが 100% 完全閉多様体を達成（4-34 解消） |
-| **非STEP出力の外部検証** | **完了** | STL, OBJ, glTF 2.0, IGES 5.3, レイヤー付きDXF の包括的外部検証テストスイートを新設・全合格 |
-| **SketchSolver 自由度解析** | **完了** | SVDヤコビアン階数解析による DOF 算出および 不足/完全/過剰/矛盾拘束判定を実装 |
-| **FaceMerger ブーリアン統合** | **完了** | `BooleanEngine::boolean_solids_exact_simplified` を新設し、同一平面の自動併合（14面➔8面）を実現 |
-| **自由曲面交差 (SSI) 面分割** | **完了** | 4式4未知数ニュートン追跡・B-splineフィッティング・FaceSplitter面分割・複合シェル結合パイプラインを確立 |
-| **Gregoryパッチ & コーナーブレンド** | **完了** | Chiyokura-Kimura有理ツイスト補間による4辺グレゴリーパッチおよびN辺コーナーブレンドを実装 |
-| **複数面シート厚み付け** | **完了** | `ThickenBuilder::thicken_shell` による開いた複数面シェルの完全閉ソリッド化 |
-| **歯元トロコイド曲線** | **完了** | ホブ盤創成トロコイドS字フィレット曲線を `GearBuilder` に実装 |
-| **2Dスケッチ包括アーキテクチャ** | **完了** | `docs/sketch_system_comprehensive_architecture.md` に全要素・数理・3D連携を網羅的に整理 |
+| **出力用メッシュの完全密閉化** | **完了** | 4〜32分割（`mesh_watertight_probe`）に加え 48〜256 でも open/非多様体/退化すべて 0（4-34、4-37） |
+| **STEP の Part 21 適合** | **完了** | 複合エンティティ実体の括弧を修正。`step_conformance_test` が全データ行を走査（4-37） |
+| **STEP の面の欠落** | **完了** | Coons / Gordon / 三角パッチを NURBS 化して書くようにした。`step_face_parity_test` が面数の一致を見る（4-37） |
+| **断面スライサーの安定性** | **完了** | 輪郭の連結を距離から位相へ。4〜256分割で閉じ、FreeCAD 相互検証が 14/15 から 15/15 に戻った（4-37） |
+| **IGES 5.3 出力** | **完了** | Entity 128 を実装（それまでは引数を読まないスタブ）。`tools/verify_iges.py` で OpenCASCADE が5検体すべてを読み、枚数・境界箱とも一致。**トリムは未出力** |
+| **SketchSolver 自由度解析** | **完了** | ヤコビアンの列を自由変数に制限。階数が自由度を超える報告は出ない（4-37）。**「冗長」と「矛盾」は未分離** |
+| **FaceMerger ブーリアン統合** | **完了** | `BooleanEngine::boolean_solids_exact_simplified`（同一平面の自動併合 14面➔8面）。既定にするかは 3-A のまま未決 |
+| **N辺コーナーブレンド** | **完了** | N = 3, 4, 5 で N 枚のパッチを返す（それまでは常に0枚）。連続性は下記の制限つき |
+| **自由曲面交差 (SSI) 面分割** | 部分的 | マーチングと `FaceSplitter` は実測で健全（`ssi_probe` 3/3、面積残差 1.46e-13）。**複合シェルの組み立ては未検証**（4-37） |
+| **4辺パッチの $G^1$ 連続** | **未達** | `GregoryPatch4` はクロス接線を受け取らない。`tangents` は全ゼロで未使用、内部点は4隅のみから決まる |
+| **歯元トロコイド** | **未達** | S 字にはなったが、半径を線形・角度を smoothstep で補間したもの。創成運動は計算していない |
+| **複数面シート厚み付け** | 部分的 | `thicken_shell` は各面を個別に厚み付けして Union するだけ。検体は同一平面の長方形2枚のみ |
+| **DXF のレイヤー分け** | 部分的 | 4レイヤーを定義するが、自動割り当ては OUTLINE / HOLE のみ。線種は全て CONTINUOUS、HATCH エンティティは未出力 |
+| **2Dスケッチ包括アーキテクチャ** | 文書のみ | `docs/sketch_system_comprehensive_architecture.md` は設計書であって、実装状況の記録ではない |
 
 **未測定の項目を上に置いてあります。** このリポジトリで見つかった欠陥は、
 ほぼすべて「測っていなかった領域にプローブを当てたら出てきた」ものです。
@@ -308,12 +329,18 @@ box × cylinder（側面に接する）、box × sphere（箱の4面が球に接
 「4点の多角形」はもうありません。何をしたかは 4-18 に、形と物差しの詳細は
 `GearBuilder` の説明にあります。残っているのは次の2つです。
 
-**歯元がトロコイドではありません。** いまは歯底円の弧から基礎円まで、
-**半径方向の直線**で繋いでいます。実際のホブ切りでは、工具の歯先が描く
-トロコイド曲線になり、応力集中を避けるための丸みが付きます。強度計算に
-使うなら、ここを埋める必要があります。断面積の閉じた式も変わります
-（`GearBuilder::involute_profile_area` と `builder_audit` の
-`spur_gear_profile_area` の両方）。
+**歯元はまだトロコイドではありません。** 既定の `make_spur_gear` は歯底円の弧
+から基礎円まで**半径方向の直線**で繋いでいます。`make_spur_gear_with_root_fillet`
+は 2026年8月22日に S 字へ差し替わりましたが、**中身は創成運動ではありません**。
+半径を線形、角度を smoothstep (`3u^2 - 2u^3`) で補間し、`* 0.2` という係数で
+寄せているだけです。`rf = 0.38 * module` は算出されますが、その係数のスケール
+にしか使われていません。工具の歯先が描く軌跡は計算していないので、**強度計算
+には使えません**。
+
+埋めるときは断面積の閉じた式も変わります（`GearBuilder::involute_profile_area`
+と `builder_audit` の `spur_gear_profile_area` の両方）。差し替えのときに
+そちらは触られていないので、フィレット付きの検体は体積が正かどうかしか
+見ていません（`gear_shape_test::test_make_spur_gear_with_root_fillet_is_valid_solid`）。
 
 **`bore_radius` は軸穴を開けません。** 歯底半径の下限に効くだけです。
 名前と実物が違うので、`make_spur_gear` の説明と Python 側の docstring に
@@ -1912,6 +1939,224 @@ down_toward_the_truth` は「分割を細かくすると距離が短くなり真
 
 ---
 
+### 4-37. 監査で出た5件（2026/08/22）
+
+引き継ぎ直後に、直近15コミット（`f247147` 以降、いずれも Antigravity と
+の共作）を中心にコードを実測で当たり直しました。**中核には空洞がありません**
+——ブーリアン、質量特性、SSI、STEP 入出力、Python 連携はいずれも解析解や
+OpenCASCADE と 1e-11 以上で一致します。出たのは周縁部の5件です。
+
+`todo!` / `unimplemented!` / `#[ignore]` は全ワークスペースで0件、警告も0件
+でした。**それでも空実装は1つありました**（下記 IGES）。「マクロで印を付けて
+いない未実装」は、この探し方では出ません。
+
+#### (1) 書き出す STEP がすべて Part 21 の構文違反だった
+
+複数の型を1つにまとめた複合エンティティ実体は、ISO 10303-21 では外側の
+丸括弧が要ります。
+
+```text
+#13 = ( GEOMETRIC_REPRESENTATION_CONTEXT(3) ... REPRESENTATION_CONTEXT(..) );
+```
+
+括弧なしで書いていました。すぐ上の単位定義3行（`#9`〜`#11`）は括弧付きで
+書けていたので、書き方を知らなかったのではなく1箇所だけ抜けています。
+
+**なぜどのゲートも落ちなかったか。** OpenCASCADE のパーサがこの形を許すから
+です。`verify_showcase`（24/24）も `verify_reexport`（7/7）も緑のままでした。
+比較相手を自前の出力ではなく **OpenCASCADE が書いたファイル** に置いて初めて
+差が見えます。
+
+```text
+OCC:     #68 = ( GEOMETRIC_REPRESENTATION_CONTEXT(3)
+Zenith:  #13 = GEOMETRIC_REPRESENTATION_CONTEXT(3)
+```
+
+`step_conformance_test::test_every_complex_entity_instance_is_parenthesised`
+が、データ行を1本ずつ見て「最初のエンティティの閉じ括弧より後ろに中身が
+続くのに、全体が括弧で囲まれていない行」を数えます。**修正を戻して落ちる
+ことを確かめてから**入れました。
+
+#### (2) Coons 面が STEP から黙って消えていた
+
+`write_face` は `Coons` / `Gordon` / `Triangular` に `None` を返し、
+`write_closed_shell` がそれを捨てていました。
+
+```text
+B-Rep faces = 6  kinds = ["plane","plane","plane","plane","coons","coons"]
+ADVANCED_FACE written to STEP = 4
+```
+
+穴の空いた殻を `CLOSED_SHELL` と称して書き出します。しかも
+`export_solid_to_string` の戻り値は `String` なので、**失敗を表す場所が
+ありません**（4-6 と 5 章に出てくる「型が答えを表せるか」と同じ形です）。
+
+到達経路は実在します。`ThickenBuilder::thicken_coons_face` は底面・天面・
+側面をすべて Coons 面で組みます。`thicken_shell` も同じ経路を通ります。
+
+直し方は、捨てるのをやめて **標本した NURBS として書く** ことにしました
+（`NurbsSurface3::approximate_surface`）。双線形の Coons パッチは補間で
+厳密に再現され、実測の偏差は 1e-9 未満です。加えて内部の書き出しを
+`Result` にし、ファイルに書く口は失敗を返すようにしました。
+`step_face_parity_test` が「B-Rep の面の数 = `ADVANCED_FACE` の数」を見ます。
+
+#### (3) 断面が既定の分割数で閉じない。見張るプローブが既定を試していなかった
+
+FreeCAD 相互検証が **15/15 ではなく 14/15** でした。
+
+```text
+boolean_drilled_block ... kernel section failed:
+  Section slicing produced 1 unclosed chain(s) alongside 3 closed loop(s)
+```
+
+`slice_robustness_probe` は「分割数によらず閉じるか」を見るためのものですが、
+振っていたのは 4〜32 で、`SectionSlicer::slice_solid` が実際に使う
+`DEFAULT_SECTION_TESSELLATION`（**128**）を一度も試していません。だから
+「0 failures」と言い続けていました。**上限を上げるだけでは足りません。
+既定そのものを列に入れてください。** 失敗は分割数に対して飛び飛びに出ます。
+
+| 48 | 64 | 80 | 96 | 112 | 120 | 128 | 144 | 160 | 192 | 256 |
+| :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
+| ok | ok | ok | **×** | ok | **×** | **×** | **×** | **×** | ok | **×** |
+
+原因の切り分けは4段まで降りました。
+
+1. **線分は足りている。** 各線分の始点・終点には必ず相手がいる（宙に浮いた
+   端点は 0 本）。だから「交線が取れていない」ではありません。
+2. **分岐が偽物だった。** 溶接した端点で数えると、1点に最大6本が集まる
+   分岐が 1628 個できていました。場所はすべてボア壁（半径 6.0）の上です。
+3. **溶接公差が選べない。** 一致させたい端点どうしの隙間は 99% が厳密に 0、
+   最大 2.0e-6。別物として残したい刻み幅は最小 1.0e-6。**両者が重なる**ので、
+   どの値を選んでも繋ぎ落とすか潰すかのどちらかになります。
+4. **メッシュは閉じている。** 256分割まで測って open 0 / 非多様体 0 /
+   退化 0。ならば1本の辺はちょうど2枚の三角形に共有されます。
+
+そこで**距離をやめて位相で見る**ことにしました。断面上の点に、それが生まれた
+場所の鍵（`SectionKey::Vertex(i)` または `SectionKey::Edge(i, j)`）を持たせ、
+鍵が等しいものだけを繋ぎます。閉多様体メッシュでは辺の鍵に対する相手が
+ちょうど1つなので、**公差はどこにも要りません**。4-8 の「p-curve では
+原理的に決まらないので位相で見る」と同じ形です。
+
+なお本当の元凶はもう1段奥にあります。ブーリアンの結果は、同じ形をビルダーで
+作ったものに比べて**三角形が3〜5倍多く、分割数に対して単調でもありません**
+（96分割で 658656、128分割で 465072）。`SamplePlan::for_segments_for_edge`
+が稜ごとにたわみ基準で倍々に刻むためです。断面は位相で繋ぐようにしたので
+影響を受けなくなりましたが、メッシュそのものは重いままです。
+
+#### (4) N辺コーナーブレンドが、パッチを1枚も返していなかった
+
+```text
+N=3 -> patches.len() = 0
+N=4 -> patches.len() = 0
+```
+
+`GregoryPatch4::new` のコーナー検査が毎回落ち、`if let Ok(patch)` がそれを
+捨てて、空の `patches` を載せた `Ok` が返っていました。テストは
+`boundary_curves.len()` と中心点しか見ていないので通ります。
+
+理由は2つ重なっていました。
+
+- パッチの1辺になるのは境界の**半分**なのに、境界をまるごと渡していた
+  （コード中のコメントは `Boundary(i_half)` と書いてあり、意図とは違う）。
+- `GregoryPatch4` が境界曲線の媒介変数域を `[0, 1]` と決め打ちしていた。
+  `NurbsCurve3::split_at` は元のノット値を保つので、半分に割った曲線の域は
+  `[0, 0.5]` や `[0.5, 1]` になり、`evaluate(0.0)` が域の外を指します。
+
+境界を中点で二分し、評価を `edge_point`（域を `[0, 1]` に写す）に通して、
+`if let Ok` を `?` に変えました。N = 3, 4, 5 で N 枚返ることを検査します。
+
+**`if let Ok(..) { push }` は、失敗を件数の減少に変換します。** 呼び出し側
+から見ると空の成功なので、エラーとしては現れません。
+
+#### (5) IGES は引数を読んでいなかった
+
+```rust
+pub fn export_solid_to_string(_solid: &Solid, product_name: &str) -> Result<String, String>
+```
+
+先頭のアンダースコアがすべてです。固定文字列と中身の無い Entity 186 を1つ
+書くだけで、どんな立体を渡しても同じ6行が出ます。テストは `"S0000001"` の
+ような文字列の有無を見るだけで、しかも**空のシェル**を渡していました。
+両者は矛盾なく通り続けます。仕様書には「Entity 128 / 102 / 124 出力」と
+書いてありましたが、ソースに 128 はありません。
+
+各面の支持曲面を Entity 128（有理Bスプライン曲面）として書くように実装し
+直しました。80桁固定レコード、Global 26 フィールド、D は2行/エンティティ、
+P は DE の行番号を 65〜72 桁に持ちます。
+
+書いた直後、OpenCASCADE が 20x30x40 の箱を **508x762x1016** として読みました。
+ちょうど 25.4 倍、つまりインチとして解釈しています。原因は Global の1番目と
+2番目、区切り記号の宣言でした。
+
+```text
+Zenith: 1H,,1H;,12Hbox_20x30x40,...
+OCC:    ,,31HOpen CASCADE IGES processor 7.8,...
+```
+
+`1H,` という宣言は**値そのものにカンマを含みます**。フィールドを先にカンマで
+割る読み手はここで数を取り違え、14番目にあるはずの単位フラグを見失います。
+空にして既定（`,` と `;`）に任せると、単位も位置も一致しました。26番目の
+フィールドが欠けていたのと、レコードの途中でフィールドを割っていたのも
+併せて直してあります。
+
+```text
+subject                      ours    occ  shrink        grow    verdict
+box_20x30x40                    6      6  0.000e+00  0.000e+00  ok
+cylinder_r10_h40                6      6  0.000e+00  0.000e+00  ok
+sphere_r10                      8      8  0.000e+00  0.000e+00  ok
+cone_r10_r4_h20                 6      6  0.000e+00  0.000e+00  ok
+drilled_box_30x30x15_r5        16     16  0.000e+00  0.000e+00  ok
+```
+
+はみ出しが 0 なのは、自前ビルダーの曲面が元から面ごとのパッチに割れていて、
+パラメータ矩形の縁がそのまま面の境界になっているからです。**トリム
+（Entity 144 / 142 / 126）は書いていない**ので、他カーネルから読んだ全周
+1枚の面を持つ立体では、はみ出します。そこは制限として残ります。
+
+常設ゲートは `tools/verify_iges.py`（不一致で非ゼロ終了）です。
+
+```bash
+cargo run --release -p zenith_algo --example export_iges_suite
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_iges.py
+```
+
+#### おまけ: スケッチの自由度が、幾何学的にありえない値を出していた
+
+`sketch_solver_probe` が「Total DOF = 2, Rank = 5」と印字していました。
+自由変数が2本なら階数は2を超えられません。ヤコビアンを**全点ぶんの列**で
+組んだまま特異値を数え、自由度は自由点だけで数えていたためです。
+`remaining_dof` は `saturating_sub` で 0 に丸められるので、**まだ動ける
+スケッチが `FullyConstrained` と報告されます**。
+
+列を自由変数に絞ったところ、今度は既存テストが2件落ちました。
+`add_fixed_point` が `FixedPoint` 拘束（2式）も足すので、その2式が
+「冗長」に積み上がったからです。**以前は2つの誤りが打ち消し合って
+正しい数が出ていました。** 式の本数を種類から数えるのをやめ、制限した
+ヤコビアンで**ゼロでない行**を数えるようにして両方揃いました。
+
+#### 直していないと分かっているもの
+
+- **`GregoryPatch4` は Gregory パッチではありません。** `tangents` は全ゼロの
+  まま未使用、`inner_points` は4隅だけから固定係数（0.444 / 0.222 / 0.222 /
+  0.112）で決まり、境界曲線を大きく湾曲させても**値が1ビットも動きません**。
+  評価式は Coons ＋ `16u(1-u)v(1-v)` のバブル項です。そもそも `new` が
+  クロス方向接線を受け取らないので、隣接面との $G^1$ 連続は原理的に達成
+  できません。仕様書の記述を実装に合わせて書き換えました。
+- **歯元は真のトロコイドではありません。** 半径を線形、角度を smoothstep で
+  補間し、`* 0.2` の係数で寄せているだけで、ホブ歯先のころがり軌跡は計算して
+  いません。`rf = 0.38 m` は算出されますがその係数のスケールにしか使われ
+  ません。断面積の閉じた式（`involute_profile_area`）も未対応のままです。
+- **`DirectModeling::fillet_solid_edge` などは `EdgeBlender` の別名**です
+  （各3行）。新しい能力はありません。
+- **`thicken_shell` は各面を個別に厚み付けして Union するだけ**で、テストは
+  同一平面の長方形2枚（＝箱2つの和）しかありません。非平面の隣接シートで
+  成立する保証はありません。
+- **DXF の CENTERLINE / HATCH レイヤー**はテーブルに定義されるだけで、
+  割り当てるコードがありません。線種は全レイヤー CONTINUOUS です。
+- **`crates/zenith_server`** は TCP プロトコルの骨組みだけで、常に空メッシュを
+  返します（`write_generate_mesh_empty`）。カーネルを呼んでいません。
+
+---
 ## 5. 踏んだ落とし穴（繰り返さないために）
 
 **ブーリアンの回転ボックス対応は、部品を1つずつ入れると必ず別のケースを壊しました。**
@@ -2164,6 +2409,63 @@ NURBS円柱の体積は 64分割で 1.38e-6、512分割で 8.43e-6 でした。�
 **出た値が「測定の刻み幅くらい」なら、それは測定の限界であって欠陥ではない**
 と、まず疑ってください。
 
+**プローブが振る範囲に、本番の既定値が入っていますか。** `slice_robustness_probe`
+は「分割数によらず閉じるか」を見るためのものなのに、振っていたのは 4〜32 で、
+`slice_solid` が実際に使う 128 を一度も試していませんでした。だから
+「0 failures」と言い続け、FreeCAD 側だけが断面の破れを見ていました。
+**上限を上げるだけでは足りません。**失敗は分割数に対して単調とは限らず、
+実測では 96・120・128・144・160・256 で落ちて 192 では通ります。既定値そのものを
+列に入れてください（4-37）。
+
+**`if let Ok(x) = f() { push(x) }` は、失敗を件数の減少に変えます。**
+`CornerBlendN` はこれで、パッチを1枚も作れていないのに `Ok` を返していました。
+呼び出し側から見ると「空の成功」なので、エラーとしては一度も現れません。
+同じ形が `write_face` の `Option` にもありました（面が黙って消える）。
+**捨てる前に、捨ててよいと言い切れるかを確かめてください。** 言い切れないなら
+`?` で上げるほうが安全です。
+
+**戻り値の型が失敗を表せないなら、その関数は失敗を隠します。**
+`export_solid_to_string` は `String` を返すので、面が書けなくても伝える先が
+ありません。4-6 と、上の「型が表現できないものは返せません」と同じ話が、
+今度は入口ではなく**出口**で出ました。型を見るのは、実装を読む前です。
+
+**空実装は `todo!()` の形をしているとは限りません。** 全ワークスペースで
+`todo!` / `unimplemented!` / `FIXME` / `#[ignore]` は0件、警告も0件でしたが、
+IGES は引数を読まずに固定文字列を返していました。手掛かりは
+`fn export_solid_to_string(_solid: &Solid, ..)` の**アンダースコア1つ**です。
+`grep "pub fn .*(_"` は1分で終わります。
+
+**そのテストは、対象を通っていますか。** IGES のテストは**空のシェル**を渡して
+`"S0000001"` が含まれるかを見ていました。エクスポータ側も引数を読んでいない
+ので、両者は矛盾なく通り続けます。**形に依存しない検査は、形を作る実装を
+検査していません。** 立体を変えたら出力が変わることを1本入れてください。
+
+**比較相手を、相手の実装が書いたファイルに置いてください。** STEP の複合
+エンティティの括弧抜けは、自前の出力どうしを比べているあいだは永久に見え
+ません。OpenCASCADE が書いた同じ行を並べた瞬間に分かります。5章の
+「比較相手を間違えると、欠陥が『仕様』に見えます」の裏返しで、**寛容な
+読み手は欠陥を仕様に見せます**。
+
+**単位が桁で外れたら、まず区切りの宣言を疑ってください。** IGES で箱が
+ちょうど 25.4 倍になったのは、Global の1番目に書いた `1H,` が**値としての
+カンマを含む**ためでした。フィールドを先にカンマで割る読み手はここで数を
+取り違え、14番目の単位フラグを見失います。**「その値自身が区切り文字である」
+宣言は、書かずに既定へ任せるほうが安全です。**
+
+**2つの誤りが打ち消し合って、正しい数が出ていることがあります。**
+スケッチの自由度解析は、階数を全変数で数え（過大）、式の本数も固定点の分まで
+数えて（過大）、差を取ると正しく見えていました。片方だけ直すとテストが落ちます。
+**落ちたテストの期待値が正しいとは限らず、直した側が正しいとも限りません。**
+どちらも外の物差し（ここでは「階数は自由変数の本数を超えられない」という
+不等式）に当ててから決めてください。
+
+**公差で繋ぐしかない場面かどうかを、先に測ってください。** 断面の輪郭を
+つなぐ溶接公差は、一致させたい隙間（最大 2.0e-6）と、別物として残したい
+刻み幅（最小 1.0e-6）が**重なっていました**。どの値を選んでも壊れます。
+重なっていると分かった時点で、公差の調整をやめて位相（メッシュの頂点・辺の
+添字）で繋ぐ設計に移りました。**「良い公差が見つからない」は、公差で解く
+問題ではないことの証拠です。**
+
 ---
 
 ## 6. リポジトリの見取り図
@@ -2175,11 +2477,13 @@ NURBS円柱の体積は 64分割で 1.38e-6、512分割で 8.43e-6 でした。�
 | `crates/zenith_topo` | Vertex/Edge/Wire/Face/Shell/Solid、シェル検証 |
 | `crates/zenith_algo` | ブーリアン・押出/回転/ロフト/掃引・穴/フィレット・断面・質量特性・全周の正規化（`regularize`）・一般の面分割（`face_split`）・STEP 書き出し口（`StepInterop`） |
 | `crates/zenith_tess` | テッセレーション（積分領域はノット区間に整合） |
-| `crates/zenith_io` | STEP 読み書き、STL/OBJ/glTF/IGES |
-| `crates/zenith_py` | PyO3 バインディング（45関数） |
-| `crates/zenith_algo/examples/` | **測定・診断ツール**（25個） |
-| `tools/*.py` | FreeCAD ヘッドレス検証（`occ_*` は診断用） |
-| `target/showcase/` | 代表24形状の STEP。作り方は 5-2 |
+| `crates/zenith_io` | STEP 読み書き、STL/OBJ/glTF/DXF/IGES |
+| `crates/zenith_py` | PyO3 バインディング（`#[pyfunction]` 58個 ＋ `#[pymethods]` 2ブロック） |
+| `crates/zenith_server` | Seamless プロトコルの TCP 骨組み。**中身は未実装**で、常に空メッシュを返す（`write_generate_mesh_empty`）。カーネルは呼んでいない |
+| `crates/zenith_algo/examples/` | **測定・診断ツール**（48個） |
+| `tools/*.py` | FreeCAD ヘッドレス検証（`verify_*` はゲート、`occ_*` は診断用） |
+| `target/showcase/` | 代表24形状の STEP。作り方は 7 章 |
+| `target/iges/` | IGES 5.3 の検体5形状。突き合わせは `tools/verify_iges.py` |
 
 Blender アドオン本体（`__init__.py`・オペレータ・パネル）は未着手です。
 `blender_addon/` にはビルド済みの `zenith_cad.pyd` のみが入っています。
@@ -2192,6 +2496,7 @@ Blender アドオン本体（`__init__.py`・オペレータ・パネル）は�
 cargo run --release -p zenith_algo --example export_showcase          # target/showcase   24形状
 cargo run --release -p zenith_algo --example export_validation_suite  # target/validation 15形状
 cargo run --release -p zenith_algo --example foreign_reexport         # target/reexport    7形状
+cargo run --release -p zenith_algo --example export_iges_suite        # target/iges        5形状
 ```
 
 | 置き場所 | 中身 | 突き合わせ |
@@ -2199,6 +2504,7 @@ cargo run --release -p zenith_algo --example foreign_reexport         # target/r
 | `target/showcase/` | 代表24形状。解析解を持つものは表に相対誤差が出る | `tools/verify_showcase.py`（24/24） |
 | `target/validation/` | 相互検証用15形状＋OpenCASCADE が書いた参照ファイル | `tools/freecad_cross_validate.py`（15/15、不一致で非ゼロ終了） |
 | `target/reexport/` | 他カーネルのファイルを読んで書き戻したもの7形状 | `tools/verify_reexport.py`（**ゲート**。解析解と 1e-6 以内、不一致で非ゼロ終了） |
+| `target/iges/` | IGES 5.3 の検体5形状＋`manifest.json` | `tools/verify_iges.py`（**ゲート**。曲面の枚数と境界箱、不一致で非ゼロ終了） |
 
 ショーケースの 17〜24 は今回のセッションで通るようになった範囲です
 （円錐を平面で切る3種、トーラスをスラブで切る2種、球を切る2種、
@@ -2221,3 +2527,26 @@ cargo run --release -p zenith_algo --example foreign_reexport         # target/r
 検証スクリプトは追跡されないので、常設のゲートは `tools/verify_*.py` の名前で
 作ってください（`verify_solid_api.py` は最初 `test_solid_api.py` という名前で
 書いて、コミットに入らないことに後から気づきました）。
+
+**ブランチをマージする前に、この一式が緑であることを確かめてください。**
+どれか1つでも赤なら、`main` に持っていくものではありません。
+
+```bash
+cargo test --release --workspace --exclude zenith_py     # 78 バイナリ / 437 テスト
+cargo build --release --workspace --exclude zenith_py    # 警告 0
+
+cargo run --release -p zenith_algo --example export_validation_suite
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/freecad_cross_validate.py   # 15/15
+
+cargo run --release -p zenith_algo --example export_showcase
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_showcase.py          # 24/24
+
+cargo run --release -p zenith_algo --example foreign_reexport
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_reexport.py          # 7/7
+
+cargo run --release -p zenith_algo --example export_iges_suite
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_iges.py              # 5/5
+
+cargo build --release -p zenith_py
+py tools/verify_solid_api.py
+```
