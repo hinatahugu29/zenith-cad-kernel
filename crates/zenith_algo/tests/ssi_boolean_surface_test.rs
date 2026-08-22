@@ -239,3 +239,82 @@ fn test_ssi_dual_surface_split_and_trimmed_assembly() {
     // 動いていないことを確かめておく。
     assert!(area_of(&sphere_face) > 0.0, "the sphere patch must have area");
 }
+
+/// 交線で**両方**の面を割る。
+///
+/// 上のケースでは球のパッチが八分の一で、交線の端が境界まで届かないため
+/// （実測 3.024 手前）、割れるのは円柱の側だけでした。割れないのは配置の
+/// せいであって実装のせいではありませんが、「両側を割れる」ことは確かめて
+/// いないままでした（4-37）。
+///
+/// 交線が両方のパッチを境界から境界へ横断する配置を選びます。半径 8 の円柱を
+/// 半径 12 の球と同軸に置くと、交わりは $z = \sqrt{144 - 64} = 8.944$ の
+/// 水平な円になります。
+///
+/// - 球の八分球（$x, y, z \ge 0$）では、その四分円は $(8, 0, 8.944)$ から
+///   $(0, 8, 8.944)$ まで、2本の子午線境界を結びます。
+/// - 円柱の四半パッチでは、同じ弧が両方の継ぎ目（$\theta = 0$ と
+///   $\theta = 90^\circ$）を結び、$z$ 方向には内部を通ります。
+///
+/// 接している場所はありません。球の法線は原点から、円柱の法線は軸から
+/// 放射状なので、交線上での角度は $\arctan(8.944 / 8) \approx 48^\circ$ です。
+#[test]
+fn test_the_intersection_splits_both_faces() {
+    let tol = Tolerance::default();
+    let (sphere_surf, sphere_face) = sphere_octant(12.0);
+    let (cyl_surf, cyl_face) = cylinder_quarter_face(Point3::new(0.0, 0.0, 0.0), 8.0, 0.0, 20.0);
+
+    let (curve, _marched, deviation) =
+        IntersectionMarcher::fit_to_tolerance(&cyl_surf, &sphere_surf, 2.0, 1e-6, &tol)
+            .expect("a cylinder through a sphere must intersect it");
+    assert!(deviation <= 1e-6, "curve deviation {deviation:e}");
+
+    // 交線は解析的に分かっている。まずそこを押さえる。
+    let expected_z = (144.0f64 - 64.0).sqrt();
+    let (t0, t1) = curve.param_range();
+    for step in 0..=32 {
+        let point = curve.evaluate(t0 + (t1 - t0) * step as f64 / 32.0);
+        let radius = (point.x * point.x + point.y * point.y).sqrt();
+        assert!(
+            (radius - 8.0).abs() < 1e-6,
+            "the curve must sit on the cylinder: radius {radius}"
+        );
+        assert!(
+            (point.z - expected_z).abs() < 1e-6,
+            "the curve must sit at z = {expected_z}: got {}",
+            point.z
+        );
+    }
+
+    let split_edge = Edge::new(
+        curve.clone(),
+        Vertex::from_point(curve.evaluate(t0)),
+        Vertex::from_point(curve.evaluate(t1)),
+        1e-6,
+    );
+
+    let params = TessellationParams {
+        u_divisions: 24,
+        v_divisions: 24,
+    };
+    let area_of = |face: &zenith_topo::Face| MassCalculator::compute_face_integral(face, &params).0;
+
+    for (name, face) in [("cylinder", &cyl_face), ("sphere", &sphere_face)] {
+        let before = area_of(face);
+        let (pieces, report) = FaceSplitter::split_by_curve(face, &split_edge, &tol)
+            .unwrap_or_else(|error| panic!("{name} face must split: {error}"));
+        assert_eq!(pieces.len(), 2, "{name} must come apart in two");
+        assert!(
+            report.area_residual < 1e-6,
+            "{name}: splitting moved {} of area",
+            report.area_residual
+        );
+
+        let after: f64 = pieces.iter().map(area_of).sum();
+        let residual = (after - before).abs() / before;
+        assert!(
+            residual < 1e-5,
+            "{name}: the pieces measure {after} against {before} whole ({residual:e})"
+        );
+    }
+}
