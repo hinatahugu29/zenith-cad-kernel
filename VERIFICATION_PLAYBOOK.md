@@ -1,7 +1,7 @@
 # 検証手順書 — Zenith CAD Kernel
 
 **対象コミット**: `kernel-accuracy-hardening` ブランチ
-**最終確認**: 2026年8月20日（再エクスポート精度の是正まで）
+**最終確認**: 2026年8月22日（監査による是正 — HANDOVER 4-37 / 4-38 まで）
 
 この文書は、**このリポジトリを初めて見る人（または別の AI モデル）が、
 主張を信じずに自分で確かめながら作業を進める**ための手順書です。
@@ -89,7 +89,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 51 テストバイナリ、335 テスト、失敗 0。
+**期待**: 80 テストバイナリ（doctest 込み）、445 テスト、失敗 0。
 
 所要はおよそ **10〜11分**です。ただし**この環境の壁時計は当てになりません**
 （下の 2-3 を読んでください）。時間で良し悪しを判断しないでください。曲面同士が交わるブーリアン（球×球、円柱×円柱、
@@ -134,7 +134,7 @@ cargo run --release -p zenith_algo --example boolean_envelope
 
 **そして、この幅は測定の揺れです。** 同じバイナリで同じ45ケースを2回走らせて
 **5分07秒 と 7分32秒**が出ました（47%差）。同じ走行で、曲面の評価回数は
-176,674,143 回で**1回も違いません**。1ケース単位ではもっと荒れ、やる仕事を
+108,381,805 回で**1回も違いません**。1ケース単位ではもっと荒れ、やる仕事を
 確実に減らした側が14秒**遅く**出たこともあります。
 
 したがって **`boolean_envelope` の秒数を性能の物差しに使わないでください。**
@@ -143,10 +143,17 @@ cargo run --release -p zenith_algo --example boolean_envelope
 ```text
 supported: 39   wrong-result: 0   unsupported/error: 6   (total 45)
 worst analytic agreement: 6.75e-8  (sphere x sphere intersection)
-solve work: 118261845 surface evaluations, 2269776 marching Newton iterations, 11448 marches
-            720 seed searches, 1035106 point-surface projections (65940 of them
+solve work: 108381805 surface evaluations, 1134888 marching Newton iterations, 5724 marches
+            360 seed searches, 936073 point-surface projections (56976 of them
             searching the whole domain for a start), 144 whole-solid tessellations
 ```
+
+（2026年8月22日の実測。**この積算は前に書いてあった数と違います** —
+以前は 118,261,845 / 2,269,776 / 11,448 でした。45行の表と
+`worst analytic agreement` は1文字も動いていないので、**答えは同じで、
+そこへ至る仕事の量だけが変わっています**。いつ変わったかは追えていません。
+積算を「前より減ったか」の物差しに使うなら、**比べる前に自分でもう一度
+測ってください。** 貼ってある数は、貼った日のものです。）
 
 これは走らせるたびに同じ値になります。重複を消したなら必ず減り、形を変えて
 いないなら45行の表は動きません。この2つは壁時計なしで確かめられます。
@@ -222,21 +229,36 @@ torus    16 -> 16 faces  volume  3789.9281 ->  3789.9281  rel 8.98e-14  shell va
 occ_reference_cone.step            1 solid(s), 3 face(s), volume  3267.2564
 occ_reference_cone_full.step       1 solid(s), 2 face(s), volume  2094.3951
 occ_reference_cylinder.step        1 solid(s), 3 face(s), volume 12566.3706
-occ_reference_cylinder_nurbs.step  1 solid(s), 3 face(s), volume 12566.6236
+occ_reference_cylinder_nurbs.step  1 solid(s), 3 face(s), volume 12566.3706
 occ_reference_sphere.step          1 solid(s), 1 face(s), volume  4188.7902
 occ_reference_sphere_capped.step   1 solid(s), 2 face(s), volume  2094.3951
 occ_reference_torus.step           1 solid(s), 1 face(s), volume  3789.9281
 occ_reference_torus_segment.step   1 solid(s), 3 face(s), volume   947.4820
 ```
 
-これらの期待値は**このリポジトリが決めた数ではなく、OpenCASCADE 自身が
-同じ形状について報告した数**です（`cylinder_nurbs` のみ、解析値 12566.3706
-に対する読み取り 12566.6236 で相対 2.0e-5）。
+これらの期待値は**このリポジトリが決めた数ではなく、解析解**です。8検体すべて
+1e-10 以内で乗ります。
+
+> ここには長らく「`cylinder_nurbs` のみ 12566.6236 で相対 2.0e-5」と書いて
+> ありました。4-19 でトリム B-spline の経路が直ったあと、**この行だけが
+> 古いまま残っていました**。写した数字は、カーネルが直っても、対象が
+> 変わっても、そのまま残ります（5章の同じ話を、この文書自身がやっていた
+> ことになります）。実測は 12566.3706 です。
+
+掃引面・楕円の検体を作ってあると、さらに3件が並びます（`SURFACE_OF_LINEAR_EXTRUSION`
+と `ELLIPSE` を読む経路。HANDOVER 4-38）。
+
+```
+occ_reference_revolved_ring.step    1 solid(s), 4 face(s), volume  1583.3627
+occ_reference_extruded_spline.step  1 solid(s), 6 face(s), volume  5220.4353
+occ_reference_elliptic_prism.step   1 solid(s), 3 face(s), volume  3958.4067
+```
 
 参照ファイルが無い場合は先に作ります。
 
 ```bash
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/occ_reference_export.py
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/occ_reference_swept.py
 ```
 
 ### 2-7. p-curve が本当に辺の上にあるか
@@ -631,6 +653,8 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `face_split_probe` | 一般の曲線で面を割ったとき、面積の和が元に戻るか |
 | `ssi_probe` | 交線が両曲面に乗るか、1本の曲線に当てはまるか |
 | `gear_probe` | 歯面の位置ずれと体積の差を、標本数ごとに並べる |
+| `tess_density_probe` | 三角形数が頼んだ分割数に対して素直に増えるか（比 17.5 倍・非単調を記録） |
+| `export_iges_suite` | IGES 5.3 の検体を書き出す（突き合わせは `tools/verify_iges.py`） |
 
 **不具合を追うための診断**
 
