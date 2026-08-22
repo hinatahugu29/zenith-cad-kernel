@@ -48,7 +48,9 @@ impl StepExporter {
         path: P,
         product_name: &str,
     ) -> std::io::Result<()> {
-        let content = Self::export_solids_to_string(std::slice::from_ref(solid), product_name);
+        let content =
+            Self::export_solids_to_string_checked(std::slice::from_ref(solid), product_name)
+                .map_err(|err| Error::new(ErrorKind::InvalidInput, err))?;
         if let Some(parent) = path.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -63,7 +65,8 @@ impl StepExporter {
         path: P,
         product_name: &str,
     ) -> std::io::Result<()> {
-        let content = Self::export_solids_to_string(solids, product_name);
+        let content = Self::export_solids_to_string_checked(solids, product_name)
+            .map_err(|err| Error::new(ErrorKind::InvalidInput, err))?;
         if let Some(parent) = path.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -94,7 +97,22 @@ impl StepExporter {
     }
 
     /// 複数SolidをSTEP形式の文字列として生成
+    ///
+    /// 書けない面が1枚でもあれば、**その面を飛ばした不完全な `CLOSED_SHELL` を
+    /// 返さない**。返り値が `String` で失敗を表せないので、STEP として読めない
+    /// 注釈だけの文字列を返す。理由を受け取りたい呼び出し側は
+    /// [`Self::export_solids_to_string_checked`] を使うこと。ファイルに書く口は
+    /// すべて `Result` を返すので、そちらでは失敗が握り潰されない。
     pub fn export_solids_to_string(solids: &[Solid], product_name: &str) -> String {
+        Self::export_solids_to_string_checked(solids, product_name)
+            .unwrap_or_else(|error| format!("/* Zenith STEP export failed: {error} */\n"))
+    }
+
+    /// 複数Solidを STEP 形式の文字列にする。面が1枚でも書けなければ理由を返す。
+    pub fn export_solids_to_string_checked(
+        solids: &[Solid],
+        product_name: &str,
+    ) -> Result<String, String> {
         let mut ctx = StepContext::new();
 
         // 1. プロダクト・コンテキスト定義（FreeCAD / OCCT 必須構造）
@@ -163,11 +181,10 @@ impl StepExporter {
         ));
 
         // 3. Shell内の各Faceのエンティティ生成（トポロジー共有）
-        let manifold_solid_ids: Vec<u64> = solids
-            .iter()
-            .enumerate()
-            .map(|(index, solid)| Self::write_solid_brep(&mut ctx, solid, product_name, index))
-            .collect();
+        let mut manifold_solid_ids = Vec::with_capacity(solids.len());
+        for (index, solid) in solids.iter().enumerate() {
+            manifold_solid_ids.push(Self::write_solid_brep(&mut ctx, solid, product_name, index)?);
+        }
         let representation_items = manifold_solid_ids
             .iter()
             .map(|id| format!("#{id}"))
@@ -199,7 +216,7 @@ impl StepExporter {
         }
 
         out.push_str("ENDSEC;\nEND-ISO-10303-21;\n");
-        out
+        Ok(out)
     }
 
     /// Shape 内の Solid 群をSTEP形式の文字列として生成
@@ -208,7 +225,7 @@ impl StepExporter {
         if solids.is_empty() {
             return Err("STEP export requires at least one Solid in the Shape".to_string());
         }
-        Ok(Self::export_solids_to_string(&solids, product_name))
+        Self::export_solids_to_string_checked(&solids, product_name)
     }
 
     fn write_solid_brep(
@@ -216,33 +233,32 @@ impl StepExporter {
         solid: &Solid,
         product_name: &str,
         index: usize,
-    ) -> u64 {
+    ) -> Result<u64, String> {
         let brep_name = if index == 0 {
             product_name.to_string()
         } else {
             format!("{product_name}_{index}")
         };
-        let outer_shell_id = Self::write_closed_shell(ctx, &solid.outer_shell);
+        let outer_shell_id = Self::write_closed_shell(ctx, &solid.outer_shell)?;
         if solid.inner_shells.is_empty() {
-            ctx.add_entity(&format!(
+            Ok(ctx.add_entity(&format!(
                 "MANIFOLD_SOLID_BREP('{}',#{})",
                 brep_name, outer_shell_id
-            ))
+            )))
         } else {
-            let oriented_void_ids = solid
-                .inner_shells
-                .iter()
-                .map(|inner_shell| {
-                    let shell_id = Self::write_closed_shell(ctx, inner_shell);
-                    ctx.add_entity(&format!("ORIENTED_CLOSED_SHELL('',*,#{},.F.)", shell_id))
-                })
-                .map(|id| format!("#{id}"))
-                .collect::<Vec<_>>()
-                .join(",");
-            ctx.add_entity(&format!(
+            let mut oriented_void_ids = Vec::with_capacity(solid.inner_shells.len());
+            for inner_shell in &solid.inner_shells {
+                let shell_id = Self::write_closed_shell(ctx, inner_shell)?;
+                let oriented =
+                    ctx.add_entity(&format!("ORIENTED_CLOSED_SHELL('',*,#{},.F.)", shell_id));
+                oriented_void_ids.push(format!("#{oriented}"));
+            }
+            Ok(ctx.add_entity(&format!(
                 "BREP_WITH_VOIDS('{}',#{},({}))",
-                brep_name, outer_shell_id, oriented_void_ids
-            ))
+                brep_name,
+                outer_shell_id,
+                oriented_void_ids.join(",")
+            )))
         }
     }
 
@@ -251,12 +267,13 @@ impl StepExporter {
         ctx.add_entity(&p_str)
     }
 
-    fn write_closed_shell(ctx: &mut StepContext, shell: &Shell) -> u64 {
-        let mut advanced_face_ids = Vec::new();
+    fn write_closed_shell(ctx: &mut StepContext, shell: &Shell) -> Result<u64, String> {
+        let mut advanced_face_ids = Vec::with_capacity(shell.faces.len());
         for face in &shell.faces {
-            if let Some(face_id) = Self::write_face(ctx, face) {
-                advanced_face_ids.push(face_id);
-            }
+            // 1枚でも書けなければ止める。書けなかった面を飛ばして残りで
+            // `CLOSED_SHELL` を組むと、閉じていないものを閉じていると称して
+            // 書き出すことになる。
+            advanced_face_ids.push(Self::write_face(ctx, face)?);
         }
 
         let face_list_str = advanced_face_ids
@@ -265,7 +282,7 @@ impl StepExporter {
             .collect::<Vec<_>>()
             .join(",");
 
-        ctx.add_entity(&format!("CLOSED_SHELL('',({}))", face_list_str))
+        Ok(ctx.add_entity(&format!("CLOSED_SHELL('',({}))", face_list_str)))
     }
 
     fn get_or_create_vertex(ctx: &mut StepContext, v: &zenith_topo::Vertex) -> u64 {
@@ -398,7 +415,7 @@ impl StepExporter {
     }
 
 
-    fn write_face(ctx: &mut StepContext, face: &Face) -> Option<u64> {
+    fn write_face(ctx: &mut StepContext, face: &Face) -> Result<u64, String> {
         let surface_id = match &face.geometry {
             FaceGeometry::Plane(plane) => {
                 let loc_id = Self::write_point(ctx, plane.origin);
@@ -419,7 +436,18 @@ impl StepExporter {
                 ctx.add_entity(&format!("PLANE('',#{})", axis2_id))
             }
             FaceGeometry::Nurbs(nurbs) => Self::write_nurbs_surface(ctx, nurbs),
-            _ => return None,
+
+            // STEP は `B_SPLINE_SURFACE` しか受け取らないので、制御点の格子を
+            // 持たない曲面は NURBS に起こしてから書く。
+            //
+            // ここは以前 `_ => return None` だった。返り値の `None` は
+            // `write_closed_shell` が黙って捨てるので、**面が1枚も欠けていない
+            // ふりをした `CLOSED_SHELL` が書き出されていた**。実測では
+            // `ThickenBuilder` が Coons パッチで作る6面の立体が、STEP では
+            // 4面になっていた（`step_faces_test`）。エラーにもならない。
+            FaceGeometry::Coons(coons) => Self::write_sampled_surface(ctx, coons)?,
+            FaceGeometry::Gordon(gordon) => Self::write_sampled_surface(ctx, gordon)?,
+            FaceGeometry::Triangular(patch) => Self::write_sampled_surface(ctx, patch)?,
         };
 
         // B-Rep EDGE_LOOP トポロジーの構築
@@ -450,7 +478,21 @@ impl StepExporter {
             bounds_str, surface_id, same_sense
         ));
 
-        Some(adv_face_id)
+        Ok(adv_face_id)
+    }
+
+    /// 制御点の格子を持たない曲面を、標本した NURBS として書く。
+    ///
+    /// 標本の細かさは、面の境界がどのくらい細かく刻まれているかとは独立に
+    /// 決めてよい。トリムは境界ワイヤ（3D の辺）が担っており、ここで書くのは
+    /// その辺が乗る土台だけだからである。
+    fn write_sampled_surface(
+        ctx: &mut StepContext,
+        surface: &dyn zenith_geom::Surface3,
+    ) -> Result<u64, String> {
+        const SAMPLES: usize = 12;
+        let nurbs = NurbsSurface3::approximate_surface(surface, SAMPLES, SAMPLES)?;
+        Ok(Self::write_nurbs_surface(ctx, &nurbs))
     }
 
     fn compress_knots(raw_knots: &[f64]) -> (Vec<u32>, Vec<f64>) {

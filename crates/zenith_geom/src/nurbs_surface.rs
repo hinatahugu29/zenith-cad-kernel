@@ -184,6 +184,62 @@ impl NurbsSurface3 {
         Self::new(degree_u, degree_v, control_points, knots_u, knots_v)
     }
 
+    /// 任意の [`Surface3`] を格子で標本し、その点を通る NURBS 曲面を起こす。
+    ///
+    /// Coons / Gordon / 三角パッチのように、制御点の格子を持たない曲面を
+    /// NURBS しか表せない相手（STEP の `B_SPLINE_SURFACE`）へ渡すための口。
+    ///
+    /// 標本点の上では厳密に一致し、その間は補間の精度で近づく。**近似である
+    /// ことを隠さないために、呼び出し側で偏差を測れるようにしてある**
+    /// （`deviation_from` を参照）。格子を細かくすれば偏差は下がる。
+    pub fn approximate_surface(
+        surface: &dyn crate::surface::Surface3,
+        samples_u: usize,
+        samples_v: usize,
+    ) -> Result<Self, String> {
+        let samples_u = samples_u.max(4);
+        let samples_v = samples_v.max(4);
+        let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+        if !(u_max > u_min && v_max > v_min) {
+            return Err("surface has an empty parameter range".to_string());
+        }
+
+        let mut grid = Vec::with_capacity(samples_u);
+        for i in 0..samples_u {
+            let u = u_min + (u_max - u_min) * i as f64 / (samples_u - 1) as f64;
+            let mut row = Vec::with_capacity(samples_v);
+            for j in 0..samples_v {
+                let v = v_min + (v_max - v_min) * j as f64 / (samples_v - 1) as f64;
+                row.push(surface.evaluate(u, v));
+            }
+            grid.push(row);
+        }
+
+        Self::interpolate_points(3, 3, &grid)
+    }
+
+    /// この曲面と `other` の隔たりを、両者のパラメータ域を正規化して測る。
+    ///
+    /// [`Self::approximate_surface`] が「どのくらい近いか」を、主張ではなく
+    /// 数で言えるようにするためのもの。
+    pub fn deviation_from(&self, other: &dyn crate::surface::Surface3, samples: usize) -> f64 {
+        let samples = samples.max(2);
+        let ((su_min, su_max), (sv_min, sv_max)) = self.param_range();
+        let ((ou_min, ou_max), (ov_min, ov_max)) = other.param_range();
+        let mut worst: f64 = 0.0;
+        for i in 0..samples {
+            let t = i as f64 / (samples - 1) as f64;
+            for j in 0..samples {
+                let s = j as f64 / (samples - 1) as f64;
+                let mine = self.evaluate(su_min + (su_max - su_min) * t, sv_min + (sv_max - sv_min) * s);
+                let theirs =
+                    other.evaluate(ou_min + (ou_max - ou_min) * t, ov_min + (ov_max - ov_min) * s);
+                worst = worst.max((mine - theirs).norm());
+            }
+        }
+        worst
+    }
+
     /// `u` の位置で2枚のパッチに分割する。
     ///
     /// 各 v 列を1本の曲線として同じ分割にかけるので、有理の重みも保たれる。
