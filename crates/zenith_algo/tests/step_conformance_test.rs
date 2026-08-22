@@ -214,3 +214,75 @@ fn test_every_complex_entity_instance_is_parenthesised() {
         );
     }
 }
+
+/// 稜の 2D 境界（p-curve）を書いているか、そして構造が正しいか。
+///
+/// ここには長らく「p-curve は出さない。OCC 自身も出さないし、無くても
+/// 往復する」と書いてありました。往復するのは本当ですが、それは
+/// OpenCASCADE が 2D 境界を自分で求め直せるからで、求め直さない読み手には
+/// 効きません。
+///
+/// 構造の要は「1本の稜につき、それを使う面の数だけ p-curve が並ぶ」ことです。
+/// 閉じた多様体では稜はちょうど2枚に共有されるので、`SURFACE_CURVE` ごとに
+/// `PCURVE` はちょうど2本になります。1本しか無ければ、片側の面の 2D 境界を
+/// 落としています。
+#[test]
+fn test_every_edge_carries_a_pcurve_for_each_face_that_uses_it() {
+    for (name, solid) in [
+        ("BOX", PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap()),
+        ("CYL", PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap()),
+        ("SPH", PrimitiveBuilder::make_sphere(10.0).unwrap()),
+        (
+            "DRILLED",
+            HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).unwrap(),
+        ),
+    ] {
+        let step = export(name, &solid);
+
+        let edge_curves = step.matches("= EDGE_CURVE").count();
+        let surface_curves = step.matches("= SURFACE_CURVE").count();
+        assert_eq!(
+            surface_curves, edge_curves,
+            "{name}: every edge should carry its 2D boundary, \
+             {surface_curves} of {edge_curves} do"
+        );
+
+        for line in step.lines().filter(|line| line.contains("= SURFACE_CURVE")) {
+            // SURFACE_CURVE('',#3d,(#p1,#p2),.PCURVE_S1.)
+            let inside = line
+                .split_once(",(")
+                .and_then(|(_, rest)| rest.split_once("),"))
+                .map(|(list, _)| list)
+                .unwrap_or("");
+            let count = inside.split(',').filter(|part| part.trim().starts_with('#')).count();
+            assert_eq!(
+                count, 2,
+                "{name}: an edge is shared by two faces, so it needs two p-curves; \
+                 this one has {count}: {line}"
+            );
+        }
+    }
+}
+
+/// 2D 曲線は 2 座標で書くこと。
+///
+/// `CARTESIAN_POINT` に 3 つ書くと、読み手は 3D 曲線として解釈して
+/// パラメータ空間の点にならない。
+#[test]
+fn test_parametric_points_have_two_coordinates() {
+    let step = export("CYL", &PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap());
+    assert!(
+        step.contains("PARAMETRIC_REPRESENTATION_CONTEXT()"),
+        "the 2D curves need a parametric context to live in"
+    );
+    // `CARTESIAN_POINT('',(u,v))` はカンマが2つ、3D は3つ。
+    let two_coordinate_points = step
+        .lines()
+        .filter(|line| line.contains("= CARTESIAN_POINT"))
+        .filter(|line| line.matches(',').count() == 2)
+        .count();
+    assert!(
+        two_coordinate_points > 0,
+        "writing p-curves means writing points in 2D"
+    );
+}

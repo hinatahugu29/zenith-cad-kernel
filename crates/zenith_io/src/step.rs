@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
-use zenith_geom::{NurbsCurve3, NurbsSurface3};
+use zenith_geom::{NurbsCurve2, NurbsCurve3, NurbsSurface3};
 use zenith_math::Point3;
 use zenith_topo::{
     Face, FaceGeometry, Shape, Shell, Solid, Wire,
@@ -16,6 +16,15 @@ struct StepContext {
     lines: Vec<String>,
     vertex_map: HashMap<u64, u64>, // Vertex ID -> STEP Vertex ID
     edge_map: HashMap<u64, u64>,   // Edge ID -> STEP EdgeCurve ID
+    /// 稜ごとの p-curve。`(その面の曲面の STEP id, その面での 2D 曲線)`。
+    ///
+    /// 稜は2枚の面に共有されるので、ここには最大2件入る。`SURFACE_CURVE` は
+    /// 3D 曲線とこの一覧を並べて持つ。
+    edge_pcurves: HashMap<u64, Vec<(u64, NurbsCurve2)>>,
+    /// 面ごとに先に書いておいた曲面の STEP id。
+    face_surface: HashMap<u64, u64>,
+    /// 2D パラメータ空間の表現コンテキスト。1つだけ作って使い回す。
+    parametric_context: Option<u64>,
 }
 
 impl StepContext {
@@ -25,7 +34,22 @@ impl StepContext {
             lines: Vec::new(),
             vertex_map: HashMap::new(),
             edge_map: HashMap::new(),
+            edge_pcurves: HashMap::new(),
+            face_surface: HashMap::new(),
+            parametric_context: None,
         }
+    }
+
+    /// 2D パラメータ空間の表現コンテキスト。`DEFINITIONAL_REPRESENTATION` が要る。
+    fn parametric_context(&mut self) -> u64 {
+        if let Some(id) = self.parametric_context {
+            return id;
+        }
+        let id = self.add_entity(
+            "( GEOMETRIC_REPRESENTATION_CONTEXT(2) PARAMETRIC_REPRESENTATION_CONTEXT() REPRESENTATION_CONTEXT('2D Space','') )",
+        );
+        self.parametric_context = Some(id);
+        id
     }
 
     fn next_id(&mut self) -> u64 {
@@ -180,7 +204,10 @@ impl StepExporter {
             origin_pt_id, z_axis_id, x_axis_id
         ));
 
-        // 3. Shell内の各Faceのエンティティ生成（トポロジー共有）
+        // 3. 面の曲面を先に書き、稜ごとの p-curve を集める。
+        Self::plan_surfaces_and_pcurves(&mut ctx, solids);
+
+        // 4. Shell内の各Faceのエンティティ生成（トポロジー共有）
         let mut manifold_solid_ids = Vec::with_capacity(solids.len());
         for (index, solid) in solids.iter().enumerate() {
             manifold_solid_ids.push(Self::write_solid_brep(&mut ctx, solid, product_name, index)?);
@@ -267,6 +294,154 @@ impl StepExporter {
         ctx.add_entity(&p_str)
     }
 
+    /// 面の曲面を先に書き、稜ごとの p-curve を集める。
+    ///
+    /// `SURFACE_CURVE` は3D曲線と、その稜を使うすべての面での 2D 曲線を並べて
+    /// 持つ。稜は面より先に書かれるので、**面の曲面の id が先に要る**。だから
+    /// 曲面だけを先に一巡して書いておく。
+    ///
+    /// p-curve を書くのは、トリムされた B-spline 面を受け取る側が 2D 境界を
+    /// 自分で求め直さずに済むからである。書いた 2D 曲線が 3D の辺とずれて
+    /// いれば受け側は割れるが、ここで書くのは `Face::pcurves`——
+    /// `pcurve_fidelity_probe` が全標本で 3e-12 以内を見張っているもの——なので、
+    /// 3D と 2D の2つの経路が食い違う心配は、その見張りに預けてある。
+    fn plan_surfaces_and_pcurves(ctx: &mut StepContext, solids: &[Solid]) {
+
+        for solid in solids {
+            for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
+                for face in &shell.faces {
+                    let Some(surface_id) = Self::write_surface_of(ctx, face) else {
+                        continue;
+                    };
+                    ctx.face_surface.insert(face.id, surface_id);
+
+                    // **面が持っている p-curve だけを書く。導出したものは
+                    // 書かない。**
+                    //
+                    // 導出は「その辺を面に射影し直す」ことなので、答えは射影の
+                    // 精度で決まる。実測すると、そこが効きます。他カーネルから
+                    // 読んだ球を書き戻したときの体積の相対誤差:
+                    //
+                    // | 検体 | p-curve なし | 導出して書く | 保持ぶんだけ書く |
+                    // | :--- | ---: | ---: | ---: |
+                    // | sphere | 1.19e-13 | 1.71e-10 | 1.19e-13 |
+                    // | sphere_capped | 1.74e-12 | 5.43e-10 | 1.74e-12 |
+                    //
+                    // 受け手は書いてある 2D 境界を使うので、こちらが導出で
+                    // 作った粗いほうを渡すと、**受け手が自分で求め直したほうが
+                    // 良かった**という結果になります。自前ビルダーの面は
+                    // 検証済みの p-curve を持っている（`pcurve_fidelity_probe`
+                    // が全標本で 3e-12 以内を見張る）ので、そちらは書きます。
+                    let Some(pcurves) = &face.pcurves else {
+                        continue;
+                    };
+                    for pcurve_loop in std::iter::once(&pcurves.outer_loop)
+                        .chain(pcurves.inner_loops.iter())
+                    {
+                        for segment in &pcurve_loop.segments {
+                            ctx.edge_pcurves
+                                .entry(segment.edge_id)
+                                .or_default()
+                                .push((surface_id, segment.curve.clone()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// 面の支持曲面だけを書く。書けない面は `None`。
+    fn write_surface_of(ctx: &mut StepContext, face: &Face) -> Option<u64> {
+        match &face.geometry {
+            FaceGeometry::Plane(plane) => {
+                let loc_id = Self::write_point(ctx, plane.origin);
+                let n = plane.normal.normalize();
+                let u = plane.u_axis.normalize();
+                let z_dir_id = ctx.add_entity(&format!(
+                    "DIRECTION('',({:.12},{:.12},{:.12}))",
+                    n.x, n.y, n.z
+                ));
+                let x_dir_id = ctx.add_entity(&format!(
+                    "DIRECTION('',({:.12},{:.12},{:.12}))",
+                    u.x, u.y, u.z
+                ));
+                let axis2_id = ctx.add_entity(&format!(
+                    "AXIS2_PLACEMENT_3D('',#{},#{},#{})",
+                    loc_id, z_dir_id, x_dir_id
+                ));
+                Some(ctx.add_entity(&format!("PLANE('',#{})", axis2_id)))
+            }
+            FaceGeometry::Nurbs(nurbs) => Some(Self::write_nurbs_surface(ctx, nurbs)),
+            FaceGeometry::Coons(coons) => Self::write_sampled_surface(ctx, coons).ok(),
+            FaceGeometry::Gordon(gordon) => Self::write_sampled_surface(ctx, gordon).ok(),
+            FaceGeometry::Triangular(patch) => Self::write_sampled_surface(ctx, patch).ok(),
+        }
+    }
+
+    /// パラメータ空間の 2D 曲線。
+    fn write_nurbs_curve_2d(ctx: &mut StepContext, curve: &NurbsCurve2) -> u64 {
+        let mut is_rational = false;
+        let mut pt_ids = Vec::with_capacity(curve.control_points.len());
+        let mut weights = Vec::with_capacity(curve.control_points.len());
+        for cp in &curve.control_points {
+            if (cp.weight - 1.0).abs() > 1e-6 {
+                is_rational = true;
+            }
+            let id = ctx.add_entity(&format!(
+                "CARTESIAN_POINT('',({:.12},{:.12}))",
+                cp.point.x, cp.point.y
+            ));
+            pt_ids.push(format!("#{id}"));
+            weights.push(format!("{:.12}", cp.weight));
+        }
+
+        let (mults, knots) = Self::compress_knots(&curve.knots.knots);
+        let mult_str = mults
+            .iter()
+            .map(|m| m.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let knot_str = knots
+            .iter()
+            .map(|k| format!("{k:.12}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        let points = pt_ids.join(",");
+
+        if is_rational {
+            ctx.add_entity(&format!(
+                "( BOUNDED_CURVE() B_SPLINE_CURVE({},({}),.UNSPECIFIED.,.F.,.F.) B_SPLINE_CURVE_WITH_KNOTS(({}),({}),.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_CURVE(({})) REPRESENTATION_ITEM('') )",
+                curve.degree,
+                points,
+                mult_str,
+                knot_str,
+                weights.join(",")
+            ))
+        } else {
+            ctx.add_entity(&format!(
+                "B_SPLINE_CURVE_WITH_KNOTS('',{},({}),.UNSPECIFIED.,.F.,.F.,({}),({}),.UNSPECIFIED.)",
+                curve.degree, points, mult_str, knot_str
+            ))
+        }
+    }
+
+    /// 稜の 2D 境界を、その稜を使う面ごとに `PCURVE` として書く。
+    fn write_pcurves_for_edge(ctx: &mut StepContext, edge_id: u64) -> Vec<u64> {
+        let Some(entries) = ctx.edge_pcurves.get(&edge_id).cloned() else {
+            return Vec::new();
+        };
+        let mut out = Vec::with_capacity(entries.len());
+        for (surface_id, curve) in entries {
+            let curve_id = Self::write_nurbs_curve_2d(ctx, &curve);
+            let context_id = ctx.parametric_context();
+            let definition = ctx.add_entity(&format!(
+                "DEFINITIONAL_REPRESENTATION('',(#{curve_id}),#{context_id})"
+            ));
+            out.push(ctx.add_entity(&format!("PCURVE('',#{surface_id},#{definition})")));
+        }
+        out
+    }
+
     fn write_closed_shell(ctx: &mut StepContext, shell: &Shell) -> Result<u64, String> {
         let mut advanced_face_ids = Vec::with_capacity(shell.faces.len());
         for face in &shell.faces {
@@ -307,6 +482,23 @@ impl StepExporter {
             edge.start_vertex.point,
             edge.end_vertex.point,
         );
+
+        // 2D 境界を持っているなら、3D 曲線と並べて `SURFACE_CURVE` にする。
+        // 受け側は好きなほうを使える。`.PCURVE_S1.` は「面のパラメータ側を
+        // 主とみなす」という宣言で、書き手が両方を持っているときの慣行。
+        let pcurve_ids = Self::write_pcurves_for_edge(ctx, edge.id);
+        let curve_id = if pcurve_ids.is_empty() {
+            curve_id
+        } else {
+            let list = pcurve_ids
+                .iter()
+                .map(|id| format!("#{id}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            ctx.add_entity(&format!(
+                "SURFACE_CURVE('',#{curve_id},({list}),.PCURVE_S1.)"
+            ))
+        };
 
         let edge_curve_id = ctx.add_entity(&format!(
             "EDGE_CURVE('',#{},#{},#{},.T.)",
@@ -388,11 +580,13 @@ impl StepExporter {
 
     /// Writes a wire as an EDGE_LOOP of shared ORIENTED_EDGEs.
     ///
-    /// No p-curves are emitted. That was checked rather than assumed: OCC's own
-    /// STEP writer emits none either, and a plane trimmed by rational spline
-    /// arcs round-trips through OpenCASCADE exactly without them. What the
-    /// reader does need is the complete complex entity declaration on the
-    /// curves themselves - see `write_edge_curve_geometry`.
+    /// 稜が 2D 境界を持っていれば、その 3D 曲線は `SURFACE_CURVE` に包まれ、
+    /// 面ごとの `PCURVE` が並ぶ（`get_or_create_edge_curve`）。
+    ///
+    /// ここには以前「p-curve は出さない。OCC 自身も出さないし、無くても
+    /// 往復する」と書いてありました。往復するのは本当ですが、それは
+    /// OpenCASCADE が 2D 境界を自分で求め直せるからで、求め直さない読み手には
+    /// 効きません。いまは出しています。
     fn write_edge_loop(ctx: &mut StepContext, wire: &Wire) -> u64 {
         let mut oriented_edge_ids = Vec::with_capacity(wire.edges.len());
 
@@ -416,39 +610,27 @@ impl StepExporter {
 
 
     fn write_face(ctx: &mut StepContext, face: &Face) -> Result<u64, String> {
-        let surface_id = match &face.geometry {
-            FaceGeometry::Plane(plane) => {
-                let loc_id = Self::write_point(ctx, plane.origin);
-                let n = plane.normal.normalize();
-                let u = plane.u_axis.normalize();
-                let z_dir_id = ctx.add_entity(&format!(
-                    "DIRECTION('',({:.12},{:.12},{:.12}))",
-                    n.x, n.y, n.z
-                ));
-                let x_dir_id = ctx.add_entity(&format!(
-                    "DIRECTION('',({:.12},{:.12},{:.12}))",
-                    u.x, u.y, u.z
-                ));
-                let axis2_id = ctx.add_entity(&format!(
-                    "AXIS2_PLACEMENT_3D('',#{},#{},#{})",
-                    loc_id, z_dir_id, x_dir_id
-                ));
-                ctx.add_entity(&format!("PLANE('',#{})", axis2_id))
-            }
-            FaceGeometry::Nurbs(nurbs) => Self::write_nurbs_surface(ctx, nurbs),
-
-            // STEP は `B_SPLINE_SURFACE` しか受け取らないので、制御点の格子を
-            // 持たない曲面は NURBS に起こしてから書く。
-            //
-            // ここは以前 `_ => return None` だった。返り値の `None` は
-            // `write_closed_shell` が黙って捨てるので、**面が1枚も欠けていない
-            // ふりをした `CLOSED_SHELL` が書き出されていた**。実測では
-            // `ThickenBuilder` が Coons パッチで作る6面の立体が、STEP では
-            // 4面になっていた（`step_faces_test`）。エラーにもならない。
-            FaceGeometry::Coons(coons) => Self::write_sampled_surface(ctx, coons)?,
-            FaceGeometry::Gordon(gordon) => Self::write_sampled_surface(ctx, gordon)?,
-            FaceGeometry::Triangular(patch) => Self::write_sampled_surface(ctx, patch)?,
-        };
+        // 曲面は `plan_surfaces_and_pcurves` が先に書いている。稜が
+        // `SURFACE_CURVE` から曲面を指すので、面より先に必要だった。
+        //
+        // 書けない面はここでエラーになる。以前は `write_face` が `None` を返し、
+        // `write_closed_shell` がそれを黙って捨てていたので、**面が1枚も欠けて
+        // いないふりをした `CLOSED_SHELL`** が書き出されていた。実測では
+        // `ThickenBuilder` が Coons パッチで作る6面の立体が STEP では4面に
+        // なっていた（`step_face_parity_test`）。
+        let surface_id = *ctx.face_surface.get(&face.id).ok_or_else(|| {
+            format!(
+                "face {} has a surface this exporter cannot write ({})",
+                face.id,
+                match &face.geometry {
+                    FaceGeometry::Plane(_) => "plane",
+                    FaceGeometry::Nurbs(_) => "nurbs",
+                    FaceGeometry::Coons(_) => "coons",
+                    FaceGeometry::Gordon(_) => "gordon",
+                    FaceGeometry::Triangular(_) => "triangular",
+                }
+            )
+        })?;
 
         // B-Rep EDGE_LOOP トポロジーの構築
         let mut bound_ids = Vec::new();
