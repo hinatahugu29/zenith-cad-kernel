@@ -344,7 +344,7 @@ cargo test --release --workspace --exclude zenith_py \
 | `step_import_audit` | 診断 | 数字を読む |
 | `pcurve_fidelity_probe` | 診断 | 数字を読む |
 | `mass_convergence` / `slice_probe` | 診断 | 数字を読む |
-| `verify_reexport.py` | **ゲート**（非ゼロ終了） | 解析解と 1e-6 以内かを見る |
+| `verify_reexport.py` | **ゲート**（非ゼロ終了） | 解析解と 1e-8 以内かを見る（4-41 で 1e-6 から締めた） |
 | `regularize_probe` | 診断 | 全周を刻んで形が動いていないか |
 | `pcurve_derivation_probe` | 診断 | p-curve を導出し直すと答えが変わる面 |
 | `interference_probe` | 診断 | 干渉判定が答えの分かる配置で何と言うか |
@@ -653,7 +653,8 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `face_split_probe` | 一般の曲線で面を割ったとき、面積の和が元に戻るか |
 | `ssi_probe` | 交線が両曲面に乗るか、1本の曲線に当てはまるか |
 | `gear_probe` | 歯面の位置ずれと体積の差を、標本数ごとに並べる |
-| `tess_density_probe` | 三角形数が頼んだ分割数に対して素直に増えるか（比 17.5 倍・非単調を記録） |
+| `tess_density_probe` | 三角形数が頼んだ分割数に対して素直に増えるか（いま比 1.00・単調） |
+| `foreign_boolean_probe` | **他カーネルの立体を読んで切る**。恒等式 `V(A-B)+V(A^B)=V(A)` と包除で見るので、切った形の閉じた式は要りません |
 | `export_iges_suite` | IGES 5.3 の検体を書き出す（突き合わせは `tools/verify_iges.py`） |
 
 **不具合を追うための診断**
@@ -667,6 +668,8 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `coplanar_probe` | 同一平面で重なる面のペアと法線の向き |
 | `uv_domain_probe` / `surface_smoothness_probe` | テッセレーションの被覆と曲面評価の不連続 |
 | `imported_curve_probe` | インポーターが再構成した曲線・面の中身 |
+| `foreign_tess_focus <検体> <分割>` | 読んだ立体を1つだけテッセレーションし、所要・三角形数・境界箱を出す（**境界箱が潰れていれば面が欠けています**） |
+| `foreign_boolean_focus <検体> <slab\|drill\|corner> <演算>` | 組を1つだけ走らせ、各段を**即座に吐く**（返ってこない段を名指しするため） |
 
 すべて `cargo run --release -p zenith_algo --example <名前>` で実行します。
 
