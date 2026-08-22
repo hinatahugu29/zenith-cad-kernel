@@ -344,16 +344,32 @@ fn point_triangle(point: Point3, triangle: &[Point3; 3]) -> (f64, Point3) {
 /// 1点だけでは、その点がたまたま食い込んでいる側かどうかに答えが乗る。
 /// 両方のメッシュから間引いて複数点を見る。
 pub(crate) fn overlaps(mesh_a: &TriangleMesh, mesh_b: &TriangleMesh, margin: f64) -> bool {
-    const SAMPLES: usize = 512;
     let probe = |from: &TriangleMesh, into: &TriangleMesh| -> bool {
         if from.positions.is_empty() || into.indices.is_empty() {
             return false;
         }
-        let stride = (from.positions.len() / SAMPLES).max(1);
-        from.positions.iter().step_by(stride).any(|point| {
-            // 面の上に乗った点は、射線の偶奇では内とも外とも出る。**深さ**を
-            // 見て、境界の上の点（面を共有して触れているだけの立体）を
-            // 食い込みと言わないようにする。
+        let mut min_into = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut max_into = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for p in &into.positions {
+            min_into.x = min_into.x.min(p.x);
+            min_into.y = min_into.y.min(p.y);
+            min_into.z = min_into.z.min(p.z);
+            max_into.x = max_into.x.max(p.x);
+            max_into.y = max_into.y.max(p.y);
+            max_into.z = max_into.z.max(p.z);
+        }
+
+        from.positions.iter().any(|point| {
+            // AABBで素早く事前除外
+            if point.x < min_into.x - margin
+                || point.x > max_into.x + margin
+                || point.y < min_into.y - margin
+                || point.y > max_into.y + margin
+                || point.z < min_into.z - margin
+                || point.z > max_into.z + margin
+            {
+                return false;
+            }
             crate::BooleanEngine::is_point_inside_mesh(*point, into)
                 && distance_to_mesh(*point, into) > margin
         })

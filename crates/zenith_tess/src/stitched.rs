@@ -647,8 +647,8 @@ fn grid_patch(
 fn build_grid_mesh(
     surface: &zenith_geom::NurbsSurface3,
     orientation: Orientation,
-    params: &TessellationParams,
-    mut uvs: Vec<Point2>,
+    _params: &TessellationParams,
+    uvs: Vec<Point2>,
     fixed: Vec<Option<Point3>>,
     rows: usize,
     columns: usize,
@@ -683,13 +683,8 @@ fn build_grid_mesh(
         );
     }
 
-    crate::surface_tess::refine_uv_triangulation_protected(
-        surface,
-        params,
-        &mut uvs,
-        &mut triangles,
-        &protected,
-    );
+    // 構造格子は既に境界エッジと整合した解像度を持っているため、
+    // 格子内部の不規則な最長辺二分細分はスキップし、規則的トポロジーを保つ。
 
     let mut mesh = TriangleMesh::new();
     for (index, uv) in uvs.iter().enumerate() {

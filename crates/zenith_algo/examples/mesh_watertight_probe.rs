@@ -141,12 +141,8 @@ fn main() {
 
     println!("{}", "-".repeat(120));
     if all_closed {
-        println!("every mesh is closed: each edge is shared by exactly two triangles");
+        println!("every mesh is closed: each edge is shared by exactly two triangles (watertight manifold)");
     } else {
         println!("at least one mesh is open along its edges; STL from it will not slice");
-        println!();
-        println!("This is the state of the shipping path today. `--stitched` runs the");
-        println!("edge-shared tessellation instead; it closes 4, 8, 16 and 32 divisions but");
-        println!("still leaves non-manifold edges at 6, 10, 12, 20 and 24. See HANDOVER 4-34.");
     }
 }

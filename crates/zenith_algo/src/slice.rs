@@ -37,8 +37,8 @@ pub struct SectionSliceResult {
 /// 円柱・球のような有理NURBS面はこの分割数で内接多角形近似されるため、
 /// 断面積の相対誤差はおおよそ (pi^2 / 3) / n^2 のオーダーで縮む。
 pub const DEFAULT_SECTION_TESSELLATION: TessellationParams = TessellationParams {
-    u_divisions: 96,
-    v_divisions: 96,
+    u_divisions: 128,
+    v_divisions: 128,
 };
 
 pub struct SectionSlicer;

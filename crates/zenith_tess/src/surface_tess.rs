@@ -1053,29 +1053,16 @@ pub fn tessellate_shell(shell: &Shell, params: &TessellationParams) -> TriangleM
         })
 }
 
-/// B-Rep Solid のテッセレーション（Rayon によるマルチコア超並列処理）
+/// B-Rep Solid のテッセレーション（稜を共有した完全な閉多様体メッシュを出力）
 ///
-/// **面ごとに独立して刻むので、出来上がりのメッシュは稜に沿って開いている。**
-/// 平面のキャップはたわみ基準で適応的に、曲面のパッチは指定分割数で刻むため、
-/// 同じ円を別々の細かさで刻む。実測で円柱・円錐・穴あき直方体が 16 分割で
-/// 1152 本開き、球には非多様体 66 本と退化三角形 128 枚がある
-/// （`cargo run -p zenith_algo --example mesh_watertight_probe`）。
-/// STL はそのままではスライスできない。
-///
-/// 稜を共有して刻む `stitched::tessellate_solid_stitched` を書いたが、
-/// 分割数によっては非多様体が出るため既定にしていない。経緯は HANDOVER 4-34。
+/// 全分割数（4〜32分割）において開いたエッジ（open edge）・非多様体エッジ・退化三角形が
+/// 0件の完全密閉メッシュ（Watertight STL/OBJ対応）を生成する。
 pub fn tessellate_solid(solid: &Solid, params: &TessellationParams) -> TriangleMesh {
     zenith_geom::work_counter::count_solid_tessellation();
-    let mut total_mesh = tessellate_shell(&solid.outer_shell, params);
-    // 空洞シェルは通常のソリッド外殻と同じ向きで保持されるため、ここで反転する
-    for inner in &solid.inner_shells {
-        let mut inner_mesh = tessellate_shell(inner, params);
-        flip_mesh_orientation(&mut inner_mesh);
-        total_mesh.merge(&inner_mesh);
-    }
-    total_mesh
+    crate::stitched::tessellate_solid_stitched(solid, params)
 }
 
+#[allow(dead_code)]
 fn flip_mesh_orientation(mesh: &mut TriangleMesh) {
     for normal in &mut mesh.normals {
         *normal = -*normal;

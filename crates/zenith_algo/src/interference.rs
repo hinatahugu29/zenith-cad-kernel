@@ -155,15 +155,31 @@ impl InterferenceChecker {
 
         // 3. 食い込んでいないなら、触れているか離れているか。距離は B-Rep の面
         //    まで詰めた値を使う（メッシュの弦のままでは曲面で刻みの誤差が乗る）。
-        let distance =
-            crate::DistanceEngine::compute_min_distance(solid_a, solid_b, tol).min_distance;
+        let dist_res = crate::DistanceEngine::compute_min_distance(solid_a, solid_b, tol);
+        let distance = dist_res.min_distance;
         if distance <= tol.linear {
-            InterferenceReport {
-                status: ClashStatus::Touching,
-                min_distance: 0.0,
-                overlap_volume: 0.0,
-                sample_divisions: divisions,
-                message: "Solids touch without overlapping".to_string(),
+            // 最近傍点が相手ソリッドの内部（深さ > tol.linear）に入っていれば浅い食い込み（Clash）
+            let in_b = crate::BooleanEngine::is_point_inside_mesh(dist_res.closest_point_a, &mesh_b)
+                && distance_to_mesh_point(dist_res.closest_point_a, &mesh_b) > tol.linear;
+            let in_a = crate::BooleanEngine::is_point_inside_mesh(dist_res.closest_point_b, &mesh_a)
+                && distance_to_mesh_point(dist_res.closest_point_b, &mesh_a) > tol.linear;
+
+            if in_b || in_a {
+                InterferenceReport {
+                    status: ClashStatus::Clash,
+                    min_distance: 0.0,
+                    overlap_volume: volume,
+                    sample_divisions: divisions,
+                    message: "Solids overlap, detected at surface projection point".to_string(),
+                }
+            } else {
+                InterferenceReport {
+                    status: ClashStatus::Touching,
+                    min_distance: 0.0,
+                    overlap_volume: 0.0,
+                    sample_divisions: divisions,
+                    message: "Solids touch without overlapping".to_string(),
+                }
             }
         } else {
             InterferenceReport {
@@ -300,4 +316,60 @@ fn overlap_volume_estimate(
     }
 
     inside_both as f64 * cell.x * cell.y * cell.z
+}
+
+/// 点からメッシュ表面までの最短距離
+fn distance_to_mesh_point(point: Point3, mesh: &TriangleMesh) -> f64 {
+    let mut best = f64::INFINITY;
+    for triangle in &mesh.indices {
+        let corners = [
+            mesh.positions[triangle[0] as usize],
+            mesh.positions[triangle[1] as usize],
+            mesh.positions[triangle[2] as usize],
+        ];
+        let p0 = corners[0];
+        let p1 = corners[1];
+        let p2 = corners[2];
+        let v0 = p1 - p0;
+        let v1 = p2 - p0;
+        let v2 = point - p0;
+        let d00 = v0.dot(&v0);
+        let d01 = v0.dot(&v1);
+        let d11 = v1.dot(&v1);
+        let d20 = v2.dot(&v0);
+        let d21 = v2.dot(&v1);
+        let denom = d00 * d11 - d01 * d01;
+        let (u, v) = if denom.abs() > 1e-18 {
+            ((d11 * d20 - d01 * d21) / denom, (d00 * d21 - d01 * d20) / denom)
+        } else {
+            (0.0, 0.0)
+        };
+        let closest = if u >= 0.0 && v >= 0.0 && u + v <= 1.0 {
+            p0 + v0 * u + v1 * v
+        } else {
+            let seg = |a: Point3, b: Point3| {
+                let ab = b - a;
+                let t = ((point - a).dot(&ab) / ab.dot(&ab)).clamp(0.0, 1.0);
+                a + ab * t
+            };
+            let c0 = seg(p0, p1);
+            let c1 = seg(p1, p2);
+            let c2 = seg(p2, p0);
+            let d0 = (point - c0).norm();
+            let d1 = (point - c1).norm();
+            let d2 = (point - c2).norm();
+            if d0 <= d1 && d0 <= d2 {
+                c0
+            } else if d1 <= d2 {
+                c1
+            } else {
+                c2
+            }
+        };
+        let distance = (point - closest).norm();
+        if distance < best {
+            best = distance;
+        }
+    }
+    best
 }
