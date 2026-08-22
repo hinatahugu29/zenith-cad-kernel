@@ -139,3 +139,78 @@ fn test_curved_solids_export_a_manifold_solid_brep() {
         );
     }
 }
+
+/// ISO 10303-21 では、複数の型を1つの実体にまとめた「複合エンティティ実体」は
+/// 外側を丸括弧で囲まなければならない（`#N = ( A(..) B(..) );`）。
+///
+/// `GEOMETRIC_REPRESENTATION_CONTEXT` の行だけこれが抜けており、全出力ファイルが
+/// 構文違反のまま書かれていた。OpenCASCADE のパーサが寛容なので FreeCAD の
+/// 突き合わせでは表に出ず、24/24 も 7/7 も通り続けていた。厳格なパーサを持つ
+/// 他社 CAD では拒否され得るので、ここで文面として押さえる。
+fn unparenthesised_complex_entities(step: &str) -> Vec<String> {
+    let mut offenders = Vec::new();
+    for line in step.lines() {
+        let Some(rest) = line.split_once(" = ") else {
+            continue;
+        };
+        if !rest.0.starts_with('#') {
+            continue;
+        }
+        let body = rest.1.trim_end().trim_end_matches(';').trim();
+        // 括弧で囲まれていれば複合エンティティとして正しい形。
+        if body.starts_with('(') {
+            continue;
+        }
+        // 単純エンティティは `NAME(...)` ちょうどで終わる。最初の '(' に対応する
+        // ')' より後ろに中身があれば、それは囲み忘れた複合エンティティである。
+        let Some(open) = body.find('(') else {
+            continue;
+        };
+        let mut depth = 0usize;
+        let mut close = None;
+        for (index, ch) in body[open..].char_indices() {
+            match ch {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(open + index);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(close) = close {
+            if !body[close + 1..].trim().is_empty() {
+                offenders.push(line.to_string());
+            }
+        }
+    }
+    offenders
+}
+
+#[test]
+fn test_every_complex_entity_instance_is_parenthesised() {
+    let subjects: Vec<(&str, zenith_topo::Solid)> = vec![
+        ("BOX", PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap()),
+        ("CYL", PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap()),
+        ("SPH", PrimitiveBuilder::make_sphere(10.0).unwrap()),
+        (
+            "DRILLED",
+            HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).unwrap(),
+        ),
+    ];
+
+    for (name, solid) in &subjects {
+        let step = export(name, solid);
+        let offenders = unparenthesised_complex_entities(&step);
+        assert!(
+            offenders.is_empty(),
+            "{name}: {} complex entity instance(s) are missing the enclosing parentheses \
+             required by ISO 10303-21, first: {}",
+            offenders.len(),
+            offenders[0]
+        );
+    }
+}

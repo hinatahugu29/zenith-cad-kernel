@@ -143,8 +143,13 @@ impl StepExporter {
         ));
 
 
+        // 複数の型を1つの実体にまとめた「複合エンティティ実体」は、ISO 10303-21
+        // では外側の丸括弧が必須である（`#N = ( A(..) B(..) );`）。上の単位定義は
+        // 括弧付きで書けていたが、ここだけ抜けていた。OpenCASCADE のパーサは
+        // 寛容なので読めてしまい、FreeCAD の突き合わせでは表に出ない。厳格な
+        // パーサを持つ他社 CAD では拒否され得る。
         let geom_context_id = ctx.add_entity(&format!(
-            "GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{})) GLOBAL_UNIT_ASSIGNED_CONTEXT((#{},#{},#{})) REPRESENTATION_CONTEXT('Context #1','3D Context with UNIT and UNCERTAINTY')",
+            "( GEOMETRIC_REPRESENTATION_CONTEXT(3) GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#{})) GLOBAL_UNIT_ASSIGNED_CONTEXT((#{},#{},#{})) REPRESENTATION_CONTEXT('Context #1','3D Context with UNIT and UNCERTAINTY') )",
             uncertainty_id, length_unit_id, plane_angle_unit_id, solid_angle_unit_id
         ));
 
