@@ -113,6 +113,35 @@ impl BooleanEngine {
         Self::boolean_solids_exact_result(solid_a, solid_b, op, tol)?.try_single()
     }
 
+    /// 厳密ブーリアン演算を実行し、同一平面の分割面を自動併合（FaceMerger）して
+    /// 実形状の面数・稜数に整理したソリッドを返す。
+    pub fn boolean_solids_exact_simplified(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        let raw = Self::boolean_solids_exact(solid_a, solid_b, op, tol)?;
+        let (simplified, _report) = crate::FaceMerger::simplify_solid(&raw, tol)?;
+        Ok(simplified)
+    }
+
+    /// 厳密ブーリアン演算を実行し、同一平面の分割面を自動併合（FaceMerger）した結果セットを返す。
+    pub fn boolean_solids_exact_result_simplified(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<ExactBooleanResult, String> {
+        let result = Self::boolean_solids_exact_result(solid_a, solid_b, op, tol)?;
+        let mut simplified_solids = Vec::with_capacity(result.solids.len());
+        for solid in &result.solids {
+            let (simplified, _) = crate::FaceMerger::simplify_solid(solid, tol)?;
+            simplified_solids.push(simplified);
+        }
+        Ok(ExactBooleanResult::from_solids(simplified_solids))
+    }
+
     /// 1つのベース立体に対して複数のツール立体を一括で連続適用するバッチブーリアン演算
     ///
     /// `base`: ベースとなるソリッド
