@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -92,8 +92,23 @@ fn handle_client(
                 .remove(&head.stack_ptr);
             write_success(stream)?;
         }
-        "update" => {
-            if let Some(payload) = binary_payload {
+        // ここから下は、プロトコルの枠だけがあって中身が無い。
+        //
+        // **もっともらしい成功を返すのをやめた。** 以前はこうだった:
+        //
+        // - `generate_mesh` は三角形0枚のメッシュを返す。クライアントからは
+        //   「モデルが空」と区別が付かない。
+        // - `measure_stack` / `measure_entity` は 0.0 を 11 個・10 個返す。
+        //   体積 0、面積 0、重心 (0,0,0) が表示される。**空ではなく誤答**。
+        // - `export_*` は**ファイルを1バイトも書かずに**成功を返す。
+        //   保存したつもりの人が、あとで何も無いことに気づく。
+        //
+        // 実装していないことは、実装していないと言う。名前を挙げて断れば、
+        // クライアントは失敗として扱えるし、次に手を付ける人は何が空白かを
+        // 一覧できる。
+        other => {
+            if let ("update", Some(payload)) = (other, binary_payload) {
+                // 受け取ったことだけは控えておく。中身の解釈はまだ無い。
                 let mut guard = state
                     .lock()
                     .map_err(|_| "server state poisoned".to_string())?;
@@ -103,47 +118,51 @@ fn handle_client(
                     .or_default()
                     .last_payload_len = payload.len();
             }
-            write_update_empty(stream)?;
-        }
-        "generate_mesh" => {
-            write_generate_mesh_empty(stream)?;
-        }
-        "measure_stack" => {
-            write_success(stream)?;
-            let values = [0.0_f64; 11];
-            for value in values {
-                stream
-                    .write_all(&value.to_le_bytes())
-                    .map_err(|e| format!("failed to write measure_stack response: {e}"))?;
-            }
-        }
-        "measure_entity" => {
-            write_success(stream)?;
-            let values = [0.0_f64; 10];
-            for value in values {
-                stream
-                    .write_all(&value.to_le_bytes())
-                    .map_err(|e| format!("failed to write measure_entity response: {e}"))?;
-            }
-        }
-        "import_step" | "import_svg" => {
-            write_json_response(stream, &json!([]))?;
-        }
-        "export_step"
-        | "export_stack_to_step"
-        | "export_parts_to_step"
-        | "export_stack_to_stl"
-        | "export_stack_to_iges"
-        | "csg_preview_begin"
-        | "csg_preview_end" => {
-            write_success(stream)?;
-        }
-        other => {
-            return Err(format!("unsupported action: {other}"));
+            return Err(unimplemented_message(other));
         }
     }
 
     Ok(())
+}
+
+/// まだ書かれていない動作に対する返事。
+///
+/// `SEAMLESS_PROTOCOL.md` に載っている動作のうち、`create_stack` と
+/// `delete_stack` 以外はまだ中身がない。この crate はプロトコルの枠であって、
+/// カーネルには繋がっていない（`zenith_algo` を依存に持ってはいるが、呼んで
+/// いない）。Blender との連携は `zenith_py` のインプロセス経路のほうが先に
+/// 動いているので、こちらは保留のままである。
+fn unimplemented_message(action: &str) -> String {
+    const KNOWN: &[&str] = &[
+        "update",
+        "generate_mesh",
+        "measure_stack",
+        "measure_entity",
+        "import_step",
+        "import_svg",
+        "export_step",
+        "export_stack_to_step",
+        "export_parts_to_step",
+        "export_stack_to_stl",
+        "export_stack_to_iges",
+        "csg_preview_begin",
+        "csg_preview_end",
+        "face_ids",
+        "mesh_face_ids",
+        "edge_lineages",
+        "perf_bool",
+        "perf_edge",
+        "perf_mesh",
+    ];
+    if KNOWN.contains(&action) {
+        format!(
+            "zenith_server does not implement '{action}' yet. Only create_stack and \
+             delete_stack are wired up; this crate is the protocol shell and does not \
+             call the kernel. Use the in-process binding (zenith_py) instead."
+        )
+    } else {
+        format!("unsupported action: {action}")
+    }
 }
 
 fn decode_request(msg: &[u8]) -> Result<(Value, Option<&[u8]>), String> {
@@ -196,87 +215,11 @@ fn write_error(stream: &mut TcpStream, message: &str) -> Result<(), String> {
         .map_err(|e| format!("failed to write error body: {e}"))
 }
 
-fn write_json_response(stream: &mut TcpStream, value: &Value) -> Result<(), String> {
-    write_success(stream)?;
-    let bytes = serde_json::to_vec(value).map_err(|e| format!("failed to encode json: {e}"))?;
-    stream
-        .write_all(&(bytes.len() as u32).to_le_bytes())
-        .map_err(|e| format!("failed to write json length: {e}"))?;
-    stream
-        .write_all(&bytes)
-        .map_err(|e| format!("failed to write json body: {e}"))
-}
-
-fn write_update_empty(stream: &mut TcpStream) -> Result<(), String> {
-    write_success(stream)?;
-
-    let empty_f32: [f32; 0] = [];
-    let empty_i32: [i32; 0] = [];
-    let meta = json!({
-        "use_mmap": false,
-        "edge_lineages": [],
-        "mesh_face_ids": [],
-        "perf_bool": 0.0,
-        "perf_edge": 0.0,
-        "perf_mesh": 0.0,
-        "perf_prim": 0.0
-    });
-    let meta_bytes =
-        serde_json::to_vec(&meta).map_err(|e| format!("failed to encode meta: {e}"))?;
-
-    let lengths = [0_u32, 0_u32, 0_u32, 0_u32, 0_u32];
-    for length in lengths {
-        stream
-            .write_all(&length.to_le_bytes())
-            .map_err(|e| format!("failed to write update lengths: {e}"))?;
-    }
-    stream
-        .write_all(&(meta_bytes.len() as u32).to_le_bytes())
-        .map_err(|e| format!("failed to write update meta length: {e}"))?;
-    stream
-        .write_all(&meta_bytes)
-        .map_err(|e| format!("failed to write update meta: {e}"))?;
-
-    write_f32_slice(stream, &empty_f32)?;
-    write_i32_slice(stream, &empty_i32)?;
-    write_f32_slice(stream, &empty_f32)?;
-    write_i32_slice(stream, &empty_i32)?;
-    write_i32_slice(stream, &empty_i32)
-}
-
-fn write_generate_mesh_empty(stream: &mut TcpStream) -> Result<(), String> {
-    write_success(stream)?;
-    let meta = json!({ "face_ids": [] });
-    let meta_bytes =
-        serde_json::to_vec(&meta).map_err(|e| format!("failed to encode meta: {e}"))?;
-
-    for length in [0_u32, 0_u32, 0_u32] {
-        stream
-            .write_all(&length.to_le_bytes())
-            .map_err(|e| format!("failed to write mesh lengths: {e}"))?;
-    }
-    stream
-        .write_all(&(meta_bytes.len() as u32).to_le_bytes())
-        .map_err(|e| format!("failed to write mesh meta length: {e}"))?;
-    stream
-        .write_all(&meta_bytes)
-        .map_err(|e| format!("failed to write mesh meta: {e}"))
-}
-
-fn write_f32_slice(stream: &mut TcpStream, values: &[f32]) -> Result<(), String> {
-    for value in values {
-        stream
-            .write_all(&value.to_le_bytes())
-            .map_err(|e| format!("failed to write f32 slice: {e}"))?;
-    }
-    Ok(())
-}
-
-fn write_i32_slice(stream: &mut TcpStream, values: &[i32]) -> Result<(), String> {
-    for value in values {
-        stream
-            .write_all(&value.to_le_bytes())
-            .map_err(|e| format!("failed to write i32 slice: {e}"))?;
-    }
-    Ok(())
-}
+// ここには、空の応答を組み立てる関数が5本ありました
+// （`write_json_response`、`write_update_empty`、`write_generate_mesh_empty`、
+// `write_f32_slice`、`write_i32_slice`）。三角形0枚のメッシュ、長さ0の配列、
+// 空のメタ情報を、**成功として**返すためのものです。
+//
+// 実装していない動作を名前で断るようにしたので、組み立てる相手がいなく
+// なりました。残しておくと「いつでも空を返せる」という誘惑になるので、
+// 消してあります。
