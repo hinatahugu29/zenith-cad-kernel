@@ -30,7 +30,7 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 
 | 指標 | 値 |
 | :--- | :--- |
-| テストバイナリ | **78（doctest 込み）すべてグリーン（437テスト 100%合格、0 failed、0 ignored）** |
+| テストバイナリ | **80（doctest 込み）すべてグリーン（445テスト 100%合格、0 failed、0 ignored）** |
 | 診断プローブ | 常設16本すべて exit 0（`builder_audit`, `planar_face_audit`, `boolean_topology_probe`, `mesh_watertight_probe`, `slice_probe`, `slice_robustness_probe`, `sketch_solver_probe`, `pcurve_fidelity_probe`, `inertia_probe`, `distance_probe`, `interference_depth_probe`, `regularize_probe`, `countersink_range_probe`, `face_split_probe`, `ssi_probe`, `boolean_gate_probe`） |
 | Python 往復 | `tools/verify_solid_api.py` 全合格（作る → ブーリアン → 稜を丸める → STEP → 読み直す） |
 | **出力用メッシュ** | **測った全分割数で完全閉多様体（Watertight Manifold）**。4〜32分割の全9通り（`mesh_watertight_probe`）に加え、48・64・96・128・192・256 でも open: 0, non-manifold: 0, degenerate: 0 を実測（4-34 解消、4-37 で範囲を確認）。格子パッチ内は適応細分を掛けないので、弦誤差は分割数で決まる（32分割で体積差 1e-3 台） |
@@ -2645,7 +2645,7 @@ cargo run --release -p zenith_algo --example export_iges_suite        # target/i
 どれか1つでも赤なら、`main` に持っていくものではありません。
 
 ```bash
-cargo test --release --workspace --exclude zenith_py     # 78 バイナリ / 437 テスト
+cargo test --release --workspace --exclude zenith_py     # 80 バイナリ / 445 テスト
 cargo build --release --workspace --exclude zenith_py    # 警告 0
 
 cargo run --release -p zenith_algo --example export_validation_suite

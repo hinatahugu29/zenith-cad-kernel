@@ -10,7 +10,7 @@
 > 実測に合わせて書き直しました。誇張していた項目（IGES、Gregory パッチ、
 > 歯元トロコイド、DXF のレイヤー、p-curve 出力）は、できていることと
 > できていないことを分けて書いてあります。経緯は
-> [`HANDOVER.md`](HANDOVER.md) の 4-37 にあります。
+> [`HANDOVER.md`](HANDOVER.md) の 4-37 と 4-38 にあります。
 >
 > **達成していること（すべて外部検証つき）**:
 > - 出力用メッシュの完全閉多様体化。4〜32分割に加え 48〜256 でも open: 0, non-manifold: 0, degenerate: 0。
@@ -136,7 +136,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 
 | 何を測ったか | 結果 | 再現コマンド |
 | :--- | :--- | :--- |
-| ワークスペース全テスト | **78 バイナリ（doctest 込み）/ 437 テスト 100% 合格**（0 failed, 0 ignored） | `cargo test --release --workspace --exclude zenith_py` |
+| ワークスペース全テスト | **80 バイナリ（doctest 込み）/ 445 テスト 100% 合格**（0 failed, 0 ignored） | `cargo test --release --workspace --exclude zenith_py` |
 | コンパイラ警告 | **0** | `cargo build --release --workspace --exclude zenith_py` |
 | ビルダー監査 | **24/24 クリーン**（解析解との差は最悪 6.3e-13、歯車 1.99e-9） | `--example builder_audit` |
 | 平面を NURBS で持つ面 | **全23ビルダーで0枚** | `--example planar_face_audit` |
