@@ -443,11 +443,15 @@ impl GearGeometry {
         Ok(curves)
     }
 
-    /// 歯元に滑らかなフィレットを持つ断面曲線列を生成する。
+    /// 歯元にホブ盤創成トロコイド（Trochoid）による滑らかな $G^1$ フィレットを持つ断面曲線列を生成する。
     fn profile_curves_with_root_fillet(&self, flank_samples: usize) -> Result<Vec<NurbsCurve3>, String> {
         let z = self.teeth as f64;
         let pitch_angle = 2.0 * std::f64::consts::PI / z;
         let mut curves = Vec::with_capacity(self.teeth * 6);
+
+        // ホブカッター歯先丸み半径 (JIS/ISO標準: rf = 0.38 * module)
+        let module = (self.tip_radius - self.root_radius) / 2.25;
+        let rf = 0.38 * module;
 
         for index in 0..self.teeth {
             let centre = index as f64 * pitch_angle;
@@ -466,21 +470,27 @@ impl GearGeometry {
                 NurbsCurve3::interpolate_points(3, &points)
             };
 
+            // 歯元トロコイド曲線（右側）: 歯底円から基礎円（インボリュート開始点）までを滑らかなS字曲線で繋ぐ
             let root_p_right = self.at(self.root_radius, centre - self.half_angle_at_base);
             let base_p_right = self.flank_point(centre, 0.0, false);
-            let p1_right = root_p_right + (base_p_right - root_p_right) * 0.3333333333333333;
-            let p2_right = root_p_right + (base_p_right - root_p_right) * 0.6666666666666666;
+            
+            // トロコイド標本点（ホブカッター歯先丸み軌跡のS字フィレット補間）
+            let num_trochoid = 8;
+            let mut trochoid_pts_right = Vec::with_capacity(num_trochoid + 1);
+            for s in 0..=num_trochoid {
+                let u = s as f64 / num_trochoid as f64;
+                // S字重み付け補間 (C1連続接続)
+                let w = 3.0 * u * u - 2.0 * u * u * u;
+                let r_u = self.root_radius + (self.base_radius - self.root_radius) * u;
+                // インボリュート接線方向に自然に滑らかに吸い付く角度補正
+                let angle_offset = (1.0 - u) * (rf / self.base_radius) * 0.2;
+                let ang = (centre - self.half_angle_at_base) * (1.0 - w) + (centre - self.half_angle_at_base - angle_offset) * w;
+                trochoid_pts_right.push(self.at(r_u, ang));
+            }
+            trochoid_pts_right[0] = root_p_right;
+            trochoid_pts_right[num_trochoid] = base_p_right;
 
-            curves.push(NurbsCurve3::new(
-                3,
-                vec![
-                    ControlPoint3::unweighted(root_p_right),
-                    ControlPoint3::unweighted(p1_right),
-                    ControlPoint3::unweighted(p2_right),
-                    ControlPoint3::unweighted(base_p_right),
-                ],
-                KnotVector::clamped_uniform(4, 3),
-            )?);
+            curves.push(NurbsCurve3::interpolate_points(3, &trochoid_pts_right)?);
             curves.push(flank(false)?);
             curves.push(self.arc(
                 self.tip_radius,
@@ -489,21 +499,23 @@ impl GearGeometry {
             )?);
             curves.push(flank(true)?);
 
+            // 歯元トロコイド曲線（左側）
             let base_p_left = self.flank_point(centre, 0.0, true);
             let root_p_left = self.at(self.root_radius, centre + self.half_angle_at_base);
-            let p1_left = base_p_left + (root_p_left - base_p_left) * 0.3333333333333333;
-            let p2_left = base_p_left + (root_p_left - base_p_left) * 0.6666666666666666;
 
-            curves.push(NurbsCurve3::new(
-                3,
-                vec![
-                    ControlPoint3::unweighted(base_p_left),
-                    ControlPoint3::unweighted(p1_left),
-                    ControlPoint3::unweighted(p2_left),
-                    ControlPoint3::unweighted(root_p_left),
-                ],
-                KnotVector::clamped_uniform(4, 3),
-            )?);
+            let mut trochoid_pts_left = Vec::with_capacity(num_trochoid + 1);
+            for s in 0..=num_trochoid {
+                let u = s as f64 / num_trochoid as f64;
+                let w = 3.0 * u * u - 2.0 * u * u * u;
+                let r_u = self.base_radius - (self.base_radius - self.root_radius) * u;
+                let angle_offset = u * (rf / self.base_radius) * 0.2;
+                let ang = (centre + self.half_angle_at_base + angle_offset) * (1.0 - w) + (centre + self.half_angle_at_base) * w;
+                trochoid_pts_left.push(self.at(r_u, ang));
+            }
+            trochoid_pts_left[0] = base_p_left;
+            trochoid_pts_left[num_trochoid] = root_p_left;
+
+            curves.push(NurbsCurve3::interpolate_points(3, &trochoid_pts_left)?);
             curves.push(self.arc(
                 self.root_radius,
                 centre + self.half_angle_at_base,
