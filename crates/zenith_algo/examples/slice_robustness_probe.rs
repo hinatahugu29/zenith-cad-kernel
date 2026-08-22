@@ -7,6 +7,13 @@
 //!
 //! ここでは、格子行にちょうど乗る高さと、わざと外した高さの両方を、複数の
 //! 分割数で切る。断面積の解析解が分かるものは値も突き合わせる。
+//!
+//! **振る分割数には、本番の既定（[`DEFAULT_SECTION_TESSELLATION`] = 128）を
+//! 必ず入れること。** かつてここは 4〜32 までしか振っておらず、`slice_solid`
+//! が実際に使う 128 を一度も試していなかった。そのため「0 failures」と報告し
+//! 続けたまま、FreeCAD の突き合わせ側だけが `boolean_drilled_block` の断面が
+//! 閉じないことを検出していた。失敗は分割数に対して単調ではなく飛び飛びに
+//! 出るので、上限を上げるだけでなく既定そのものを列に含める必要がある。
 
 use std::f64::consts::PI;
 
@@ -26,7 +33,11 @@ struct Subject {
 
 fn main() {
     let tol = Tolerance::default();
-    let densities = [4usize, 6, 8, 11, 12, 16, 20, 24, 32];
+    // 末尾の 48〜256 は本番の刻み幅を挟む。128 は `DEFAULT_SECTION_TESSELLATION`
+    // そのもので、`SectionSlicer::slice_solid` を呼ぶと必ずこの値になる。
+    let densities = [
+        4usize, 6, 8, 11, 12, 16, 20, 24, 32, 48, 64, 96, 128, 192, 256,
+    ];
 
     let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
     let bore = BrepTransform::translate_solid(
