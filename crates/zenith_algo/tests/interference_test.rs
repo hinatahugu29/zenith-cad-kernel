@@ -127,28 +127,29 @@ fn two_rods_that_cross_are_a_clash_even_though_no_vertex_is_inside_the_other() {
     );
 }
 
-/// 分割を細かくすれば、距離は真の値へ寄る。
+/// 報告される距離は、分割の細かさで動かない。
 ///
-/// 寄る向きは決まっている——内接多角形なので、必ず**上から**近づく。
+/// 以前はメッシュの弦の上で測っていたので、内接多角形のぶん必ず**上から**
+/// 近づき、細かくするほど短くなりました。このテストもその収束を見ていました。
+/// いまは最近接点を B-Rep の面まで詰めるので、粗い刻みでも解析解に乗ります。
+/// 「細かくすると良くなる」ではなく「**どの刻みでも合っている**」が正しい要求です。
 #[test]
-fn refining_the_sampling_brings_the_distance_down_toward_the_truth() {
+fn the_reported_distance_does_not_depend_on_the_sampling() {
     let tol = Tolerance::default();
     let sphere = PrimitiveBuilder::make_sphere(5.0).unwrap();
     let boxed = shifted(&cube(7.0), 3.0, 3.0, 3.0);
+    // 箱の隅 (3,3,3) は原点から sqrt(27)。球の半径 5 を引いた残りが隙間。
     let truth = 27.0f64.sqrt() - 5.0;
 
-    let coarse = InterferenceChecker::check_with_divisions(&sphere, &boxed, 8, &tol).min_distance;
-    let fine = InterferenceChecker::check_with_divisions(&sphere, &boxed, 32, &tol).min_distance;
-
-    assert!(coarse >= truth - 1e-9 && fine >= truth - 1e-9);
-    assert!(
-        fine < coarse,
-        "refining should shorten the reading: coarse {coarse}, fine {fine}"
-    );
-    assert!(
-        fine - truth < coarse - truth,
-        "refining should close the gap to {truth}"
-    );
+    for divisions in [8usize, 16, 32] {
+        let measured =
+            InterferenceChecker::check_with_divisions(&sphere, &boxed, divisions, &tol)
+                .min_distance;
+        assert!(
+            (measured - truth).abs() < 1e-9,
+            "at {divisions} divisions the gap read {measured}, not {truth}"
+        );
+    }
 }
 
 #[test]

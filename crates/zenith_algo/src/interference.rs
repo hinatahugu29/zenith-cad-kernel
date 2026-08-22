@@ -17,24 +17,33 @@
 //!
 //! 1. 2つの箱が重なる範囲を格子で刻み、**両方の内側に入る点**を数える。
 //!    1つでもあれば `Clash` で、数から重なりの体積が出る。
-//! 2. 無ければ、表面同士の最短距離を測る。公差以内なら `Touching`、
-//!    そうでなければ `Clearance`。
+//! 2. 格子で捕まらない薄い食い込みを、**表面の点がもう一方の内側にどれだけ
+//!    深く入っているか**で拾う。深さを見るのは、面を共有して触れているだけの
+//!    立体を食い込みと言わないため（面の上の点は射線の偶奇では内とも外とも出る）。
+//! 3. 無ければ、表面同士の最短距離で `Touching` か `Clearance` を決める。
 //!
-//! 表面の**頂点**が相手の内側にあるかで見る書き方も試しましたが、足りません。
-//! 平面の面は隅にしか頂点を持たないので、直交する2本の角棒が互いを貫いていても
-//! どの頂点も相手の内側に来ず、`Clearance` と答えます（実測で「19.0 離れて
-//! いる」と報告しました）。内側かどうかは、表面ではなく**体積を**標本する
-//! ほうが素直です。
+//! 表面の**頂点だけ**を見る書き方も試しましたが、足りません。平面の面は隅に
+//! しか頂点を持たないので、直交する2本の角棒が互いを貫いていてもどの頂点も
+//! 相手の内側に来ず、`Clearance` と答えます（実測で「19.0 離れている」と
+//! 報告しました）。格子と表面の点は、どちらか一方では足りず、両方要ります。
 //!
 //! # 何を測っていて、何を測っていないか
 //!
-//! 距離は**三角形に割った表面**の上で測っています。分割の細かさは
-//! [`InterferenceReport::sample_divisions`] が持ち帰ります。曲面は内接
-//! 多角形になるので、距離はわずかに大きめに出ます。
+//! 距離は [`crate::DistanceEngine`] が返す値で、最近接点を B-Rep の面まで
+//! 詰めてあります。**表示の刻みでは動きません**。以前はメッシュの弦の上で
+//! 測っていたので、曲面ではわずかに大きめに出ていました。
 //!
 //! 体積は格子の点を数えた見積りで、**格子の目より細い重なりは数えられません**。
+//! 数えられなくても食い込みは検出します（メッセージにその旨が出ます）。
 //! 厳密な重なりの体積が要るなら、対応している配置では
 //! [`crate::BooleanEngine`] の積のほうが桁違いに正確です。
+//!
+//! # 実測
+//!
+//! `cargo run -p zenith_algo --example interference_depth_probe`。食い込み量を
+//! 5 mm から 0.001 mm まで減らした 21 配置（直方体どうし・板とピン・板と球）
+//! すべてで `Clash`、隙間のある5配置すべてで報告距離が閉じた式と一致。
+//! 従来は板に 0.01 mm 押し込んだ球が「隙間 0.010」と報告されていました。
 
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
@@ -58,8 +67,8 @@ pub struct InterferenceReport {
     pub status: ClashStatus,
     /// 表面同士の最短距離 (mm)。触れている・食い込んでいる場合は 0.0。
     ///
-    /// 三角形に割った表面の間で測る。曲面は内接多角形になるので、真の距離より
-    /// わずかに大きく出る。
+    /// [`crate::DistanceEngine`] が返す値で、最近接点は B-Rep の面まで詰めて
+    /// ある。表示の刻みでは動かない。
     pub min_distance: f64,
     /// 重なりの体積 (mm^3) の見積り。`Clash` のときだけ数える。
     ///
@@ -105,9 +114,14 @@ impl InterferenceChecker {
         };
 
         // 1. 箱で篩う。ここで離れていれば、立体も必ず離れている。
+        //    離れていると分かっても、**返す距離は表面の値**でなければならない。
+        //    メッシュの弦のままでは曲面で刻みの誤差が乗るので、B-Rep の面まで
+        //    詰めた値を使う。
         let gap = box_gap(min_a, max_a, min_b, max_b);
         if gap > tol.linear {
-            let distance = surface_distance(&mesh_a, &mesh_b).max(gap);
+            let distance = crate::DistanceEngine::compute_min_distance(solid_a, solid_b, tol)
+                .min_distance
+                .max(gap);
             return InterferenceReport {
                 status: ClashStatus::Clearance,
                 min_distance: distance,
@@ -118,19 +132,31 @@ impl InterferenceChecker {
         }
 
         // 2. 重なる箱の中を数える。両方の内側に入る点が1つでもあれば食い込み。
+        //
+        // 格子だけでは、格子の目より薄い食い込みが落ちる。三角形どうしの距離は
+        // 辺と辺・頂点と面しか見ないので、**交差している**三角形の組では正の値に
+        // なり、浅い食い込みは距離からも分からない。板に 0.01 mm 押し込んだ球が
+        // 「隙間 0.010」と報告されていた。見落としは製造まで流れる。
+        // 表面の点がもう一方の内側にあるかでも見る。
         let volume = overlap_volume_estimate(&mesh_a, &mesh_b, min_a, max_a, min_b, max_b);
-        if volume > 0.0 {
+        if volume > 0.0 || crate::distance::overlaps(&mesh_a, &mesh_b, tol.linear) {
             return InterferenceReport {
                 status: ClashStatus::Clash,
                 min_distance: 0.0,
                 overlap_volume: volume,
                 sample_divisions: divisions,
-                message: format!("Solids overlap by about {volume:.6} mm^3"),
+                message: if volume > 0.0 {
+                    format!("Solids overlap by about {volume:.6} mm^3")
+                } else {
+                    "Solids overlap, too thinly for the sampling grid to measure".to_string()
+                },
             };
         }
 
-        // 3. 食い込んでいないなら、触れているか離れているか。
-        let distance = surface_distance(&mesh_a, &mesh_b);
+        // 3. 食い込んでいないなら、触れているか離れているか。距離は B-Rep の面
+        //    まで詰めた値を使う（メッシュの弦のままでは曲面で刻みの誤差が乗る）。
+        let distance =
+            crate::DistanceEngine::compute_min_distance(solid_a, solid_b, tol).min_distance;
         if distance <= tol.linear {
             InterferenceReport {
                 status: ClashStatus::Touching,
@@ -225,87 +251,6 @@ fn box_gap(min_a: Point3, max_a: Point3, min_b: Point3, max_b: Point3) -> f64 {
 ///
 /// 片方の頂点からもう片方の三角形までを両方向に測る。辺と辺が最も近い配置は
 /// この測り方では拾えないので、分割が粗いとわずかに大きく出る。
-fn surface_distance(mesh_a: &TriangleMesh, mesh_b: &TriangleMesh) -> f64 {
-    // 三角形ごとに中心と半径を先に出しておき、いま分かっている最小より遠い
-    // ものは中身を見ない。これが無いと、球のような細かい面では総当たりが
-    // 数千万回になる。
-    let spheres = |mesh: &TriangleMesh| -> Vec<(Point3, f64, [Point3; 3])> {
-        mesh.indices
-            .iter()
-            .map(|triangle| {
-                let a = mesh.positions[triangle[0] as usize];
-                let b = mesh.positions[triangle[1] as usize];
-                let c = mesh.positions[triangle[2] as usize];
-                let centre = Point3::from((a.coords + b.coords + c.coords) / 3.0);
-                let radius = (a - centre)
-                    .norm()
-                    .max((b - centre).norm())
-                    .max((c - centre).norm());
-                (centre, radius, [a, b, c])
-            })
-            .collect()
-    };
-    let triangles_a = spheres(mesh_a);
-    let triangles_b = spheres(mesh_b);
-
-    let one_way = |points: &[Point3], targets: &[(Point3, f64, [Point3; 3])], best: f64| -> f64 {
-        let mut worst = best;
-        for point in points {
-            for (centre, radius, corners) in targets {
-                if (*point - *centre).norm() - radius >= worst {
-                    continue;
-                }
-                worst = worst.min(point_triangle_distance(
-                    *point,
-                    corners[0],
-                    corners[1],
-                    corners[2],
-                ));
-                if worst <= 0.0 {
-                    return 0.0;
-                }
-            }
-        }
-        worst
-    };
-    let forward = one_way(&mesh_a.positions, &triangles_b, f64::INFINITY);
-    one_way(&mesh_b.positions, &triangles_a, forward)
-}
-
-fn point_triangle_distance(point: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
-    // 三角形の平面へ落とし、外れていれば辺に落とす。
-    let ab = b - a;
-    let ac = c - a;
-    let normal = ab.cross(&ac);
-    let area_twice = normal.norm();
-    if area_twice <= f64::EPSILON {
-        return segment_distance(point, a, b).min(segment_distance(point, b, c));
-    }
-    let unit = normal / area_twice;
-    let projected = point - unit * (point - a).dot(&unit);
-
-    // 重心座標で内外を見る。
-    let inside = |u: Vec3, v: Vec3| u.cross(&v).dot(&unit) >= 0.0;
-    if inside(b - a, projected - a) && inside(c - b, projected - b) && inside(a - c, projected - c) {
-        return (point - projected).norm();
-    }
-    segment_distance(point, a, b)
-        .min(segment_distance(point, b, c))
-        .min(segment_distance(point, c, a))
-}
-
-fn segment_distance(point: Point3, a: Point3, b: Point3) -> f64 {
-    let direction = b - a;
-    let length_squared = direction.norm_squared();
-    let t = if length_squared <= f64::EPSILON {
-        0.0
-    } else {
-        ((point - a).dot(&direction) / length_squared).clamp(0.0, 1.0)
-    };
-    (point - (a + direction * t)).norm()
-}
-
-/// 重なりの体積を、重なった箱の中の格子点から見積もる。
 fn overlap_volume_estimate(
     mesh_a: &TriangleMesh,
     mesh_b: &TriangleMesh,

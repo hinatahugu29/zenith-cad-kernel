@@ -88,7 +88,7 @@ impl DistanceEngine {
         triangle_pairs(&mesh_a, &mesh_b, &mut best, &mut point_a, &mut point_b);
 
         // 3. 触れている・交わっている・包含している場合は 0。
-        if best <= tol.linear || overlaps(&mesh_a, &mesh_b) {
+        if best <= tol.linear || overlaps(&mesh_a, &mesh_b, tol.linear) {
             return DistanceResult {
                 min_distance: 0.0,
                 closest_point_a: point_a,
@@ -335,10 +335,50 @@ fn point_triangle(point: Point3, triangle: &[Point3; 3]) -> (f64, Point3) {
     ((point - on).norm(), on)
 }
 
-/// 片方が他方の内側に入っているか。表面が離れていても距離は 0。
-fn overlaps(mesh_a: &TriangleMesh, mesh_b: &TriangleMesh) -> bool {
-    crate::BooleanEngine::is_point_inside_mesh(mesh_a.positions[0], mesh_b)
-        || crate::BooleanEngine::is_point_inside_mesh(mesh_b.positions[0], mesh_a)
+/// 片方の表面の点が、もう一方の内側に入っているか。
+///
+/// 三角形どうしの距離は、辺と辺・頂点と面しか見ないので、**交差している**
+/// 三角形の組では正の値になる。浅く食い込んだ立体（板に 0.01 mm 押し込んだ球）
+/// はそれだけでは捕まらないので、点の内外でも見る。
+///
+/// 1点だけでは、その点がたまたま食い込んでいる側かどうかに答えが乗る。
+/// 両方のメッシュから間引いて複数点を見る。
+pub(crate) fn overlaps(mesh_a: &TriangleMesh, mesh_b: &TriangleMesh, margin: f64) -> bool {
+    const SAMPLES: usize = 512;
+    let probe = |from: &TriangleMesh, into: &TriangleMesh| -> bool {
+        if from.positions.is_empty() || into.indices.is_empty() {
+            return false;
+        }
+        let stride = (from.positions.len() / SAMPLES).max(1);
+        from.positions.iter().step_by(stride).any(|point| {
+            // 面の上に乗った点は、射線の偶奇では内とも外とも出る。**深さ**を
+            // 見て、境界の上の点（面を共有して触れているだけの立体）を
+            // 食い込みと言わないようにする。
+            crate::BooleanEngine::is_point_inside_mesh(*point, into)
+                && distance_to_mesh(*point, into) > margin
+        })
+    };
+    probe(mesh_a, mesh_b) || probe(mesh_b, mesh_a)
+}
+
+/// 点からメッシュ表面までの最短距離
+fn distance_to_mesh(point: Point3, mesh: &TriangleMesh) -> f64 {
+    let mut best = f64::INFINITY;
+    for triangle in &mesh.indices {
+        let corners = [
+            mesh.positions[triangle[0] as usize],
+            mesh.positions[triangle[1] as usize],
+            mesh.positions[triangle[2] as usize],
+        ];
+        let (distance, _) = point_triangle(point, &corners);
+        if distance < best {
+            best = distance;
+            if best <= 0.0 {
+                return 0.0;
+            }
+        }
+    }
+    best
 }
 
 /// メッシュ上の最近接点を、B-Rep の面へ交互に射影して詰める。

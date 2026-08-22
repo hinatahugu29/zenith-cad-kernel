@@ -89,7 +89,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **2D DXF 図面エクスポート (DXF Export)** | `zenith_io::DxfExporter` | 3D断面スライス（`SectionSlicer`）で抽出した閉断面ワイヤループ群を標準AutoCAD DXF形式（`LWPOLYLINE`）でファイル出力。2D CADやレーザー加工機とのダイレクト連携に対応。 |
 | **薄肉シェル容器化 (Shelling)** | `shelling` | 任意ソリッドからの開口面除去および均一肉厚 $t$ での中空容器（Open-Top Box）自動構築。 |
 | **断面スライス (Section Slicing)** | `slice` | 任意3D平面によるB-Repソリッド切断、閉じた断面ワイヤループ抽出、符号付き断面積（穴は減算）・周長算出。断面は表示用メッシュの多角形ではなく **B-Rep の上で測った点**で積む。輪郭の点を面と平面の交わりへ載せ直し、弦ごとに中点をもう1点測って3点を通る2次曲線の Green 積分で積むので、誤差は分割数の**4乗**で縮む。平面のみで構成された立体は分割数によらず厳密、曲面を含む場合も既定 96 分割で円柱断面の相対誤差 **4.83e-11**（周長 2.41e-11）。閉じないループはエラーとして返す。 |
-| **アセンブリ干渉判定 (Clash)** | `interference` | 2ソリッド間の干渉判定（Clearance / Touching / Clash）。箱・メッシュ篩いによる高速判定に加え、`check_exact` による `BooleanEngine` ハイブリッド B-Rep 積計算で真の干渉体積・干渉ソリッド抽出に対応。 |
+| **アセンブリ干渉判定 (Clash)** | `interference` | 2ソリッド間の干渉判定（Clearance / Touching / Clash）。箱は篩いにだけ使い、答えは①重なり範囲の格子標本 ②**表面の点がもう一方の内側に公差より深く入っているか** ③表面同士の最短距離、の順で決める。②が無いと格子の目より薄い食い込みが落ちる（三角形どうしの距離は辺と辺・頂点と面しか見ないので、**交差している三角形の組では正の値になる**）。深さを見るのは、面を共有して触れているだけの立体を食い込みと言わないため。<br>報告する距離は `DistanceEngine` が返す値で、**表示の刻みでは動かない**。<br>実測: 食い込み 5〜0.001 mm の21配置すべてで `Clash`、隙間のある5配置すべてで報告距離が閉じた式と一致（`interference_depth_probe`）。従来は板に 0.01 mm 押し込んだ球を「隙間 0.010」と報告していた。<br>`check_exact` は `BooleanEngine` の積で真の干渉体積・干渉ソリッドを返す。 |
 | **厳密物性値・質量特性 (Mass)** | `mass_properties` | ガウス・グリーンの発散定理に基づく体積・表面積・3D重心・慣性テンソル計算。**`inertia_diagonal` は原点を通る座標軸まわりの対角成分**であり、主慣性モーメントではない（原点を角に置いた直方体では重心まわりの4倍）。慣性積 `inertia_products` = (∫xy, ∫yz, ∫zx) を持ち、`inertia_tensor()` / `inertia_tensor_about(point)` / `inertia_tensor_about_center_of_mass()` / `principal_moments()`（重心まわりの固有値）でテンソルとして扱える。実測: 直方体・円柱・球・円錐・移動した直方体のいずれも原点まわりの閉じた式と **1.8e-13 以内**、主慣性モーメントは平行移動でも斜め軸の回転でも **1.5e-15** で不変（`inertia_probe` / `inertia_test`）。B-Rep面上で直接積分し、積分領域はノット区間に整合させる（区間をまたぐセルで求積すると、いくら細分しても誤差が減らない）。解析解を持つ全ビルダーで相対誤差 1e-12 以下、分割数を4倍にしても値は 1e-8 未満しか動かない。 |
 | **ヘリックス (Helix)** | `helix` | リード角・ピッチ・巻数指定の3次元螺旋スプリング。角断面スプリングに加え、`make_round_wire_spring` により RMF 最小回転標架と4象限NURBS端面キャップによる丸線ワイヤコイルスプリングの完全閉多様体ソリッド生成に対応。 |
 | **パターン＆ミラー (Pattern / Mirror)** | `pattern`, `mirror` | 線形/円形パターン、任意平面に対する幾何ミラー反転＆Compound対称ケーシング。 |
@@ -196,6 +196,7 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | `cargo run --release -p zenith_algo --example boolean_topology_probe` | ブーリアンの結果が稜を**実体として**共有しているか（共有されていない稜が1本でもあれば非ゼロ終了するのでリリースゲートに使える） |
 | `cargo run --release -p zenith_algo --example mesh_watertight_probe` | 出力用メッシュが閉じた三角形メッシュになっているか（9通りの分割数で、開いた辺・非多様体・退化三角形・体積のずれを出す） |
 | `cargo run --release -p zenith_algo --example boolean_gate_probe` | ブーリアンの検証ゲートの判定が、テッセレーションの設定で変わらないか。正しい結果が全部通り、誤答（体積の境界では捕まらないものを含む）が全部落ちることを 4〜32 分割で確かめる |
+| `cargo run --release -p zenith_algo --example interference_depth_probe` | どこまで浅い食い込みを食い込みとして検出できるか（5〜0.001 mm の21配置）。見落としがあれば非ゼロ終了 |
 | `cargo run --release -p zenith_algo --example distance_probe` | 最短距離が閉じた式に乗るか、および刻みの細かさで答えが動かないか（7配置） |
 | `cargo run --release -p zenith_algo --example slice_robustness_probe` | 断面が、平面が格子行に乗るかどうかと分割数によらず閉じるか（閉じなければ非ゼロ終了） |
 | `cargo run --release -p zenith_algo --example inertia_probe` | 重心・慣性・慣性積・主慣性モーメントが閉じた式に乗るか（主値が剛体変換で不変かも見る） |
