@@ -653,6 +653,7 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `export_validation_suite` ＋ `tools/freecad_cross_validate.py` | 体積・表面積・断面積を OpenCASCADE と突き合わせ（ゲート） |
 | `export_showcase` ＋ `tools/verify_showcase.py` | 代表24形状が Solid として読めるか（ゲート） |
 | `occ_reference_export.py` | OpenCASCADE 自身に解析曲面の STEP を書かせる |
+| `occ_reference_swept.py` | OpenCASCADE 自身に掃引面・楕円の STEP を書かせ、どのエンティティを選ぶかを数える |
 | `foreign_reexport` ＋ `tools/verify_reexport.py` | 読んで書き戻した一周が解析解に乗るか（**ゲート**） |
 | `export_iges_suite` ＋ `tools/verify_iges.py` | IGES を OpenCASCADE が読み、曲面の枚数と境界箱が合うか（**ゲート**） |
 

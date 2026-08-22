@@ -121,7 +121,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | フォーマット / バインディング | 対応規格 | スペック詳細 |
 | :--- | :--- | :--- |
 | **STEP 出力** | ISO 10303-21 (AP214) | `MANIFOLD_SOLID_BREP` / `BREP_WITH_VOIDS`、`ADVANCED_FACE`、`PLANE`、有理B-spline曲面・曲線、稜を実体として共有する `EDGE_CURVE`。**p-curve（`PCURVE` / `DEFINITIONAL_REPRESENTATION`）は出力しない**（受け側が導出する）。解析曲面は読めても書き出しは B-spline 化される。複合エンティティ実体の括弧を含め Part 21 の構文に適合。 |
-| **STEP 入力** | ISO 10303-21 | `PLANE` / `CYLINDRICAL` / `CONICAL` / `SPHERICAL` / `TOROIDAL` / 有理B-spline、`CIRCLE` / `LINE` / `TRIMMED_CURVE` / `SURFACE_CURVE`、`FACE_BOUND` のみのファイルからの外周ループ自動判定、`BREP_WITH_VOIDS`。**未対応**: `ELLIPSE`, `SURFACE_OF_REVOLUTION`, `SURFACE_OF_LINEAR_EXTRUSION`, `OFFSET_SURFACE`, `COMPOSITE_CURVE`, `POLYLINE`, 開シェル系表現。未対応に当たると p-curve 検証ゲートが捕まえてエラーになる（誤答にはならない）。 |
+| **STEP 入力** | ISO 10303-21 | **曲面**: `PLANE` / `CYLINDRICAL` / `CONICAL` / `SPHERICAL` / `TOROIDAL` / 有理B-spline / `SURFACE_OF_LINEAR_EXTRUSION`。**曲線**: `LINE` / `CIRCLE` / `ELLIPSE` / `TRIMMED_CURVE` / `SURFACE_CURVE` / 有理B-spline。`FACE_BOUND` のみのファイルからの外周ループ自動判定、`BREP_WITH_VOIDS`。**未対応**: `SURFACE_OF_REVOLUTION`, `OFFSET_SURFACE`, `COMPOSITE_CURVE`, `POLYLINE`, 開シェル系表現 — 当たると**エンティティ名を名指ししてエラー**になる（既定の平面や直線に差し替えて黙って進むことはしない）。 |
 | **IGES エクスポート** | IGES 5.3 | 各面の支持曲面を **Entity 128（有理Bスプライン曲面）** として出力。80桁固定レコード、Global 26フィールド、D/P セクション対応。**トリム（Entity 144 / 142 / 126）は未出力**。`tools/verify_iges.py` で OpenCASCADE が5検体すべてを読み、曲面枚数一致・境界箱のずれ 0。 |
 | **2D DXF 図面出力** | AutoCAD DXF (AC1015) | 断面スライサーからの閉ポリライン図面（LWPOLYLINE）。レイヤーは OUTLINE / HOLE / CENTERLINE / HATCH を **テーブルに定義**するが、`generate_dxf_string` が自動で割り当てるのは OUTLINE と HOLE のみ。線種は全レイヤー CONTINUOUS で、HATCH エンティティは出力しない。 |
 | **OBJ / バイナリSTL / glTF** | 3D Mesh Formats | 頂点法線付きWavefront OBJ、バイナリSTL、glTF 2.0 JSON 出力。 |
