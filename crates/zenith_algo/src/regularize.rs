@@ -584,13 +584,21 @@ impl StepInterop {
     }
 
     /// 正規化してから STEP ファイルに書く。
+    ///
+    /// ファイルに書く口は、面が1枚でも書けなければ**書かずにエラーを返す**。
+    /// 文字列を返す口は `String` で失敗を表せないので、そちらとは扱いが違う。
     pub fn export_solid_to_file<P: AsRef<std::path::Path>>(
         solid: &Solid,
         path: P,
         product_name: &str,
         tol: &Tolerance,
     ) -> std::io::Result<RegularizeReport> {
-        let (content, report) = Self::export_solid_to_string(solid, product_name, tol);
+        let (regular, report) = Regularizer::regularize_solid(solid, tol);
+        let content = zenith_io::StepExporter::export_solids_to_string_checked(
+            std::slice::from_ref(&regular),
+            product_name,
+        )
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
         if let Some(parent) = path.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -612,7 +620,9 @@ impl StepInterop {
             report.absorb(&piece_report);
             regular.push(piece);
         }
-        let content = zenith_io::StepExporter::export_solids_to_string(&regular, product_name);
+        let content =
+            zenith_io::StepExporter::export_solids_to_string_checked(&regular, product_name)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
         if let Some(parent) = path.as_ref().parent() {
             std::fs::create_dir_all(parent)?;
         }
