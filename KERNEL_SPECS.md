@@ -1,16 +1,16 @@
 # 🚀 Zenith CAD Kernel - スペック総覧（棚卸し）＆ 次なる飛躍への展望
 
-**文書バージョン**: v3.2.0 (STEP の Part 21 適合・面の欠落解消・断面連結の位相化・IGES 実装・自由度解析の是正・メッシュ密度の是正・ホブ創成トロコイド)  
+**文書バージョン**: v3.3.0 (STEP の Part 21 適合と p-curve 出力・面の欠落解消・断面連結の位相化・IGES 実装・自由度解析の是正・メッシュ密度の是正・ホブ創成トロコイド・グレゴリーパッチの $G^1$)  
 **最終更新日時**: 2026年8月23日  
 **ステータス**: 完全自前 Rust B-Rep エンジン。**本書の数値はすべて実測値**。
 
-> **v3.1.0 / v3.2.0 での訂正について**
+> **v3.1.0 〜 v3.3.0 での訂正と実装について**
 >
 > v3.0.0 の記述のうち、外の物差しに当てた結果が残っていなかったものを、
 > 実測に合わせて書き直しました。誇張していた項目（IGES、Gregory パッチ、
 > 歯元トロコイド、DXF のレイヤー、p-curve 出力）は、できていることと
 > できていないことを分けて書いてあります。経緯は
-> [`HANDOVER.md`](HANDOVER.md) の 4-37 〜 4-40 にあります。
+> [`HANDOVER.md`](HANDOVER.md) の 4-37 〜 4-41 にあります。
 >
 > **達成していること（すべて外部検証つき）**:
 > - 出力用メッシュの完全閉多様体化。4〜32分割に加え 48〜256 でも open: 0, non-manifold: 0, degenerate: 0。
@@ -30,7 +30,7 @@ Zenith CAD Kernel は、Rust でフルスクラッチ開発された **次世代
 
 ```mermaid
 graph TD
-    A[Zenith CAD Kernel Core v3.2.0] --> B[1. 数値幾何・自由曲面エンジン]
+    A[Zenith CAD Kernel Core v3.3.0] --> B[1. 数値幾何・自由曲面エンジン]
     A --> C[2. B-Rep トポロジー構造]
     A --> D[3. 形状生成・フィーチャーモデリング]
     A --> E[4. ダイレクトモデリング＆解析]
@@ -47,8 +47,8 @@ graph TD
 | **有理真円・円錐曲線** | `nurbs_curve` | 重み $w_i = \cos(\theta/2)$ による真円・円弧・楕円・放物線・双曲線の幾何学的厳密表現（誤差 $0.0$）。 |
 | **微分幾何・曲率解析** | `curvature` | 第1基本形式 ($E, F, G$)、第2基本形式 ($L, M, N$)、Gauss曲率 $K$、平均曲率 $H$、主曲率 $\kappa_1, \kappa_2$、法線ベクトルの厳密計算。 |
 | **4境界 Coons パッチ** | `coons_patch` | 4本の3D境界スプラインからの双線形 / 双3次ブレンド曲面自動補間。 |
-| **4辺ブレンドパッチ** | `gregory_patch` | 4本の境界曲線を厳密に通る双線形Coonsブレンド＋内部バブル項（`GregoryPatch4`）。**クロス方向接線を引数に取らないので、隣接面との $G^1$ 連続は達成していない**（`tangents` フィールドは全ゼロのまま未使用、`inner_points` は4隅のみから決まる）。名前に反して Chiyokura-Kimura のツイスト補間ではない。 |
-| **N辺コーナーブレンド** | `gregory_patch` | 3本以上の境界曲線（$N \ge 3$）が集まる多面頂点を、中心リブと境界の二等分により $N$ 個の4辺パッチで密閉（`CornerBlendN`）。$N = 3, 4, 5$ で $N$ 枚を返すことを `gregory_patch_test` が検査。曲面の連続性は上記の制限を引き継ぐ。 |
+| **4辺グレゴリーパッチ** | `gregory_patch` | 双3次ベジエの内部4点を**双子**で持ち、`(u,v)` で有理的に混ぜる（`GregoryPatch4::with_ribbons`）。4本の境界曲線と、4辺それぞれのクロス方向接線（`CrossRibbon`）を同時に満たす。隅のツイストが揃っている必要がない。実測: 境界 $2.3\times10^{-16}$、接線の残差は差分の刻み幅に比例して落ちる（刻み $10^{-6}$ で $3.4\times10^{-5}$）。境界は1スパンの非有理ベジエ（次数3以下）であること。 |
+| **N辺コーナーブレンド** | `gregory_patch` | 3本以上の境界曲線（$N \ge 3$）が集まる多面頂点を、中心リブと境界の二等分により $N$ 個のグレゴリーパッチで密閉（`CornerBlendN`）。$N = 3, 4, 5$ で $N$ 枚を返す。隣り合うセルは共有するリブの上で**隙間 0.000e0、法線の食い違い 0.0000 rad**。 |
 | **Gordon 曲線ネットワーク** | `gordon_surface` | 格子状に交差する曲線網を通る滑らかな自由曲面生成。 |
 | **3角形 Bézier / NURBS** | `triangular_patch` | 3境界からの重心座標系 $(u, v, w)$ による非四角形トリパッチ曲面補間。 |
 | **曲面間フィレットブレンド** | `surface_blend` | 2曲面の間を埋めるブレンド曲面（`create_g1_blend` / `create_g2_blend`）。**連続性を数で検査したテストは無く、`create_g2_blend` の膨らみは `0.8 * curvature_scale` という経験係数**。`FaceGeometry` に入っていないので B-Rep の面としては使えない。 |
@@ -120,7 +120,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 
 | フォーマット / バインディング | 対応規格 | スペック詳細 |
 | :--- | :--- | :--- |
-| **STEP 出力** | ISO 10303-21 (AP214) | `MANIFOLD_SOLID_BREP` / `BREP_WITH_VOIDS`、`ADVANCED_FACE`、`PLANE`、有理B-spline曲面・曲線、稜を実体として共有する `EDGE_CURVE`。**p-curve（`PCURVE` / `DEFINITIONAL_REPRESENTATION`）は出力しない**（受け側が導出する）。解析曲面は読めても書き出しは B-spline 化される。複合エンティティ実体の括弧を含め Part 21 の構文に適合。 |
+| **STEP 出力** | ISO 10303-21 (AP214) | `MANIFOLD_SOLID_BREP` / `BREP_WITH_VOIDS`、`ADVANCED_FACE`、`PLANE`、有理B-spline曲面・曲線、稜を実体として共有する `EDGE_CURVE`。**2D トリム境界を `SURFACE_CURVE` ＋ 面ごとの `PCURVE` として出力**（1稜につきちょうど2本。書いている p-curve は 3D の辺と 3.2e-15〜2.9e-12 で一致）。複合エンティティ実体の括弧を含め Part 21 の構文に適合。**解析曲面は読めても書き出しは B-spline 化される** — 実装しないと決めた項目で、理由は HANDOVER 4-41 に。 |
 | **STEP 入力** | ISO 10303-21 | **曲面**: `PLANE` / `CYLINDRICAL` / `CONICAL` / `SPHERICAL` / `TOROIDAL` / 有理B-spline / `SURFACE_OF_LINEAR_EXTRUSION`。**曲線**: `LINE` / `CIRCLE` / `ELLIPSE` / `TRIMMED_CURVE` / `SURFACE_CURVE` / 有理B-spline。`FACE_BOUND` のみのファイルからの外周ループ自動判定、`BREP_WITH_VOIDS`。**未対応**: `SURFACE_OF_REVOLUTION`, `OFFSET_SURFACE`, `COMPOSITE_CURVE`, `POLYLINE`, 開シェル系表現 — 当たると**エンティティ名を名指ししてエラー**になる（既定の平面や直線に差し替えて黙って進むことはしない）。 |
 | **IGES エクスポート** | IGES 5.3 | 各面の支持曲面を **Entity 128（有理Bスプライン曲面）** として出力。80桁固定レコード、Global 26フィールド、D/P セクション対応。**トリム（Entity 144 / 142 / 126）は未出力**。`tools/verify_iges.py` で OpenCASCADE が5検体すべてを読み、曲面枚数一致・境界箱のずれ 0。 |
 | **2D DXF 図面出力** | AutoCAD DXF (AC1015) | 断面スライサーからの閉ポリライン図面（LWPOLYLINE）。レイヤーは OUTLINE / HOLE / CENTERLINE / HATCH を **テーブルに定義**するが、`generate_dxf_string` が自動で割り当てるのは OUTLINE と HOLE のみ。線種は全レイヤー CONTINUOUS で、HATCH エンティティは出力しない。 |
@@ -136,7 +136,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 
 | 何を測ったか | 結果 | 再現コマンド |
 | :--- | :--- | :--- |
-| ワークスペース全テスト | **81 バイナリ（doctest 込み）/ 450 テスト 100% 合格**（0 failed, 0 ignored） | `cargo test --release --workspace --exclude zenith_py` |
+| ワークスペース全テスト | **81 バイナリ（doctest 込み）/ 455 テスト 100% 合格**（0 failed, 0 ignored） | `cargo test --release --workspace --exclude zenith_py` |
 | コンパイラ警告 | **0** | `cargo build --release --workspace --exclude zenith_py` |
 | ビルダー監査 | **24/24 クリーン**（解析解との差は最悪 6.3e-13、歯車 1.99e-9） | `--example builder_audit` |
 | 平面を NURBS で持つ面 | **全23ビルダーで0枚** | `--example planar_face_audit` |
