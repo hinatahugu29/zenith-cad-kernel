@@ -18,6 +18,29 @@ impl ThickenBuilder {
         Self::thicken_face_with_samples(face, thickness, Self::DEFAULT_OFFSET_SAMPLES, tol)
     }
 
+    /// 開いたシートシェル（複数Face）全体に均一な厚み `thickness` を与えて完全閉B-Repソリッド化
+    pub fn thicken_shell(shell: &Shell, thickness: f64, tol: &Tolerance) -> Result<Solid, String> {
+        if shell.faces.is_empty() {
+            return Err("Cannot thicken an empty shell".to_string());
+        }
+        if shell.faces.len() == 1 {
+            return Self::thicken_face(&shell.faces[0], thickness, tol);
+        }
+
+        // 複数面の場合、各パッチを厚み付けして結合（Boolean Union）
+        let mut solid = Self::thicken_face(&shell.faces[0], thickness, tol)?;
+        for face in shell.faces.iter().skip(1) {
+            let next_solid = Self::thicken_face(face, thickness, tol)?;
+            solid = crate::BooleanEngine::boolean_solids_exact(
+                &solid,
+                &next_solid,
+                crate::BooleanOpType::Union,
+                tol,
+            )?;
+        }
+        Ok(solid)
+    }
+
     /// 曲面をずらすときの標本の細かさを指定して厚みを付ける。
     ///
     /// 厳密なオフセット曲面は一般に NURBS では表せない。ここは曲面を標本して
