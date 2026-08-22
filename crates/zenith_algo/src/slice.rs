@@ -7,6 +7,8 @@
 //! planar faces exact and makes curved faces converge with the tessellation
 //! density instead of collapsing to the seam points.
 
+use std::collections::HashMap;
+
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
 use zenith_topo::{Edge, OrientedEdge, Solid, Vertex, Wire};
@@ -113,8 +115,8 @@ impl SectionSlicer {
         }
 
         // 2. 向きを保ったまま端点で連結し、閉じたループだけを採用する。
-        let weld_tolerance = weld_tolerance_for(&mesh, tol);
-        let chained = chain_directed_segments(&segments, weld_tolerance);
+        //    連結は距離ではなく**メッシュの位相**で行う（`SectionKey` を参照）。
+        let chained = chain_directed_segments(&segments);
 
         if !chained.open_chains.is_empty() {
             let longest = chained
@@ -296,16 +298,39 @@ fn mesh_bounds(mesh: &TriangleMesh) -> (Point3, Point3) {
     (min_pt, max_pt)
 }
 
-/// Endpoint matching has to tolerate the gap between two adjacent faces that
-/// were tessellated independently, so the weld distance is scaled to the model
-/// rather than left at the raw linear tolerance.
-fn weld_tolerance_for(mesh: &TriangleMesh, tol: &Tolerance) -> f64 {
-    let (min_pt, max_pt) = mesh_bounds(mesh);
-    let diagonal = (max_pt - min_pt).norm();
-    if !diagonal.is_finite() || diagonal <= 0.0 {
-        return tol.linear.max(1e-9);
+/// 断面上の点が、メッシュのどこで生まれたかを表す鍵。
+///
+/// 連結を**距離で**やっていたときの公差は模型の対角の 1e-6 だった。それが
+/// 成り立つのは、輪郭の刻み幅がその公差より十分に大きいあいだだけである。
+/// ブーリアンの結果を既定の 128 分割で切ると、実測で
+///
+/// - 一致させたい端点どうしの隙間: 99% が厳密に 0、最大 2.0e-6
+/// - 別物として残したい刻み幅   : 最小 1.0e-6
+///
+/// と**両者が重なる**。どの値を選んでも、繋ぎ落とすか、別々の点を1つに
+/// 潰すかのどちらかになる。実際に潰れており、1点に6本の線分が集まる偽の
+/// 分岐が 1628 個できて、貪欲な連結が行き止まりに入っていた。
+///
+/// 距離をやめて位相で見る。出力メッシュは全分割数で閉じた多様体なので
+/// （`mesh_watertight_probe`、および 256 分割まで実測）、**メッシュの1辺は
+/// ちょうど2枚の三角形に共有される**。その辺を横切ってできた点は、両側の
+/// 三角形から同じ鍵で出てくる。公差はどこにも要らない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum SectionKey {
+    /// 平面がメッシュの頂点をちょうど通った。
+    Vertex(u32),
+    /// 平面がメッシュの辺を横切った。添字は昇順に正規化してある。
+    Edge(u32, u32),
+}
+
+impl SectionKey {
+    fn edge(a: u32, b: u32) -> Self {
+        if a <= b {
+            SectionKey::Edge(a, b)
+        } else {
+            SectionKey::Edge(b, a)
+        }
     }
-    (diagonal * 1e-6).max(tol.linear)
 }
 
 /// One directed intersection segment, oriented so that chained loops come out
@@ -314,6 +339,8 @@ fn weld_tolerance_for(mesh: &TriangleMesh, tol: &Tolerance) -> f64 {
 struct DirectedSegment {
     start: Point3,
     end: Point3,
+    start_key: SectionKey,
+    end_key: SectionKey,
 }
 
 fn collect_directed_segments(
@@ -339,11 +366,11 @@ fn collect_directed_segments(
             snap_distance((p[2] - plane_origin).dot(&normal), tol.linear),
         ];
 
-        let Some(crossing) = triangle_plane_crossing(&p, &distance) else {
+        let Some(crossing) = triangle_plane_crossing(&p, tri, &distance) else {
             continue;
         };
-        let (first, second) = crossing;
-        if (second - first).norm() <= tol.linear {
+        let ((first, first_key), (second, second_key)) = crossing;
+        if first_key == second_key {
             continue;
         }
 
@@ -360,11 +387,15 @@ fn collect_directed_segments(
             segments.push(DirectedSegment {
                 start: first,
                 end: second,
+                start_key: first_key,
+                end_key: second_key,
             });
         } else {
             segments.push(DirectedSegment {
                 start: second,
                 end: first,
+                start_key: second_key,
+                end_key: first_key,
             });
         }
     }
@@ -388,7 +419,11 @@ fn snap_distance(distance: f64, linear_tolerance: f64) -> f64 {
 /// therefore classified explicitly, and a triangle with one edge in the plane
 /// contributes that edge only from its positive side so the segment is emitted
 /// exactly once.
-fn triangle_plane_crossing(points: &[Point3; 3], distance: &[f64; 3]) -> Option<(Point3, Point3)> {
+fn triangle_plane_crossing(
+    points: &[Point3; 3],
+    indices: &[u32; 3],
+    distance: &[f64; 3],
+) -> Option<((Point3, SectionKey), (Point3, SectionKey))> {
     let zero_count = distance.iter().filter(|d| **d == 0.0).count();
     let positive_count = distance.iter().filter(|d| **d > 0.0).count();
     let negative_count = distance.iter().filter(|d| **d < 0.0).count();
@@ -402,9 +437,9 @@ fn triangle_plane_crossing(points: &[Point3; 3], distance: &[f64; 3]) -> Option<
             if positive_count != 1 {
                 return None;
             }
-            let on_plane: Vec<Point3> = (0..3)
+            let on_plane: Vec<(Point3, SectionKey)> = (0..3)
                 .filter(|index| distance[*index] == 0.0)
-                .map(|index| points[index])
+                .map(|index| (points[index], SectionKey::Vertex(indices[index])))
                 .collect();
             Some((on_plane[0], on_plane[1]))
         }
@@ -419,7 +454,13 @@ fn triangle_plane_crossing(points: &[Point3; 3], distance: &[f64; 3]) -> Option<
             let (d0, d1) = (distance[other[0]], distance[other[1]]);
             let t = d0 / (d0 - d1);
             let crossing = points[other[0]] + (points[other[1]] - points[other[0]]) * t;
-            Some((points[vertex_index], crossing))
+            Some((
+                (points[vertex_index], SectionKey::Vertex(indices[vertex_index])),
+                (
+                    crossing,
+                    SectionKey::edge(indices[other[0]], indices[other[1]]),
+                ),
+            ))
         }
 
         // 頂点が平面上になければ、素直に2辺を横切る。
@@ -435,7 +476,10 @@ fn triangle_plane_crossing(points: &[Point3; 3], distance: &[f64; 3]) -> Option<
                     continue;
                 }
                 let t = d0 / (d0 - d1);
-                hits.push(points[index] + (points[next] - points[index]) * t);
+                hits.push((
+                    points[index] + (points[next] - points[index]) * t,
+                    SectionKey::edge(indices[index], indices[next]),
+                ));
             }
             if hits.len() < 2 {
                 return None;
@@ -453,7 +497,16 @@ struct ChainedSegments {
 /// Walks the directed segments head-to-tail so the loop winding survives the
 /// chaining, and keeps closed loops apart from chains that never came back to
 /// their start.
-fn chain_directed_segments(segments: &[DirectedSegment], weld: f64) -> ChainedSegments {
+fn chain_directed_segments(segments: &[DirectedSegment]) -> ChainedSegments {
+    // 始点の鍵から、そこを出ていく線分を引ける表。閉じた多様体メッシュでは
+    // 1つの辺をちょうど2枚の三角形が共有するので、辺の鍵に対する候補は
+    // 常に高々1本になる。頂点の鍵だけは、輪郭がその頂点で自分に触れている
+    // ときに複数になりうるので、候補は列で持つ。
+    let mut outgoing: HashMap<SectionKey, Vec<usize>> = HashMap::new();
+    for (index, segment) in segments.iter().enumerate() {
+        outgoing.entry(segment.start_key).or_default().push(index);
+    }
+
     let mut used = vec![false; segments.len()];
     let mut loops = Vec::new();
     let mut open_chains = Vec::new();
@@ -466,43 +519,31 @@ fn chain_directed_segments(segments: &[DirectedSegment], weld: f64) -> ChainedSe
 
         let seed = segments[seed_index];
         let mut chain = vec![seed.start, seed.end];
+        let mut current_key = seed.end_key;
         let mut closed = false;
 
         loop {
-            let current_end = *chain.last().unwrap();
-
-            if chain.len() >= 3 && (current_end - chain[0]).norm() <= weld {
+            // 出発点に戻ってきたら閉じている。最後の点は先頭と同じ位置なので落とす。
+            if current_key == seed.start_key {
                 chain.pop();
                 closed = true;
                 break;
             }
 
-            let mut next_index = None;
-            let mut best_distance = weld;
-            for (index, segment) in segments.iter().enumerate() {
-                if used[index] {
-                    continue;
-                }
-                let distance = (segment.start - current_end).norm();
-                if distance <= best_distance {
-                    best_distance = distance;
-                    next_index = Some(index);
-                }
-            }
+            let next_index = outgoing
+                .get(&current_key)
+                .and_then(|candidates| candidates.iter().copied().find(|index| !used[*index]));
 
             let Some(index) = next_index else {
-                if chain.len() >= 3 && (current_end - chain[0]).norm() <= weld {
-                    chain.pop();
-                    closed = true;
-                }
                 break;
             };
 
             used[index] = true;
             chain.push(segments[index].end);
+            current_key = segments[index].end_key;
         }
 
-        if closed {
+        if closed && chain.len() >= 3 {
             loops.push(chain);
         } else {
             open_chains.push(chain);
