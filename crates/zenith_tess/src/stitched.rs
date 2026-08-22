@@ -272,9 +272,13 @@ fn patch_mesh(
     if let Some(surface) = surface {
         if rings.len() == 1 {
             if let Some(mesh) = grid_patch(rings, surface, orientation, params) {
+                zenith_geom::work_counter::count_grid_patch();
                 return mesh;
             }
         }
+        // 構造格子が使えなかった面。ここを通る枚数は `tess_density_probe` が
+        // 数えており、ブーリアンの結果が重くなる原因はこの分岐である。
+        zenith_geom::work_counter::count_earcut_patch();
     }
 
     let mut flat = Vec::new();
@@ -528,7 +532,33 @@ fn grid_patch(
     params: &TessellationParams,
 ) -> Option<TriangleMesh> {
     let ring = &rings[0];
-    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let ((domain_u_min, domain_u_max), (domain_v_min, domain_v_max)) = surface.param_range();
+    if !(domain_u_max > domain_u_min && domain_v_max > domain_v_min) {
+        return None;
+    }
+
+    // 格子を張る矩形は、曲面のパラメータ領域全体ではなく **境界が実際に囲んで
+    // いる矩形** で取る。
+    //
+    // 面の境界が領域の縁に乗っているとは限らない。ブーリアンの結果では、支持
+    // 曲面が元の立体のまま（例えば全高 40 の円柱）で、面はその一部（箱の高さ
+    // 20）しか使っていないことがある。そのとき境界は領域の**内部**の等パラ
+    // メータ線上にあり、領域全体で縁を判定すると弾かれる。実測で、穴あき箱を
+    // ブーリアンで作ったときのボア壁4枚は境界 64 点のうち 30 点が「縁の外」と
+    // 判定され、4枚とも earcut ＋ 適応細分の経路に落ちていた。同じ形をビルダー
+    // で作ると 4 枚とも構造格子を通る。三角形数の比は最大 17.5 倍だった
+    // （`tess_density_probe`）。
+    //
+    // 境界が囲む矩形で見れば、内部の等パラメータ線も「縁」になる。矩形の外に
+    // 出る境界（斜めに切られた面など）は、これでも弾かれる。
+    let (mut u_min, mut u_max) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut v_min, mut v_max) = (f64::INFINITY, f64::NEG_INFINITY);
+    for uv in &ring.uv {
+        u_min = u_min.min(uv.x);
+        u_max = u_max.max(uv.x);
+        v_min = v_min.min(uv.y);
+        v_max = v_max.max(uv.y);
+    }
     let (u_span, v_span) = (u_max - u_min, v_max - v_min);
     if !(u_span > 0.0 && v_span > 0.0) {
         return None;
@@ -540,6 +570,10 @@ fn grid_patch(
         du <= 1e-7 * u_span || dv <= 1e-7 * v_span
     };
     if !ring.uv.iter().all(on_border) {
+        if std::env::var("ZENITH_GRID_WHY").is_ok() {
+            let off = ring.uv.iter().filter(|uv| !on_border(uv)).count();
+            eprintln!("GRIDWHY off_border {} of {}", off, ring.uv.len());
+        }
         return None;
     }
 
@@ -555,6 +589,9 @@ fn grid_patch(
     } else if !counts.is_empty() && counts.iter().all(|c| *c == counts[0]) {
         (counts[0].max(1), counts[0].max(1))
     } else {
+        if std::env::var("ZENITH_GRID_WHY").is_ok() {
+            eprintln!("GRIDWHY segment_counts {counts:?}");
+        }
         return None;
     };
     // どちらの向きが u かは、格子を作って共有点が全部乗るほうを採る。
@@ -639,6 +676,9 @@ fn grid_patch(
         return Some(build_grid_mesh(
             surface, orientation, params, uvs, fixed, rows, columns,
         ));
+    }
+    if std::env::var("ZENITH_GRID_WHY").is_ok() {
+        eprintln!("GRIDWHY no_orientation_matched across={across} along={along}");
     }
     None
 }

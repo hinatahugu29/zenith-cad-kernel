@@ -35,8 +35,10 @@ struct Subject {
     twin: Option<&'static str>,
 }
 
-fn triangles(solid: &Solid, divisions: usize) -> usize {
-    tessellate_solid(
+/// 三角形の数と、その面がどちらの経路で張られたか（構造格子 / earcut）。
+fn triangles(solid: &Solid, divisions: usize) -> (usize, u64, u64) {
+    let before = zenith_geom::work_counter::snapshot();
+    let count = tessellate_solid(
         solid,
         &TessellationParams {
             u_divisions: divisions,
@@ -44,7 +46,9 @@ fn triangles(solid: &Solid, divisions: usize) -> usize {
         },
     )
     .indices
-    .len()
+    .len();
+    let spent = zenith_geom::work_counter::snapshot().since(&before);
+    (count, spent.grid_patches, spent.earcut_patches)
 }
 
 fn main() {
@@ -101,11 +105,17 @@ fn main() {
     let mut counts: Vec<(&str, Vec<usize>)> = Vec::new();
     let mut non_monotone = 0usize;
 
+    let mut paths: Vec<(&str, u64, u64)> = Vec::new();
+
     for subject in &subjects {
-        let row: Vec<usize> = densities
+        let measured: Vec<(usize, u64, u64)> = densities
             .iter()
             .map(|density| triangles(&subject.solid, *density))
             .collect();
+        let row: Vec<usize> = measured.iter().map(|entry| entry.0).collect();
+        // 経路の内訳は分割数によらないので、代表として1つ取る。
+        let (_, grid, earcut) = measured[0];
+        paths.push((subject.name, grid, earcut));
 
         let monotone = row.windows(2).all(|pair| pair[1] >= pair[0]);
         if !monotone {
@@ -150,14 +160,35 @@ fn main() {
     }
 
     println!("{}", "-".repeat(22 + 9 * densities.len() + 12));
+
+    // どちらの経路で張られたか。ここが重さの出どころである。
+    println!();
+    println!("{:<22}{:>10}{:>10}", "subject", "grid", "earcut");
+    println!("{}", "-".repeat(42));
+    let mut earcut_total = 0u64;
+    for (name, grid, earcut) in &paths {
+        println!("{name:<22}{grid:>10}{earcut:>10}");
+        earcut_total += earcut;
+    }
+    println!("{}", "-".repeat(42));
+
+    println!();
     println!("subjects whose triangle count is not monotone in the division count: {non_monotone}");
     println!("worst ratio between two routes to the same shape: {worst_ratio:.2}x");
+    println!("faces that could not use the structured grid: {earcut_total}");
     println!();
-    println!("A count that falls when the division count rises means the number asked");
-    println!("for is not what decides the grid. `segments_for_edge` doubles until the");
-    println!("edge's own deflection is under target, so a curved edge can pull the whole");
-    println!("patch far past what was requested, and which edge wins changes with the");
-    println!("division count.");
+    println!("The weight comes from the `earcut` column, not from the edge sampling.");
+    println!("`SamplePlan` gives every edge of both solids exactly the number of");
+    println!("segments asked for - measured, both the builder and the boolean drilled");
+    println!("box sit at n for every edge. What differs is how the patch interior is");
+    println!("filled: a face whose boundary runs along the parameter rectangle is laid");
+    println!("out on a structured grid, and any other face falls back to earcut plus");
+    println!("adaptive refinement, which subdivides until deflection is met and so");
+    println!("ignores the division count as an upper bound.");
+    println!();
+    println!("Boolean results carry split faces whose boundaries no longer follow the");
+    println!("parameter rectangle, so they take the fallback. That is also why the");
+    println!("count is not monotone: which faces qualify shifts with the density.");
     println!();
     println!("This probe measures; nothing here is fixed yet. It is wired to report");
     println!("rather than to fail, so that the numbers stay visible without turning a");

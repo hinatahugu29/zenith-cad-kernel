@@ -32,6 +32,8 @@ static UV_TRIANGLES: AtomicU64 = AtomicU64::new(0);
 static UV_BOUNDARY_POINTS: AtomicU64 = AtomicU64::new(0);
 static UV_WORST_BOUNDARY: AtomicU64 = AtomicU64::new(0);
 static SOLID_TESSELLATIONS: AtomicU64 = AtomicU64::new(0);
+static GRID_PATCHES: AtomicU64 = AtomicU64::new(0);
+static EARCUT_PATCHES: AtomicU64 = AtomicU64::new(0);
 
 /// ある時点までに積み上がった仕事の量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -74,6 +76,19 @@ pub struct WorkCounters {
     /// 内外判定はメッシュに対して行われるので、同じ立体を何度も刻んで
     /// いないかがここに出る。
     pub solid_tessellations: u64,
+    /// 面を**構造格子**で張った回数。境界がパラメータ矩形の縁を1周している
+    /// パッチはこちらを通り、頼んだ分割数どおりの規則的な格子になる。
+    pub grid_patches: u64,
+    /// 面を **earcut ＋ 適応細分**で張った回数。
+    ///
+    /// 構造格子が使えなかった面はこちらへ落ちる。境界の多角形から三角形を
+    /// 起こし、たわみが目標を下回るまで最長辺を割り続けるので、**頼んだ
+    /// 分割数が上限として効かない**。
+    ///
+    /// ブーリアンの結果はここを通る面が多い。同じ形をビルダーで作ったものと
+    /// 比べて重くなる原因はここで、`SamplePlan` の稜の刻みではない（そちらは
+    /// 実測で両者とも頼んだ分割数ちょうどだった）。
+    pub earcut_patches: u64,
 }
 
 impl WorkCounters {
@@ -110,6 +125,8 @@ impl WorkCounters {
             solid_tessellations: self
                 .solid_tessellations
                 .saturating_sub(earlier.solid_tessellations),
+            grid_patches: self.grid_patches.saturating_sub(earlier.grid_patches),
+            earcut_patches: self.earcut_patches.saturating_sub(earlier.earcut_patches),
         }
     }
 }
@@ -131,6 +148,8 @@ pub fn snapshot() -> WorkCounters {
         uv_boundary_points: UV_BOUNDARY_POINTS.load(Ordering::Relaxed),
         uv_worst_boundary: UV_WORST_BOUNDARY.load(Ordering::Relaxed),
         solid_tessellations: SOLID_TESSELLATIONS.load(Ordering::Relaxed),
+        grid_patches: GRID_PATCHES.load(Ordering::Relaxed),
+        earcut_patches: EARCUT_PATCHES.load(Ordering::Relaxed),
     }
 }
 
@@ -150,6 +169,8 @@ pub fn reset() {
     UV_BOUNDARY_POINTS.store(0, Ordering::Relaxed);
     UV_WORST_BOUNDARY.store(0, Ordering::Relaxed);
     SOLID_TESSELLATIONS.store(0, Ordering::Relaxed);
+    GRID_PATCHES.store(0, Ordering::Relaxed);
+    EARCUT_PATCHES.store(0, Ordering::Relaxed);
 }
 
 #[inline]
@@ -212,4 +233,16 @@ pub fn count_uv_triangulation(triangles: usize) {
 pub fn count_uv_boundary(points: usize) {
     UV_BOUNDARY_POINTS.fetch_add(points as u64, Ordering::Relaxed);
     UV_WORST_BOUNDARY.fetch_max(points as u64, Ordering::Relaxed);
+}
+
+/// 面を構造格子で張った。
+#[inline]
+pub fn count_grid_patch() {
+    GRID_PATCHES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 面を earcut ＋ 適応細分で張った。
+#[inline]
+pub fn count_earcut_patch() {
+    EARCUT_PATCHES.fetch_add(1, Ordering::Relaxed);
 }
