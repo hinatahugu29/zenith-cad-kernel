@@ -458,7 +458,125 @@ fn derive_wire_nurbs_boundary_pcurves(
         });
     }
 
+    settle_seam_segments(&mut segments, surface, tol);
+
     Ok(FacePcurveLoop { segments })
+}
+
+/// 継ぎ目に丸ごと乗っている区間を、ループの隣とつながる側へ寄せる。
+///
+/// `settle_seam_parameters` は稜1本の中で寄せ先を決めるので、**稜が丸ごと
+/// 継ぎ目に乗っている**ときは寄せ先が無く、そのまま返します。周期曲面では
+/// その稜の uv は2通りあり（u=0 と u=1 が同じ3D点）、投影はどちらを返しても
+/// 正しく見えます。両方が同じ側に落ちると、ループは行って戻るだけの
+/// **面積0の多角形**になります。
+///
+/// 実測: OpenCASCADE が書いた全周の円錐と半球は、母線2本がどちらも u=0 に
+/// 落ち、uv の符号付き面積がちょうど 0 になっていました。earcut は三角形を
+/// 1枚も返さず、**側面がメッシュから丸ごと消えます**（底面だけの 20 三角形、
+/// z 方向の広がり 0）。体積は別経路で積むので正しく、見えませんでした。
+///
+/// 寄せ先はループが決めます。継ぎ目に乗った区間の端は、隣の区間の端と
+/// 一致していなければなりません。
+fn settle_seam_segments(
+    segments: &mut [FacePcurveSegment],
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) {
+    if segments.len() < 2 {
+        return;
+    }
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    settle_seam_segment_axis(segments, u_min, u_max, surface, tol, true);
+    settle_seam_segment_axis(segments, v_min, v_max, surface, tol, false);
+}
+
+fn settle_seam_segment_axis(
+    segments: &mut [FacePcurveSegment],
+    min: f64,
+    max: f64,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+    along_u: bool,
+) {
+    let span = max - min;
+    if span <= 0.0 {
+        return;
+    }
+    // この軸が本当に周期的か。両端が同じ点に写らなければ、寄せてはいけない。
+    let middle = if along_u {
+        (surface.param_range().1 .0 + surface.param_range().1 .1) * 0.5
+    } else {
+        (surface.param_range().0 .0 + surface.param_range().0 .1) * 0.5
+    };
+    let (low_point, high_point) = if along_u {
+        (surface.evaluate(min, middle), surface.evaluate(max, middle))
+    } else {
+        (surface.evaluate(middle, min), surface.evaluate(middle, max))
+    };
+    if (high_point - low_point).norm() > tol.linear.max(1e-9) {
+        return;
+    }
+
+    let edge_of_domain = span * 1e-6;
+    let coordinate = |point: &Point2| if along_u { point.x } else { point.y };
+
+    // 曖昧なのは、**この軸の値が丸ごと片側に張り付いている**区間だけ。
+    // 「各制御点が min か max のどちらかにある」では足りません。円錐の底円の
+    // p-curve は u が 1 から 0 へ動く1次の直線で、制御点は 2 点ともちょうど
+    // 端にあります。それを曖昧と見ると、寄せ先を決める基準が無くなります。
+    let ambiguous: Vec<bool> = segments
+        .iter()
+        .map(|segment| {
+            let at = |target: f64| {
+                segment
+                    .curve
+                    .control_points
+                    .iter()
+                    .all(|control| (coordinate(&control.point) - target).abs() <= edge_of_domain)
+            };
+            at(min) || at(max)
+        })
+        .collect();
+    if ambiguous.iter().all(|flag| *flag) || ambiguous.iter().all(|flag| !*flag) {
+        return;
+    }
+
+    let count = segments.len();
+    for index in 0..count {
+        if !ambiguous[index] {
+            continue;
+        }
+        // 前の区間の終わり、次の区間の始まり。曖昧でない隣だけを見る。
+        let previous = (index + count - 1) % count;
+        let next = (index + 1) % count;
+        let mut wanted: Vec<f64> = Vec::new();
+        if !ambiguous[previous] {
+            let (_, t_max) = segments[previous].curve.param_range();
+            wanted.push(coordinate(&segments[previous].curve.evaluate(t_max)));
+        }
+        if !ambiguous[next] {
+            let (t_min, _) = segments[next].curve.param_range();
+            wanted.push(coordinate(&segments[next].curve.evaluate(t_min)));
+        }
+        if wanted.is_empty() {
+            continue;
+        }
+        let reference = wanted.iter().sum::<f64>() / wanted.len() as f64;
+        let nearer = if (reference - min).abs() <= (reference - max).abs() {
+            min
+        } else {
+            max
+        };
+
+        for control in &mut segments[index].curve.control_points {
+            if along_u {
+                control.point.x = nearer;
+            } else {
+                control.point.y = nearer;
+            }
+        }
+    }
 }
 
 fn match_nurbs_boundary_pcurve(
