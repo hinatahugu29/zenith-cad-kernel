@@ -464,7 +464,48 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
 }
 
 /// この立体で許すたわみ。寸法と指定分割数から決める。
+///
+/// 寸法は**頂点**から測ります。曲がった形では、頂点の箱は形そのものより
+/// 小さく出ます（螺旋ばねは両端が同じ角度に来るので、頂点だけ見ると
+/// 幅 2R が消える）。その控えめさは**効いています**——刻みが細かい側に
+/// 倒れるので、丸線ばねのメッシュ体積は 16〜256 分割で 3.98e-4 から
+/// 1.55e-6 まで単調に落ちます。
+///
+/// **稜の上の点まで見て「正しく」測ると、これが壊れます。** 実測（同じ
+/// `helix_volume_probe`、稜を5点ずつ見るようにしたもの）:
+///
+/// | 分割 | 頂点で測る | 稜の上まで測る |
+/// | --: | --: | --: |
+/// | 16 | 3.98e-4 | 1.19e-3 |
+/// | 64 | 2.49e-5 | **5.85e-1** |
+/// | 128 | 6.22e-6 | **-4.86e0** |
+///
+/// 目標が緩むとパッチの境界が巻きをまたいで切り取られ、収束すらしなく
+/// なります。ここは「正しい寸法」ではなく「安全側の寸法」が要る場所です。
+///
+/// 潰れたときだけが問題です。全周で閉じた1枚の面（他カーネルが書いた
+/// トーラス）は4本の継ぎ目がすべて同じ1点で始まって同じ点で終わるので、
+/// **頂点の箱は1点に潰れて範囲が 0 になります**。目標が下限 1e-9 に落ち、
+/// どの稜も上限 4096 まで刻まれ、16384 点の多角形を渡された earcut は
+/// 事実上返ってきません（実測: 4分割でも 120 秒で返らず）。
+///
+/// なので、**測り方は変えず、潰れだけを見張ります**。頂点の箱が稜の箱に
+/// 比べて桁違いに小さいときだけ、稜の箱に切り替えます。
 fn deflection_target(solid: &Solid, divisions: usize) -> f64 {
+    let vertex_extent = solid_extent(solid, 0);
+    let edge_extent = solid_extent(solid, 4);
+    // 潰れの判定。ばねは 0.42 倍なので触りません。トーラスは 0 です。
+    let extent = if vertex_extent > edge_extent * 1e-3 {
+        vertex_extent
+    } else {
+        edge_extent
+    };
+    let divisions = divisions.max(2) as f64;
+    (extent / (8.0 * divisions * divisions)).max(1e-9)
+}
+
+/// 立体の境界箱の対角長。`samples` が 0 なら稜の端点だけ、正なら稜の途中も見る。
+fn solid_extent(solid: &Solid, samples: usize) -> f64 {
     let mut low: Option<Point3> = None;
     let mut high: Option<Point3> = None;
     let mut consider = |point: Point3| {
@@ -481,18 +522,22 @@ fn deflection_target(solid: &Solid, divisions: usize) -> f64 {
         for face in &shell.faces {
             for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
                 for oriented in &wire.edges {
-                    consider(oriented.edge.start_vertex.point);
-                    consider(oriented.edge.end_vertex.point);
+                    if samples == 0 {
+                        consider(oriented.edge.start_vertex.point);
+                        consider(oriented.edge.end_vertex.point);
+                    } else {
+                        for step in 0..=samples {
+                            consider(oriented.evaluate_normalized(step as f64 / samples as f64));
+                        }
+                    }
                 }
             }
         }
     }
-    let extent = match (low, high) {
+    match (low, high) {
         (Some(l), Some(h)) => (h - l).norm(),
         _ => 1.0,
-    };
-    let divisions = divisions.max(2) as f64;
-    (extent / (8.0 * divisions * divisions)).max(1e-9)
+    }
 }
 
 /// この稜を、自身のたわみが目標を下回るまで何本に刻むか
