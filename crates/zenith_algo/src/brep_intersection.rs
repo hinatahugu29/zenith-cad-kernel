@@ -3573,19 +3573,43 @@ fn point_triangle_distance(point: Point3, a: Point3, b: Point3, c: Point3) -> f6
     (point - closest).norm()
 }
 
+/// 面の境界を確実に含む箱。
+///
+/// **標本から作った箱は上界ではありません。** ここは長らく境界を12点ずつ
+/// 標本して箱にしていました。曲がった境界では標本の間で外へ膨らむので、
+/// 出来た箱は本物より小さくなります。有理曲線はパラメータが角度に比例しない
+/// ので、「端と真ん中を取れば足りる」も成り立ちません。
+///
+/// 実測: 半径10の円柱を120度ずつに割った断片で、境界の本当の y の最大は 10、
+/// 標本の箱は **9.993**。この箱は候補の絞り込みと交線の切り詰めの両方に
+/// 使われるので、x=-0.2 の平面との交線（y=9.998）が**箱の外**と判定され、
+/// 面の組ごと落ちていました。落ちた組は「交わらない」と同じ扱いになります。
+///
+/// 制御点で測ります。B-spline 曲線は制御点の凸包に含まれる（重みが正で
+/// あれば有理でも同じ）ので、制御点の箱は**必ず曲線を含みます**。絞り込みの
+/// 箱は大きすぎる方向に外れるべきで、小さすぎる方向に外れてはいけません。
+/// 標本も併せて入れます——重みが負の曲線が来ても悪化させないためです。
 fn face_boundary_bbox(face: &Face) -> Option<BoundingBox3> {
     let mut bbox = BoundingBox3::empty();
-    for point in face.outer_wire.sample_points(12) {
-        if point3_is_finite(point) {
-            bbox.extend_point(point);
-        }
-    }
-    for wire in &face.inner_wires {
+
+    let take = |wire: &zenith_topo::Wire, bbox: &mut BoundingBox3| {
         for point in wire.sample_points(12) {
             if point3_is_finite(point) {
                 bbox.extend_point(point);
             }
         }
+        for oriented in &wire.edges {
+            for control in &oriented.edge.curve.control_points {
+                if point3_is_finite(control.point) {
+                    bbox.extend_point(control.point);
+                }
+            }
+        }
+    };
+
+    take(&face.outer_wire, &mut bbox);
+    for wire in &face.inner_wires {
+        take(wire, &mut bbox);
     }
 
     bbox.is_valid().then_some(bbox)
