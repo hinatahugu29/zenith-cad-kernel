@@ -76,7 +76,7 @@ pub use feature_tree::{
 };
 pub use fillet::FilletBuilder;
 pub use flange::FlangeBuilder;
-pub use gear::GearBuilder;
+pub use gear::{GearBuilder, RootFilletGeneration};
 pub use helix::HelixBuilder;
 pub use hole::HoleBuilder;
 pub use interference::{ClashStatus, InterferenceChecker, InterferenceReport};
