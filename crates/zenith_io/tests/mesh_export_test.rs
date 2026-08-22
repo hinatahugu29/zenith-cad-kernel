@@ -1,7 +1,6 @@
-use zenith_io::{GltfExporter, IgesExporter, ObjExporter, StlExporter};
+use zenith_io::{GltfExporter, ObjExporter, StlExporter};
 use zenith_math::{Point3, Vec3};
 use zenith_tess::TriangleMesh;
-use zenith_topo::Solid;
 
 fn make_test_mesh() -> TriangleMesh {
     let mut mesh = TriangleMesh::new();
@@ -77,15 +76,8 @@ fn test_obj_export_to_file() {
     let _ = std::fs::remove_file(obj_path);
 }
 
-#[test]
-fn test_iges_export_sections() {
-    let solid = Solid::new(zenith_topo::Shell::new(vec![], true), vec![]);
-    let iges_str = IgesExporter::export_solid_to_string(&solid, "TestPart")
-        .expect("IGES export should succeed");
-    assert!(iges_str.contains("Zenith CAD Kernel IGES 5.3 Export - TestPart"));
-    assert!(iges_str.contains("S0000001"));
-    assert!(iges_str.contains("G0000001"));
-    assert!(iges_str.contains("D      1"));
-    assert!(iges_str.contains("P      1"));
-    assert!(iges_str.contains("T0000001"));
-}
+// IGES の検査は crates/zenith_algo/tests/iges_export_test.rs へ移した。
+// ここにあった test_iges_export_sections は**空のシェル**を渡して固定文字列の
+// 有無を見るだけで、エクスポータ側も引数を読んでいなかったため、両者は
+// 矛盾なく通り続けていた。形に依存する量を見るには立体を作る必要があり、
+// ビルダーは zenith_algo にある。

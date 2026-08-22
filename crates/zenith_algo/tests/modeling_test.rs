@@ -6088,7 +6088,23 @@ fn test_iges_export() {
 
     let content = std::fs::read_to_string(iges_path).unwrap();
     assert!(content.contains("ZENITH_BOX_IGES"));
-    assert!(content.contains("186")); // Manifold Solid B-Rep Type 186
+
+    // ここは以前 `content.contains("186")` を見ていた。当時のエクスポータは
+    // 立体を読まずに中身の無い Entity 186 を1つ書くだけで、この検査はその
+    // スタブが残した文字列を確かめていた。いまは面ごとに Entity 128（有理
+    // Bスプライン曲面）を書くので、箱なら6枚ぶんの Directory Entry が並ぶ。
+    let directory_records = content
+        .lines()
+        .filter(|line| line.len() >= 73 && line.as_bytes()[72] == b'D')
+        .count();
+    assert_eq!(
+        directory_records, 12,
+        "a box has six faces, and each entity takes two directory records"
+    );
+    assert!(
+        content.contains("18.0000000000"),
+        "the control points of this box must appear in its own file"
+    );
 }
 
 #[test]
