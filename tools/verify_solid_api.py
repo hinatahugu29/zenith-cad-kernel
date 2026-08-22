@@ -193,6 +193,33 @@ def test_mesh_still_available():
     check("the mesh volume agrees", close(mesh.volume, 1000.0, 1e-9), mesh.volume)
 
 
+def test_distance():
+    print("[distance]")
+    plate = z.Solid.box(200.0, 200.0, 2.0)
+    ball = z.Solid.sphere(5.0).translated(100.0, 100.0, 10.0)
+
+    result = plate.distance_to(ball)
+    check(
+        "a ball 3 above the middle of a plate measures 3",
+        close(result["distance"], 3.0, 1e-9),
+        result["distance"],
+    )
+    check(
+        "the closest point is under the ball, not at a corner of the plate",
+        close(result["point_on_self"][0], 100.0, 1e-6)
+        and close(result["point_on_self"][1], 100.0, 1e-6),
+        result["point_on_self"],
+    )
+
+    overlapping = z.Solid.box(10.0, 10.0, 10.0)
+    other = z.Solid.box(10.0, 10.0, 10.0).translated(5.0, 0.0, 0.0)
+    check(
+        "overlapping solids have no clearance",
+        overlapping.distance_to(other)["distance"] == 0.0,
+        overlapping.distance_to(other)["distance"],
+    )
+
+
 def test_inertia():
     print("[inertia]")
     part = z.Solid.box(20.0, 30.0, 40.0)
@@ -269,6 +296,7 @@ def main():
     test_mesh_still_available()
     test_simplify()
     test_inertia()
+    test_distance()
 
     print("=" * 60)
     if FAILURES:

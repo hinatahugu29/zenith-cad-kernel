@@ -85,7 +85,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **六角ボルト (Hex Bolt)** | `bolt::BoltBuilder` | 二面幅 $S$、頭部厚み $k$、軸部半径 $r$、軸長 $L$ から六角頭＋軸部円柱を一体化した標準六角ボルトソリッド（完全閉多様体）を生成。 |
 | **段付きシャフト・キー溝・環状溝 (Shaft)** | `shaft::ShaftBuilder` | 複数段 $\&[(r_i, L_i)]$ の段付き軸（`make_stepped_shaft`）、平行キー溝の差分切削（`make_shaft_with_keyway`）、および止め輪・Oリング環状溝の切削（`make_shaft_with_annular_groove`）による機械伝動軸の直接構築。 |
 | **一括バッチブーリアン (Batch Boolean)** | `BooleanEngine::boolean_solids_batch` | 1つのベース立体に対して複数のツール立体（ボルト穴列、ピン列、補強リブ群など）を一括で連続適用する安全なバッチ演算API。 |
-| **任意ソリッド間最短距離探索 (Distance)** | `distance::DistanceEngine` | 2つのソリッド間の表面最短距離および最近傍点ペアを算出。箱・円柱・球・自由曲面のクリアランス自動検証に対応。 |
+| **任意ソリッド間最短距離探索 (Distance)** | `distance::DistanceEngine` | 2つのソリッド間の表面最短距離と最近接点の組。**面の内側・辺・頂点のすべてを見る**（頂点どうしで上界を取り、その上界で枝刈りしながら三角形どうしの最短距離を取り、最後に最近接点を B-Rep の面へ交互に射影して詰める。射影がトリム領域の内側にあるかは p-curve で判定する）。触れている・交わっている・一方が他方の内側にある場合は 0 を返す。<br>実測: 板の中央の上の小球・板の上の角材・平行円柱・球どうし・めり込みを含む7配置すべてで閉じた式と**厳密に一致**し、刻みを 8/16/32 と振っても動かない（最大 8.9e-16）。<br>**従来は2つのメッシュの頂点どうししか見ておらず**、直方体の頂点は8個しかないため板の上の物体は板の隅との距離で測られていた（3.0 が 136.6、0.5 が 138.6）。めり込んだ立体には正の隙間を返していた。`distance_probe` が常時測る。 |
 | **2D DXF 図面エクスポート (DXF Export)** | `zenith_io::DxfExporter` | 3D断面スライス（`SectionSlicer`）で抽出した閉断面ワイヤループ群を標準AutoCAD DXF形式（`LWPOLYLINE`）でファイル出力。2D CADやレーザー加工機とのダイレクト連携に対応。 |
 | **薄肉シェル容器化 (Shelling)** | `shelling` | 任意ソリッドからの開口面除去および均一肉厚 $t$ での中空容器（Open-Top Box）自動構築。 |
 | **断面スライス (Section Slicing)** | `slice` | 任意3D平面によるB-Repソリッド切断、閉じた断面ワイヤループ抽出、符号付き断面積（穴は減算）・周長算出。断面は表示用メッシュの多角形ではなく **B-Rep の上で測った点**で積む。輪郭の点を面と平面の交わりへ載せ直し、弦ごとに中点をもう1点測って3点を通る2次曲線の Green 積分で積むので、誤差は分割数の**4乗**で縮む。平面のみで構成された立体は分割数によらず厳密、曲面を含む場合も既定 96 分割で円柱断面の相対誤差 **4.83e-11**（周長 2.41e-11）。閉じないループはエラーとして返す。 |
@@ -151,7 +151,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **glTF 2.0** | **Write** | Web 3D標準フォーマット。PBR対応、BASE64バイナリ埋め込み自己完結型 `.gltf` 出力。 |
 | **IGES 5.3** | **Write** | レガシーCAD互換。Type 186 Manifold Solid B-Rep フォーマット出力。 |
 | **Blender 5.x C拡張** | **Python C 拡張 (`zenith_cad.pyd`)** | PyO3 0.23 / abi3 \| 全 **45** 個のネイティブ関数を単一の超高速バイナリ（~2.9MB）としてエクスポート。厳密ブーリアンは `make_exact_box_boolean`（箱同士）と `make_exact_drill_boolean`（任意軸の円柱による貫通穴・止まり穴）で公開。対応範囲外は例外を送出する。<br>ビルド時、`pyo3` は PATH から Python を探す。見つからない環境では `PYO3_PYTHON` に実行ファイルを指定する。 |
-| **Python 立体ハンドル** | **`zenith_cad.Solid`** | 立体そのものを Python 側で持ち回るための不変オブジェクト。**すべてのメソッドが新しい立体を返す**。生成（`box` / `cylinder` / `sphere` / `cone` / `torus` / `regular_prism` / `from_step` / `all_from_step`）、変換（`translated` / `rotated` / `mirrored`）、ブーリアン（`union` / `difference` / `intersection` / `difference_all`）、稜（`edges` / `blendable_edges` / `fillet_edge` / `chamfer_edge` / `fillet_edges` / `chamfer_edges`）、面（`faces` / `push_pull_face` / `taper_face`）、計測（`mass_properties` / `validate` / `clash_status` / `volume` / `face_count`）、出力（`tessellate` / `to_step` / `to_step_string`）、後片付け（`sewn` / `simplified` / `simplify_report`）。これが入るまで、Python 側は `make_X(...) -> Mesh` のワンショットしか無く、作った立体を次の演算に渡す手段が無かった（組み合わせが要るたびに Rust 側へ専用関数を足していた）。`validate()` の `unshared_edge_entity_uses` が 0 でない立体は、閉じてはいるが稜を選べない状態を指す。<br>一周の検証: `py tools/verify_solid_api.py`（20項目。作る → ブーリアン → 稜を選ぶ → 丸める → STEP → 読み直すで体積が閉じた式と一致）。 |
+| **Python 立体ハンドル** | **`zenith_cad.Solid`** | 立体そのものを Python 側で持ち回るための不変オブジェクト。**すべてのメソッドが新しい立体を返す**。生成（`box` / `cylinder` / `sphere` / `cone` / `torus` / `regular_prism` / `from_step` / `all_from_step`）、変換（`translated` / `rotated` / `mirrored`）、ブーリアン（`union` / `difference` / `intersection` / `difference_all`）、稜（`edges` / `blendable_edges` / `fillet_edge` / `chamfer_edge` / `fillet_edges` / `chamfer_edges`）、面（`faces` / `push_pull_face` / `taper_face`）、計測（`mass_properties` / `validate` / `clash_status` / `volume` / `face_count`）、出力（`tessellate` / `to_step` / `to_step_string`）、計測（`distance_to`）、後片付け（`sewn` / `simplified` / `simplify_report`）。これが入るまで、Python 側は `make_X(...) -> Mesh` のワンショットしか無く、作った立体を次の演算に渡す手段が無かった（組み合わせが要るたびに Rust 側へ専用関数を足していた）。`validate()` の `unshared_edge_entity_uses` が 0 でない立体は、閉じてはいるが稜を選べない状態を指す。<br>一周の検証: `py tools/verify_solid_api.py`（20項目。作る → ブーリアン → 稜を選ぶ → 丸める → STEP → 読み直すで体積が閉じた式と一致）。 |
 
 ---
 
@@ -196,6 +196,7 @@ STEP に書き出した瞬間に他カーネルで壊れる立体。いずれも
 | `cargo run --release -p zenith_algo --example boolean_topology_probe` | ブーリアンの結果が稜を**実体として**共有しているか（共有されていない稜が1本でもあれば非ゼロ終了するのでリリースゲートに使える） |
 | `cargo run --release -p zenith_algo --example mesh_watertight_probe` | 出力用メッシュが閉じた三角形メッシュになっているか（9通りの分割数で、開いた辺・非多様体・退化三角形・体積のずれを出す） |
 | `cargo run --release -p zenith_algo --example boolean_gate_probe` | ブーリアンの検証ゲートの判定が、テッセレーションの設定で変わらないか。正しい結果が全部通り、誤答（体積の境界では捕まらないものを含む）が全部落ちることを 4〜32 分割で確かめる |
+| `cargo run --release -p zenith_algo --example distance_probe` | 最短距離が閉じた式に乗るか、および刻みの細かさで答えが動かないか（7配置） |
 | `cargo run --release -p zenith_algo --example slice_robustness_probe` | 断面が、平面が格子行に乗るかどうかと分割数によらず閉じるか（閉じなければ非ゼロ終了） |
 | `cargo run --release -p zenith_algo --example inertia_probe` | 重心・慣性・慣性積・主慣性モーメントが閉じた式に乗るか（主値が剛体変換で不変かも見る） |
 | `cargo run --release -p zenith_algo --example planar_face_audit` | 平面なのに NURBS で持っている面を返すビルダーが無いか（1枚でもあれば非ゼロ終了） |

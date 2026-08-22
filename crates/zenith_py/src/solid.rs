@@ -501,6 +501,41 @@ impl PySolid {
         Ok(out)
     }
 
+    /// もう1つの立体との表面最短距離と、その最近接点。
+    ///
+    /// 触れている・交わっている・一方が他方の内側にある場合は 0。
+    /// 答えは B-Rep の面へ詰めるので、表示の刻みでは動かない。
+    pub fn distance_to<'py>(
+        &self,
+        py: Python<'py>,
+        other: &PySolid,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let result = zenith_algo::DistanceEngine::compute_min_distance(
+            &self.solid,
+            &other.solid,
+            &Tolerance::default(),
+        );
+        let out = PyDict::new(py);
+        out.set_item("distance", result.min_distance)?;
+        out.set_item(
+            "point_on_self",
+            [
+                result.closest_point_a.x,
+                result.closest_point_a.y,
+                result.closest_point_a.z,
+            ],
+        )?;
+        out.set_item(
+            "point_on_other",
+            [
+                result.closest_point_b.x,
+                result.closest_point_b.y,
+                result.closest_point_b.z,
+            ],
+        )?;
+        Ok(out)
+    }
+
     /// もう1つの立体との干渉状態: "clearance" / "touching" / "clash"
     pub fn clash_status(&self, other: &PySolid) -> String {
         match InterferenceChecker::check(&self.solid, &other.solid, &Tolerance::default()).status {
