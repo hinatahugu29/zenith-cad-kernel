@@ -431,6 +431,13 @@ impl StepImporter {
             }
         }
 
+        if raw.name == "ELLIPSE" {
+            if let Some(c) = Self::arc_from_ellipse_entity(ctx, &raw, p_start, p_end)? {
+                ctx.curves.insert(id, c.clone());
+                return Ok(c);
+            }
+        }
+
         if raw.name == "SURFACE_CURVE" {
             let parts = Self::split_top_level_args(&raw.args);
             if parts.len() >= 2 {
@@ -450,9 +457,16 @@ impl StepImporter {
             }
         }
 
-        // デフォルト直線補間
-        let c = NurbsCurve3::bspline_from_points(1, vec![p_start, p_end])?;
-        Ok(c)
+        // ここは端点を結ぶ直線を返していた。楕円弧や複合曲線をそのまま弦に
+        // 置き換えるということで、平面の上に載る境界なら**面からは外れない**
+        // ので、下流の p-curve 検証を素通りしうる。閉じた円のように両端が
+        // 同じ点になる曲線は退化として捕まるが、それは捕まる側の運が良い
+        // だけである。読めなかったことは、読めなかったと言う。
+        Err(format!(
+            "Unsupported curve entity {} (#{}). Zenith reads LINE, CIRCLE, \
+             TRIMMED_CURVE, SURFACE_CURVE and (rational) B_SPLINE_CURVE_WITH_KNOTS",
+            raw.name, id
+        ))
     }
 
     fn parse_nurbs_curve(
@@ -647,6 +661,255 @@ impl StepImporter {
         arc_from_angles(center, normal, ref_dir, radius, p_start, p_end).map(Some)
     }
 
+    /// `SURFACE_OF_LINEAR_EXTRUSION('', #swept_curve, #extrusion_axis)`
+    ///
+    /// 断面曲線を一方向にまっすぐ掃いた曲面。OpenCASCADE は、スプライン断面や
+    /// 楕円断面の押し出しをこの形で書く（解析曲面に落とせる円や直線の押し出しは
+    /// `CYLINDRICAL_SURFACE` / `PLANE` になるので、ここに来るのは自由曲線の
+    /// 押し出しに限られる）。
+    ///
+    /// `S(u, v) = C(u) + v * V` は `v` について1次なので、`v` 方向の次数を1に
+    /// して両端の制御点列を置けば**厳密**に表せる。有理曲線でも、重みはそのまま
+    /// で制御点だけ平行移動すればよい（同次座標で見ると分母が `v` に依らない）。
+    ///
+    /// `v` の範囲は境界から取る。解析曲面と同じで、STEP の掃引面は範囲を
+    /// 持たないからである。ここでは制御点の凸包を使って**必ず覆う**側に丸める
+    /// （面のトリムは境界ワイヤが担うので、広いぶんには困らない）。
+    fn linear_extrusion_patch(
+        ctx: &mut ImportContext,
+        raw: &RawEntity,
+        boundary_points: &[Point3],
+    ) -> Result<Option<NurbsSurface3>, String> {
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 3 {
+            return Ok(None);
+        }
+        let (Some(curve_id), Some(vector_id)) = (
+            Self::parse_entity_ref(parts[1]),
+            Self::parse_entity_ref(parts[2]),
+        ) else {
+            return Ok(None);
+        };
+
+        let Some(basis) = Self::swept_basis_curve(ctx, curve_id)? else {
+            return Ok(None);
+        };
+        let Some(extrusion) = Self::get_vector(ctx, vector_id)? else {
+            return Ok(None);
+        };
+        let length = extrusion.norm();
+        if length <= 1e-12 {
+            return Ok(None);
+        }
+        let direction = extrusion / length;
+
+        // 曲線は制御点の凸包に収まるので、掃引方向の成分もその範囲に収まる。
+        let mut curve_low = f64::INFINITY;
+        let mut curve_high = f64::NEG_INFINITY;
+        for cp in &basis.control_points {
+            let s = cp.point.coords.dot(&direction);
+            curve_low = curve_low.min(s);
+            curve_high = curve_high.max(s);
+        }
+        let mut boundary_low = f64::INFINITY;
+        let mut boundary_high = f64::NEG_INFINITY;
+        for point in boundary_points {
+            let s = point.coords.dot(&direction);
+            boundary_low = boundary_low.min(s);
+            boundary_high = boundary_high.max(s);
+        }
+        if !(curve_low.is_finite() && boundary_low.is_finite()) {
+            return Ok(None);
+        }
+
+        // 安全のためのマージンは足さない。凸包の範囲だけで必ず覆えるうえ、
+        // **この面の境界はパラメータ矩形そのもの**なので、はみ出したぶんが
+        // そのまま積分に乗る。実測で 2e-6 だけ v を広げたところ、側面の面積が
+        // 3.0e-6、立体の体積が 1.3e-6 だけ大きく出て、しかも分割数を振っても
+        // 動かなかった（平面キャップのほうは 1.5e-14 で厳密なままなので、
+        // 楕円そのものは正しい）。動かない差は求積の粗さではなく、測っている
+        // 対象が違うという印である。
+        let v_low = (boundary_low - curve_high) / length;
+        let v_high = (boundary_high - curve_low) / length;
+
+        let control_points: Vec<Vec<ControlPoint3>> = basis
+            .control_points
+            .iter()
+            .map(|cp| {
+                vec![
+                    ControlPoint3::new(cp.point + extrusion * v_low, cp.weight),
+                    ControlPoint3::new(cp.point + extrusion * v_high, cp.weight),
+                ]
+            })
+            .collect();
+
+        NurbsSurface3::new(
+            basis.degree,
+            1,
+            control_points,
+            basis.knots.clone(),
+            KnotVector::clamped_uniform(2, 1),
+        )
+        .map(Some)
+    }
+
+    /// 掃引面の断面になっている曲線。端点を必要としない形だけを受け取る。
+    fn swept_basis_curve(
+        ctx: &mut ImportContext,
+        curve_id: u64,
+    ) -> Result<Option<NurbsCurve3>, String> {
+        let raw = ctx
+            .raw_entities
+            .get(&curve_id)
+            .ok_or_else(|| format!("Entity #{} not found", curve_id))?
+            .clone();
+
+        if raw.name == "B_SPLINE_CURVE_WITH_KNOTS" || raw.args.contains("B_SPLINE_CURVE_WITH_KNOTS")
+        {
+            return Self::parse_nurbs_curve(ctx, &raw);
+        }
+
+        // 円・楕円は全周で組む。掃引面の断面としては閉じた1本なので、端点から
+        // 角度を測る必要がない。
+        let parts = Self::split_top_level_args(&raw.args);
+        if (raw.name == "CIRCLE" && parts.len() >= 3) || (raw.name == "ELLIPSE" && parts.len() >= 4)
+        {
+            let Some(axis_id) = Self::parse_entity_ref(parts[1]) else {
+                return Ok(None);
+            };
+            let Ok(semi_x) = parts[2].trim().parse::<f64>() else {
+                return Ok(None);
+            };
+            let semi_y = if raw.name == "ELLIPSE" {
+                match parts[3].trim().parse::<f64>() {
+                    Ok(value) => value,
+                    Err(_) => return Ok(None),
+                }
+            } else {
+                semi_x
+            };
+            if !(semi_x > 1e-9 && semi_y > 1e-9) {
+                return Ok(None);
+            }
+            let (center, normal, ref_dir) = Self::get_axis2_placement(ctx, axis_id)?;
+            let axis = normal
+                .try_normalize(1e-12)
+                .ok_or_else(|| "Swept curve axis is degenerate".to_string())?;
+            let x_axis = {
+                let projected = ref_dir - axis * ref_dir.dot(&axis);
+                projected
+                    .try_normalize(1e-12)
+                    .ok_or_else(|| "Swept curve reference direction is degenerate".to_string())?
+            };
+            let y_axis = axis.cross(&x_axis);
+            return rational_elliptic_arc(
+                center,
+                x_axis,
+                y_axis,
+                semi_x,
+                semi_y,
+                0.0,
+                std::f64::consts::PI * 2.0,
+            )
+            .map(Some);
+        }
+
+        Ok(None)
+    }
+
+    /// `VECTOR('', #direction, magnitude)` を、向きと長さを掛けた1本のベクトルで返す。
+    fn get_vector(ctx: &mut ImportContext, id: u64) -> Result<Option<Vec3>, String> {
+        let raw = ctx
+            .raw_entities
+            .get(&id)
+            .ok_or_else(|| format!("Entity #{} not found", id))?
+            .clone();
+        if raw.name != "VECTOR" {
+            return Ok(None);
+        }
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 3 {
+            return Ok(None);
+        }
+        let Some(direction_id) = Self::parse_entity_ref(parts[1]) else {
+            return Ok(None);
+        };
+        let Ok(magnitude) = parts[2].trim().parse::<f64>() else {
+            return Ok(None);
+        };
+        let direction = Self::get_direction(ctx, direction_id)?;
+        Ok(Some(direction * magnitude))
+    }
+
+    /// `ELLIPSE('', #axis2_placement_3d, semi_axis_1, semi_axis_2)`
+    ///
+    /// 楕円は、押し出し断面や斜め切りの円柱の縁として実務のファイルによく出る。
+    /// 対応していなかったときは、端点を結ぶ**直線**に置き換わっていた。平面の
+    /// 上に載る境界ならその弦も面から外れないので、下流の検証を素通りしうる。
+    fn arc_from_ellipse_entity(
+        ctx: &mut ImportContext,
+        raw: &RawEntity,
+        p_start: Point3,
+        p_end: Point3,
+    ) -> Result<Option<NurbsCurve3>, String> {
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 4 {
+            return Ok(None);
+        }
+        let Some(axis_id) = Self::parse_entity_ref(parts[1]) else {
+            return Ok(None);
+        };
+        let (Ok(semi_x), Ok(semi_y)) = (
+            parts[2].trim().parse::<f64>(),
+            parts[3].trim().parse::<f64>(),
+        ) else {
+            return Ok(None);
+        };
+        if !(semi_x > 1e-9 && semi_y > 1e-9) {
+            return Ok(None);
+        }
+
+        let (center, normal, ref_dir) = Self::get_axis2_placement(ctx, axis_id)?;
+        let axis = normal
+            .try_normalize(1e-12)
+            .ok_or_else(|| "Ellipse axis is degenerate".to_string())?;
+        let x_axis = {
+            let projected = ref_dir - axis * ref_dir.dot(&axis);
+            projected
+                .try_normalize(1e-12)
+                .ok_or_else(|| "Ellipse reference direction is parallel to its axis".to_string())?
+        };
+        let y_axis = axis.cross(&x_axis);
+
+        // 楕円の媒介変数角は幾何的な角度ではない。点を各軸の半径で割って
+        // 単位円に戻してから角度を測る。
+        let angle_of = |point: Point3| {
+            let offset = point - center;
+            (offset.dot(&y_axis) / semi_y).atan2(offset.dot(&x_axis) / semi_x)
+        };
+        let on_ellipse = |point: Point3| {
+            let offset = point - center;
+            let u = offset.dot(&x_axis) / semi_x;
+            let v = offset.dot(&y_axis) / semi_y;
+            ((u * u + v * v).sqrt() - 1.0).abs() <= 1e-3
+        };
+        if !on_ellipse(p_start) || !on_ellipse(p_end) {
+            return Ok(None);
+        }
+
+        let start_angle = angle_of(p_start);
+        let full_turn = std::f64::consts::PI * 2.0;
+        let mut sweep = angle_of(p_end) - start_angle;
+        while sweep <= 1e-9 {
+            sweep += full_turn;
+        }
+        if (p_end - p_start).norm() <= 1e-9 {
+            sweep = full_turn;
+        }
+
+        rational_elliptic_arc(center, x_axis, y_axis, semi_x, semi_y, start_angle, sweep).map(Some)
+    }
+
     fn get_axis2_placement(
         ctx: &mut ImportContext,
         axis_id: u64,
@@ -769,6 +1032,14 @@ impl StepImporter {
 
         if boundary_points.is_empty() {
             return Self::get_surface(ctx, id);
+        }
+
+        if raw.name == "SURFACE_OF_LINEAR_EXTRUSION" {
+            if let Some(nurbs) = Self::linear_extrusion_patch(ctx, &raw, boundary_points)? {
+                let geom = FaceGeometry::Nurbs(nurbs);
+                ctx.surfaces.insert(id, geom.clone());
+                return Ok(geom);
+            }
         }
 
         // どの解析曲面も AXIS2_PLACEMENT_3D を第2引数に取り、その後に半径類が続く。
@@ -1020,14 +1291,21 @@ impl StepImporter {
             }
         }
 
-        // NURBS曲面等のフォールバック
-        let default_plane = PlaneSurface3::new(
-            Point3::new(0.0, 0.0, 0.0),
-            Vec3::new(1.0, 0.0, 0.0),
-            Vec3::new(0.0, 1.0, 0.0),
-        )
-        .unwrap();
-        Ok(FaceGeometry::Plane(default_plane))
+        // ここは既定の平面（原点を通る Y-Z 平面）を返していた。読めなかった
+        // 曲面を、まったく別の平面に差し替えて返すということである。
+        //
+        // 実測では、その先の p-curve 検証が「境界が面から 4.0e1 離れている」と
+        // 言って必ず落とすので、**誤答にはならず、クリーンなエラーになって
+        // いた**。ただしそのエラーは「p-curve が退化している」としか言わない
+        // ので、読めなかった理由——対応していない曲面型に当たったこと——が
+        // 呼び出し側に伝わらない。原因の分からないエラーは、追いかける人に
+        // 幾何の疑いを持たせる。ここで名指しする。
+        Err(format!(
+            "Unsupported surface entity {} (#{}). Zenith reads PLANE, \
+             CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, \
+             TOROIDAL_SURFACE and (rational) B_SPLINE_SURFACE_WITH_KNOTS",
+            raw.name, id
+        ))
     }
 
 
@@ -2243,6 +2521,27 @@ fn rational_arc(
     start_angle: f64,
     sweep: f64,
 ) -> Result<NurbsCurve3, String> {
+    rational_elliptic_arc(center, x_axis, y_axis, radius, radius, start_angle, sweep)
+}
+
+/// 楕円弧を有理2次の NURBS として厳密に組む。
+///
+/// 楕円は単位円の像である（`X` 方向に `a`、`Y` 方向に `b` 伸ばしたもの）。
+/// 有理 NURBS はアフィン変換のもとで不変——制御点を写して重みをそのまま
+/// 使えば同じ曲線になる——ので、円の構成の半径を軸ごとに置き換えるだけで、
+/// 近似ではなく**厳密な**楕円が得られる。
+fn rational_elliptic_arc(
+    center: Point3,
+    x_axis: Vec3,
+    y_axis: Vec3,
+    radius_x: f64,
+    radius_y: f64,
+    start_angle: f64,
+    sweep: f64,
+) -> Result<NurbsCurve3, String> {
+    let radius = radius_x;
+    let scale_y = radius_y / radius_x;
+    let y_axis = y_axis * scale_y;
     // ちょうど四半円のとき、除算の丸めで商が 1 をわずかに超えて 2 区間に
     // 割れてしまう。許容差を引いてから切り上げる。
     let span_count = (((sweep / std::f64::consts::FRAC_PI_2) - 1e-9).ceil() as usize).max(1);
