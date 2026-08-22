@@ -89,7 +89,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 80 テストバイナリ（doctest 込み）、445 テスト、失敗 0。
+**期待**: 81 テストバイナリ（doctest 込み）、450 テスト、失敗 0。
 
 所要はおよそ **10〜11分**です。ただし**この環境の壁時計は当てになりません**
 （下の 2-3 を読んでください）。時間で良し悪しを判断しないでください。曲面同士が交わるブーリアン（球×球、円柱×円柱、
