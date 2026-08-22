@@ -19,6 +19,16 @@ pub struct GregoryPatch4 {
     pub corners: [Point3; 4],
 }
 
+/// 境界曲線を、パッチの辺の媒介変数 `s in [0, 1]` で評価する。
+///
+/// 曲線の媒介変数域が [0, 1] とは限らない。`NurbsCurve3::split_at` は元の
+/// ノット値を保つので、半分に割った曲線の域は [0, 0.5] や [0.5, 1] になる。
+/// `evaluate(0.0)` を直に呼ぶと域の外を指し、コーナーが合わなくなる。
+fn edge_point(curve: &NurbsCurve3, s: f64) -> Point3 {
+    let (t0, t1) = curve.param_range();
+    curve.evaluate(t0 + (t1 - t0) * s.clamp(0.0, 1.0))
+}
+
 impl GregoryPatch4 {
     /// 4本の境界曲線とクロス接線からグレゴリーパッチを作成
     pub fn new(
@@ -28,22 +38,22 @@ impl GregoryPatch4 {
         c3: NurbsCurve3,
         tol: &Tolerance,
     ) -> Result<Self, String> {
-        let p00 = c0.evaluate(0.0);
-        let p10 = c0.evaluate(1.0);
-        let p11 = c1.evaluate(1.0);
-        let p01 = c3.evaluate(1.0);
+        let p00 = edge_point(&c0, 0.0);
+        let p10 = edge_point(&c0, 1.0);
+        let p11 = edge_point(&c1, 1.0);
+        let p01 = edge_point(&c3, 1.0);
 
         // コーナー連続性検証
-        if !c1.evaluate(0.0).is_coincident_with(&p10, tol.linear) {
+        if !edge_point(&c1, 0.0).is_coincident_with(&p10, tol.linear) {
             return Err("Corner P10 mismatch between C0 and C1".to_string());
         }
-        if !c2.evaluate(1.0).is_coincident_with(&p11, tol.linear) {
+        if !edge_point(&c2, 1.0).is_coincident_with(&p11, tol.linear) {
             return Err("Corner P11 mismatch between C1 and C2".to_string());
         }
-        if !c2.evaluate(0.0).is_coincident_with(&p01, tol.linear) {
+        if !edge_point(&c2, 0.0).is_coincident_with(&p01, tol.linear) {
             return Err("Corner P01 mismatch between C2 and C3".to_string());
         }
-        if !c3.evaluate(0.0).is_coincident_with(&p00, tol.linear) {
+        if !edge_point(&c3, 0.0).is_coincident_with(&p00, tol.linear) {
             return Err("Corner P00 mismatch between C3 and C0".to_string());
         }
 
@@ -82,10 +92,10 @@ impl GregoryPatch4 {
         let v = v.clamp(0.0, 1.0);
 
         // 境界評価
-        let p_c0 = self.c0.evaluate(u).coords;
-        let p_c2 = self.c2.evaluate(u).coords;
-        let p_c3 = self.c3.evaluate(v).coords;
-        let p_c1 = self.c1.evaluate(v).coords;
+        let p_c0 = edge_point(&self.c0, u).coords;
+        let p_c2 = edge_point(&self.c2, u).coords;
+        let p_c3 = edge_point(&self.c3, v).coords;
+        let p_c1 = edge_point(&self.c1, v).coords;
 
         let cor0 = self.corners[0].coords;
         let cor1 = self.corners[1].coords;
@@ -199,19 +209,39 @@ impl CornerBlendN {
             rib_curves.push(rib);
         }
 
-        // 4. 各コーナーごとに4辺グレゴリーパッチを構築
+        // 4. 各境界を中点で二分する。パッチの1辺になるのは境界の**半分**であって
+        //    全体ではない。ここで境界をそのまま渡していたため、`GregoryPatch4::new`
+        //    のコーナー検査が毎回落ち、`if let Ok(..)` がそれを黙って捨てて、
+        //    `patches` が常に空のまま `Ok` が返っていた（N=3 でも N=4 でも
+        //    `patches.len() == 0`）。穴は1枚も塞がっていなかった。
+        let mut halves = Vec::with_capacity(n);
+        for curve in &curves {
+            let (t0, t1) = curve.param_range();
+            let (first, second) = curve
+                .split_at((t0 + t1) * 0.5)
+                .ok_or_else(|| "boundary curve could not be split at its midpoint".to_string())?;
+            halves.push((first, second));
+        }
+
+        // 5. 各コーナーごとに4辺グレゴリーパッチを構築する。
+        //
+        //    セルは 中心 -> mid(i) -> corner(i, i+1) -> mid(i+1) -> 中心 の
+        //    四辺形で、`GregoryPatch4` が求める向きに合わせて辺を並べる。
+        //      c0 (v=0, u:0->1): rib(i)            中心   -> mid(i)
+        //      c1 (u=1, v:0->1): curve(i) の後半    mid(i) -> corner
+        //      c2 (v=1, u:0->1): curve(i+1) の前半を反転  mid(i+1) -> corner
+        //      c3 (u=0, v:0->1): rib(i+1)          中心   -> mid(i+1)
         let mut patches = Vec::with_capacity(n);
         for i in 0..n {
             let next = (i + 1) % n;
-            // 4境界: Rib(i), Boundary(i_half), Boundary(next_half), Rib(next)
             let c0 = rib_curves[i].clone();
-            let c1 = curves[i].clone();
-            let c2 = curves[next].clone();
+            let c1 = halves[i].1.clone();
+            let c2 = halves[next].0.reversed();
             let c3 = rib_curves[next].clone();
 
-            if let Ok(patch) = GregoryPatch4::new(c0, c1, c2, c3, tol) {
-                patches.push(patch);
-            }
+            patches.push(GregoryPatch4::new(c0, c1, c2, c3, tol).map_err(|error| {
+                format!("corner blend patch {i} of {n} could not be built: {error}")
+            })?);
         }
 
         Ok(Self {

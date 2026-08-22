@@ -64,3 +64,58 @@ fn test_n_sided_corner_blend_creation() {
     assert!((blend.center_point.y - 3.333).abs() < 0.1);
     assert!((blend.center_point.z - 3.333).abs() < 0.1);
 }
+
+/// N辺コーナーブレンドは、実際にパッチを返さなければ穴を塞いでいない。
+///
+/// ここは以前 `patches` の枚数を一度も見ておらず、`boundary_curves.len()` と
+/// 中心点だけを検査していた。`GregoryPatch4::new` が毎回 `Err` を返し、
+/// `if let Ok(..)` がそれを捨てていたので、実測では N=3 でも N=4 でも
+/// `patches.len() == 0` のまま「3辺コーナーブレンドを作れた」と通っていた。
+#[test]
+fn test_n_sided_corner_blend_actually_produces_patches() {
+    let tol = Tolerance::default();
+
+    for corners in [
+        vec![
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(0.0, 10.0, 0.0),
+            Point3::new(0.0, 0.0, 10.0),
+        ],
+        vec![
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(0.0, 10.0, 0.0),
+            Point3::new(-10.0, 0.0, 0.0),
+            Point3::new(0.0, -10.0, 4.0),
+        ],
+        vec![
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(3.0, 9.0, 1.0),
+            Point3::new(-8.0, 6.0, 0.0),
+            Point3::new(-8.0, -6.0, 2.0),
+            Point3::new(3.0, -9.0, 0.0),
+        ],
+    ] {
+        let n = corners.len();
+        let curves: Vec<NurbsCurve3> = (0..n)
+            .map(|index| make_line_curve(corners[index], corners[(index + 1) % n]))
+            .collect();
+
+        let blend = CornerBlendN::create_n_sided_blend(curves, &tol)
+            .unwrap_or_else(|error| panic!("{n}-sided corner blend failed: {error}"));
+
+        assert_eq!(
+            blend.patches.len(),
+            n,
+            "an N-sided blend must close the hole with N four-sided patches"
+        );
+
+        // 各パッチの4隅が、意図した位置（中心・境界中点・コーナー）に来ているか。
+        for (index, patch) in blend.patches.iter().enumerate() {
+            let start = patch.evaluate(0.0, 0.0);
+            assert!(
+                (start - blend.center_point).norm() < 1e-9,
+                "patch {index} must start at the blend centre"
+            );
+        }
+    }
+}
