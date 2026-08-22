@@ -76,7 +76,7 @@ pub struct EdgeBlendReport {
 }
 
 /// 稜の性質だけを見るための下調べ結果
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BlendableEdge {
     pub edge_id: u64,
     pub length: f64,

@@ -424,6 +424,21 @@ impl DirectModeling {
         crate::validated_solid(Shell::closed(new_faces))
     }
 
+    /// 任意ソリッドの指定したエッジIDに対してフィレットを適用
+    pub fn fillet_solid_edge(solid: &Solid, edge_id: u64, radius: f64) -> Result<Solid, String> {
+        crate::EdgeBlender::fillet_edge(solid, edge_id, radius)
+    }
+
+    /// 任意ソリッドの指定したエッジIDに対して面取りを適用
+    pub fn chamfer_solid_edge(solid: &Solid, edge_id: u64, distance: f64) -> Result<Solid, String> {
+        crate::EdgeBlender::chamfer_edge(solid, edge_id, distance)
+    }
+
+    /// 任意ソリッドのフィレット可能な稜一覧を取得
+    pub fn list_blendable_edges(solid: &Solid) -> Vec<crate::edge_blend::BlendableEdge> {
+        crate::EdgeBlender::blendable_edges(solid)
+    }
+
     /// 直方体の指定した単一垂直エッジ（0: X=0,Y=0; 1: X=dx,Y=0; 2: X=dx,Y=dy; 3: X=0,Y=dy）に半径 radius のフィレットを適用
     pub fn fillet_box_single_edge(
         dx: f64,
