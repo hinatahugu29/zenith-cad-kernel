@@ -423,4 +423,71 @@ impl SketchSolver {
 
         (f_vec, j_mat)
     }
+
+    /// スケッチの自由度 (DOF: Degrees of Freedom) を解析
+    /// 戻り値: (総変数自由度, 有効拘束ランク, 残余自由度)
+    pub fn degrees_of_freedom(&self) -> (usize, usize, usize) {
+        let num_points = self.points.len();
+        if num_points == 0 {
+            return (0, 0, 0);
+        }
+        let num_vars = num_points * 2;
+        let mut x = DVector::zeros(num_vars);
+        for (i, p) in self.points.iter().enumerate() {
+            x[2 * i] = p.x;
+            x[2 * i + 1] = p.y;
+        }
+        let (_, j) = self.eval_residuals_and_jacobian(&x);
+        if j.nrows() == 0 || j.ncols() == 0 {
+            let free_vars = self.points.iter().filter(|p| !p.is_fixed).count() * 2;
+            return (free_vars, 0, free_vars);
+        }
+
+        let svd = j.svd(false, false);
+        let tol = 1e-7;
+        let rank = svd.singular_values.iter().filter(|&&s| s > tol).count();
+        let total_dof = self.points.iter().filter(|p| !p.is_fixed).count() * 2;
+        let remaining_dof = total_dof.saturating_sub(rank);
+        (total_dof, rank, remaining_dof)
+    }
+
+    /// 現在のスケッチの拘束状態を判定
+    pub fn constraint_status(&self) -> SketchConstraintStatus {
+        let (total_dof, rank, remaining_dof) = self.degrees_of_freedom();
+        if self.constraints.is_empty() && total_dof > 0 {
+            return SketchConstraintStatus::UnderConstrained { remaining_dof };
+        }
+        let num_eqs = {
+            let mut count = 0;
+            for c in &self.constraints {
+                match c {
+                    Constraint::Coincident(_, _) | Constraint::FixedPoint(_, _, _) => count += 2,
+                    Constraint::Radius(_, _) => {}
+                    _ => count += 1,
+                }
+            }
+            count
+        };
+
+        if num_eqs > rank && remaining_dof == 0 {
+            SketchConstraintStatus::OverConstrained {
+                redundant_constraints: num_eqs - rank,
+            }
+        } else if remaining_dof == 0 {
+            SketchConstraintStatus::FullyConstrained
+        } else {
+            SketchConstraintStatus::UnderConstrained { remaining_dof }
+        }
+    }
+}
+
+/// スケッチ拘束状態
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SketchConstraintStatus {
+    /// 不足拘束（残余自由度あり）
+    UnderConstrained { remaining_dof: usize },
+    /// 完全拘束（形状が一意に決定）
+    FullyConstrained,
+    /// 過剰拘束（冗長または矛盾する拘束が存在）
+    OverConstrained { redundant_constraints: usize },
 }

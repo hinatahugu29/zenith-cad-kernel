@@ -97,7 +97,8 @@ pub use sew::{SewReport, Sewer};
 pub use shell::ShellBuilder;
 pub use shelling::ShellingBuilder;
 pub use sketch_solver::{
-    CircleId, Constraint, LineId, PointId, SketchCircle, SketchLine, SketchPoint, SketchSolver,
+    CircleId, Constraint, LineId, PointId, SketchCircle, SketchConstraintStatus, SketchLine,
+    SketchPoint, SketchSolver,
 };
 pub use slice::{SectionSliceResult, SectionSlicer};
 pub use sweep::SweepBuilder;
