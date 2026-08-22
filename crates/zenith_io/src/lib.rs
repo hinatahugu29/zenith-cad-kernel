@@ -8,7 +8,7 @@ pub mod step;
 pub mod step_import;
 pub mod stl;
 
-pub use dxf_export::DxfExporter;
+pub use dxf_export::{DxfExporter, DxfLayer};
 pub use gltf::GltfExporter;
 pub use iges::IgesExporter;
 pub use obj::ObjExporter;

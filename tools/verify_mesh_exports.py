@@ -53,7 +53,8 @@ def verify_dxf(path):
     if "ENTITIES" not in content or "EOF" not in content:
         raise ValueError("Invalid DXF structure")
     lwpoly_count = content.count("LWPOLYLINE")
-    print(f"  [PASS] DXF valid, LWPOLYLINE entities: {lwpoly_count}")
+    has_layers = "TABLES" in content and "LAYER" in content
+    print(f"  [PASS] DXF valid, LWPOLYLINE entities: {lwpoly_count}, Layer tables defined: {has_layers}")
     return True
 
 def main():
