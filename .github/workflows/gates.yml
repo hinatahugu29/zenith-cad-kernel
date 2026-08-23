@@ -65,7 +65,7 @@ jobs:
             boolean_gate_probe tess_density_probe step_import_audit \
             robustness_probe closure_probe foreign_boolean_probe \
             helix_volume_probe cutter_placement_probe cone_slab_probe \
-            intersection_edge_probe shape_variety_probe
+            intersection_edge_probe shape_variety_probe march_stop_probe
           do
             echo "=== $probe"
             if ! timeout 1200 "./target/release/examples/$probe" > "/tmp/$probe.txt" 2>&1; then
