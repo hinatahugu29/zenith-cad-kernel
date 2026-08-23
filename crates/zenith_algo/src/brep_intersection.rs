@@ -821,6 +821,16 @@ impl BrepIntersectionBuilder {
 
         for (_face_b_index, edges) in candidates_by_face_b {
             let cap_gen = Self::build_planar_caps_from_intersection_edges(&edges, tol);
+            if std::env::var_os("ZENITH_CAP_TRACE").is_some() {
+                eprintln!(
+                    "    cap group face_b {_face_b_index}: {} edge(s) in -> {} loop(s), {} skipped, {} cap face(s), {} failed loop(s)",
+                    edges.len(),
+                    cap_gen.edge_loop_extraction.loops.len(),
+                    cap_gen.edge_loop_extraction.skipped_edge_count,
+                    cap_gen.cap_faces.len(),
+                    cap_gen.failed_loop_count
+                );
+            }
             total_skipped_edge_count += cap_gen.edge_loop_extraction.skipped_edge_count;
             all_loops.extend(cap_gen.edge_loop_extraction.loops);
             all_cap_faces.extend(cap_gen.cap_faces);
@@ -3771,32 +3781,67 @@ fn clip_candidate_to_planar_trims(
             segment_start,
             segment_end,
         } => {
-            let mut interval = (0.0, 1.0);
-            interval = clip_segment_to_planar_face_trim(
+            // **1本の直線が、面の中で2本以上に分かれることがあります。**
+            // 穴あきの面を横切る直線がそれで、円環を横切れば材料の上に乗るのは
+            // 2区間です。長いほうだけ返していたので、輪をスラブで切ると
+            // 稜が8本のところ6本しか出ず、切り口のループが閉じませんでした。
+            let mut intervals = clip_segment_to_planar_face_trim_all(
                 segment_start,
                 segment_end,
                 face_a,
-                interval,
+                &[(0.0, 1.0)],
                 tol,
             )?;
-            interval = clip_segment_to_planar_face_trim(
+            intervals = clip_segment_to_planar_face_trim_all(
                 segment_start,
                 segment_end,
                 face_b,
-                interval,
+                &intervals,
                 tol,
             )?;
-            if interval.1 - interval.0 <= tol.linear {
-                return None;
-            }
-
             let segment_vec = segment_end - segment_start;
-            Some(FaceIntersectionKind::Line {
-                point,
-                direction,
-                segment_start: segment_start + segment_vec * interval.0,
-                segment_end: segment_start + segment_vec * interval.1,
-            })
+            let intervals: Vec<(f64, f64)> = intervals
+                .into_iter()
+                .filter(|(start, end)| {
+                    (segment_vec * (end - start)).norm() > tol.linear
+                })
+                .collect();
+
+            match intervals.len() {
+                0 => None,
+                1 => {
+                    let (start, end) = intervals[0];
+                    Some(FaceIntersectionKind::Line {
+                        point,
+                        direction,
+                        segment_start: segment_start + segment_vec * start,
+                        segment_end: segment_start + segment_vec * end,
+                    })
+                }
+                _ => {
+                    let mut edges = Vec::with_capacity(intervals.len());
+                    for (start, end) in intervals {
+                        let from = segment_start + segment_vec * start;
+                        let to = segment_start + segment_vec * end;
+                        let Ok(curve) = NurbsCurve3::bspline_from_points(1, vec![from, to]) else {
+                            continue;
+                        };
+                        edges.push(Edge::new(
+                            curve,
+                            Vertex::new(from, tol.linear),
+                            Vertex::new(to, tol.linear),
+                            tol.linear,
+                        ));
+                    }
+                    match edges.len() {
+                        0 => None,
+                        1 => Some(FaceIntersectionKind::Curve {
+                            edge: edges.into_iter().next().unwrap(),
+                        }),
+                        _ => Some(FaceIntersectionKind::Curves { edges }),
+                    }
+                }
+            }
         }
         FaceIntersectionKind::Curve { edge } => {
             let pieces = clip_curve_to_both_planar_trims(&edge, face_a, face_b, tol);
@@ -3982,42 +4027,62 @@ fn subcurve_between(curve: &NurbsCurve3, a: f64, b: f64) -> Option<NurbsCurve3> 
     Some(piece)
 }
 
-fn clip_segment_to_planar_face_trim(
+/// 面のトリムで残る区間を、**1つに絞らずに全部**返す。
+///
+/// `clip_segment_to_planar_face_trim` は一番長い区間だけを返します。1本の
+/// 交線が面の中で2本以上に分かれる形——穴あきの面を横切る直線——では、
+/// それでは足りません。輪をスラブで切ると、切り口の断面は穴の両側の2つの
+/// 矩形になり、必要な稜は8本です。1区間しか返さないと6本になり、蓋の
+/// ループがどちらも閉じません。
+fn clip_segment_to_planar_face_trim_all(
     segment_start: Point3,
     segment_end: Point3,
     face: &Face,
-    current_interval: (f64, f64),
+    current: &[(f64, f64)],
     tol: &Tolerance,
-) -> Option<(f64, f64)> {
+) -> Option<Vec<(f64, f64)>> {
     let FaceGeometry::Plane(plane) = &face.geometry else {
-        return Some(current_interval);
+        return Some(current.to_vec());
     };
     let Ok(pcurves) = face.pcurves(tol) else {
-        return Some(current_interval);
+        return Some(current.to_vec());
     };
     let uv_start = project_to_plane_uv(segment_start, plane);
     let uv_end = project_to_plane_uv(segment_end, plane);
     // 評価できないループはこれまでどおりクリップ対象外として素通しする
-    let Some(intervals) =
+    let Some(mut inside) =
         segment_inside_pcurve_loop_intervals(uv_start, uv_end, &pcurves.outer_loop, tol)
     else {
-        return Some(current_interval);
+        return Some(current.to_vec());
     };
 
-    // **穴の中は面の外です。** 外周の内側から、内側ループの内側を引きます。
-    // 引かないと、穴を素通りするだけの相手が交わっていることになります。
-    let mut intervals = intervals;
+    // 穴の中は面の外。
     for inner in &pcurves.inner_loops {
         let Some(hole) = segment_inside_pcurve_loop_intervals(uv_start, uv_end, inner, tol) else {
             continue;
         };
-        intervals = subtract_intervals(intervals, &hole, tol.parametric);
-        if intervals.is_empty() {
+        inside = subtract_intervals(inside, &hole, tol.parametric);
+        if inside.is_empty() {
             return None;
         }
     }
 
-    intersect_interval_set(current_interval, &intervals, tol.parametric)
+    let epsilon = tol.parametric.max(1e-12);
+    let mut out = Vec::new();
+    for (low, high) in current {
+        for (start, end) in &inside {
+            let from = low.max(*start);
+            let to = high.min(*end);
+            if to - from > epsilon {
+                out.push((from, to));
+            }
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Some(out)
 }
 
 /// `base` から `cut` を取り除く。どちらも昇順に整っている必要はありません。
@@ -4213,27 +4278,6 @@ fn sample_pcurve_loop(loop_data: &FacePcurveLoop, samples_per_segment: usize) ->
     }
 
     points
-}
-
-fn intersect_interval_set(
-    current: (f64, f64),
-    intervals: &[(f64, f64)],
-    tol: f64,
-) -> Option<(f64, f64)> {
-    let mut best = None;
-    let mut best_len = 0.0;
-
-    for interval in intervals {
-        let start = current.0.max(interval.0);
-        let end = current.1.min(interval.1);
-        let len = end - start;
-        if len > tol.max(1e-9) && len > best_len {
-            best = Some((start, end));
-            best_len = len;
-        }
-    }
-
-    best
 }
 
 fn merge_intervals(mut intervals: Vec<(f64, f64)>, tol: f64) -> Vec<(f64, f64)> {
