@@ -183,13 +183,22 @@ impl BooleanResultVerifier {
         // 200x200x2 の板を 0.02x0.02x20 の針が貫くとき、積は 0.0008 が正解
         // です。上限で正規化していても、絶対値 1 の床が残っていると閾値が
         // 0.001 になり、正解が「ゼロ」と判定されていました。
-        let result_upper_bound = match op {
-            BooleanOpType::Union => va.abs().max(vb.abs()),
-            BooleanOpType::Intersection => va.abs().min(vb.abs()),
-            BooleanOpType::Difference => va.abs(),
-        };
-        let zero_eps =
-            (params.volume_relative_tolerance * result_upper_bound).max(zero_floor);
+        // **「何か囲んでいるか」は、相手の大きさとは関係ありません。**
+        //
+        // ここは長らく、結果が取りうる上限（積なら小さいほうの立体）に相対で
+        // 掛けた閾値を使っていました。それでも足りません。円錐の角を
+        // 9x9x9 の箱で削るとき、積の正解は 0.003239 mm^3、小さいほうの立体は
+        // 729 mm^3 です。閾値は 0.729 になり、**正しい答えが「正でない」と
+        // 弾かれます**（実測）。真値の 22 万倍を「ゼロ」の線に使っていました。
+        //
+        // 薄い重なりは実務にいくらでもあります（板と針、面取りのかかり、
+        // 公差ぎりぎりの嵌合）。相対で切ると、小さい答えほど弾かれます。
+        //
+        // 訊きたいのは「この立体は何も囲んでいないのか」だけなので、幾何の
+        // 尺度で見ます。`tol.linear` の3乗より小さい体積は数値的にゼロです。
+        // 「思ったより小さい」を捕まえるのはこの判定の仕事ではありません
+        // （それは下の境界チェックと内外一貫性が見ます）。
+        let zero_eps = zero_floor;
 
         if !result.is_empty() && vr <= zero_eps {
             report

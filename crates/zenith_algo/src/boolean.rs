@@ -317,13 +317,6 @@ impl BooleanEngine {
             return Ok(result);
         }
 
-        // 面で接しているだけで中身が重なっていない場合、差は A そのもの。
-        // 一般経路に流すと、B の同一平面が Boundary として採られて A の面と
-        // 重複し、非多様体になる。
-        if matches!(op, BooleanOpType::Difference) && !Self::interiors_overlap(solid_a, solid_b) {
-            return Ok(ExactBooleanResult::single(solid_a.clone()));
-        }
-
         let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
             solid_a, solid_b, op, tol,
         );
@@ -355,6 +348,29 @@ impl BooleanEngine {
         // OpenCASCADE は V(A∩B)=0、V(A∪B)=V(A)+V(B) と答えます。
         if report.intersection_edge_candidate_count == 0 {
             return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol);
+        }
+
+        // 面で接しているだけで中身が重なっていない場合、差は A そのもの。
+        // 一般経路に流すと、B の同一平面が Boundary として採られて A の面と
+        // 重複し、非多様体になります。
+        //
+        // **この判定は先回りに使えません。** `interiors_overlap` は共通の
+        // 境界箱に 512 点を撒いて、両方の内側に入る点を探すだけです。
+        // 標本は「重なっている」ことは示せますが、**「重なっていない」ことは
+        // 示せません**。
+        //
+        // 実測: 円錐の角を 9x9x9 の箱で削ると、重なりは 0.003239 mm^3、
+        // 共通の箱は 216 mm^3 です。当たる確率は 1.5e-5 で、512点の期待値は
+        // 0.008 点——まず当たりません。それで「重なっていない」と判断し、
+        // **A をそのまま返していました**。一般経路は正しい答え（9面、
+        // 3267.253121、OpenCASCADE と一致）を作れていたのに、そこへ届く前に
+        // 打ち切られていたわけです。
+        //
+        // なので**最後の受け皿**に置きます。一般経路が閉じた多様体を作れた
+        // ならそちらが先に返り、作れなかったとき（接しているだけの配置が
+        // まさにそれです）だけ、ここに来ます。
+        if matches!(op, BooleanOpType::Difference) && !Self::interiors_overlap(solid_a, solid_b) {
+            return Ok(ExactBooleanResult::single(solid_a.clone()));
         }
 
         Err(format!(
