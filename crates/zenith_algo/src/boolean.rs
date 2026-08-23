@@ -344,6 +344,19 @@ impl BooleanEngine {
 
         let report =
             Self::preparation_report_from_shell_assembly(solid_a, solid_b, &shell_assembly, tol)?;
+
+        // **交線が1本も無いなら、2つは交わっていません。** そのときの答えは
+        // 包含関係だけで決まり、切る仕事はありません。
+        //
+        // 入口の `has_face_pair_candidates` は境界箱と面の種類しか見ないので、
+        // 「かもしれない」で通します。境界箱が重なっていても実際には触れて
+        // いない配置——丸棒が円環の穴を素通りする、など——はここまで来ます。
+        // 実測: `occ_reference_revolved_ring` と中心の丸棒がそれで、
+        // OpenCASCADE は V(A∩B)=0、V(A∪B)=V(A)+V(B) と答えます。
+        if report.intersection_edge_candidate_count == 0 {
+            return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol);
+        }
+
         Err(format!(
             "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} skipped batch splits, {} classified split candidates, {} selected face pieces, {} cap loops, and {} cap faces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses; with caps it has {} face pieces, {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
             report.face_pair_candidate_count,
