@@ -196,6 +196,64 @@ fn main() {
     }
     if lonely == 0 {
         println!("    none");
+
+    // **同じ向きに2度使われた稜。** 閉じた殻では、1本の稜はちょうど2枚の面に
+    // 使われ、その向きは互いに逆になります。同じ向きなら、どちらかの面が
+    // 裏返っています。本数だけでは、どの片が裏返っているか分かりません。
+    println!();
+    println!("  edges used twice the same way round (a piece is inside out):");
+    let mut directed: BTreeMap<(i64, i64, i64, i64, i64, i64), Vec<usize>> = BTreeMap::new();
+    for (index, piece) in pieces.iter().enumerate() {
+        for wire in std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                let mut start = oriented.evaluate_normalized(0.0);
+                let mut end = oriented.evaluate_normalized(1.0);
+                if piece.reverse_orientation {
+                    std::mem::swap(&mut start, &mut end);
+                }
+                let cell = |point: Point3| {
+                    (
+                        (point.x / grid).round() as i64,
+                        (point.y / grid).round() as i64,
+                        (point.z / grid).round() as i64,
+                    )
+                };
+                let (a, b) = (cell(start), cell(end));
+                directed
+                    .entry((a.0, a.1, a.2, b.0, b.1, b.2))
+                    .or_default()
+                    .push(index);
+            }
+        }
+    }
+    let mut same = 0usize;
+    for ((x0, y0, z0, x1, y1, z1), users) in &directed {
+        if users.len() < 2 {
+            continue;
+        }
+        same += users.len();
+        println!(
+            "    pieces {users:?} all run ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})",
+            *x0 as f64 * grid,
+            *y0 as f64 * grid,
+            *z0 as f64 * grid,
+            *x1 as f64 * grid,
+            *y1 as f64 * grid,
+            *z1 as f64 * grid
+        );
+        for index in users {
+            let piece = &pieces[*index];
+            println!(
+                "      piece {index:>3} ({:?}, {:?}{})",
+                piece.operand,
+                piece.location,
+                if piece.reverse_orientation { ", reversed" } else { "" }
+            );
+        }
+    }
+    if same == 0 {
+        println!("    none");
+    }
     }
 
     println!();

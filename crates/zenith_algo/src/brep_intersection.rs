@@ -1342,6 +1342,21 @@ impl BrepIntersectionBuilder {
                     });
                 }
             }
+
+            // **切り込みが穴を横切る**配置。円環の面を外周から穴まで走る
+            // 切り込みで割るとこれになります。ここまでのどの経路も、
+            // 切り込みの端を外側のワイヤにしか探しません。
+            //
+            // ここも最後の受け皿です。上のどれかが通っていれば来ません。
+            if let Ok(pieces) = split_planar_face_across_holes(face, split_edges, tol) {
+                if pieces.len() >= 2 {
+                    return Ok(PlanarFaceMultiSplitResult {
+                        faces: pieces,
+                        applied_split_count: split_edges.len(),
+                        skipped_split_count: 0,
+                    });
+                }
+            }
         }
 
         Ok(PlanarFaceMultiSplitResult {
@@ -2906,7 +2921,7 @@ fn split_cylinder_side_face_by_vertical_edge(
         Vertex::new(top_end, tol.linear),
     )?;
 
-    let left = Face::new(
+    let left = hold_piece_like_its_face(Face::new(
         face.geometry.clone(),
         Wire::new(vec![
             OrientedEdge::forward(bottom_left),
@@ -2917,8 +2932,8 @@ fn split_cylinder_side_face_by_vertical_edge(
         Vec::new(),
         face.orientation,
         face.tolerance,
-    );
-    let right = Face::new(
+    ), tol);
+    let right = hold_piece_like_its_face(Face::new(
         face.geometry.clone(),
         Wire::new(vec![
             OrientedEdge::forward(bottom_right),
@@ -2929,7 +2944,7 @@ fn split_cylinder_side_face_by_vertical_edge(
         Vec::new(),
         face.orientation,
         face.tolerance,
-    );
+    ), tol);
 
     for split_face in [&left, &right] {
         if !split_face.outer_wire.is_closed(tol) {
@@ -5790,4 +5805,428 @@ fn selected_piece_normal(
         normal = -normal;
     }
     Some(normal)
+}
+
+/// 切り込みが**穴を横切る**平面の面を割る。
+///
+/// 円環の面（外周＋穴）を、外周から穴まで走る切り込みで割る配置がこれです。
+/// 通常の分割は切り込みの端を**外側のワイヤにしか探さない**ので
+/// 「Split edge end does not lie on the outer boundary」で断ります。穴が
+/// 片方の片に丸ごと入る配置は `distribute_inner_wires` が扱いますが、
+/// **穴自体が割れる**配置はそこでも扱えません。
+///
+/// ここは uv の平面アレンジメントを組みます。外側・内側すべてのワイヤを
+/// 着地点で細分し、切り込みを加えて、**入ってきた向きの逆から時計回りに
+/// 1つ手前の弧**へ進む標準の巡回で面を取り出します。
+///
+/// **最後の受け皿です。** 既存の経路が通る配置はここへ来ません。
+///
+/// 取り出した領域の面積の和が元の面積に戻らなければ断ります。閉じた輪に
+/// なっただけでは、領域の取り違えは分かりません。
+fn split_planar_face_across_holes(
+    face: &Face,
+    split_edges: &[Edge],
+    tol: &Tolerance,
+) -> Result<Vec<Face>, String> {
+    let FaceGeometry::Plane(plane) = &face.geometry else {
+        return Err("Only planar faces can be split across a hole".to_string());
+    };
+    if face.inner_wires.is_empty() {
+        return Err("This face has no holes to cut across".to_string());
+    }
+
+    let wires: Vec<&Wire> = std::iter::once(&face.outer_wire)
+        .chain(face.inner_wires.iter())
+        .collect();
+
+    // 1. 切り込みの端が、どのワイヤのどこに乗るか。
+    let cuts = deduplicate_split_edges(split_edges, tol);
+    let mut landings: Vec<Vec<WireHit>> = vec![Vec::new(); wires.len()];
+    let mut crosses_a_hole = false;
+    for cut in &cuts {
+        let start = locate_on_any_wire(&wires, cut.start_vertex.point, tol)
+            .ok_or_else(|| "a cut end does not lie on any wire of the face".to_string())?;
+        let end = locate_on_any_wire(&wires, cut.end_vertex.point, tol)
+            .ok_or_else(|| "a cut end does not lie on any wire of the face".to_string())?;
+        if start.0 != end.0 {
+            crosses_a_hole = true;
+        }
+        landings[start.0].push(start.1);
+        landings[end.0].push(end.1);
+    }
+    if !crosses_a_hole {
+        // 穴を横切っていないなら、ここの仕事ではありません。
+        return Err("no cut runs between two different wires".to_string());
+    }
+
+    // 2. ワイヤを着地点で細分して弧にする。着地の無いワイヤは丸ごと残し、
+    //    最後にどの領域の穴かを決めます。
+    let mut arcs: Vec<Arc> = Vec::new();
+    let mut nodes: Vec<Point3> = Vec::new();
+    let mut free_wires: Vec<Wire> = Vec::new();
+    for (index, wire) in wires.iter().enumerate() {
+        let mut hits = landings[index].clone();
+        if hits.is_empty() {
+            if index > 0 {
+                free_wires.push((*wire).clone());
+            }
+            continue;
+        }
+        hits.sort_by(|a, b| {
+            a.edge_index
+                .cmp(&b.edge_index)
+                .then(a.t.total_cmp(&b.t))
+        });
+        hits.dedup_by(|a, b| a.edge_index == b.edge_index && (a.t - b.t).abs() <= 1e-9);
+        if hits.len() < 2 {
+            return Err("a wire was met by the cut only once".to_string());
+        }
+        for step in 0..hits.len() {
+            let from = &hits[step];
+            let to = &hits[(step + 1) % hits.len()];
+            let path = wire_path_between(&wire.edges, from, to, tol)?;
+            if path.is_empty() {
+                continue;
+            }
+            let start = node_index(&mut nodes, oriented_start_point(&path[0]), tol);
+            let end = node_index(&mut nodes, oriented_end_point(&path[path.len() - 1]), tol);
+            if start == end {
+                continue;
+            }
+            arcs.push(Arc { from: start, to: end, path });
+        }
+    }
+
+    // 3. 切り込みを弧として加えます。
+    for cut in &cuts {
+        let start_point = cut.start_vertex.point;
+        let end_point = cut.end_vertex.point;
+        let start = node_index(&mut nodes, start_point, tol);
+        let end = node_index(&mut nodes, end_point, tol);
+        if start == end {
+            continue;
+        }
+        let forward = OrientedEdge::new(cut.clone(), zenith_topo::Orientation::Forward);
+        let runs_forward = (forward.evaluate_normalized(0.0) - start_point).norm()
+            <= (forward.evaluate_normalized(1.0) - start_point).norm();
+        let forward = if runs_forward {
+            forward
+        } else {
+            OrientedEdge::new(cut.clone(), zenith_topo::Orientation::Reversed)
+        };
+        arcs.push(Arc { from: start, to: end, path: vec![forward] });
+    }
+
+    // 弧はすべて両向きに持ちます。巡回はそれを前提にします。
+    let mut directed: Vec<Arc> = Vec::new();
+    for arc in arcs {
+        let reversed = Arc {
+            from: arc.to,
+            to: arc.from,
+            path: arc
+                .path
+                .iter()
+                .rev()
+                .map(|oriented| {
+                    OrientedEdge::new(oriented.edge.clone(), oriented.orientation.reversed())
+                })
+                .collect(),
+        };
+        directed.push(arc);
+        directed.push(reversed);
+    }
+
+    // 4. 節点ごとに、出ていく弧を uv の角度で並べます。
+    let departure = |arc: &Arc| -> f64 {
+        let first = &arc.path[0];
+        let a = project_to_plane_uv(first.evaluate_normalized(0.0), plane);
+        let b = project_to_plane_uv(first.evaluate_normalized(0.02), plane);
+        (b.y - a.y).atan2(b.x - a.x)
+    };
+    let mut out_of: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
+    for (index, arc) in directed.iter().enumerate() {
+        out_of[arc.from].push(index);
+    }
+    for list in out_of.iter_mut() {
+        list.sort_by(|a, b| departure(&directed[*a]).total_cmp(&departure(&directed[*b])));
+    }
+    // 逆向きの弧の番号。両向きを続けて入れたので、偶奇の反転で出ます。
+    let reverse_of = |index: usize| if index % 2 == 0 { index + 1 } else { index - 1 };
+
+    // 5. 巡回。入ってきた弧の逆から見て、**反時計回りに1つ手前**の弧へ進むと、
+    //    有界な面は反時計回り（符号付き面積が正）で取れます。
+    let mut visited = vec![false; directed.len()];
+    let mut cycles: Vec<Vec<usize>> = Vec::new();
+    for seed in 0..directed.len() {
+        if visited[seed] {
+            continue;
+        }
+        let mut cycle = Vec::new();
+        let mut current = seed;
+        while !visited[current] {
+            visited[current] = true;
+            cycle.push(current);
+            let back = reverse_of(current);
+            let node = directed[back].from;
+            let ring = &out_of[node];
+            let Some(position) = ring.iter().position(|candidate| *candidate == back) else {
+                return Err("the arrangement lost an arc at a node".to_string());
+            };
+            current = ring[(position + ring.len() - 1) % ring.len()];
+        }
+        if cycle.len() >= 2 {
+            cycles.push(cycle);
+        }
+    }
+
+    // 6. 元の面の内側にある巡回だけ残します。
+    let outer_polygon: Vec<Point2> = face
+        .outer_wire
+        .sample_points(96)
+        .iter()
+        .map(|point| project_to_plane_uv(*point, plane))
+        .collect();
+    let hole_polygons: Vec<Vec<Point2>> = face
+        .inner_wires
+        .iter()
+        .map(|wire| {
+            wire.sample_points(96)
+                .iter()
+                .map(|point| project_to_plane_uv(*point, plane))
+                .collect()
+        })
+        .collect();
+
+    // **元の面と同じ巻き方で返します。** アレンジメントの巡回は uv で
+    // 反時計回りの有界面を出しますが、面が裏向きなら内側は時計回りです。
+    // 揃えないと、縫合で「同じ向きに2度使われた稜」が出ます（4-46 と同じ
+    // 症状。実測で 28 本出ました）。
+    let face_winding = signed_area_2d(&outer_polygon).signum();
+    let mut regions: Vec<Wire> = Vec::new();
+    let mut outlines: Vec<Vec<Point2>> = Vec::new();
+    for cycle in &cycles {
+        let mut edges = Vec::new();
+        for index in cycle {
+            edges.extend(directed[*index].path.iter().cloned());
+        }
+        let wire = Wire::new(edges);
+        let polygon: Vec<Point2> = wire
+            .sample_points(96)
+            .iter()
+            .map(|point| project_to_plane_uv(*point, plane))
+            .collect();
+        if polygon.len() < 3 || signed_area_2d(&polygon) <= 0.0 {
+            continue;
+        }
+        let Some(inside) = interior_sample_2d(&polygon, tol.parametric) else {
+            continue;
+        };
+        if !point_in_polygon_2d(inside, &outer_polygon, tol.parametric) {
+            continue;
+        }
+        if hole_polygons
+            .iter()
+            .any(|hole| point_in_polygon_2d(inside, hole, tol.parametric))
+        {
+            continue;
+        }
+        regions.push(if face_winding < 0.0 { reversed_wire(&wire) } else { wire });
+        outlines.push(polygon);
+    }
+
+    if regions.len() < 2 {
+        return Err("cutting across the hole did not divide the face".to_string());
+    }
+
+    // 7. **面積の和が元に戻ること。** 閉じた輪になっただけでは足りません。
+    let expected = signed_area_2d(&outer_polygon).abs()
+        - hole_polygons
+            .iter()
+            .map(|hole| signed_area_2d(hole).abs())
+            .sum::<f64>();
+    let got: f64 = outlines
+        .iter()
+        .map(|outline| signed_area_2d(outline).abs())
+        .sum();
+    if expected.abs() > 0.0 && (got - expected).abs() / expected.abs() > 1e-6 {
+        return Err(format!(
+            "the regions add up to {got:.6e} against the face's {expected:.6e}"
+        ));
+    }
+
+    // 8. 着地の無かった穴は、それを含む領域の穴として戻します。
+    let mut faces: Vec<Face> = regions
+        .into_iter()
+        .map(|wire| {
+            Face::new(
+                face.geometry.clone(),
+                wire,
+                Vec::new(),
+                face.orientation,
+                face.tolerance,
+            )
+        })
+        .collect();
+    if !free_wires.is_empty() {
+        let carrier = Face::new(
+            face.geometry.clone(),
+            face.outer_wire.clone(),
+            free_wires,
+            face.orientation,
+            face.tolerance,
+        );
+        faces = distribute_inner_wires(&carrier, faces, plane, tol)?;
+    }
+    Ok(faces)
+}
+
+/// アレンジメントの1本の弧。節点から節点までの、境界または切り込みの一部。
+struct Arc {
+    from: usize,
+    to: usize,
+    path: Vec<OrientedEdge>,
+}
+
+fn oriented_start_point(edge: &OrientedEdge) -> Point3 {
+    edge.evaluate_normalized(0.0)
+}
+
+fn oriented_end_point(edge: &OrientedEdge) -> Point3 {
+    edge.evaluate_normalized(1.0)
+}
+
+/// 点が既にある節点と同じならその番号を、無ければ足して新しい番号を返す。
+fn node_index(nodes: &mut Vec<Point3>, point: Point3, tol: &Tolerance) -> usize {
+    let limit = tol.linear * 1000.0;
+    if let Some(index) = nodes.iter().position(|node| (*node - point).norm() <= limit) {
+        return index;
+    }
+    nodes.push(point);
+    nodes.len() - 1
+}
+
+/// 外側・内側すべてのワイヤに対して着地を探し、いちばん近いものを返す。
+fn locate_on_any_wire(wires: &[&Wire], point: Point3, tol: &Tolerance) -> Option<(usize, WireHit)> {
+    let mut best: Option<(f64, usize, WireHit)> = None;
+    for (index, wire) in wires.iter().enumerate() {
+        let Some(hit) = locate_point_on_wire(&wire.edges, point, tol) else {
+            continue;
+        };
+        let distance = (wire.edges[hit.edge_index].evaluate_normalized(hit.t) - point).norm();
+        if best
+            .as_ref()
+            .is_none_or(|(best_distance, _, _)| distance < *best_distance)
+        {
+            best = Some((distance, index, hit));
+        }
+    }
+    best.map(|(_, index, hit)| (index, hit))
+}
+
+/// 多角形の**内側**の点を1つ返す。重心は凹形では外に出るので、辺から内側へ
+/// わずかに寄せた点を順に試す。
+fn interior_sample_2d(polygon: &[Point2], tol: f64) -> Option<Point2> {
+    let count = polygon.len() as f64;
+    let sum = polygon
+        .iter()
+        .fold(Point2::new(0.0, 0.0), |sum, point| {
+            Point2::new(sum.x + point.x, sum.y + point.y)
+        });
+    let centroid = Point2::new(sum.x / count, sum.y / count);
+    if point_in_polygon_2d(centroid, polygon, tol)
+        && !point_on_polygon_boundary(centroid, polygon, tol)
+    {
+        return Some(centroid);
+    }
+
+    let extent = polygon
+        .iter()
+        .map(|point| (point - centroid).norm())
+        .fold(0.0_f64, f64::max)
+        .max(1.0);
+    let step = extent * 1e-4;
+    for index in 0..polygon.len() {
+        let a = polygon[index];
+        let b = polygon[(index + 1) % polygon.len()];
+        let mid = Point2::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
+        let along = b - a;
+        let Some(inward) = Vec2::new(-along.y, along.x).try_normalize(1e-12) else {
+            continue;
+        };
+        for sign in [1.0_f64, -1.0] {
+            let candidate = mid + inward * (step * sign);
+            if point_in_polygon_2d(candidate, polygon, tol)
+                && !point_on_polygon_boundary(candidate, polygon, tol)
+            {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// 面の外周が、その面の向きに対して正しく巻かれているか。
+///
+/// p-curve の符号付き面積を面の向きで符号調整したものが正なら正しい、
+/// という約束です（`Regularizer` と同じ判定）。
+///
+/// **割った断片を、この約束に合わせるために要ります。** 断片の輪を決め打ちの
+/// 順で組む分割器は、元の面がどちら巻きでも同じ順で返すので、裏向きの面
+/// ——輪の穴の壁がそれです——を割ると断片が裏返ります。縫合では「同じ向きに
+/// 2度使われた稜」として出ます（4-46 と同じ症状）。
+fn face_loop_matches_orientation(face: &Face, tol: &Tolerance) -> bool {
+    let Ok(pcurves) = face.pcurves(tol) else {
+        // p-curve が出せない面はここでは判定しない。後段の検証に任せる。
+        return true;
+    };
+    let mut area = 0.0;
+    let mut previous: Option<Point2> = None;
+    let mut first: Option<Point2> = None;
+    for segment in &pcurves.outer_loop.segments {
+        let (t0, t1) = segment.curve.param_range();
+        const SAMPLES: usize = 8;
+        for step in 0..=SAMPLES {
+            let point = segment
+                .curve
+                .evaluate(t0 + (t1 - t0) * step as f64 / SAMPLES as f64);
+            if first.is_none() {
+                first = Some(point);
+            }
+            if let Some(last) = previous {
+                area += last.x * point.y - point.x * last.y;
+            }
+            previous = Some(point);
+        }
+    }
+    if let (Some(last), Some(start)) = (previous, first) {
+        area += last.x * start.y - start.x * last.y;
+    }
+    let area = area * 0.5;
+    let oriented = if face.orientation.is_forward() {
+        area
+    } else {
+        -area
+    };
+    oriented > tol.parametric
+}
+
+/// 巻き方が約束から外れている断片を巻き直す。
+fn hold_piece_like_its_face(piece: Face, tol: &Tolerance) -> Face {
+    if face_loop_matches_orientation(&piece, tol) {
+        return piece;
+    }
+    let rewound = Face::new(
+        piece.geometry.clone(),
+        reversed_wire(&piece.outer_wire),
+        piece.inner_wires.iter().map(reversed_wire).collect(),
+        piece.orientation,
+        piece.tolerance,
+    );
+    // 巻き直して約束に合うようになったときだけ採ります。合わないなら、
+    // 原因は巻き方ではありません。
+    if face_loop_matches_orientation(&rewound, tol) {
+        rewound
+    } else {
+        piece
+    }
 }
