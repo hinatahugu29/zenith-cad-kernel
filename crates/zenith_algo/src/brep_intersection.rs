@@ -881,9 +881,6 @@ impl BrepIntersectionBuilder {
         let FaceGeometry::Plane(plane) = &face.geometry else {
             return Err("Only planar faces can be split by an intersection edge".to_string());
         };
-        if !face.inner_wires.is_empty() {
-            return Err("Planar face splitting with inner wires is not implemented yet".to_string());
-        }
         let boundary = &face.outer_wire.edges;
         if boundary.len() < 3 {
             return Err("Cannot split a face with fewer than three boundary edges".to_string());
@@ -930,7 +927,7 @@ impl BrepIntersectionBuilder {
 
         let face_a = face_from_wire_path_and_split_chain(face, path_a, &ordered, tol)?;
         let face_b = face_from_wire_path_and_split_chain(face, path_b, &ordered, tol)?;
-        Ok(vec![face_a, face_b])
+        distribute_inner_wires(face, vec![face_a, face_b], plane, tol)
     }
 
     fn split_planar_face_by_single_edge(
@@ -941,11 +938,6 @@ impl BrepIntersectionBuilder {
         let FaceGeometry::Plane(plane) = &face.geometry else {
             return Err("Only planar faces can be split by an intersection edge".to_string());
         };
-        if !face.inner_wires.is_empty() {
-            return Err(
-                "Planar face splitting with inner wires is not implemented yet".to_string(),
-            );
-        }
         let boundary = &face.outer_wire.edges;
         if boundary.len() < 3 {
             return Err("Cannot split a face with fewer than three boundary edges".to_string());
@@ -990,7 +982,7 @@ impl BrepIntersectionBuilder {
 
         let face_a = face_from_wire_path_and_split_edge(face, path_a, split_edge, tol)?;
         let face_b = face_from_wire_path_and_split_edge(face, path_b, split_edge, tol)?;
-        Ok(vec![face_a, face_b])
+        distribute_inner_wires(face, vec![face_a, face_b], plane, tol)
     }
 
     pub fn split_face_by_edge(
@@ -1039,12 +1031,6 @@ impl BrepIntersectionBuilder {
         let FaceGeometry::Plane(_) = &face.geometry else {
             return Err("Only planar faces can be split by intersection edges".to_string());
         };
-        if !face.inner_wires.is_empty() {
-            return Err(
-                "Planar face splitting with inner wires is not implemented yet".to_string(),
-            );
-        }
-
         let mut faces = vec![face.clone()];
         let mut applied_split_count = 0;
         let mut skipped_split_count = 0;
@@ -3619,6 +3605,82 @@ fn point_triangle_distance(point: Point3, a: Point3, b: Point3, c: Point3) -> f6
 /// あれば有理でも同じ）ので、制御点の箱は**必ず曲線を含みます**。絞り込みの
 /// 箱は大きすぎる方向に外れるべきで、小さすぎる方向に外れてはいけません。
 /// 標本も併せて入れます——重みが負の曲線が来ても悪化させないためです。
+/// 割った片に、元の面が持っていた穴を配り直す。
+///
+/// **穴を持つ平面は、これまで一切割れませんでした。** 実務では穴あき板の面
+/// そのもので、円環の上面もこれです。実測: 輪の角を箱で削る配置は、上面
+/// （外周 r10・穴 r4 の円環）が割れないせいで、切り口の三角形が縫えずに
+/// 落ちていました。
+///
+/// 切り込みが穴に触れない配置に限ります。触れているなら穴自体を割ることに
+/// なり、それは別の仕事です。**できないことは、名前を挙げて断ります。**
+fn distribute_inner_wires(
+    original: &Face,
+    pieces: Vec<Face>,
+    plane: &zenith_geom::PlaneSurface3,
+    tol: &Tolerance,
+) -> Result<Vec<Face>, String> {
+    if original.inner_wires.is_empty() {
+        return Ok(pieces);
+    }
+
+    // 片ごとの外周を uv の多角形にしておく。
+    let polygons: Vec<Vec<Point2>> = pieces
+        .iter()
+        .map(|piece| {
+            piece
+                .outer_wire
+                .sample_points(24)
+                .iter()
+                .map(|point| project_to_plane_uv(*point, plane))
+                .collect()
+        })
+        .collect();
+
+    let mut assigned: Vec<Vec<Wire>> = vec![Vec::new(); pieces.len()];
+    for wire in &original.inner_wires {
+        // 穴の代表点。**辺の中点を使います** — 頂点は角にあたることがあり、
+        // 内外判定が割れます。
+        let Some(first) = wire.edges.first() else {
+            continue;
+        };
+        let sample = project_to_plane_uv(edge_midpoint(&first.edge), plane);
+
+        let mut owners = polygons.iter().enumerate().filter(|(_, polygon)| {
+            polygon.len() >= 3 && point_in_polygon_2d(sample, polygon, tol.parametric)
+        });
+        let Some((index, _)) = owners.next() else {
+            return Err(
+                "the cut passes through a hole; splitting a face across its inner wire is not implemented"
+                    .to_string(),
+            );
+        };
+        if owners.next().is_some() {
+            return Err(
+                "a hole landed in more than one piece; the cut probably crosses it".to_string(),
+            );
+        }
+        assigned[index].push(wire.clone());
+    }
+
+    Ok(pieces
+        .into_iter()
+        .zip(assigned)
+        .map(|(piece, inners)| {
+            if inners.is_empty() {
+                return piece;
+            }
+            Face::new(
+                piece.geometry.clone(),
+                piece.outer_wire.clone(),
+                inners,
+                piece.orientation,
+                piece.tolerance,
+            )
+        })
+        .collect())
+}
+
 fn face_boundary_bbox(face: &Face) -> Option<BoundingBox3> {
     let mut bbox = BoundingBox3::empty();
 
