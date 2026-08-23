@@ -235,7 +235,7 @@ fn main() {
     println!("{}", "-".repeat(126));
 
     // ok / refused / WRONG / PANIC
-    let mut tally = [0usize; 4];
+    let mut tally = [0usize; 5];
     let mut worst: f64 = 0.0;
     // 検証つきの口で通った演算の数。恒等式の側とは別に数えます。
     let mut gate_passed = 0usize;
@@ -282,6 +282,10 @@ fn main() {
             };
             let volume_b = volume(&b);
 
+            // **検証つきの口が何件通すかを、行ごとに出す。** 合計だけだと、
+            // 恒等式は通っているのにゲートが断っている行——直すべきものが
+            // 結果ではなくゲートかもしれない行——が見えない。
+            let mut gate_here = 0usize;
             for op in [
                 BooleanOpType::Difference,
                 BooleanOpType::Intersection,
@@ -290,6 +294,7 @@ fn main() {
                 gate_total += 1;
                 if passes_the_gate(a, &b, op, &tol) {
                     gate_passed += 1;
+                    gate_here += 1;
                 }
             }
 
@@ -314,9 +319,9 @@ fn main() {
                             }
                             Outcome::Refused(err) => {
                                 println!(
-                                    "{name:<18} {:<14} {op_name:<12} refused: {}",
+                                    "{name:<18} {:<14} {op_name:<12} refused (gate {gate_here}/3): {}",
                                     placement.name,
-                                    err.chars().take(58).collect::<String>()
+                                    err.chars().take(46).collect::<String>()
                                 );
                                 tally[1] += 1;
                             }
@@ -332,15 +337,33 @@ fn main() {
             let miss = split.max(incl_excl);
             worst = worst.max(miss);
 
-            let verdict = if miss <= 1e-6 { "ok" } else { "WRONG" };
-            if miss <= 1e-6 {
-                tally[0] += 1;
+            // **何も起きていない行を、通った行と混ぜない。**
+            // 積が 0 なら恒等式は V(A-B) = V(A) と V(AuB) = V(A)+V(B) に
+            // なり、**切り手を無視して A をそのまま返しても成り立ちます**。
+            // 実測: トーラスを半分のスラブで切る配置で、答えは A のままなのに
+            // 残差 2.44e-12 の「ok」と出ていました。OpenCASCADE は同じ箱で
+            // 1862.79 削ります（`occ_cut_reference.py torus slab --box ...`）。
+            //
+            // 本当に 0 の配置もあります（輪の穴を通るドリルなど）。**どちらか
+            // は恒等式には決められない**ので、ここでは判定せずに旗を立てます。
+            let untouched = v_inter.abs() <= volume_a * 1e-9;
+            let verdict = if miss > 1e-6 {
+                "WRONG"
+            } else if untouched {
+                "NOCUT"
             } else {
+                "ok"
+            };
+            if miss > 1e-6 {
                 tally[2] += 1;
+            } else if untouched {
+                tally[4] += 1;
+            } else {
+                tally[0] += 1;
             }
 
             println!(
-                "{name:<18} {:<14} {v_diff:>14.4} {v_inter:>14.4} {v_union:>14.4} {split:>11.2e} {incl_excl:>11.2e}  {verdict}",
+                "{name:<18} {:<14} {v_diff:>14.4} {v_inter:>14.4} {v_union:>14.4} {split:>11.2e} {incl_excl:>11.2e}  {verdict:<5} gate {gate_here}/3",
                 placement.name
             );
         }
@@ -348,8 +371,8 @@ fn main() {
 
     println!("{}", "-".repeat(126));
     println!(
-        "ok {}   refused {}   WRONG {}   PANIC {}   worst identity residual {:.2e}",
-        tally[0], tally[1], tally[2], tally[3], worst
+        "ok {}   NOCUT {}   refused {}   WRONG {}   PANIC {}   worst identity residual {:.2e}",
+        tally[0], tally[4], tally[1], tally[2], tally[3], worst
     );
     println!(
         "through the verified API: {gate_passed} of {gate_total} operation(s)"
@@ -360,4 +383,10 @@ fn main() {
     println!();
     println!("Both hold whatever A is and wherever B sits, so neither needs a");
     println!("closed form for the cut shape. Refusing is not a defect; WRONG is.");
+    println!();
+    println!("NOCUT = the intersection came out zero, so both identities hold");
+    println!("even if the cutter was ignored entirely. These rows are NOT");
+    println!("graded here. Settle each one against an outside ruler:");
+    println!("  tools/occ_cut_reference.py <subject> <cutter> --box ...");
+    println!("  cargo run --release -p zenith_algo --example cutter_placement_probe");
 }
