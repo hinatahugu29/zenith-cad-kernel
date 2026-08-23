@@ -114,6 +114,21 @@ impl Regularizer {
         if !recognised && report.wrapped_faces_split == 0 && report.closed_edges_split == 0 {
             return solid.clone();
         }
+
+        // **整えた結果が入力より悪いなら、整えない。**
+        //
+        // 整えるのは通しやすくするためであって、通す条件ではありません。
+        // 実測: `occ_reference_revolved_ring` は正規化すると**位相的に無効な
+        // 立体**になります（4面→10面、割った面2・刻んだ閉じた辺4、報告は
+        // 成功のまま）。それを入口で黙って渡すと、ブーリアンは無効な入力を
+        // 相手にすることになります。
+        //
+        // 正規化そのものの欠陥は別に直すべきものです（`regularize_probe` が
+        // 監視するようになりました）。入口で「悪化させない」ことは、それとは
+        // 別に常に守れます。
+        if !regularized.is_topologically_valid(tol) {
+            return solid.clone();
+        }
         regularized
     }
 
@@ -523,13 +538,80 @@ impl Regularizer {
         // 作ると `id` を自分で書くことになり、ここでは 0 を書いていた。
         // 割った面がすべて同じ id を名乗るので、id を鍵にして面を覚える
         // 仕組みを後から足すと、静かに取り違える。
-        Some(Face::new(
-            FaceGeometry::Nurbs(patch.surface.clone()),
-            Wire::new(wire_edges),
-            Vec::new(),
-            face.orientation,
-            face.tolerance,
-        ))
+        let build = |edges: Vec<OrientedEdge>| {
+            Face::new(
+                FaceGeometry::Nurbs(patch.surface.clone()),
+                Wire::new(edges),
+                Vec::new(),
+                face.orientation,
+                face.tolerance,
+            )
+        };
+
+        // **境界はパッチの縁を決まった順で辿るので、親の向きを見ていません。**
+        // 裏向き（`Reversed`）の面を割ると、断片のループは親と逆に巻きます。
+        // 形も体積も合ったまま、立体は**位相的に無効**になります。実測:
+        // `occ_reference_revolved_ring` と `occ_reference_elliptic_prism` は
+        // 正規化するとシェルは閉じたままこれで落ちていました（媒介変数空間の
+        // 符号付き面積が +0.25、向きから期待される符号と逆）。
+        //
+        // 組んでから測って、合わなければ巻き直します。
+        let candidate = build(wire_edges.clone());
+        if Self::loop_matches_orientation(&candidate, tol) {
+            return Some(candidate);
+        }
+        let flipped: Vec<OrientedEdge> = wire_edges
+            .into_iter()
+            .rev()
+            .map(|oriented| OrientedEdge::new(oriented.edge, oriented.orientation.reversed()))
+            .collect();
+        let flipped = build(flipped);
+        if Self::loop_matches_orientation(&flipped, tol) {
+            return Some(flipped);
+        }
+        // どちらでも合わないなら、この面は割らない。**間違った向きの断片を
+        // 返すより、割らないほうがましです。**
+        None
+    }
+
+    /// 面のトリムループが、面の向きと同じ側を囲んでいるか。
+    ///
+    /// 媒介変数空間での符号付き面積を見ます。`Forward` の面は正、`Reversed` の
+    /// 面は負でなければなりません（シェルの検証がそう見ています）。
+    fn loop_matches_orientation(face: &Face, tol: &Tolerance) -> bool {
+        let Ok(pcurves) = face.pcurves(tol) else {
+            // p-curve が出せない面は、ここでは判定しない。後段の検証に任せる。
+            return true;
+        };
+        let mut area = 0.0;
+        let mut previous: Option<zenith_math::Point2> = None;
+        let mut first: Option<zenith_math::Point2> = None;
+        for segment in &pcurves.outer_loop.segments {
+            let (t0, t1) = segment.curve.param_range();
+            const SAMPLES: usize = 8;
+            for step in 0..=SAMPLES {
+                let point = segment
+                    .curve
+                    .evaluate(t0 + (t1 - t0) * step as f64 / SAMPLES as f64);
+                if first.is_none() {
+                    first = Some(point);
+                }
+                if let Some(last) = previous {
+                    area += last.x * point.y - point.x * last.y;
+                }
+                previous = Some(point);
+            }
+        }
+        if let (Some(last), Some(start)) = (previous, first) {
+            area += last.x * start.y - start.x * last.y;
+        }
+        let area = area * 0.5;
+        let oriented = if face.orientation.is_forward() {
+            area
+        } else {
+            -area
+        };
+        oriented > tol.parametric
     }
 
     fn same_edge_geometry(a: &Edge, b: &Edge, tol: &Tolerance) -> bool {

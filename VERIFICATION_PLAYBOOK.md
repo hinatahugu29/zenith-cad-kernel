@@ -648,7 +648,7 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `step_import_audit` | STEP の往復と、他カーネルのファイルを読めるか |
 | `pcurve_fidelity_probe` | p-curve が本当に辺の上にあるか |
 | `foreign_reexport` | 他カーネルのファイルを読んで書き戻す一周 |
-| `regularize_probe` | 全周を刻んでも体積・面積が動かないか |
+| `regularize_probe` | 全周を刻んでも体積・面積が動かないか。**組み直した立体をブーリアンが受け取れるか**も見る（`usable` の列。閉じているだけでは足りません） |
 | `pcurve_derivation_probe` | p-curve を導出し直すと積分が変わる面 |
 | `face_split_probe` | 一般の曲線で面を割ったとき、面積の和が元に戻るか |
 | `ssi_probe` | 交線が両曲面に乗るか、1本の曲線に当てはまるか |
@@ -673,6 +673,7 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `foreign_tess_focus <検体> <分割>` | 読んだ立体を1つだけテッセレーションし、所要・三角形数・境界箱を出す（**境界箱が潰れていれば面が欠けています**） |
 | `foreign_boolean_focus <検体> <slab\|drill\|corner> <演算>` | 組を1つだけ走らせ、各段を**即座に吐く**（返ってこない段を名指しするため） |
 | `foreign_boolean_why [検体] [切り手] [演算]` | パイプラインの段ごとの内訳を、**同じ形をビルダーで作ったものと並べて**出す。読んだほうだけ落ちるなら、違うのは形ではなく持ち方 |
+| `tools/occ_cut_reference.py <検体> <slab|drill|corner>` | 同じ配置を OpenCASCADE に切らせる。**「本当に削れるのか」**を決める口。断ったのが正しいのか、以前通っていた答えが誤答だったのかは、これで分かれます |
 
 すべて `cargo run --release -p zenith_algo --example <名前>` で実行します。
 
