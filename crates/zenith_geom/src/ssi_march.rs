@@ -888,40 +888,68 @@ impl IntersectionMarcher {
                 continue;
             }
 
+            // **刻みは、測った収束の速さから予測して決める。**
+            //
+            // ここは以前、半分ずつ12回まで刻んでいた。届くまでの回数が
+            // 多いと、そのたびに最初から辿り直すので費用が積み上がる。実測:
+            // 楕円柱を傾けたドリルで抜く配置に、1件で15分かかっていた。
+            //
+            // 6回で打ち切っていた頃は逆に届かず、「交わらない」と報告して
+            // いた（4-55）。**回数の問題ではありません。**
+            //
+            // 2回測れば、ずれが刻みの何乗で落ちているかが出る。3次補間の
+            // 理屈は4乗だが、序盤は 1.26e-1 → 8.38e-2 のように 0.6 倍
+            // （0.7 乗相当）までしか落ちないことがある。**理屈ではなく、
+            // その場で測った次数を使う。**
+            //
+            // 予測した刻みには 1.5 の安全率を掛ける。外しても次の回で
+            // 測り直すので、外れ方は費用にしか出ない。
             let mut step = first_step;
-            // **回数ではなく、届いたかどうかで止める。** 6回と決め打ちにして
-            // いたが、全周円錐をスラブで切る配置では、6回目でも 3.53e-5 で、
-            // 要求の 1e-6 に届かないまま「交わらない」と報告していた。辿った
-            // 点は両方の曲面から 4e-11 しか離れておらず、**足りないのは
-            // マーチングではなく当てはめ**だった。
-            //
-            // 刻みを半分にするたびのずれは 1.26e-1 → 8.38e-2 → 5.09e-2 →
-            // 6.53e-3 → 6.20e-4 → 3.53e-5。序盤の減りは 3 次補間の理屈
-            // （8分の1）よりずっと緩い。**「減りが鈍ったら降りる」という
-            // 見切りは入れない**——入れたところ、トーラス片をドリルで切る
-            // 配置の交線が 12 本から 2 本に減った。序盤の鈍さは、その先で
-            // 届かないことを意味しない。
-            //
-            // 費用は点の上限が抑える。刻みを半分にすると点は倍になるので、
-            // 上限に当たった時点で降りれば、全体の仕事はいちばん細かい一回の
-            // 2 倍で収まる。
-            for _ in 0..12 {
-                if let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, 2048, tol) {
-                    if marched.points.len() >= 4 {
-                        if let Some((curve, deviation)) = Self::fit_curve(s1, s2, &marched, 3) {
-                            if deviation <= deviation_limit {
-                                found.push((curve, marched, deviation));
-                                break;
-                            }
-                        }
-                        // 点の上限に当たったら、これ以上刻んでも曲線は
-                        // 伸びない。切り詰められた交線を返さないために降りる。
-                        if marched.points.len() >= 2048 {
-                            break;
+            let mut previous: Option<(f64, f64)> = None;
+            for attempt in 0..8 {
+                let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, 2048, tol) else {
+                    step *= 0.5;
+                    continue;
+                };
+                if marched.points.len() < 4 {
+                    step *= 0.5;
+                    continue;
+                }
+                let Some((curve, deviation)) = Self::fit_curve(s1, s2, &marched, 3) else {
+                    step *= 0.5;
+                    continue;
+                };
+                if deviation <= deviation_limit {
+                    found.push((curve, marched, deviation));
+                    break;
+                }
+                // 点の上限に当たったら、これ以上刻んでも曲線は伸びない。
+                // 切り詰められた交線を返さないために降りる。
+                if marched.points.len() >= 2048 {
+                    break;
+                }
+
+                let next = match previous {
+                    // 1回目は比べる相手がいないので、半分にして測り直す。
+                    None => step * 0.5,
+                    Some((before_step, before_deviation)) => {
+                        let step_ratio = before_step / step;
+                        let deviation_ratio = before_deviation / deviation;
+                        if !(step_ratio > 1.0 && deviation_ratio > 1.0) {
+                            // 落ちていない。予測できないので半分ずつに戻す。
+                            step * 0.5
+                        } else {
+                            let order = (deviation_ratio.ln() / step_ratio.ln()).clamp(0.5, 6.0);
+                            let shrink = (deviation / deviation_limit).powf(1.0 / order) * 1.5;
+                            // 一度に縮めすぎると点の上限に当たって切り詰めた
+                            // 交線が返る。1回あたり 16 倍までにしておく。
+                            step / shrink.clamp(2.0, 16.0)
                         }
                     }
-                }
-                step *= 0.5;
+                };
+                previous = Some((step, deviation));
+                step = next;
+                let _ = attempt;
             }
         }
 
