@@ -152,6 +152,9 @@ fn main() {
     // **端点が何本の稜に共有されているか。** 蓋を作るには交線が閉じた輪に
     // ならなければならず、閉じているかどうかはここで決まります。ちょうど 2 本
     // でない端点があれば、そこで輪は閉じません。
+    split_report(&faces_a, &faces_b, &tol);
+    refusal_report(&faces_a, &faces_b, &edges, &tol);
+    chain_report(&faces_a, &faces_b, &edges, &tol);
     println!("\n  endpoints shared by exactly one edge (the loop breaks here):");
     let mut lonely = 0usize;
     for (index, point) in ends
@@ -178,5 +181,110 @@ fn main() {
     }
     if lonely == 0 {
         println!("    none; every endpoint meets another edge");
+    }
+}
+
+/// 交線を渡された面が、実際に割れたかどうか。
+///
+/// 「交線 N 本」まで来ていても、面が割れていなければ切り口は縫えません。
+/// **どの面が割れ、どの面が割れなかったか**は、段の合計（"applied batch
+/// splits"）では分かりません。
+fn split_report(
+    faces_a: &[zenith_topo::Face],
+    faces_b: &[zenith_topo::Face],
+    tol: &Tolerance,
+) {
+    let splits = BrepIntersectionBuilder::collect_planar_face_batch_splits(faces_a, faces_b, tol);
+    for (label, batch, faces) in [
+        ("A", &splits.splits_a, faces_a),
+        ("B", &splits.splits_b, faces_b),
+    ] {
+        println!("\n  {label} faces that were split:");
+        if batch.is_empty() {
+            println!("    none");
+        }
+        for split in batch {
+            println!(
+                "    {label}{:<3} {} split edge(s) -> {} piece(s) (applied {}, skipped {})",
+                split.face_index,
+                split.split_edge_count,
+                split.result.faces.len(),
+                split.result.applied_split_count,
+                split.result.skipped_split_count
+            );
+        }
+        let _ = faces;
+    }
+}
+
+/// 割れなかった面については、**断り文をそのまま**出す。
+fn refusal_report(
+    faces_a: &[zenith_topo::Face],
+    faces_b: &[zenith_topo::Face],
+    edges: &[zenith_algo::IntersectionEdgeCandidate],
+    tol: &Tolerance,
+) {
+    println!("\n  what each face said when asked to split:");
+    for candidate in edges {
+        for (label, face) in [
+            ("A", &faces_a[candidate.face_a_index]),
+            ("B", &faces_b[candidate.face_b_index]),
+        ] {
+            let index = if label == "A" {
+                candidate.face_a_index
+            } else {
+                candidate.face_b_index
+            };
+            match BrepIntersectionBuilder::split_face_by_edge(face, &candidate.edge, tol) {
+                Ok(pieces) => println!("    {label}{index:<3} -> {} piece(s)", pieces.len()),
+                Err(err) => println!(
+                    "    {label}{index:<3} -> {}",
+                    err.chars().take(400).collect::<String>()
+                ),
+            }
+        }
+    }
+}
+
+/// 面に来た交線を**まとめて**1本の切り込みとして当てたとき、何が起きるか。
+///
+/// 曲面同士の交線は相手のパッチの境界で細切れになって届くので、1本ずつでは
+/// どれも面の内側で終わります。最後の受け皿は鎖にまとめて当て直しますが、
+/// そこが何と言っているかは段の合計には出ません。
+fn chain_report(
+    faces_a: &[zenith_topo::Face],
+    faces_b: &[zenith_topo::Face],
+    edges: &[zenith_algo::IntersectionEdgeCandidate],
+    tol: &Tolerance,
+) {
+    use std::collections::BTreeMap;
+    let mut by_a: BTreeMap<usize, Vec<zenith_topo::Edge>> = BTreeMap::new();
+    let mut by_b: BTreeMap<usize, Vec<zenith_topo::Edge>> = BTreeMap::new();
+    for candidate in edges {
+        by_a.entry(candidate.face_a_index)
+            .or_default()
+            .push(candidate.edge.clone());
+        by_b.entry(candidate.face_b_index)
+            .or_default()
+            .push(candidate.edge.clone());
+    }
+
+    println!("\n  the whole set of edges on a face, taken as one chain:");
+    for (label, groups, faces) in [("A", &by_a, faces_a), ("B", &by_b, faces_b)] {
+        for (index, group) in groups {
+            match zenith_algo::FaceSplitter::split_by_chain(&faces[*index], group, tol) {
+                Ok((pieces, report)) => println!(
+                    "    {label}{index:<3} {} edge(s) -> {} piece(s), area residual {:.3e}",
+                    group.len(),
+                    pieces.len(),
+                    report.area_residual
+                ),
+                Err(err) => println!(
+                    "    {label}{index:<3} {} edge(s) -> {}",
+                    group.len(),
+                    err.chars().take(200).collect::<String>()
+                ),
+            }
+        }
     }
 }
