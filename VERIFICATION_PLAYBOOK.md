@@ -655,6 +655,8 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `gear_probe` | 歯面の位置ずれと体積の差を、標本数ごとに並べる |
 | `tess_density_probe` | 三角形数が頼んだ分割数に対して素直に増えるか（いま比 1.00・単調） |
 | `foreign_boolean_probe` | **他カーネルの立体を読んで切る**。恒等式 `V(A-B)+V(A^B)=V(A)` と包除で見るので、切った形の閉じた式は要りません |
+| `foreign_boolean_stage_probe` | 断った配置を**どの段で足りなくなったか**で並べる。1件ずつ追う前に、**何種類あるか**を出すための道具 |
+| `ring_corner_probe` | 輪の角を箱で削る配置を、読んだ立体とビルダーの立体で並べる。両方落ちればブーリアン自身の穴 |
 | `step_unit_probe` | **ミリ以外の単位で書かれた STEP** を正しい大きさで読めているか。検体は `tools/make_unit_step.py` が作り、OCC が解析解どおりに読み戻すことを確かめてある |
 | `step_representation_probe` | 同じ形を**違う書き方**（1ファイルに複数立体、解析曲面か B-spline か）で書いたファイルが、同じ答えになるか。**個数も見ます** |
 | `export_iges_suite` | IGES 5.3 の検体を書き出す（突き合わせは `tools/verify_iges.py`） |
