@@ -488,6 +488,7 @@ dependencies = [
  "log",
  "nalgebra",
  "serde",
+ "serde_json",
  "thiserror",
  "zenith_geom",
  "zenith_io",

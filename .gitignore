@@ -5,6 +5,16 @@
 
 # Local/generated verification outputs
 /target_*/
+/*.step
+/blender_addon/
+/tools/inspect_*.py
+/tools/test_*.py
+/tools/diagnose_brep_freecad.py
+/tools/generate_v*.py
+/tools/diff_step_files.py
+/tools/analyze_edge_tolerances.py
+/tools/freecad_step_validator.py
+/tools/append_work_log.py
 
 # External/reference source drops kept beside the kernel
 /reference/

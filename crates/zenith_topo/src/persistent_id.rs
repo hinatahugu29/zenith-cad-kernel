@@ -138,3 +138,68 @@ impl GeometricMatcher {
         best_idx.map(|idx| (idx, highest_score))
     }
 }
+
+/// 稜の幾何シグネチャ（履歴を編集して作り直したあと、同じ稜を選び直すためのもの）
+///
+/// 稜の ID は作り直すたびに変わるので、履歴に ID を書いても次の再計算では
+/// 指すものがありません。ここに残すのは**形の側の情報**です。中点・向き・
+/// 長さ・二面角の4つで、寸法を変えた程度なら同じ稜が最も近いまま残ります。
+///
+/// 向きは始点と終点の入れ替えで反転するので、成分の符号を正規化してから
+/// 保存します。同じ稜を逆向きに格納しても同じシグネチャになります。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EdgeSignature {
+    pub midpoint: Point3,
+    pub direction: Vec3,
+    pub length: f64,
+    #[serde(default)]
+    pub dihedral_angle_deg: Option<f64>,
+}
+
+impl EdgeSignature {
+    /// 稜からシグネチャを取る（二面角は呼び出し側が測って渡す）
+    pub fn from_edge(edge: &crate::edge::Edge, dihedral_angle_deg: Option<f64>) -> Self {
+        let start = edge.start_vertex.point;
+        let end = edge.end_vertex.point;
+        let span = end - start;
+        let length = span.norm();
+        let direction = if length > 1e-12 {
+            canonical_direction(span / length)
+        } else {
+            Vec3::new(1.0, 0.0, 0.0)
+        };
+
+        Self {
+            midpoint: Point3::from((start.coords + end.coords) * 0.5),
+            direction,
+            length,
+            dihedral_angle_deg,
+        }
+    }
+
+    /// 0.0〜1.0 の一致度。1.0 が完全一致。
+    pub fn similarity(&self, other: &EdgeSignature) -> f64 {
+        let alignment = self.direction.dot(&other.direction).abs().clamp(0.0, 1.0);
+        let distance = (self.midpoint - other.midpoint).norm();
+        let distance_score = (-distance * 0.05).exp();
+        let longer = self.length.max(other.length).max(1e-12);
+        let length_score = 1.0 - (self.length - other.length).abs() / longer;
+
+        let angle_score = match (self.dihedral_angle_deg, other.dihedral_angle_deg) {
+            (Some(a), Some(b)) => 1.0 - ((a - b).abs() / 360.0).min(1.0),
+            _ => 1.0,
+        };
+
+        alignment * 0.35 + distance_score * 0.35 + length_score * 0.15 + angle_score * 0.15
+    }
+}
+
+/// 始点と終点の入れ替えに依存しない向き
+fn canonical_direction(direction: Vec3) -> Vec3 {
+    for component in [direction.x, direction.y, direction.z] {
+        if component.abs() > 1e-12 {
+            return if component > 0.0 { direction } else { -direction };
+        }
+    }
+    direction
+}

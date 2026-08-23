@@ -73,6 +73,25 @@ impl StepImporter {
             .ok_or("MANIFOLD_SOLID_BREP or BREP_WITH_VOIDS not found in STEP data".to_string())
     }
 
+    /// Reads one EDGE_CURVE out of a STEP text, without needing a whole solid
+    /// around it.
+    ///
+    /// Diagnostic entry point: a malformed curve is easier to pin down on its
+    /// own than through the shell that failed to validate because of it.
+    pub fn import_edge_from_str(content: &str, edge_id: u64) -> Result<Edge, String> {
+        let mut ctx = ImportContext::new();
+        Self::parse_data_section(content, &mut ctx)?;
+        Self::get_edge(&mut ctx, edge_id)
+    }
+
+    /// Reads one ADVANCED_FACE out of a STEP text, without needing a shell
+    /// around it. Diagnostic counterpart to [`Self::import_edge_from_str`].
+    pub fn import_face_from_str(content: &str, face_id: u64) -> Result<Face, String> {
+        let mut ctx = ImportContext::new();
+        Self::parse_data_section(content, &mut ctx)?;
+        Self::resolve_face(&mut ctx, face_id)
+    }
+
     /// STEPテキストから複数の Solid（B-Repソリッド）をインポート
     pub fn import_solids_from_str(content: &str) -> Result<Vec<Solid>, String> {
         let mut ctx = ImportContext::new();
@@ -412,6 +431,13 @@ impl StepImporter {
             }
         }
 
+        if raw.name == "ELLIPSE" {
+            if let Some(c) = Self::arc_from_ellipse_entity(ctx, &raw, p_start, p_end)? {
+                ctx.curves.insert(id, c.clone());
+                return Ok(c);
+            }
+        }
+
         if raw.name == "SURFACE_CURVE" {
             let parts = Self::split_top_level_args(&raw.args);
             if parts.len() >= 2 {
@@ -431,9 +457,16 @@ impl StepImporter {
             }
         }
 
-        // デフォルト直線補間
-        let c = NurbsCurve3::bspline_from_points(1, vec![p_start, p_end])?;
-        Ok(c)
+        // ここは端点を結ぶ直線を返していた。楕円弧や複合曲線をそのまま弦に
+        // 置き換えるということで、平面の上に載る境界なら**面からは外れない**
+        // ので、下流の p-curve 検証を素通りしうる。閉じた円のように両端が
+        // 同じ点になる曲線は退化として捕まるが、それは捕まる側の運が良い
+        // だけである。読めなかったことは、読めなかったと言う。
+        Err(format!(
+            "Unsupported curve entity {} (#{}). Zenith reads LINE, CIRCLE, \
+             TRIMMED_CURVE, SURFACE_CURVE and (rational) B_SPLINE_CURVE_WITH_KNOTS",
+            raw.name, id
+        ))
     }
 
     fn parse_nurbs_curve(
@@ -614,7 +647,7 @@ impl StepImporter {
             Ok(r) if r > 1e-9 => r,
             _ => return Ok(None),
         };
-        let (center, normal, _) = Self::get_axis2_placement(ctx, axis_id)?;
+        let (center, normal, ref_dir) = Self::get_axis2_placement(ctx, axis_id)?;
 
         let v0 = p_start - center;
         let v1 = p_end - center;
@@ -622,47 +655,259 @@ impl StepImporter {
             return Ok(None);
         }
 
-        Self::make_circular_arc(center, normal, p_start, p_end)
+        // 円弧は円の自前の座標系から角度で組む。端点から幾何を推測すると、
+        // 始点と終点が同じ完全円（円柱の縁として必ず出てくる形）を角度0の
+        // 退化として捨ててしまう。
+        arc_from_angles(center, normal, ref_dir, radius, p_start, p_end).map(Some)
     }
 
-    fn make_circular_arc(
-        center: Point3,
-        normal: Vec3,
+    /// `SURFACE_OF_LINEAR_EXTRUSION('', #swept_curve, #extrusion_axis)`
+    ///
+    /// 断面曲線を一方向にまっすぐ掃いた曲面。OpenCASCADE は、スプライン断面や
+    /// 楕円断面の押し出しをこの形で書く（解析曲面に落とせる円や直線の押し出しは
+    /// `CYLINDRICAL_SURFACE` / `PLANE` になるので、ここに来るのは自由曲線の
+    /// 押し出しに限られる）。
+    ///
+    /// `S(u, v) = C(u) + v * V` は `v` について1次なので、`v` 方向の次数を1に
+    /// して両端の制御点列を置けば**厳密**に表せる。有理曲線でも、重みはそのまま
+    /// で制御点だけ平行移動すればよい（同次座標で見ると分母が `v` に依らない）。
+    ///
+    /// `v` の範囲は境界から取る。解析曲面と同じで、STEP の掃引面は範囲を
+    /// 持たないからである。ここでは制御点の凸包を使って**必ず覆う**側に丸める
+    /// （面のトリムは境界ワイヤが担うので、広いぶんには困らない）。
+    fn linear_extrusion_patch(
+        ctx: &mut ImportContext,
+        raw: &RawEntity,
+        boundary_points: &[Point3],
+    ) -> Result<Option<NurbsSurface3>, String> {
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 3 {
+            return Ok(None);
+        }
+        let (Some(curve_id), Some(vector_id)) = (
+            Self::parse_entity_ref(parts[1]),
+            Self::parse_entity_ref(parts[2]),
+        ) else {
+            return Ok(None);
+        };
+
+        let Some(basis) = Self::swept_basis_curve(ctx, curve_id)? else {
+            return Ok(None);
+        };
+        let Some(extrusion) = Self::get_vector(ctx, vector_id)? else {
+            return Ok(None);
+        };
+        let length = extrusion.norm();
+        if length <= 1e-12 {
+            return Ok(None);
+        }
+        let direction = extrusion / length;
+
+        // 曲線は制御点の凸包に収まるので、掃引方向の成分もその範囲に収まる。
+        let mut curve_low = f64::INFINITY;
+        let mut curve_high = f64::NEG_INFINITY;
+        for cp in &basis.control_points {
+            let s = cp.point.coords.dot(&direction);
+            curve_low = curve_low.min(s);
+            curve_high = curve_high.max(s);
+        }
+        let mut boundary_low = f64::INFINITY;
+        let mut boundary_high = f64::NEG_INFINITY;
+        for point in boundary_points {
+            let s = point.coords.dot(&direction);
+            boundary_low = boundary_low.min(s);
+            boundary_high = boundary_high.max(s);
+        }
+        if !(curve_low.is_finite() && boundary_low.is_finite()) {
+            return Ok(None);
+        }
+
+        // 安全のためのマージンは足さない。凸包の範囲だけで必ず覆えるうえ、
+        // **この面の境界はパラメータ矩形そのもの**なので、はみ出したぶんが
+        // そのまま積分に乗る。実測で 2e-6 だけ v を広げたところ、側面の面積が
+        // 3.0e-6、立体の体積が 1.3e-6 だけ大きく出て、しかも分割数を振っても
+        // 動かなかった（平面キャップのほうは 1.5e-14 で厳密なままなので、
+        // 楕円そのものは正しい）。動かない差は求積の粗さではなく、測っている
+        // 対象が違うという印である。
+        let v_low = (boundary_low - curve_high) / length;
+        let v_high = (boundary_high - curve_low) / length;
+
+        let control_points: Vec<Vec<ControlPoint3>> = basis
+            .control_points
+            .iter()
+            .map(|cp| {
+                vec![
+                    ControlPoint3::new(cp.point + extrusion * v_low, cp.weight),
+                    ControlPoint3::new(cp.point + extrusion * v_high, cp.weight),
+                ]
+            })
+            .collect();
+
+        NurbsSurface3::new(
+            basis.degree,
+            1,
+            control_points,
+            basis.knots.clone(),
+            KnotVector::clamped_uniform(2, 1),
+        )
+        .map(Some)
+    }
+
+    /// 掃引面の断面になっている曲線。端点を必要としない形だけを受け取る。
+    fn swept_basis_curve(
+        ctx: &mut ImportContext,
+        curve_id: u64,
+    ) -> Result<Option<NurbsCurve3>, String> {
+        let raw = ctx
+            .raw_entities
+            .get(&curve_id)
+            .ok_or_else(|| format!("Entity #{} not found", curve_id))?
+            .clone();
+
+        if raw.name == "B_SPLINE_CURVE_WITH_KNOTS" || raw.args.contains("B_SPLINE_CURVE_WITH_KNOTS")
+        {
+            return Self::parse_nurbs_curve(ctx, &raw);
+        }
+
+        // 円・楕円は全周で組む。掃引面の断面としては閉じた1本なので、端点から
+        // 角度を測る必要がない。
+        let parts = Self::split_top_level_args(&raw.args);
+        if (raw.name == "CIRCLE" && parts.len() >= 3) || (raw.name == "ELLIPSE" && parts.len() >= 4)
+        {
+            let Some(axis_id) = Self::parse_entity_ref(parts[1]) else {
+                return Ok(None);
+            };
+            let Ok(semi_x) = parts[2].trim().parse::<f64>() else {
+                return Ok(None);
+            };
+            let semi_y = if raw.name == "ELLIPSE" {
+                match parts[3].trim().parse::<f64>() {
+                    Ok(value) => value,
+                    Err(_) => return Ok(None),
+                }
+            } else {
+                semi_x
+            };
+            if !(semi_x > 1e-9 && semi_y > 1e-9) {
+                return Ok(None);
+            }
+            let (center, normal, ref_dir) = Self::get_axis2_placement(ctx, axis_id)?;
+            let axis = normal
+                .try_normalize(1e-12)
+                .ok_or_else(|| "Swept curve axis is degenerate".to_string())?;
+            let x_axis = {
+                let projected = ref_dir - axis * ref_dir.dot(&axis);
+                projected
+                    .try_normalize(1e-12)
+                    .ok_or_else(|| "Swept curve reference direction is degenerate".to_string())?
+            };
+            let y_axis = axis.cross(&x_axis);
+            return rational_elliptic_arc(
+                center,
+                x_axis,
+                y_axis,
+                semi_x,
+                semi_y,
+                0.0,
+                std::f64::consts::PI * 2.0,
+            )
+            .map(Some);
+        }
+
+        Ok(None)
+    }
+
+    /// `VECTOR('', #direction, magnitude)` を、向きと長さを掛けた1本のベクトルで返す。
+    fn get_vector(ctx: &mut ImportContext, id: u64) -> Result<Option<Vec3>, String> {
+        let raw = ctx
+            .raw_entities
+            .get(&id)
+            .ok_or_else(|| format!("Entity #{} not found", id))?
+            .clone();
+        if raw.name != "VECTOR" {
+            return Ok(None);
+        }
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 3 {
+            return Ok(None);
+        }
+        let Some(direction_id) = Self::parse_entity_ref(parts[1]) else {
+            return Ok(None);
+        };
+        let Ok(magnitude) = parts[2].trim().parse::<f64>() else {
+            return Ok(None);
+        };
+        let direction = Self::get_direction(ctx, direction_id)?;
+        Ok(Some(direction * magnitude))
+    }
+
+    /// `ELLIPSE('', #axis2_placement_3d, semi_axis_1, semi_axis_2)`
+    ///
+    /// 楕円は、押し出し断面や斜め切りの円柱の縁として実務のファイルによく出る。
+    /// 対応していなかったときは、端点を結ぶ**直線**に置き換わっていた。平面の
+    /// 上に載る境界ならその弦も面から外れないので、下流の検証を素通りしうる。
+    fn arc_from_ellipse_entity(
+        ctx: &mut ImportContext,
+        raw: &RawEntity,
         p_start: Point3,
         p_end: Point3,
     ) -> Result<Option<NurbsCurve3>, String> {
-        let v0 = p_start - center;
-        let v1 = p_end - center;
-        let r0 = v0.norm();
-        let r1 = v1.norm();
-        if r0 <= 1e-9 || r1 <= 1e-9 || (r0 - r1).abs() > 1e-3 {
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 4 {
+            return Ok(None);
+        }
+        let Some(axis_id) = Self::parse_entity_ref(parts[1]) else {
+            return Ok(None);
+        };
+        let (Ok(semi_x), Ok(semi_y)) = (
+            parts[2].trim().parse::<f64>(),
+            parts[3].trim().parse::<f64>(),
+        ) else {
+            return Ok(None);
+        };
+        if !(semi_x > 1e-9 && semi_y > 1e-9) {
             return Ok(None);
         }
 
-        let u0 = v0 / r0;
-        let u1 = v1 / r1;
-        let dot = u0.dot(&u1).clamp(-1.0, 1.0);
-        let angle = dot.acos();
-        if angle <= 1e-9 || angle > std::f64::consts::FRAC_PI_2 + 1e-6 {
+        let (center, normal, ref_dir) = Self::get_axis2_placement(ctx, axis_id)?;
+        let axis = normal
+            .try_normalize(1e-12)
+            .ok_or_else(|| "Ellipse axis is degenerate".to_string())?;
+        let x_axis = {
+            let projected = ref_dir - axis * ref_dir.dot(&axis);
+            projected
+                .try_normalize(1e-12)
+                .ok_or_else(|| "Ellipse reference direction is parallel to its axis".to_string())?
+        };
+        let y_axis = axis.cross(&x_axis);
+
+        // 楕円の媒介変数角は幾何的な角度ではない。点を各軸の半径で割って
+        // 単位円に戻してから角度を測る。
+        let angle_of = |point: Point3| {
+            let offset = point - center;
+            (offset.dot(&y_axis) / semi_y).atan2(offset.dot(&x_axis) / semi_x)
+        };
+        let on_ellipse = |point: Point3| {
+            let offset = point - center;
+            let u = offset.dot(&x_axis) / semi_x;
+            let v = offset.dot(&y_axis) / semi_y;
+            ((u * u + v * v).sqrt() - 1.0).abs() <= 1e-3
+        };
+        if !on_ellipse(p_start) || !on_ellipse(p_end) {
             return Ok(None);
         }
 
-        let tangent0 = normal.cross(&u0);
-        let tangent1 = normal.cross(&u1);
-        let control = line_intersection_closest(p_start, tangent0, p_end, tangent1)
-            .unwrap_or_else(|| center + (v0 + v1));
-        let weight = (angle * 0.5).cos();
+        let start_angle = angle_of(p_start);
+        let full_turn = std::f64::consts::PI * 2.0;
+        let mut sweep = angle_of(p_end) - start_angle;
+        while sweep <= 1e-9 {
+            sweep += full_turn;
+        }
+        if (p_end - p_start).norm() <= 1e-9 {
+            sweep = full_turn;
+        }
 
-        let curve = NurbsCurve3::new(
-            2,
-            vec![
-                ControlPoint3::unweighted(p_start),
-                ControlPoint3::new(control, weight),
-                ControlPoint3::unweighted(p_end),
-            ],
-            KnotVector::clamped_uniform(3, 2),
-        )?;
-        Ok(Some(curve))
+        rational_elliptic_arc(center, x_axis, y_axis, semi_x, semi_y, start_angle, sweep).map(Some)
     }
 
     fn get_axis2_placement(
@@ -693,6 +938,17 @@ impl StepImporter {
         Ok((origin, z_dir, x_dir))
     }
 
+    /// The point a VERTEX_LOOP stands at, or `None` for any other loop.
+    fn vertex_loop_point(ctx: &mut ImportContext, loop_id: u64) -> Option<Point3> {
+        let raw = ctx.raw_entities.get(&loop_id)?.clone();
+        if raw.name != "VERTEX_LOOP" {
+            return None;
+        }
+        let parts = Self::split_top_level_args(&raw.args);
+        let vertex_id = Self::parse_entity_ref(parts.get(1)?)?;
+        Self::get_vertex(ctx, vertex_id).ok().map(|vertex| vertex.point)
+    }
+
     fn get_wire(ctx: &mut ImportContext, loop_id: u64) -> Result<Wire, String> {
         if let Some(w) = ctx.wires.get(&loop_id) {
             return Ok(w.clone());
@@ -702,6 +958,18 @@ impl StepImporter {
             .get(&loop_id)
             .ok_or_else(|| format!("Entity #{} not found", loop_id))?
             .clone();
+        if raw.name == "VERTEX_LOOP" {
+            // VERTEX_LOOP('',#vertex)
+            //
+            // 頂点ひとつだけのループ。辺が無いのは書き落としではなく、
+            // 面が曲面全体を覆っていて囲むものが無いという意味。球を1面で
+            // 書くと極がこれになる。空のワイヤで表し、境界の広がりは
+            // 頂点のほうから渡す。
+            let wire = Wire::new(Vec::new());
+            ctx.wires.insert(loop_id, wire.clone());
+            return Ok(wire);
+        }
+
         if raw.name == "EDGE_LOOP" {
             // EDGE_LOOP('',(#1,#2,#3...))
             let parts = Self::split_top_level_args(&raw.args);
@@ -741,6 +1009,80 @@ impl StepImporter {
             }
         }
         Err(format!("Invalid ORIENTED_EDGE #{}", id))
+    }
+
+    /// Builds the surface a face sits on, sized to that face.
+    ///
+    /// STEP's analytic surfaces are unbounded: a CYLINDRICAL_SURFACE states an
+    /// axis and a radius and nothing about how far it runs, and the face's
+    /// bounds are what pick out the piece in use. Building a fixed patch and
+    /// hoping it covers the boundary does not work, so the extent is taken from
+    /// the boundary itself. Surfaces that are already bounded, such as
+    /// B-splines, ignore the boundary and go through the ordinary path.
+    fn get_surface_for_boundary(
+        ctx: &mut ImportContext,
+        id: u64,
+        boundary_points: &[Point3],
+    ) -> Result<FaceGeometry, String> {
+        let raw = ctx
+            .raw_entities
+            .get(&id)
+            .ok_or_else(|| format!("Entity #{} not found", id))?
+            .clone();
+
+        if boundary_points.is_empty() {
+            return Self::get_surface(ctx, id);
+        }
+
+        if raw.name == "SURFACE_OF_LINEAR_EXTRUSION" {
+            if let Some(nurbs) = Self::linear_extrusion_patch(ctx, &raw, boundary_points)? {
+                let geom = FaceGeometry::Nurbs(nurbs);
+                ctx.surfaces.insert(id, geom.clone());
+                return Ok(geom);
+            }
+        }
+
+        // どの解析曲面も AXIS2_PLACEMENT_3D を第2引数に取り、その後に半径類が続く。
+        let parts = Self::split_top_level_args(&raw.args);
+        let placement = parts
+            .get(1)
+            .and_then(|arg| Self::parse_entity_ref(arg))
+            .and_then(|axis2_id| Self::get_axis2_placement(ctx, axis2_id).ok());
+        let number = |index: usize| -> Option<f64> {
+            parts
+                .get(index)
+                .and_then(|arg| arg.trim().parse::<f64>().ok())
+        };
+
+        if let Some((origin, z_dir, x_dir)) = placement {
+            let patch = match raw.name.as_str() {
+                "CYLINDRICAL_SURFACE" => number(2).and_then(|radius| {
+                    cylinder_patch_for_boundary(origin, z_dir, x_dir, radius, boundary_points)
+                }),
+                "CONICAL_SURFACE" => number(2).zip(number(3)).and_then(|(radius, semi_angle)| {
+                    cone_patch_for_boundary(
+                        origin,
+                        z_dir,
+                        x_dir,
+                        radius,
+                        semi_angle,
+                        boundary_points,
+                    )
+                }),
+                "SPHERICAL_SURFACE" => number(2).and_then(|radius| {
+                    sphere_patch_for_boundary(origin, z_dir, x_dir, radius, boundary_points)
+                }),
+                "TOROIDAL_SURFACE" => number(2).zip(number(3)).and_then(|(major, minor)| {
+                    torus_patch_for_boundary(origin, z_dir, x_dir, major, minor, boundary_points)
+                }),
+                _ => None,
+            };
+            if let Some(nurbs) = patch {
+                return Ok(FaceGeometry::Nurbs(nurbs));
+            }
+        }
+
+        Self::get_surface(ctx, id)
     }
 
     fn get_surface(ctx: &mut ImportContext, id: u64) -> Result<FaceGeometry, String> {
@@ -949,14 +1291,21 @@ impl StepImporter {
             }
         }
 
-        // NURBS曲面等のフォールバック
-        let default_plane = PlaneSurface3::new(
-            Point3::new(0.0, 0.0, 0.0),
-            Vec3::new(1.0, 0.0, 0.0),
-            Vec3::new(0.0, 1.0, 0.0),
-        )
-        .unwrap();
-        Ok(FaceGeometry::Plane(default_plane))
+        // ここは既定の平面（原点を通る Y-Z 平面）を返していた。読めなかった
+        // 曲面を、まったく別の平面に差し替えて返すということである。
+        //
+        // 実測では、その先の p-curve 検証が「境界が面から 4.0e1 離れている」と
+        // 言って必ず落とすので、**誤答にはならず、クリーンなエラーになって
+        // いた**。ただしそのエラーは「p-curve が退化している」としか言わない
+        // ので、読めなかった理由——対応していない曲面型に当たったこと——が
+        // 呼び出し側に伝わらない。原因の分からないエラーは、追いかける人に
+        // 幾何の疑いを持たせる。ここで名指しする。
+        Err(format!(
+            "Unsupported surface entity {} (#{}). Zenith reads PLANE, \
+             CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, \
+             TOROIDAL_SURFACE and (rational) B_SPLINE_SURFACE_WITH_KNOTS",
+            raw.name, id
+        ))
     }
 
 
@@ -1162,9 +1511,17 @@ impl StepImporter {
 
             let surface_id =
                 Self::parse_entity_ref(parts[2]).ok_or("Invalid surface ref in ADVANCED_FACE")?;
-            let geom = Self::get_surface(ctx, surface_id)?;
 
             // 2. Bounds の取得
+            //
+            // FACE_OUTER_BOUND は FACE_BOUND の subtype であって必須ではない。
+            // OpenCASCADE をはじめ多くの書き手はすべての境界を FACE_BOUND として
+            // 出すので、印が付いていなければ幾何から外周を決める必要がある。
+            // これを必須としていたため、他カーネルの STEP が一切読めなかった。
+            let mut unmarked_wires: Vec<Wire> = Vec::new();
+            // 辺を持たない境界からは形が取れないので、頂点だけは別に控えておく。
+            // 曲面をどう張るかを決めるのに、この一点でも位置の手掛かりになる。
+            let mut vertex_loop_points: Vec<Point3> = Vec::new();
             for b_id in Self::parse_ref_list(parts[1]) {
                 let bound_raw = ctx
                     .raw_entities
@@ -1174,17 +1531,70 @@ impl StepImporter {
                 let b_parts = Self::split_top_level_args(&bound_raw.args);
                 if b_parts.len() >= 2 {
                     let loop_id = Self::parse_entity_ref(b_parts[1]).ok_or("loop ref")?;
-                    let wire = Self::get_wire(ctx, loop_id)?;
+                    if let Some(point) = Self::vertex_loop_point(ctx, loop_id) {
+                        vertex_loop_points.push(point);
+                    }
+                    let mut wire = Self::get_wire(ctx, loop_id)?;
+                    // FACE_BOUND の向きフラグ。.F. のとき、ループは書かれている
+                    // のと逆向きに面を囲む。これを無視すると、辺が隣り合う面から
+                    // 同じ向きに2度使われ、シェル検証が対で見つけられなくなる。
+                    if b_parts.len() >= 3 && b_parts[2].trim() == ".F." {
+                        wire = Wire::new(
+                            wire.edges
+                                .iter()
+                                .rev()
+                                .map(|oriented| {
+                                    OrientedEdge::new(
+                                        oriented.edge.clone(),
+                                        oriented.orientation.reversed(),
+                                    )
+                                })
+                                .collect(),
+                        );
+                    }
                     if bound_raw.name == "FACE_OUTER_BOUND" {
                         outer_wire = Some(wire);
                     } else {
-                        inner_wires.push(wire);
+                        unmarked_wires.push(wire);
                     }
+                }
+            }
+
+            match outer_wire {
+                // 印付きの外周があるなら、残りはすべて穴。
+                Some(_) => inner_wires.extend(unmarked_wires),
+                None => {
+                    if unmarked_wires.is_empty() {
+                        return Err(format!("No bounds at all for face #{}", face_id));
+                    }
+                    // 外周は他のすべてを囲むループ。境界の広がりで選ぶ。
+                    let outer_index = unmarked_wires
+                        .iter()
+                        .enumerate()
+                        .max_by(|(_, left), (_, right)| {
+                            wire_extent(left).total_cmp(&wire_extent(right))
+                        })
+                        .map(|(index, _)| index)
+                        .unwrap_or(0);
+                    let chosen = unmarked_wires.remove(outer_index);
+                    outer_wire = Some(chosen);
+                    inner_wires.extend(unmarked_wires);
                 }
             }
 
             let outer =
                 outer_wire.ok_or_else(|| format!("No outer bound for face #{}", face_id))?;
+
+            // 曲面は境界が決まってから組む。STEP の解析曲面（円柱・円錐など）は
+            // 無限に伸びた形で書かれ、どこを使うかは面の境界だけが決めるので、
+            // 境界を見ずに固定サイズのパッチを作ると境界が曲面から外れる。
+            let mut boundary_points = outer.sample_points(24);
+            for wire in &inner_wires {
+                boundary_points.extend(wire.sample_points(12));
+            }
+            boundary_points.extend(vertex_loop_points);
+            let geom = Self::get_surface_for_boundary(ctx, surface_id, &boundary_points)?;
+
             let orientation = if same_sense {
                 Orientation::Forward
             } else {
@@ -1199,30 +1609,6 @@ impl StepImporter {
     }
 }
 
-fn line_intersection_closest(p0: Point3, d0: Vec3, p1: Point3, d1: Vec3) -> Option<Point3> {
-    let a = d0.dot(&d0);
-    let b = d0.dot(&d1);
-    let c = d1.dot(&d1);
-    let r = p0 - p1;
-    let d = d0.dot(&r);
-    let e = d1.dot(&r);
-    let denom = a * c - b * b;
-
-    if denom.abs() <= 1e-12 {
-        return None;
-    }
-
-    let s = (b * e - c * d) / denom;
-    let t = (a * e - b * d) / denom;
-    let q0 = p0 + d0 * s;
-    let q1 = p1 + d1 * t;
-
-    if (q0 - q1).norm() > 1e-4 {
-        return None;
-    }
-
-    Some(q0 + (q1 - q0) * 0.5)
-}
 
 fn extract_entity_args<'a>(text: &'a str, entity_name: &str) -> Option<&'a str> {
     let mut search_start = 0;
@@ -1340,7 +1726,11 @@ fn expand_knot_vector(mult_arg: &str, knot_arg: &str) -> Result<KnotVector, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::{ImportContext, RawEntity, StepImporter};
+    use super::{
+        angular_span, cone_patch_for_boundary, sphere_patch_for_boundary,
+        torus_patch_for_boundary, ImportContext, RawEntity, StepImporter,
+    };
+    use zenith_geom::NurbsSurface3;
     use zenith_math::{Point3, Vec3};
     use zenith_topo::FaceGeometry;
 
@@ -1871,6 +2261,719 @@ mod tests {
             args: format!("'',({:.6},{:.6},{:.6})", x, y, z),
         }
     }
+
+    /// Samples a patch on a grid and reports the worst deviation from the
+    /// analytic surface the patch is meant to be.
+    fn worst_deviation(surface: &NurbsSurface3, distance: impl Fn(Point3) -> f64) -> f64 {
+        let mut worst: f64 = 0.0;
+        for i in 0..=16 {
+            for j in 0..=16 {
+                let point = surface.evaluate(i as f64 / 16.0, j as f64 / 16.0);
+                worst = worst.max(distance(point).abs());
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn conical_patch_matches_the_cone_it_was_sized_from() {
+        // 半径10、半角0.291456794478 rad (r=4 at z=20) の円錐。境界は上下の円。
+        let semi_angle: f64 = 0.291456794478;
+        let slope = semi_angle.tan();
+        let mut boundary = Vec::new();
+        for step in 0..24 {
+            let angle = std::f64::consts::PI * 2.0 * step as f64 / 24.0;
+            for z in [0.0, 20.0] {
+                let radius = 10.0 + z * slope;
+                boundary.push(Point3::new(radius * angle.cos(), radius * angle.sin(), z));
+            }
+        }
+
+        let patch = cone_patch_for_boundary(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            10.0,
+            semi_angle,
+            &boundary,
+        )
+        .expect("cone patch");
+
+        let deviation = worst_deviation(&patch, |point| {
+            let expected = 10.0 + point.z * slope;
+            (point.x * point.x + point.y * point.y).sqrt() - expected
+        });
+        assert!(deviation < 1e-9, "cone deviation {deviation}");
+    }
+
+    #[test]
+    fn conical_patch_closes_on_the_apex() {
+        let semi_angle = (10.0f64 / 20.0).atan();
+        let mut boundary = Vec::new();
+        for step in 0..24 {
+            let angle = std::f64::consts::PI * 2.0 * step as f64 / 24.0;
+            boundary.push(Point3::new(10.0 * angle.cos(), 10.0 * angle.sin(), 0.0));
+        }
+        boundary.push(Point3::new(0.0, 0.0, -20.0));
+
+        let patch = cone_patch_for_boundary(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            10.0,
+            semi_angle,
+            &boundary,
+        )
+        .expect("cone patch through the apex");
+
+        let apex = patch.evaluate(0.5, 0.0);
+        assert!(
+            (apex - Point3::new(0.0, 0.0, -20.0)).norm() < 1e-9,
+            "apex landed at {apex:?}"
+        );
+    }
+
+    #[test]
+    fn spherical_patch_matches_the_sphere_it_was_sized_from() {
+        // 北半球。境界は赤道の円だけ。
+        let mut boundary = Vec::new();
+        for step in 0..24 {
+            let angle = std::f64::consts::PI * 2.0 * step as f64 / 24.0;
+            boundary.push(Point3::new(10.0 * angle.cos(), 10.0 * angle.sin(), 0.0));
+        }
+        boundary.push(Point3::new(0.0, 0.0, 10.0));
+
+        let patch = sphere_patch_for_boundary(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            10.0,
+            &boundary,
+        )
+        .expect("sphere patch");
+
+        let deviation = worst_deviation(&patch, |point| point.coords.norm() - 10.0);
+        assert!(deviation < 1e-9, "sphere deviation {deviation}");
+    }
+
+    #[test]
+    fn toroidal_patch_matches_the_torus_it_was_sized_from() {
+        // 90度のトーラス区分。境界は継ぎ目の主円弧と両端の副円。
+        let (major, minor) = (12.0f64, 4.0f64);
+        let point_on_torus = |major_angle: f64, minor_angle: f64| {
+            let distance = major + minor * minor_angle.cos();
+            Point3::new(
+                distance * major_angle.cos(),
+                distance * major_angle.sin(),
+                minor * minor_angle.sin(),
+            )
+        };
+
+        let mut boundary = Vec::new();
+        for step in 0..24 {
+            let along = std::f64::consts::FRAC_PI_2 * step as f64 / 24.0;
+            boundary.push(point_on_torus(along, 0.0));
+        }
+        for step in 0..24 {
+            let around = std::f64::consts::PI * 2.0 * step as f64 / 24.0;
+            boundary.push(point_on_torus(0.0, around));
+            boundary.push(point_on_torus(std::f64::consts::FRAC_PI_2, around));
+        }
+
+        let patch = torus_patch_for_boundary(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            major,
+            minor,
+            &boundary,
+        )
+        .expect("torus patch");
+
+        let deviation = worst_deviation(&patch, |point| {
+            let radial = (point.x * point.x + point.y * point.y).sqrt();
+            ((radial - major).powi(2) + point.z * point.z).sqrt() - minor
+        });
+        assert!(deviation < 1e-9, "torus deviation {deviation}");
+    }
+
+    #[test]
+    fn analytic_patch_refuses_a_boundary_that_is_not_on_the_surface() {
+        let boundary = vec![
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(0.0, 10.0, 5.0),
+            Point3::new(-7.0, 0.0, 10.0), // 半径が合わない
+        ];
+        assert!(sphere_patch_for_boundary(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            10.0,
+            &boundary,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn a_gap_no_wider_than_the_sampling_is_not_a_gap() {
+        // 15度おきの標本は15度の隙間を空ける。それを穴と読むと面が閉じない。
+        let mut even = (0..24)
+            .map(|step| std::f64::consts::PI * 2.0 * step as f64 / 24.0)
+            .collect::<Vec<_>>();
+        let (_, sweep) = angular_span(&mut even);
+        assert!(
+            (sweep - std::f64::consts::PI * 2.0).abs() < 1e-12,
+            "even sampling reported sweep {sweep}"
+        );
+
+        // 本物の隙間は標本間隔から明確に離れている。
+        let mut quarter = (0..24)
+            .map(|step| std::f64::consts::FRAC_PI_2 * step as f64 / 24.0)
+            .collect::<Vec<_>>();
+        let (start, sweep) = angular_span(&mut quarter);
+        assert!((sweep - std::f64::consts::FRAC_PI_2 * 23.0 / 24.0).abs() < 1e-12);
+        assert!(start.rem_euclid(std::f64::consts::PI * 2.0) < 1e-12);
+    }
 }
 
 
+
+/// Diagonal of a wire's bounding box, as a cheap stand-in for how much of the
+/// face it encloses.
+///
+/// The outer bound is the one containing the others, and on a well-formed face
+/// that is also the one with the largest extent. Comparing extents avoids
+/// needing the surface's parameterisation, which is not always available at
+/// this point in the read.
+fn wire_extent(wire: &Wire) -> f64 {
+    let points = wire.sample_points(8);
+    if points.is_empty() {
+        return 0.0;
+    }
+
+    let mut min_pt = points[0];
+    let mut max_pt = points[0];
+    for point in &points {
+        min_pt.x = min_pt.x.min(point.x);
+        min_pt.y = min_pt.y.min(point.y);
+        min_pt.z = min_pt.z.min(point.z);
+        max_pt.x = max_pt.x.max(point.x);
+        max_pt.y = max_pt.y.max(point.y);
+        max_pt.z = max_pt.z.max(point.z);
+    }
+
+    (max_pt - min_pt).norm()
+}
+
+/// Builds the arc of a circle that runs from `p_start` to `p_end`, taking the
+/// circle's own frame as the authority.
+///
+/// Coincident endpoints mean the full circle, which is how every writer states
+/// the rim of a cylinder; inferring the sweep from the endpoints alone reads
+/// that as a zero-length arc.
+fn arc_from_angles(
+    center: Point3,
+    normal: Vec3,
+    ref_dir: Vec3,
+    radius: f64,
+    p_start: Point3,
+    p_end: Point3,
+) -> Result<NurbsCurve3, String> {
+    let axis = normal
+        .try_normalize(1e-12)
+        .ok_or_else(|| "Circle axis is degenerate".to_string())?;
+    let x_axis = {
+        let projected = ref_dir - axis * ref_dir.dot(&axis);
+        projected
+            .try_normalize(1e-12)
+            .ok_or_else(|| "Circle reference direction is parallel to its axis".to_string())?
+    };
+    let y_axis = axis.cross(&x_axis);
+
+    let angle_of = |point: Point3| {
+        let offset = point - center;
+        offset.dot(&y_axis).atan2(offset.dot(&x_axis))
+    };
+
+    let start_angle = angle_of(p_start);
+    let mut sweep = angle_of(p_end) - start_angle;
+    let full_turn = std::f64::consts::PI * 2.0;
+    while sweep <= 1e-9 {
+        sweep += full_turn;
+    }
+    // 端点が一致していれば完全円。上のループで 2*pi になっている。
+    if (p_end - p_start).norm() <= 1e-9 {
+        sweep = full_turn;
+    }
+
+    rational_arc(center, x_axis, y_axis, radius, start_angle, sweep)
+}
+
+/// A rational quadratic arc of any sweep, as a clamped multi-span NURBS.
+///
+/// Each span covers at most a quarter turn, which is the widest a single
+/// rational quadratic segment represents exactly.
+fn rational_arc(
+    center: Point3,
+    x_axis: Vec3,
+    y_axis: Vec3,
+    radius: f64,
+    start_angle: f64,
+    sweep: f64,
+) -> Result<NurbsCurve3, String> {
+    rational_elliptic_arc(center, x_axis, y_axis, radius, radius, start_angle, sweep)
+}
+
+/// 楕円弧を有理2次の NURBS として厳密に組む。
+///
+/// 楕円は単位円の像である（`X` 方向に `a`、`Y` 方向に `b` 伸ばしたもの）。
+/// 有理 NURBS はアフィン変換のもとで不変——制御点を写して重みをそのまま
+/// 使えば同じ曲線になる——ので、円の構成の半径を軸ごとに置き換えるだけで、
+/// 近似ではなく**厳密な**楕円が得られる。
+fn rational_elliptic_arc(
+    center: Point3,
+    x_axis: Vec3,
+    y_axis: Vec3,
+    radius_x: f64,
+    radius_y: f64,
+    start_angle: f64,
+    sweep: f64,
+) -> Result<NurbsCurve3, String> {
+    let radius = radius_x;
+    let scale_y = radius_y / radius_x;
+    let y_axis = y_axis * scale_y;
+    // ちょうど四半円のとき、除算の丸めで商が 1 をわずかに超えて 2 区間に
+    // 割れてしまう。許容差を引いてから切り上げる。
+    let span_count = (((sweep / std::f64::consts::FRAC_PI_2) - 1e-9).ceil() as usize).max(1);
+    let span_angle = sweep / span_count as f64;
+    let weight = (span_angle * 0.5).cos();
+
+    let point_at = |angle: f64| center + x_axis * (radius * angle.cos()) + y_axis * (radius * angle.sin());
+    // 接線の交点。半径 / cos(half) の距離に、区間の中央方向へ置く。
+    let shoulder_at = |angle: f64| {
+        let middle = angle + span_angle * 0.5;
+        center
+            + x_axis * (radius / weight * middle.cos())
+            + y_axis * (radius / weight * middle.sin())
+    };
+
+    let mut control_points = Vec::with_capacity(span_count * 2 + 1);
+    control_points.push(ControlPoint3::unweighted(point_at(start_angle)));
+    for span in 0..span_count {
+        let angle = start_angle + span_angle * span as f64;
+        control_points.push(ControlPoint3::new(shoulder_at(angle), weight));
+        control_points.push(ControlPoint3::unweighted(point_at(angle + span_angle)));
+    }
+
+    let mut knots = vec![0.0, 0.0, 0.0];
+    for span in 1..span_count {
+        let value = span as f64 / span_count as f64;
+        knots.push(value);
+        knots.push(value);
+    }
+    knots.extend([1.0, 1.0, 1.0]);
+
+    NurbsCurve3::new(2, control_points, KnotVector::new(knots))
+}
+
+/// The angular range a set of boundary points occupies around an axis.
+///
+/// Returned as `(start, sweep)` in radians. The range in use is whatever lies
+/// outside the widest gap between neighbouring angles: a boundary that goes all
+/// the way round leaves no gap and reports a full turn.
+///
+/// The widest gap is judged against the next widest rather than against a
+/// spacing guessed from the sample count. Sampling runs per edge, so how far
+/// apart samples land in this direction depends on which way each edge runs,
+/// and the guess was wrong often enough to cut a full turn short: a torus's two
+/// cap circles are sampled every 15 degrees, and a 15 degree step between
+/// samples read as a 15 degree hole in the face. A real gap stands well clear
+/// of the ordinary spacing; a sampling step does not.
+fn angular_span(angles: &mut Vec<f64>) -> (f64, f64) {
+    let full_turn = std::f64::consts::PI * 2.0;
+    if angles.len() < 2 {
+        return (0.0, full_turn);
+    }
+
+    angles.sort_by(f64::total_cmp);
+    let mut gaps: Vec<(f64, f64)> = Vec::with_capacity(angles.len());
+    gaps.push((
+        angles[0] + full_turn - angles[angles.len() - 1],
+        angles[angles.len() - 1],
+    ));
+    for window in angles.windows(2) {
+        gaps.push((window[1] - window[0], window[0]));
+    }
+    gaps.sort_by(|left, right| right.0.total_cmp(&left.0));
+
+    let (widest_gap, gap_start) = gaps[0];
+    let next_widest = gaps.get(1).map(|entry| entry.0).unwrap_or(0.0);
+    if widest_gap <= next_widest * 3.0 {
+        return (0.0, full_turn);
+    }
+
+    let sweep = full_turn - widest_gap;
+    if sweep <= 1e-9 {
+        // 角度が一点に潰れている。閉じた曲面の継ぎ目なので一周とみなす。
+        return (0.0, full_turn);
+    }
+    (gap_start + widest_gap, sweep)
+}
+
+/// Knots for a quadratic arc built from `span_count` equal spans.
+fn quadratic_arc_knots(span_count: usize) -> KnotVector {
+    let mut knots = vec![0.0, 0.0, 0.0];
+    for span in 1..span_count {
+        let value = span as f64 / span_count as f64;
+        knots.push(value);
+        knots.push(value);
+    }
+    knots.extend([1.0, 1.0, 1.0]);
+    KnotVector::new(knots)
+}
+
+/// How many 90-degree-or-less spans a sweep needs.
+fn arc_span_count(sweep: f64) -> usize {
+    (((sweep / std::f64::consts::FRAC_PI_2) - 1e-9).ceil() as usize).max(1)
+}
+
+/// A rational quadratic arc, given as `(radial, axial, weight)` triples in the
+/// plane a surface's radial and axial directions span, with the knots that go
+/// with it. Angle zero points along the radial direction.
+///
+/// This is the profile half of a surface of revolution: sphere and torus
+/// patches differ only in which circle this traces.
+fn arc_profile(
+    centre_radial: f64,
+    centre_axial: f64,
+    radius: f64,
+    start_angle: f64,
+    sweep: f64,
+) -> (Vec<(f64, f64, f64)>, KnotVector) {
+    let span_count = arc_span_count(sweep);
+    let span_angle = sweep / span_count as f64;
+    let weight = (span_angle * 0.5).cos();
+
+    let on_arc = |angle: f64, scale: f64| {
+        (
+            centre_radial + radius * scale * angle.cos(),
+            centre_axial + radius * scale * angle.sin(),
+        )
+    };
+
+    let mut profile = Vec::with_capacity(span_count * 2 + 1);
+    let (r, a) = on_arc(start_angle, 1.0);
+    profile.push((r, a, 1.0));
+    for span in 0..span_count {
+        let angle = start_angle + span_angle * span as f64;
+        let (r, a) = on_arc(angle + span_angle * 0.5, 1.0 / weight);
+        profile.push((r, a, weight));
+        let (r, a) = on_arc(angle + span_angle, 1.0);
+        profile.push((r, a, 1.0));
+    }
+
+    (profile, quadratic_arc_knots(span_count))
+}
+
+/// Sweeps a profile around an axis to give an exact rational surface.
+///
+/// The profile is `(radial, axial, weight)` in the axis frame and becomes the v
+/// direction; the swept angle becomes u. Shoulder rows sit where the tangents
+/// of neighbouring spans meet, at `radius / cos(half span)` from the axis,
+/// which is what makes the sweep a circle rather than an approximation of one.
+fn revolve_profile(
+    origin: Point3,
+    axis: Vec3,
+    x_axis: Vec3,
+    y_axis: Vec3,
+    profile: &[(f64, f64, f64)],
+    profile_knots: KnotVector,
+    profile_degree: usize,
+    start_angle: f64,
+    sweep: f64,
+) -> Option<NurbsSurface3> {
+    if profile.len() < 2 {
+        return None;
+    }
+    let span_count = arc_span_count(sweep);
+    let span_angle = sweep / span_count as f64;
+    let weight = (span_angle * 0.5).cos();
+
+    let row_at = |angle: f64, radial_scale: f64, row_weight: f64| {
+        profile
+            .iter()
+            .map(|&(radial, axial, profile_weight)| {
+                let point = origin
+                    + axis * axial
+                    + x_axis * (radial * radial_scale * angle.cos())
+                    + y_axis * (radial * radial_scale * angle.sin());
+                ControlPoint3::new(point, row_weight * profile_weight)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let mut rows = Vec::with_capacity(span_count * 2 + 1);
+    rows.push(row_at(start_angle, 1.0, 1.0));
+    for span in 0..span_count {
+        let angle = start_angle + span_angle * span as f64;
+        rows.push(row_at(angle + span_angle * 0.5, 1.0 / weight, weight));
+        rows.push(row_at(angle + span_angle, 1.0, 1.0));
+    }
+
+    NurbsSurface3::new(
+        2,
+        profile_degree,
+        rows,
+        quadratic_arc_knots(span_count),
+        profile_knots,
+    )
+    .ok()
+}
+
+/// Splits a point into its distance along an axis and its offset from it.
+fn axis_frame_coords(point: Point3, origin: Point3, axis: Vec3) -> (f64, Vec3) {
+    let offset = point - origin;
+    let axial = offset.dot(&axis);
+    (axial, offset - axis * axial)
+}
+
+/// The axis frame of an analytic surface: axis, and two directions across it.
+fn revolution_frame(z_dir: Vec3, x_dir: Vec3) -> Option<(Vec3, Vec3, Vec3)> {
+    let axis = z_dir.try_normalize(1e-12)?;
+    let x_axis = (x_dir - axis * x_dir.dot(&axis)).try_normalize(1e-12)?;
+    Some((axis, x_axis, axis.cross(&x_axis)))
+}
+
+/// A cylindrical patch covering the angular and axial span a face occupies.
+///
+/// Returns `None` when the boundary does not sit on the cylinder, so a
+/// mismatch is refused rather than approximated.
+fn cylinder_patch_for_boundary(
+    origin: Point3,
+    z_dir: Vec3,
+    x_dir: Vec3,
+    radius: f64,
+    boundary_points: &[Point3],
+) -> Option<NurbsSurface3> {
+    let (axis, x_axis, y_axis) = revolution_frame(z_dir, x_dir)?;
+
+    let mut axial_min = f64::INFINITY;
+    let mut axial_max = f64::NEG_INFINITY;
+    let mut angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
+
+    for point in boundary_points {
+        let (axial, radial) = axis_frame_coords(*point, origin, axis);
+        if (radial.norm() - radius).abs() > radius.abs().max(1.0) * 1e-3 {
+            return None;
+        }
+        axial_min = axial_min.min(axial);
+        axial_max = axial_max.max(axial);
+        angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)));
+    }
+
+    if !axial_min.is_finite() || !axial_max.is_finite() {
+        return None;
+    }
+    if (axial_max - axial_min).abs() <= 1e-12 {
+        return None;
+    }
+
+    let (start_angle, sweep) = angular_span(&mut angles);
+    let profile = [(radius, axial_min, 1.0), (radius, axial_max, 1.0)];
+    revolve_profile(
+        origin,
+        axis,
+        x_axis,
+        y_axis,
+        &profile,
+        KnotVector::clamped_uniform(2, 1),
+        1,
+        start_angle,
+        sweep,
+    )
+}
+
+/// A conical patch covering the angular and axial span a face occupies.
+///
+/// A cone is ruled, so the profile is still a straight segment; only the radius
+/// now depends on how far along the axis the row sits. A face that runs to the
+/// apex gives a zero radius at that end, which is a degenerate row rather than
+/// a failure.
+fn cone_patch_for_boundary(
+    origin: Point3,
+    z_dir: Vec3,
+    x_dir: Vec3,
+    radius: f64,
+    semi_angle: f64,
+    boundary_points: &[Point3],
+) -> Option<NurbsSurface3> {
+    let (axis, x_axis, y_axis) = revolution_frame(z_dir, x_dir)?;
+    let slope = semi_angle.tan();
+    if !slope.is_finite() {
+        return None;
+    }
+    // 頂点では半径が 0 になるので、判定の尺度は基準半径から取る。
+    let scale = radius.abs().max(1.0);
+
+    let mut axial_min = f64::INFINITY;
+    let mut axial_max = f64::NEG_INFINITY;
+    let mut angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
+
+    for point in boundary_points {
+        let (axial, radial) = axis_frame_coords(*point, origin, axis);
+        let expected = radius + axial * slope;
+        if (radial.norm() - expected).abs() > scale * 1e-3 {
+            return None;
+        }
+        axial_min = axial_min.min(axial);
+        axial_max = axial_max.max(axial);
+        // 頂点上の点には向きが無い。角度の被覆には数えない。
+        if radial.norm() > scale * 1e-6 {
+            angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)));
+        }
+    }
+
+    if !axial_min.is_finite() || !axial_max.is_finite() {
+        return None;
+    }
+    if (axial_max - axial_min).abs() <= 1e-12 {
+        return None;
+    }
+
+    let radius_min = radius + axial_min * slope;
+    let radius_max = radius + axial_max * slope;
+    if radius_min < -scale * 1e-6 || radius_max < -scale * 1e-6 {
+        return None;
+    }
+
+    let (start_angle, sweep) = angular_span(&mut angles);
+    let profile = [
+        (radius_min.max(0.0), axial_min, 1.0),
+        (radius_max.max(0.0), axial_max, 1.0),
+    ];
+    revolve_profile(
+        origin,
+        axis,
+        x_axis,
+        y_axis,
+        &profile,
+        KnotVector::clamped_uniform(2, 1),
+        1,
+        start_angle,
+        sweep,
+    )
+}
+
+/// A spherical patch covering the longitude and latitude a face occupies.
+///
+/// Latitude comes from the extent of the boundary rather than from a gap: a
+/// sphere is not closed in that direction, so the patch has to reach whichever
+/// parallels the boundary touches, and reaching past them is harmless.
+fn sphere_patch_for_boundary(
+    origin: Point3,
+    z_dir: Vec3,
+    x_dir: Vec3,
+    radius: f64,
+    boundary_points: &[Point3],
+) -> Option<NurbsSurface3> {
+    let (axis, x_axis, y_axis) = revolution_frame(z_dir, x_dir)?;
+    let scale = radius.abs().max(1.0);
+    let half_pi = std::f64::consts::FRAC_PI_2;
+
+    let mut latitude_min = f64::INFINITY;
+    let mut latitude_max = f64::NEG_INFINITY;
+    let mut angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
+
+    for point in boundary_points {
+        if ((*point - origin).norm() - radius).abs() > scale * 1e-3 {
+            return None;
+        }
+        let (axial, radial) = axis_frame_coords(*point, origin, axis);
+        let latitude = axial.atan2(radial.norm());
+        latitude_min = latitude_min.min(latitude);
+        latitude_max = latitude_max.max(latitude);
+        if radial.norm() > scale * 1e-6 {
+            angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)));
+        }
+    }
+
+    if !latitude_min.is_finite() || !latitude_max.is_finite() {
+        return None;
+    }
+    // 境界が緯度方向に広がりを持たないなら、極から極までが使われている。
+    if latitude_max - latitude_min <= 1e-9 {
+        latitude_min = -half_pi;
+        latitude_max = half_pi;
+    }
+    let latitude_min = latitude_min.max(-half_pi);
+    let latitude_max = latitude_max.min(half_pi);
+
+    let (start_angle, sweep) = angular_span(&mut angles);
+    let (profile, profile_knots) =
+        arc_profile(0.0, 0.0, radius, latitude_min, latitude_max - latitude_min);
+    revolve_profile(
+        origin,
+        axis,
+        x_axis,
+        y_axis,
+        &profile,
+        profile_knots,
+        2,
+        start_angle,
+        sweep,
+    )
+}
+
+/// A toroidal patch covering the major and minor angles a face occupies.
+///
+/// Both directions are closed, so both are read the same way as a cylinder's
+/// angle: the range in use is what lies outside the widest gap.
+fn torus_patch_for_boundary(
+    origin: Point3,
+    z_dir: Vec3,
+    x_dir: Vec3,
+    major_radius: f64,
+    minor_radius: f64,
+    boundary_points: &[Point3],
+) -> Option<NurbsSurface3> {
+    let (axis, x_axis, y_axis) = revolution_frame(z_dir, x_dir)?;
+    let scale = minor_radius.abs().max(1.0);
+
+    let mut major_angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
+    let mut minor_angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
+
+    for point in boundary_points {
+        let (axial, radial) = axis_frame_coords(*point, origin, axis);
+        let radial_distance = radial.norm();
+        // 芯円までの距離が副半径に一致していなければ、この面はトーラス上に無い。
+        let from_core = ((radial_distance - major_radius).powi(2) + axial * axial).sqrt();
+        if (from_core - minor_radius).abs() > scale * 1e-3 {
+            return None;
+        }
+        if radial_distance > major_radius.abs().max(1.0) * 1e-6 {
+            major_angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)));
+        }
+        minor_angles.push(axial.atan2(radial_distance - major_radius));
+    }
+
+    if minor_angles.is_empty() {
+        return None;
+    }
+
+    let (start_major, major_sweep) = angular_span(&mut major_angles);
+    let (start_minor, minor_sweep) = angular_span(&mut minor_angles);
+
+    let (profile, profile_knots) =
+        arc_profile(major_radius, 0.0, minor_radius, start_minor, minor_sweep);
+    revolve_profile(
+        origin,
+        axis,
+        x_axis,
+        y_axis,
+        &profile,
+        profile_knots,
+        2,
+        start_major,
+        major_sweep,
+    )
+}

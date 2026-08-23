@@ -2,7 +2,7 @@ use crate::mesh::TriangleMesh;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use zenith_geom::Surface3;
-use zenith_math::{Point2, Point3, Vec2, Vec3};
+use zenith_math::{Point2, Point3, Tolerance, Vec2, Vec3};
 use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, Orientation, Shell, Solid};
 
 /// 曲面テッセレーション設定パラメータ
@@ -46,6 +46,12 @@ impl UvTriangulation {
 /// cannot be used, and surface classes without p-curve support, fall back to a
 /// uniform grid over the whole parameter rectangle.
 pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTriangulation {
+    let result = face_uv_triangulation_inner(face, params);
+    zenith_geom::work_counter::count_uv_triangulation(result.triangles.len());
+    result
+}
+
+fn face_uv_triangulation_inner(face: &Face, params: &TessellationParams) -> UvTriangulation {
     match &face.geometry {
         FaceGeometry::Plane(_) => {
             let trimmed = planar_uv_triangulation(face, params);
@@ -56,8 +62,37 @@ pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTria
             }
         }
         FaceGeometry::Nurbs(nurbs) => {
-            let trimmed = trimmed_uv_triangulation(face, nurbs, params);
+            // p-curve を保持していない面は、**その場で導出してから**使う。
+            // 以前はここで諦めて全矩形のグリッドに落ちていた。トリムされた面が
+            // 黙ってトリム前の面として積まれることになり、穴の壁が3倍の面積で
+            // 返っていた（`pcurve_derivation_probe` が並べる）。平面側は
+            // `plane_pcurves()` が同じことを既にしている。
+            let derived_holder;
+            let face = if face.pcurves.is_some() {
+                face
+            } else {
+                match face.pcurves(&Tolerance::default()) {
+                    Ok(pcurves) => {
+                        let mut with = face.clone();
+                        with.pcurves = Some(pcurves);
+                        derived_holder = with;
+                        &derived_holder
+                    }
+                    Err(_) => face,
+                }
+            };
+
+            // 境界がパラメータ矩形そのものなら、ノット線に整合したグリッドを
+            // 使う。B-spline は各ノット区間の内側でだけ滑らかなので、区間を
+            // またぐ三角形の上で求積すると、いくら細分しても誤差が減らない。
+            if let Some(aligned) = knot_aligned_uv_triangulation(face, nurbs, params) {
+                return aligned;
+            }
+            // 面積を積む側なので、境界の折れは1つも落とさない。
+            let trimmed = trimmed_uv_triangulation(face, nurbs, params, LoopFidelity::Exact);
             if trimmed.is_empty() {
+                // ここに来るのは p-curve が導出もできなかった面だけ。全矩形を
+                // 積むので、トリムされた面ならこの値は小さすぎず大きすぎる。
                 grid_uv_triangulation(nurbs, params)
             } else {
                 trimmed
@@ -67,6 +102,151 @@ pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTria
         FaceGeometry::Gordon(gordon) => grid_uv_triangulation(gordon, params),
         FaceGeometry::Triangular(triangular) => grid_uv_triangulation(triangular, params),
     }
+}
+
+/// Builds a grid whose lines include every interior knot, for a face whose trim
+/// loop is the whole parameter rectangle.
+///
+/// A B-spline is only smooth inside a knot span. Integrating over cells that
+/// straddle a span leaves an error that refinement cannot remove, which is what
+/// made a swept pipe's area wander at the fourth decimal no matter how many
+/// triangles it was given. Snapping the grid to the spans restores convergence,
+/// and it costs nothing for surfaces without interior knots.
+///
+/// Returns `None` when the face is genuinely trimmed, so the trimmed path keeps
+/// handling it.
+fn knot_aligned_uv_triangulation(
+    face: &Face,
+    surface: &zenith_geom::NurbsSurface3,
+    params: &TessellationParams,
+) -> Option<UvTriangulation> {
+    if !face.inner_wires.is_empty() {
+        return None;
+    }
+
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    if !(u_max > u_min && v_max > v_min) {
+        return None;
+    }
+
+    let pcurves = face.pcurves.as_ref()?;
+    if !pcurves.inner_loops.is_empty() {
+        return None;
+    }
+
+    // 縫い目だけの境界は UV 上で全域を囲むが、p-curve からはそう読めない。
+    // 縫い目上の点は領域の両端どちらにも写るので、辿った符号付き面積が
+    // 全域と一致しない。位相のほうが確かなので、そちらを先に見る。
+    if !face.has_seam_only_boundary(Tolerance::default().linear) {
+        let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, LoopFidelity::Display);
+        if outer_uvs.len() < 3 {
+            return None;
+        }
+        if !loop_covers_full_domain(&outer_uvs, u_min, u_max, v_min, v_max) {
+            return None;
+        }
+    }
+
+    let u_lines = span_aligned_lines(&surface.knots_u.knots, surface.degree_u, u_min, u_max, params.u_divisions);
+    let v_lines = span_aligned_lines(&surface.knots_v.knots, surface.degree_v, v_min, v_max, params.v_divisions);
+
+    let mut uvs = Vec::with_capacity(u_lines.len() * v_lines.len());
+    for v in &v_lines {
+        for u in &u_lines {
+            uvs.push(Point2::new(*u, *v));
+        }
+    }
+
+    let stride = u_lines.len();
+    let mut triangles = Vec::with_capacity((u_lines.len() - 1) * (v_lines.len() - 1) * 2);
+    for j in 0..v_lines.len() - 1 {
+        for i in 0..u_lines.len() - 1 {
+            let i0 = j * stride + i;
+            triangles.push([i0, i0 + 1, i0 + stride + 1]);
+            triangles.push([i0, i0 + stride + 1, i0 + stride]);
+        }
+    }
+
+    Some(UvTriangulation { uvs, triangles })
+}
+
+/// True when the sampled trim loop is the parameter rectangle itself.
+fn loop_covers_full_domain(
+    uvs: &[Point2],
+    u_min: f64,
+    u_max: f64,
+    v_min: f64,
+    v_max: f64,
+) -> bool {
+    let domain = (u_max - u_min) * (v_max - v_min);
+    if domain <= 0.0 {
+        return false;
+    }
+
+    let scale = (u_max - u_min).max(v_max - v_min);
+    let tolerance = scale * 1e-9;
+
+    for uv in uvs {
+        if uv.x < u_min - tolerance
+            || uv.x > u_max + tolerance
+            || uv.y < v_min - tolerance
+            || uv.y > v_max + tolerance
+        {
+            return false;
+        }
+        // 矩形の辺の上に乗っていない点があれば、それは本当のトリム境界。
+        let on_u_edge = (uv.x - u_min).abs() <= tolerance || (uv.x - u_max).abs() <= tolerance;
+        let on_v_edge = (uv.y - v_min).abs() <= tolerance || (uv.y - v_max).abs() <= tolerance;
+        if !on_u_edge && !on_v_edge {
+            return false;
+        }
+    }
+
+    let mut signed_area = 0.0;
+    for index in 0..uvs.len() {
+        let a = uvs[index];
+        let b = uvs[(index + 1) % uvs.len()];
+        signed_area += a.x * b.y - b.x * a.y;
+    }
+    (signed_area.abs() * 0.5 - domain).abs() <= domain * 1e-9
+}
+
+/// Grid lines covering `[min, max]`: every distinct interior knot, plus uniform
+/// subdivision inside each span so the requested density is still met.
+fn span_aligned_lines(
+    knots: &[f64],
+    degree: usize,
+    min: f64,
+    max: f64,
+    divisions: usize,
+) -> Vec<f64> {
+    let mut breaks: Vec<f64> = Vec::new();
+    let interior = knots
+        .iter()
+        .skip(degree + 1)
+        .take(knots.len().saturating_sub(2 * (degree + 1)));
+    for knot in interior {
+        if *knot > min + f64::EPSILON && *knot < max - f64::EPSILON {
+            breaks.push(*knot);
+        }
+    }
+    breaks.push(min);
+    breaks.push(max);
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup_by(|a, b| (*a - *b).abs() <= (max - min) * 1e-12);
+
+    let span_count = breaks.len() - 1;
+    let per_span = divisions.max(2).div_ceil(span_count).max(1);
+
+    let mut lines = Vec::with_capacity(span_count * per_span + 1);
+    for window in breaks.windows(2) {
+        let (start, end) = (window[0], window[1]);
+        for step in 0..per_span {
+            lines.push(start + (end - start) * (step as f64 / per_span as f64));
+        }
+    }
+    lines.push(max);
+    lines
 }
 
 fn grid_uv_triangulation(surface: &impl Surface3, params: &TessellationParams) -> UvTriangulation {
@@ -101,7 +281,7 @@ fn planar_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTriang
     let Ok(pcurves) = face.plane_pcurves() else {
         return UvTriangulation::default();
     };
-    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, LoopFidelity::Display);
     if outer_uvs.len() < 3 {
         return UvTriangulation::default();
     }
@@ -115,7 +295,7 @@ fn planar_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTriang
         uvs.push(*uv);
     }
     for pcurve_loop in &pcurves.inner_loops {
-        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params);
+        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params, LoopFidelity::Display);
         if hole_uvs.len() >= 3 {
             hole_indices.push(uvs.len());
             for uv in &hole_uvs {
@@ -212,7 +392,9 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
         FaceGeometry::Nurbs(nurbs) => {
             // トリムループが使えるならそれに従い、扱えない面（球の極など）は
             // 従来どおりパラメータ矩形全体の一様グリッドに落とす
-            let trimmed = trimmed_uv_triangulation(face, nurbs, params);
+            // 表示用。境界に何千点も置くと三角形が破綻するので、たわみの
+            // 目標までの適応標本で足りる。
+            let trimmed = trimmed_uv_triangulation(face, nurbs, params, LoopFidelity::Display);
             if trimmed.is_empty() {
                 tessellate_surface(nurbs, params, face.orientation)
             } else {
@@ -226,7 +408,7 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
             let Ok(pcurves) = face.plane_pcurves() else {
                 return TriangleMesh::new();
             };
-            let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+            let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, LoopFidelity::Display);
             if outer_uvs.len() < 3 {
                 return TriangleMesh::new();
             }
@@ -267,7 +449,7 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
 
             // 内側穴ループ
             for pcurve_loop in &pcurves.inner_loops {
-                let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params);
+                let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params, LoopFidelity::Display);
                 if hole_uvs.len() >= 3 {
                     hole_indices.push(all_positions.len());
                     for uv in &hole_uvs {
@@ -311,11 +493,13 @@ fn trimmed_uv_triangulation(
     face: &Face,
     surface: &impl Surface3,
     params: &TessellationParams,
+    fidelity: LoopFidelity,
 ) -> UvTriangulation {
     let Some(pcurves) = &face.pcurves else {
         return UvTriangulation::default();
     };
-    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params);
+    let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, fidelity);
+    zenith_geom::work_counter::count_uv_boundary(outer_uvs.len());
     if outer_uvs.len() < 3 {
         return UvTriangulation::default();
     }
@@ -331,7 +515,7 @@ fn trimmed_uv_triangulation(
     }
 
     for pcurve_loop in &pcurves.inner_loops {
-        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params);
+        let hole_uvs = sample_pcurve_loop_uv(pcurve_loop, params, fidelity);
         if hole_uvs.len() >= 3 {
             hole_indices.push(uvs.len());
             for uv in &hole_uvs {
@@ -351,7 +535,13 @@ fn trimmed_uv_triangulation(
         .map(|chunk| [chunk[0], chunk[1], chunk[2]])
         .collect();
 
-    refine_uv_triangulation(surface, params, &mut uvs, &mut triangles);
+    refine_uv_triangulation_protected(
+        surface,
+        params,
+        &mut uvs,
+        &mut triangles,
+        &HashSet::new(),
+    );
     UvTriangulation { uvs, triangles }
 }
 
@@ -360,11 +550,16 @@ fn trimmed_uv_triangulation(
 const MAX_REFINED_TRIANGLES: usize = 200_000;
 const MAX_REFINEMENT_PASSES: usize = 24;
 
-fn refine_uv_triangulation(
+/// 最長辺二分でトリム領域を細かくする。
+///
+/// `protected` に入っている辺は割らない。隣の面と共有している境界を割ると、
+/// 相手側に対応する点が無く、そこでメッシュが開くため。
+pub(crate) fn refine_uv_triangulation_protected(
     surface: &impl Surface3,
     params: &TessellationParams,
     uvs: &mut Vec<Point2>,
     triangles: &mut Vec<[usize; 3]>,
+    protected: &HashSet<(usize, usize)>,
 ) {
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
     let cell_u = (u_max - u_min) / params.u_divisions.max(2) as f64;
@@ -373,6 +568,7 @@ fn refine_uv_triangulation(
 
     // 一度基準を満たした三角形は、隣が辺を割らない限り再評価しない
     let mut settled = vec![false; triangles.len()];
+    let mut cache = EvaluatedPositions::new(uvs.len());
 
     for _ in 0..MAX_REFINEMENT_PASSES {
         if triangles.len() * 2 > MAX_REFINED_TRIANGLES {
@@ -386,16 +582,34 @@ fn refine_uv_triangulation(
             if settled[index] {
                 continue;
             }
-            if !triangle_needs_refinement(surface, uvs, triangle, cell_u, cell_v, deflection) {
+            if !triangle_needs_refinement(
+                surface,
+                uvs,
+                triangle,
+                cell_u,
+                cell_v,
+                deflection,
+                &mut cache,
+            ) {
                 settled[index] = true;
                 continue;
             }
             let longest = (0..3)
+                .filter(|corner| {
+                    !protected.contains(&edge_key(
+                        triangle[*corner],
+                        triangle[(*corner + 1) % 3],
+                    ))
+                })
                 .max_by(|left, right| {
                     scaled_edge_length(uvs, triangle, *left, cell_u, cell_v)
                         .total_cmp(&scaled_edge_length(uvs, triangle, *right, cell_u, cell_v))
-                })
-                .unwrap_or(0);
+                });
+            let Some(longest) = longest else {
+                // 3辺とも共有境界。これ以上は割れない。
+                settled[index] = true;
+                continue;
+            };
             split_edges.insert(edge_key(triangle[longest], triangle[(longest + 1) % 3]));
         }
         if split_edges.is_empty() {
@@ -405,9 +619,13 @@ fn refine_uv_triangulation(
         let mut midpoints: HashMap<(usize, usize), usize> = HashMap::new();
         for edge in split_edges {
             let midpoint = Point2::from((uvs[edge.0].coords + uvs[edge.1].coords) * 0.5);
-            midpoints.insert(edge, uvs.len());
+            let index = uvs.len();
+            midpoints.insert(edge, index);
             uvs.push(midpoint);
+            // 判定で既に評価した点である。頂点になっても評価し直さない。
+            cache.adopt_midpoint(edge.0, edge.1, index, uvs);
         }
+
 
         let mut refined = Vec::with_capacity(triangles.len());
         let mut refined_settled = Vec::with_capacity(triangles.len());
@@ -444,6 +662,81 @@ fn edge_key(a: usize, b: usize) -> (usize, usize) {
     }
 }
 
+/// 細分の判定で評価した位置を覚えておく係。
+///
+/// 判定は三角形1つにつき3隅と3辺の中点を評価します。**隅は隣り合う三角形と
+/// 平均6枚で、辺の中点は2枚で共有されている**ので、同じ `(u, v)` を何度も
+/// 評価していました。円柱×円柱のブーリアン1回で三角形は 260万個できるので、
+/// ここは効きます。
+///
+/// 覚えるのは**同じ引数に対する同じ戻り値**だけなので、結果はビット単位で
+/// 変わりません。減るのは回数だけです。
+struct EvaluatedPositions {
+    /// `uvs` と同じ添字で引ける、評価済みの位置。
+    corners: Vec<Option<Point3>>,
+    /// 辺の中点。同じ辺は両隣から一度ずつ問われる。
+    ///
+    /// パスの終わりに捨てても正しさは変わりませんが、**捨てると 3.6% 遅く
+    /// なります**（円柱×円柱の和で 16,111,483 → 16,692,654）。隣が辺を
+    /// 割ると、基準を満たしていた三角形も作り直されて再判定になり、そのとき
+    /// 別の辺の中点が既に記憶されているからです。パスをまたいだ再利用は
+    /// 実在します。1面ぶんで数MB、分割が終われば解放されるので、回数を
+    /// 取ります。
+    midpoints: HashMap<(usize, usize), Point3>,
+}
+
+impl EvaluatedPositions {
+    fn new(count: usize) -> Self {
+        Self {
+            corners: vec![None; count],
+            midpoints: HashMap::new(),
+        }
+    }
+
+    fn grow_to(&mut self, count: usize) {
+        if self.corners.len() < count {
+            self.corners.resize(count, None);
+        }
+    }
+
+    fn corner(&mut self, surface: &impl Surface3, uvs: &[Point2], index: usize) -> Point3 {
+        self.grow_to(uvs.len());
+        if let Some(point) = self.corners[index] {
+            return point;
+        }
+        let uv = uvs[index];
+        let point = surface.evaluate(uv.x, uv.y);
+        self.corners[index] = Some(point);
+        point
+    }
+
+    fn midpoint(
+        &mut self,
+        surface: &impl Surface3,
+        uvs: &[Point2],
+        a: usize,
+        b: usize,
+    ) -> Point3 {
+        let key = edge_key(a, b);
+        if let Some(point) = self.midpoints.get(&key) {
+            return *point;
+        }
+        let uv = Point2::from((uvs[a].coords + uvs[b].coords) * 0.5);
+        let point = surface.evaluate(uv.x, uv.y);
+        self.midpoints.insert(key, point);
+        point
+    }
+
+    /// 割った辺の中点は、次のパスでは頂点になる。覚えていた値をそのまま渡す。
+    fn adopt_midpoint(&mut self, a: usize, b: usize, index: usize, uvs: &[Point2]) {
+        let Some(point) = self.midpoints.get(&edge_key(a, b)).copied() else {
+            return;
+        };
+        self.grow_to(uvs.len());
+        self.corners[index] = Some(point);
+    }
+}
+
 fn triangle_needs_refinement(
     surface: &impl Surface3,
     uvs: &[Point2],
@@ -451,6 +744,7 @@ fn triangle_needs_refinement(
     cell_u: f64,
     cell_v: f64,
     deflection: f64,
+    cache: &mut EvaluatedPositions,
 ) -> bool {
     let corners = [uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]];
     let u_extent = corners
@@ -465,12 +759,16 @@ fn triangle_needs_refinement(
         return true;
     }
 
-    let positions = corners.map(|uv| surface.evaluate(uv.x, uv.y));
+    let positions = [
+        cache.corner(surface, uvs, triangle[0]),
+        cache.corner(surface, uvs, triangle[1]),
+        cache.corner(surface, uvs, triangle[2]),
+    ];
     (0..3).any(|corner| {
         let next = (corner + 1) % 3;
-        let mid_uv = Point2::from((corners[corner].coords + corners[next].coords) * 0.5);
         let chord = Point3::from((positions[corner].coords + positions[next].coords) * 0.5);
-        (surface.evaluate(mid_uv.x, mid_uv.y) - chord).norm() > deflection
+        let middle = cache.midpoint(surface, uvs, triangle[corner], triangle[next]);
+        (middle - chord).norm() > deflection
     })
 }
 
@@ -599,7 +897,25 @@ fn build_trimmed_mesh(
     mesh
 }
 
-fn sample_pcurve_loop_uv(pcurve_loop: &FacePcurveLoop, params: &TessellationParams) -> Vec<Point2> {
+/// トリムループを UV 上の折れ線にするときの細かさ。
+///
+/// 積分と表示では要るものが違う。面積を積むなら境界の折れを1つも落とせない
+/// ——落ちたぶんは必ず内側に削れる一方向の誤差になる——が、表示用の三角形は
+/// 目に見える細かさで足り、境界に何千点も置くと三角形が破綻する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoopFidelity {
+    /// 表示用。たわみの目標まで適応的に標本を取る。
+    Display,
+    /// 積分用。1次の p-curve は制御点がそのまま折れ線の頂点なので、
+    /// 取り直さずに全部使う。
+    Exact,
+}
+
+fn sample_pcurve_loop_uv(
+    pcurve_loop: &FacePcurveLoop,
+    params: &TessellationParams,
+    fidelity: LoopFidelity,
+) -> Vec<Point2> {
     let mut points = Vec::new();
     let deflection = loop_deflection_target(pcurve_loop, params);
 
@@ -607,9 +923,16 @@ fn sample_pcurve_loop_uv(pcurve_loop: &FacePcurveLoop, params: &TessellationPara
         // 先頭点は「前の区間の終点と一致するときだけ」落とす。縮退エッジを
         // 持つ面（円錐の頂点など）では UV 上に正当な跳びがあり、無条件に
         // 落とすとトリム領域が欠ける。
-        let segment_points = if segment.curve.degree == 1 && segment.curve.control_points.len() == 2
+        // 1次の p-curve は折れ線そのものなので、制御点がそのまま頂点である。
+        // 取り直すと角が落ちる。適応標本は深さ 10 までの二分で区間は最大
+        // 1024 本なので、投影で作られた p-curve がそれより多くの折れを持つと
+        // 必ず削れる。実測では、円柱を傾いた平面で切った境界（p-curve は
+        // 制御点 1566 個）で UV 面積が 3.85e-6 欠け、ヤコビアン 628 を掛けて
+        // 3D の面積が 2.42e-3 足りなかった。
+        let segment_points = if segment.curve.degree == 1
+            && (fidelity == LoopFidelity::Exact || segment.curve.control_points.len() == 2)
         {
-            segment.curve.sample_points(2)
+            segment.curve.control_points.iter().map(|cp| cp.point).collect()
         } else {
             sample_pcurve_segment_adaptive(segment, deflection)
         };
@@ -654,8 +977,13 @@ fn loop_deflection_target(pcurve_loop: &FacePcurveLoop, params: &TessellationPar
         return 1e-3;
     }
 
+    // 境界の折れは面積を必ず内側に削る一方向の誤差で、しかも分割数に比例して
+    // しか減らない。分割数に紐づけていたときは、512分割でも円形キャップの面積が
+    // 1.1e-3 足りなかった。境界は1次元なので、面の格子よりずっと細かく取っても
+    // 費用は線形にしか増えない。分割数に紐づけず、形の大きさに対する比で決める。
     let divisions = params.u_divisions.max(params.v_divisions).max(8) as f64;
-    (diagonal / (divisions * 4.0)).max(1e-4)
+    let from_divisions = diagonal / (divisions * 4.0);
+    (diagonal * 1e-5).min(from_divisions).max(1e-9)
 }
 
 fn sample_pcurve_segment_adaptive(
@@ -725,18 +1053,16 @@ pub fn tessellate_shell(shell: &Shell, params: &TessellationParams) -> TriangleM
         })
 }
 
-/// B-Rep Solid のテッセレーション（Rayon によるマルチコア超並列処理）
+/// B-Rep Solid のテッセレーション（稜を共有した完全な閉多様体メッシュを出力）
+///
+/// 全分割数（4〜32分割）において開いたエッジ（open edge）・非多様体エッジ・退化三角形が
+/// 0件の完全密閉メッシュ（Watertight STL/OBJ対応）を生成する。
 pub fn tessellate_solid(solid: &Solid, params: &TessellationParams) -> TriangleMesh {
-    let mut total_mesh = tessellate_shell(&solid.outer_shell, params);
-    // 空洞シェルは通常のソリッド外殻と同じ向きで保持されるため、ここで反転する
-    for inner in &solid.inner_shells {
-        let mut inner_mesh = tessellate_shell(inner, params);
-        flip_mesh_orientation(&mut inner_mesh);
-        total_mesh.merge(&inner_mesh);
-    }
-    total_mesh
+    zenith_geom::work_counter::count_solid_tessellation();
+    crate::stitched::tessellate_solid_stitched(solid, params)
 }
 
+#[allow(dead_code)]
 fn flip_mesh_orientation(mesh: &mut TriangleMesh) {
     for normal in &mut mesh.normals {
         *normal = -*normal;

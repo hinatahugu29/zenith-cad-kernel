@@ -1,4 +1,4 @@
-use zenith_geom::{PlaneSurface3, Surface3};
+use zenith_geom::Surface3;
 use zenith_math::{Point2, Point3, Vec3};
 use zenith_tess::{face_uv_triangulation, TessellationParams, TriangleMesh};
 use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, Shell, Solid};
@@ -12,8 +12,119 @@ pub struct MassProperties {
     pub volume: f64,
     /// 重心座標 (mm)
     pub center_of_mass: Point3,
-    /// 慣性モーメント主成分 (Ixx, Iyy, Izz) (mm^5 または密度1時の単位)
+    /// 慣性テンソルの対角成分 (Ixx, Iyy, Izz)。**原点を通る座標軸まわり**。
+    ///
+    /// 主慣性モーメントではありません。主慣性モーメントは重心を通る主軸まわり
+    /// の値で、`principal_moments()` が返します。慣性積を無視してこの3つを主値
+    /// として使うと、対称でない形では答えが変わります。
+    ///
+    /// 実測: 直方体・円柱・球・円錐・原点から離した直方体のいずれも、原点
+    /// まわりの閉じた式と **1.8e-13 以内**（`inertia_probe`）。
     pub inertia_diagonal: Vec3,
+    /// 慣性積のもとになる積 (∫xy dV, ∫yz dV, ∫zx dV)。**原点まわり**。
+    ///
+    /// 慣性テンソルの非対角成分は符号が反転した `-∫xy dV` です。テンソルとして
+    /// 使うときは `inertia_tensor()` を通してください。
+    #[cfg_attr(not(doc), doc(hidden))]
+    pub inertia_products: Vec3,
+}
+
+impl MassProperties {
+    /// 原点を通る座標軸まわりの慣性テンソル（密度1）
+    pub fn inertia_tensor(&self) -> [[f64; 3]; 3] {
+        let (ixy, iyz, izx) = (
+            self.inertia_products.x,
+            self.inertia_products.y,
+            self.inertia_products.z,
+        );
+        [
+            [self.inertia_diagonal.x, -ixy, -izx],
+            [-ixy, self.inertia_diagonal.y, -iyz],
+            [-izx, -iyz, self.inertia_diagonal.z],
+        ]
+    }
+
+    /// 任意の点を通る座標軸まわりの慣性テンソル（平行軸の定理）
+    pub fn inertia_tensor_about(&self, point: Point3) -> [[f64; 3]; 3] {
+        let mass = self.volume;
+        let d = point - self.center_of_mass;
+        let c = self.center_of_mass - Point3::origin();
+
+        // まず重心まわりへ移し、そこから目的の点へ移す
+        let about_origin = self.inertia_tensor();
+        let mut tensor = [[0.0f64; 3]; 3];
+        for row in 0..3 {
+            for column in 0..3 {
+                let shift_from_origin = if row == column {
+                    c.norm_squared() - c[row] * c[column]
+                } else {
+                    -c[row] * c[column]
+                };
+                let shift_to_point = if row == column {
+                    d.norm_squared() - d[row] * d[column]
+                } else {
+                    -d[row] * d[column]
+                };
+                tensor[row][column] =
+                    about_origin[row][column] - mass * shift_from_origin + mass * shift_to_point;
+            }
+        }
+        tensor
+    }
+
+    /// 重心を通る座標軸まわりの慣性テンソル
+    pub fn inertia_tensor_about_center_of_mass(&self) -> [[f64; 3]; 3] {
+        self.inertia_tensor_about(self.center_of_mass)
+    }
+
+    /// 主慣性モーメント（重心を通る主軸まわり、昇順）
+    ///
+    /// 重心まわりの慣性テンソルの固有値です。対称でない形では
+    /// `inertia_diagonal` とは一致しません。
+    pub fn principal_moments(&self) -> Vec3 {
+        let mut values = symmetric_eigenvalues(self.inertia_tensor_about_center_of_mass());
+        values.sort_by(f64::total_cmp);
+        Vec3::new(values[0], values[1], values[2])
+    }
+}
+
+/// 3x3 対称行列の固有値（ヤコビ法）
+fn symmetric_eigenvalues(matrix: [[f64; 3]; 3]) -> [f64; 3] {
+    let mut a = matrix;
+    for _sweep in 0..64 {
+        let (mut p, mut q, mut largest) = (0usize, 1usize, 0.0f64);
+        for row in 0..3 {
+            for column in (row + 1)..3 {
+                if a[row][column].abs() > largest {
+                    largest = a[row][column].abs();
+                    p = row;
+                    q = column;
+                }
+            }
+        }
+        let scale = a[0][0].abs().max(a[1][1].abs()).max(a[2][2].abs()).max(1.0);
+        if largest <= 1e-18 * scale {
+            break;
+        }
+
+        let theta = 0.5 * (a[q][q] - a[p][p]) / a[p][q];
+        let t = theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt());
+        let cos = 1.0 / (t * t + 1.0).sqrt();
+        let sin = t * cos;
+
+        let mut next = a;
+        for k in 0..3 {
+            next[p][k] = cos * a[p][k] - sin * a[q][k];
+            next[q][k] = sin * a[p][k] + cos * a[q][k];
+        }
+        let rotated = next;
+        for k in 0..3 {
+            next[k][p] = cos * rotated[k][p] - sin * rotated[k][q];
+            next[k][q] = sin * rotated[k][p] + cos * rotated[k][q];
+        }
+        a = next;
+    }
+    [a[0][0], a[1][1], a[2][2]]
 }
 
 /// ガウスの発散定理に基づく高精度物性値計算エンジン
@@ -101,6 +212,9 @@ impl MassCalculator {
         let mut ixx = 0.0;
         let mut iyy = 0.0;
         let mut izz = 0.0;
+        let mut ixy = 0.0;
+        let mut iyz = 0.0;
+        let mut izx = 0.0;
 
         for tri in &mesh.indices {
             let p0 = mesh.positions[tri[0] as usize];
@@ -134,6 +248,21 @@ impl MassCalculator {
             ixx += vol * (y2 + z2) / 10.0;
             iyy += vol * (x2 + z2) / 10.0;
             izz += vol * (x2 + y2) / 10.0;
+
+            // 5. 慣性積の寄与。原点を頂点とする四面体で
+            //    ∫xy dV = V (2 Σ x_i y_i + Σ_{i≠j} x_i y_j) / 20。
+            let cross_moment = |a: [f64; 3], b: [f64; 3]| -> f64 {
+                let sum_a = a[0] + a[1] + a[2];
+                let sum_b = b[0] + b[1] + b[2];
+                let paired = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                (sum_a * sum_b + paired) / 20.0
+            };
+            let xs = [p0.x, p1.x, p2.x];
+            let ys = [p0.y, p1.y, p2.y];
+            let zs = [p0.z, p1.z, p2.z];
+            ixy += vol * cross_moment(xs, ys);
+            iyz += vol * cross_moment(ys, zs);
+            izx += vol * cross_moment(zs, xs);
         }
 
         let total_vol_abs = total_vol.abs();
@@ -148,8 +277,141 @@ impl MassCalculator {
             volume: total_vol_abs,
             center_of_mass: Point3::new(cm_x, cm_y, cm_z),
             inertia_diagonal: Vec3::new(ixx.abs(), iyy.abs(), izz.abs()),
+            inertia_products: Vec3::new(ixy, iyz, izx),
         }
     }
+}
+
+/// パラメータ三角形を、またいでいるノット線で割る。
+///
+/// 割った断片は元の三角形をちょうど覆う（重なりも隙間もない）。切り口は
+/// 直線なので、面積の和は元と厳密に等しい。またいでいなければ何もしない
+/// ので、内部ノットを持たない曲面には費用が乗らない。
+fn split_triangle_at_breaks(
+    triangle: [Point2; 3],
+    u_breaks: &[f64],
+    v_breaks: &[f64],
+    out: &mut Vec<[Point2; 3]>,
+) {
+    let mut current = vec![triangle];
+    for (axis, breaks) in [(0usize, u_breaks), (1usize, v_breaks)] {
+        for value in breaks {
+            let mut next = Vec::with_capacity(current.len());
+            for piece in current.drain(..) {
+                split_triangle_on_axis(piece, axis, *value, &mut next);
+            }
+            current = next;
+        }
+    }
+    out.append(&mut current);
+}
+
+fn split_triangle_on_axis(
+    triangle: [Point2; 3],
+    axis: usize,
+    value: f64,
+    out: &mut Vec<[Point2; 3]>,
+) {
+    let coordinate = |point: &Point2| if axis == 0 { point.x } else { point.y };
+    let signed: [f64; 3] = [
+        coordinate(&triangle[0]) - value,
+        coordinate(&triangle[1]) - value,
+        coordinate(&triangle[2]) - value,
+    ];
+    // またいでいなければ触らない。境界に乗っているだけの頂点は「またぎ」に
+    // 数えない——幅ゼロの断片を作るだけだからである。
+    let has_below = signed.iter().any(|d| *d < 0.0);
+    let has_above = signed.iter().any(|d| *d > 0.0);
+    if !(has_below && has_above) {
+        out.push(triangle);
+        return;
+    }
+
+    let mut below: Vec<Point2> = Vec::with_capacity(4);
+    let mut above: Vec<Point2> = Vec::with_capacity(4);
+    for index in 0..3 {
+        let next = (index + 1) % 3;
+        let (a, b) = (triangle[index], triangle[next]);
+        let (da, db) = (signed[index], signed[next]);
+
+        if da <= 0.0 {
+            below.push(a);
+        }
+        if da >= 0.0 {
+            above.push(a);
+        }
+        if (da < 0.0 && db > 0.0) || (da > 0.0 && db < 0.0) {
+            let t = da / (da - db);
+            let crossing = a + (b - a) * t;
+            below.push(crossing);
+            above.push(crossing);
+        }
+    }
+
+    fan(&below, out);
+    fan(&above, out);
+}
+
+fn fan(polygon: &[Point2], out: &mut Vec<[Point2; 3]>) {
+    if polygon.len() < 3 {
+        return;
+    }
+    for index in 1..polygon.len() - 1 {
+        out.push([polygon[0], polygon[index], polygon[index + 1]]);
+    }
+}
+
+/// 曲面が `(u, v)` についてアフィンなら、その枠 `(origin, u_axis, v_axis)` を返す。
+///
+/// `p(u, v) = origin + u * u_axis + v * v_axis` が全域で成り立つときだけ、
+/// グリーンの定理で領域積分を境界の線積分に落とせる。落とせれば、円形の
+/// トリム境界は内接多角形ではなく真の値に積まれる。
+///
+/// **次数で判定してはいけません。** 1x1 次のパッチは一般には双1次で、
+/// `uv` の交差項を持つ。4隅が平行四辺形でなければ位置はアフィンではなく、
+/// 定理の前提が崩れる。有理パッチも重みが一定でなければアフィンではない。
+/// どちらも「1次だから平面のはず」を通すと静かに間違う。格子の**全点**で
+/// 測って確かめる。角だけを見ると、双1次のパッチは4隅では必ず一致する。
+fn affine_frame_of(surface: &impl Surface3) -> Option<(Point3, Vec3, Vec3)> {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    if !(u_min.is_finite() && u_max.is_finite() && v_min.is_finite() && v_max.is_finite()) {
+        return None;
+    }
+    let u_span = u_max - u_min;
+    let v_span = v_max - v_min;
+    if u_span <= 0.0 || v_span <= 0.0 {
+        return None;
+    }
+
+    let corner = surface.evaluate(u_min, v_min);
+    let u_axis = (surface.evaluate(u_max, v_min) - corner) / u_span;
+    let v_axis = (surface.evaluate(u_min, v_max) - corner) / v_span;
+    if u_axis.cross(&v_axis).norm() <= f64::EPSILON {
+        return None;
+    }
+    let origin = corner - u_axis * u_min - v_axis * v_min;
+
+    // 許容はパッチの実寸に対する比で決める。絶対値で決めると、大きな面では
+    // 甘く、小さな面では通らない。
+    let extent = (u_axis.norm() * u_span).max(v_axis.norm() * v_span);
+    let limit = extent * 1e-12;
+
+    // 標本数は次数やノットと互いに素になるように選ぶ。等分点は制御点や
+    // ノットに当たりやすく、そこは構成上一致することがある。
+    const U_SAMPLES: usize = 17;
+    const V_SAMPLES: usize = 19;
+    for i in 0..=U_SAMPLES {
+        let u = u_min + u_span * (i as f64) / (U_SAMPLES as f64);
+        for j in 0..=V_SAMPLES {
+            let v = v_min + v_span * (j as f64) / (V_SAMPLES as f64);
+            let predicted = origin + u_axis * u + v_axis * v;
+            if (surface.evaluate(u, v) - predicted).norm() > limit {
+                return None;
+            }
+        }
+    }
+
+    Some((origin, u_axis, v_axis))
 }
 
 /// Running totals of the divergence-theorem surface integrals.
@@ -159,6 +421,8 @@ struct SurfaceIntegral {
     volume: f64,
     moment: Vec3,
     second_moment: Vec3,
+    /// (∫xy dV, ∫yz dV, ∫zx dV)
+    products: Vec3,
 }
 
 impl SurfaceIntegral {
@@ -169,6 +433,7 @@ impl SurfaceIntegral {
     }
 
     fn add_face(&mut self, face: &Face, params: &TessellationParams, sign: f64) {
+        zenith_geom::work_counter::count_face_integral();
         let orientation_sign = if face.orientation.is_forward() {
             sign
         } else {
@@ -177,12 +442,31 @@ impl SurfaceIntegral {
         match &face.geometry {
             FaceGeometry::Plane(surface) => {
                 // 平面はトリム境界の線積分で解析的に積める
-                if self.add_planar_face(face, surface, orientation_sign) {
+                if self.add_affine_face(
+                    face,
+                    surface.origin,
+                    surface.u_axis,
+                    surface.v_axis,
+                    orientation_sign,
+                ) {
                     return;
                 }
                 self.add_surface(face, surface, params, orientation_sign)
             }
             FaceGeometry::Nurbs(surface) => {
+                // 他カーネルは平面を 1x1 次のパッチとして書くことがある。
+                // 幾何は平面なのに種別が Nurbs なので、そのままでは下の
+                // 求積に落ち、トリム境界が弦の折れ線になる。円形のキャップは
+                // 内接多角形として積まれ、**分割数を上げても動かない**
+                // 一方向の不足が残る（実測 -2.56e-5、16分割でも512分割でも
+                // 小数9桁目まで同じ値）。厳密な経路は既にあるので、そこへ通す。
+                if face.pcurves.is_some() {
+                    if let Some((origin, u_axis, v_axis)) = affine_frame_of(surface) {
+                        if self.add_affine_face(face, origin, u_axis, v_axis, orientation_sign) {
+                            return;
+                        }
+                    }
+                }
                 self.add_surface(face, surface, params, orientation_sign)
             }
             FaceGeometry::Coons(surface) => {
@@ -207,10 +491,12 @@ impl SurfaceIntegral {
     ///
     /// Returns false when the face has no usable p-curves, so the caller can
     /// fall back to domain quadrature.
-    fn add_planar_face(
+    fn add_affine_face(
         &mut self,
         face: &Face,
-        plane: &PlaneSurface3,
+        origin: Point3,
+        u_axis: Vec3,
+        v_axis: Vec3,
         orientation_sign: f64,
     ) -> bool {
         let Ok(pcurves) = face.plane_pcurves() else {
@@ -240,7 +526,7 @@ impl SurfaceIntegral {
             *moment *= normalization;
         }
 
-        let jacobian_vector = plane.u_axis.cross(&plane.v_axis);
+        let jacobian_vector = u_axis.cross(&v_axis);
         let jacobian = jacobian_vector.norm();
         if jacobian <= f64::EPSILON {
             return false;
@@ -249,12 +535,12 @@ impl SurfaceIntegral {
 
         let area = jacobian * moments[index_uv(0, 0)];
         self.area += area;
-        self.volume += plane.origin.coords.dot(&normal) * area / 3.0;
+        self.volume += origin.coords.dot(&normal) * area / 3.0;
 
         for axis in 0..3 {
-            let base = plane.origin.coords[axis];
-            let du = plane.u_axis[axis];
-            let dv = plane.v_axis[axis];
+            let base = origin.coords[axis];
+            let du = u_axis[axis];
+            let dv = v_axis[axis];
 
             let squared = base * base * moments[index_uv(0, 0)]
                 + du * du * moments[index_uv(2, 0)]
@@ -278,6 +564,27 @@ impl SurfaceIntegral {
             self.second_moment[axis] += normal[axis] * jacobian * cubed / 3.0;
         }
 
+        // 慣性積 ∫xy dV = ∮ (x^2 y / 2) n_x dA。x も y も (u, v) の1次なので
+        // x^2 y は3次で、ここにある モーメントだけで閉じる。
+        //
+        // ∫ a^2 b = b0 ∫a^2 + bu ∫(a^2 u) + bv ∫(a^2 v)
+        let squared_times = |i: usize, j: usize, base: f64, du: f64, dv: f64| -> f64 {
+            base * base * moments[index_uv(i, j)]
+                + 2.0 * base * du * moments[index_uv(i + 1, j)]
+                + 2.0 * base * dv * moments[index_uv(i, j + 1)]
+                + du * du * moments[index_uv(i + 2, j)]
+                + 2.0 * du * dv * moments[index_uv(i + 1, j + 1)]
+                + dv * dv * moments[index_uv(i, j + 2)]
+        };
+        for (slot, (a_axis, b_axis)) in [(0usize, 1usize), (1, 2), (2, 0)].into_iter().enumerate() {
+            let (a0, au, av) = (origin.coords[a_axis], u_axis[a_axis], v_axis[a_axis]);
+            let (b0, bu, bv) = (origin.coords[b_axis], u_axis[b_axis], v_axis[b_axis]);
+            let integral = b0 * squared_times(0, 0, a0, au, av)
+                + bu * squared_times(1, 0, a0, au, av)
+                + bv * squared_times(0, 1, a0, au, av);
+            self.products[slot] += normal[a_axis] * jacobian * integral / 2.0;
+        }
+
         true
     }
 
@@ -289,12 +596,25 @@ impl SurfaceIntegral {
         orientation_sign: f64,
     ) {
         let domain = face_uv_triangulation(face, params);
+        // 三角形がノット区間をまたいでいたら、そこで割ってから当てる。
+        // B-spline が滑らかなのは区間の内側だけで、またいだまま次数4の
+        // 則を当てても次数が効かない。トリムされた面の三角形は earcut と
+        // 細分で作られていて、ノット線を知らない。
+        //
+        // **セル線でも切ろうとして、二度外しました。** 経緯は 4-21 に。
+        let (u_breaks, v_breaks) = surface.integration_breaks();
+        let mut pieces: Vec<[Point2; 3]> = Vec::new();
         for triangle in &domain.triangles {
             let corners = [
                 domain.uvs[triangle[0]],
                 domain.uvs[triangle[1]],
                 domain.uvs[triangle[2]],
             ];
+            split_triangle_at_breaks(corners, &u_breaks, &v_breaks, &mut pieces);
+        }
+
+        for corners in &pieces {
+            let corners = *corners;
             let parametric_area = 0.5
                 * ((corners[1] - corners[0]).x * (corners[2] - corners[0]).y
                     - (corners[1] - corners[0]).y * (corners[2] - corners[0]).x);
@@ -328,6 +648,12 @@ impl SurfaceIntegral {
                     point.y * point.y * point.y * area_vector.y,
                     point.z * point.z * point.z * area_vector.z,
                 ) / 3.0;
+                // ∫xy dV = ∮ (x^2 y / 2) n_x dA など
+                self.products += Vec3::new(
+                    point.x * point.x * point.y * area_vector.x,
+                    point.y * point.y * point.z * area_vector.y,
+                    point.z * point.z * point.x * area_vector.z,
+                ) / 2.0;
             }
         }
     }
@@ -348,9 +674,10 @@ impl SurfaceIntegral {
 
         MassProperties {
             surface_area: self.area,
-            volume: self.volume.abs(),
+            volume: self.volume,
             center_of_mass,
             inertia_diagonal: Vec3::new(inertia.x.abs(), inertia.y.abs(), inertia.z.abs()),
+            inertia_products: self.products,
         }
     }
 }
@@ -398,35 +725,65 @@ fn loop_uv_moments(pcurve_loop: &FacePcurveLoop) -> [f64; 10] {
 
     for segment in &pcurve_loop.segments {
         let (t_min, t_max) = segment.curve.param_range();
-        let half_span = 0.5 * (t_max - t_min);
-        let midpoint = 0.5 * (t_min + t_max);
-        if half_span.abs() <= f64::EPSILON {
+        if (t_max - t_min).abs() <= f64::EPSILON {
             continue;
         }
 
-        for (node, weight) in GAUSS_LEGENDRE_10 {
-            let t = midpoint + half_span * node;
-            let point = segment.curve.evaluate(t);
-            let slope = segment.curve.evaluate_derivative(t);
-            let scale = weight * half_span * slope.y;
+        // ノット区間ごとに積む。B-spline はノットをまたぐと滑らかでなくなるので、
+        // 曲線全体に一つの求積則をあてると、たとえば4区間で書かれた完全円の
+        // 面積が 1.4% ずれる。単一区間の曲線ではこの分割は何も変えない。
+        for (span_start, span_end) in knot_spans(&segment.curve, t_min, t_max) {
+            let half_span = 0.5 * (span_end - span_start);
+            let midpoint = 0.5 * (span_start + span_end);
+            if half_span.abs() <= f64::EPSILON {
+                continue;
+            }
 
-            let u_powers = [
-                1.0,
-                point.x,
-                point.x * point.x,
-                point.x.powi(3),
-                point.x.powi(4),
-            ];
-            let v_powers = [1.0, point.y, point.y * point.y, point.y.powi(3)];
+            for (node, weight) in GAUSS_LEGENDRE_10 {
+                let t = midpoint + half_span * node;
+                let point = segment.curve.evaluate(t);
+                let slope = segment.curve.evaluate_derivative(t);
+                let scale = weight * half_span * slope.y;
 
-            for p in 0..4 {
-                for q in 0..(4 - p) {
-                    moments[index_uv(p, q)] +=
-                        u_powers[p + 1] / (p as f64 + 1.0) * v_powers[q] * scale;
+                let u_powers = [
+                    1.0,
+                    point.x,
+                    point.x * point.x,
+                    point.x.powi(3),
+                    point.x.powi(4),
+                ];
+                let v_powers = [1.0, point.y, point.y * point.y, point.y.powi(3)];
+
+                for p in 0..4 {
+                    for q in 0..(4 - p) {
+                        moments[index_uv(p, q)] +=
+                            u_powers[p + 1] / (p as f64 + 1.0) * v_powers[q] * scale;
+                    }
                 }
             }
         }
     }
 
     moments
+}
+
+/// The curve's distinct knot spans inside `[t_min, t_max]`.
+///
+/// A single-span curve yields exactly one interval, so callers that only ever
+/// see Bezier segments are unaffected.
+fn knot_spans(curve: &zenith_geom::NurbsCurve2, t_min: f64, t_max: f64) -> Vec<(f64, f64)> {
+    let mut breaks: Vec<f64> = vec![t_min];
+    for knot in &curve.knots.knots {
+        if *knot > t_min + f64::EPSILON && *knot < t_max - f64::EPSILON {
+            breaks.push(*knot);
+        }
+    }
+    breaks.push(t_max);
+    breaks.sort_by(f64::total_cmp);
+    breaks.dedup_by(|a, b| (*a - *b).abs() <= (t_max - t_min).abs() * 1e-12);
+
+    breaks
+        .windows(2)
+        .map(|window| (window[0], window[1]))
+        .collect()
 }

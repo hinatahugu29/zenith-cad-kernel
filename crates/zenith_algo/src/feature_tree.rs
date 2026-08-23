@@ -5,7 +5,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3};
 use zenith_math::{Point3, Tolerance, Vec3};
-use zenith_topo::{Edge, GeometricMatcher, GeometricSignature, OrientedEdge, Solid, Vertex, Wire};
+use zenith_topo::{
+    Edge, EdgeSignature, GeometricMatcher, GeometricSignature, OrientedEdge, Solid, Vertex, Wire,
+};
 
 /// パラメトリック・フィーチャー操作の種別
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,6 +98,61 @@ pub enum FeatureOp {
         target_signature: GeometricSignature,
         thickness: f64,
     },
+
+    /// これまでの結果を平行移動する
+    Translate { offset: [f64; 3] },
+
+    /// これまでの結果を軸まわりに回転する
+    Rotate {
+        axis_origin: [f64; 3],
+        axis_dir: [f64; 3],
+        angle_deg: f64,
+    },
+
+    /// これまでの結果と、`tool` を組み立てた立体とのブーリアン。
+    ///
+    /// `tool` は**それ自身が短いフィーチャー列**で、空の状態から順に評価
+    /// される。位置合わせは `tool` の末尾に `Translate` / `Rotate` を
+    /// 置いて行う。これがあるまで、履歴ツリーは各段が前段を捨てる
+    /// 「独立したビルダーの列」で、ブーリアンを含む形は表現できなかった。
+    Boolean {
+        op: BooleanKind,
+        tool: Vec<FeatureOp>,
+    },
+
+    /// 現在の立体の1本の稜にフィレットを掛ける。
+    ///
+    /// 稜は ID ではなく形（中点・向き・長さ・二面角）で指す。寸法を変えて
+    /// 作り直しても、同じ稜が最も近いまま残るので選び直せる。似た稜しか
+    /// 見つからないときは、黙って別の稜を丸めずに失敗する。
+    FilletSolidEdge {
+        target: EdgeSignature,
+        radius: f64,
+    },
+
+    /// 同じく面取り
+    ChamferSolidEdge {
+        target: EdgeSignature,
+        distance: f64,
+    },
+}
+
+/// 履歴に書けるブーリアン種別（`BooleanOpType` の直列化可能版）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BooleanKind {
+    Union,
+    Difference,
+    Intersection,
+}
+
+impl From<BooleanKind> for crate::BooleanOpType {
+    fn from(kind: BooleanKind) -> Self {
+        match kind {
+            BooleanKind::Union => crate::BooleanOpType::Union,
+            BooleanKind::Difference => crate::BooleanOpType::Difference,
+            BooleanKind::Intersection => crate::BooleanOpType::Intersection,
+        }
+    }
 }
 
 /// フィーチャーツリー内の単一ノード
@@ -147,6 +204,20 @@ impl FeatureTree {
             return Err("Feature tree is empty".to_string());
         }
 
+        let ops: Vec<FeatureOp> = self
+            .nodes
+            .iter()
+            .filter(|node| node.enabled)
+            .map(|node| node.op.clone())
+            .collect();
+        Self::evaluate(&ops)
+    }
+
+    /// 一連のフィーチャーを、何も無い状態から順に評価する。
+    ///
+    /// `recompute` はこれを有効なノードだけで呼ぶ。`FeatureOp::Boolean` の
+    /// ツール側もこれを呼ぶので、ブーリアンの片側を同じ語彙で組み立てられる。
+    pub fn evaluate(ops: &[FeatureOp]) -> Result<Solid, String> {
         let mut current_solid: Option<Solid> = None;
         let tol = Tolerance::default();
 
@@ -165,12 +236,8 @@ impl FeatureTree {
             Ok(Wire::new(edges))
         };
 
-        for node in &self.nodes {
-            if !node.enabled {
-                continue;
-            }
-
-            match &node.op {
+        for op in ops {
+            match op {
                 FeatureOp::CreateBox { dx, dy, dz } => {
                     current_solid = Some(PrimitiveBuilder::make_box(*dx, *dy, *dz)?);
                 }
@@ -378,6 +445,57 @@ impl FeatureTree {
                     current_solid =
                         Some(ThickenBuilder::thicken_face(target_face, *thickness, &tol)?);
                 }
+                FeatureOp::Translate { offset } => {
+                    let solid = current_solid.ok_or("No base solid to translate")?;
+                    current_solid = Some(crate::BrepTransform::translate_solid(
+                        &solid,
+                        Vec3::new(offset[0], offset[1], offset[2]),
+                    ));
+                }
+                FeatureOp::Rotate {
+                    axis_origin,
+                    axis_dir,
+                    angle_deg,
+                } => {
+                    let solid = current_solid.ok_or("No base solid to rotate")?;
+                    let axis = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
+                    if axis.norm() <= 1e-12 {
+                        return Err("The rotation axis has no direction".to_string());
+                    }
+                    let origin = Vec3::new(axis_origin[0], axis_origin[1], axis_origin[2]);
+                    let transform = zenith_math::Transform3::from_translation(origin)
+                        .compose(&zenith_math::Transform3::from_axis_angle(
+                            &axis,
+                            angle_deg.to_radians(),
+                        ))
+                        .compose(&zenith_math::Transform3::from_translation(-origin));
+                    current_solid = Some(crate::BrepTransform::transform_solid(
+                        &solid, &transform,
+                    )?);
+                }
+                FeatureOp::Boolean { op, tool } => {
+                    let solid = current_solid.ok_or("No base solid for a boolean")?;
+                    let tool_solid = Self::evaluate(tool)
+                        .map_err(|err| format!("building the boolean tool: {err}"))?;
+                    current_solid = Some(crate::BooleanEngine::boolean_solids_exact(
+                        &solid,
+                        &tool_solid,
+                        (*op).into(),
+                        &tol,
+                    )?);
+                }
+                FeatureOp::FilletSolidEdge { target, radius } => {
+                    let solid = current_solid.ok_or("No base solid to fillet")?;
+                    let edge_id = match_edge(&solid, target)?;
+                    current_solid =
+                        Some(crate::EdgeBlender::fillet_edge(&solid, edge_id, *radius)?);
+                }
+                FeatureOp::ChamferSolidEdge { target, distance } => {
+                    let solid = current_solid.ok_or("No base solid to chamfer")?;
+                    let edge_id = match_edge(&solid, target)?;
+                    current_solid =
+                        Some(crate::EdgeBlender::chamfer_edge(&solid, edge_id, *distance)?);
+                }
             }
         }
 
@@ -389,4 +507,69 @@ impl Default for FeatureTree {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// 履歴に書いてある稜のシグネチャに、今の立体のどの稜が当たるかを探す。
+///
+/// 一致度が足りないとき、および2位との差が小さくてどちらとも言えないときは、
+/// 近い方を黙って丸めずに失敗する。間違った稜を丸めた結果は「閉じた別の形」
+/// になり、後から見て気付けないため。
+pub fn match_edge(solid: &Solid, target: &EdgeSignature) -> Result<u64, String> {
+    let mut scored: Vec<(f64, u64)> = Vec::new();
+    let mut seen: Vec<u64> = Vec::new();
+
+    for face in &solid.outer_shell.faces {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                let id = oriented.edge.id;
+                if seen.contains(&id) {
+                    continue;
+                }
+                seen.push(id);
+
+                let dihedral = DirectModeling::inspect_solid_edge(solid, id)
+                    .ok()
+                    .and_then(|inspection| inspection.dihedral_angle_deg);
+                let signature = EdgeSignature::from_edge(&oriented.edge, dihedral);
+                scored.push((target.similarity(&signature), id));
+            }
+        }
+    }
+
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let (best_score, best_id) = *scored
+        .first()
+        .ok_or("The solid has no edges to match against")?;
+
+    if best_score < 0.9 {
+        return Err(format!(
+            "No edge matches the one this feature was made on (best score {best_score:.3})"
+        ));
+    }
+    if let Some((runner_up, _)) = scored.get(1) {
+        if best_score - runner_up < 1e-6 {
+            return Err(format!(
+                "Two edges match this feature equally well (both {best_score:.3}); the selection is ambiguous"
+            ));
+        }
+    }
+
+    Ok(best_id)
+}
+
+/// 立体の中の1本の稜から、履歴に書けるシグネチャを作る
+pub fn edge_signature(solid: &Solid, edge_id: u64) -> Result<EdgeSignature, String> {
+    for face in &solid.outer_shell.faces {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                if oriented.edge.id == edge_id {
+                    let dihedral = DirectModeling::inspect_solid_edge(solid, edge_id)
+                        .ok()
+                        .and_then(|inspection| inspection.dihedral_angle_deg);
+                    return Ok(EdgeSignature::from_edge(&oriented.edge, dihedral));
+                }
+            }
+        }
+    }
+    Err(format!("Edge {edge_id} is not in this solid"))
 }

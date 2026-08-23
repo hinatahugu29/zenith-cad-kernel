@@ -4,3 +4,8 @@
 *.md text eol=lf
 *.py text eol=lf
 *.json text eol=lf
+
+# STEP fixtures are compared byte for byte by include_str!; never rewrite their
+# line endings. A checkout that turned them into CRLF would change what the
+# tests read without changing what git shows.
+*.step -text

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use zenith_geom::{ControlPoint3, NurbsSurface3, PlaneSurface3};
-use zenith_math::{Point3, Transform3, Vec3};
+use zenith_math::{Point3, Transform3, Vec3, Vec3Ext};
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Shell, Solid, Vertex, Wire};
 
 /// 面・辺の幾何情報クエリ結果
@@ -128,17 +128,28 @@ impl DirectModeling {
     }
 
     /// ソリッド内の特定エッジについて、隣接2面との二面角および凸/凹/スムーズ判定を行う
+    ///
+    /// 二面角は**材料の側から**測るので、0〜360 度の値を返す。凸なら 180 度
+    /// 未満、凹なら 180 度を超える。法線どうしの角度ではないことに注意。
+    ///
+    /// 凸凹の判定には、各面のワイヤがそのエッジを**どちら向きに辿るか**を
+    /// 使う。ワイヤは外向き法線まわりに反時計回りなので、進行方向の左が
+    /// その面の内側であり、この関係はエッジの格納向きにも面の並び順にも
+    /// 依存しない。（以前は「法線の外積とエッジ接線の向き」で判定していた
+    /// ため、同じ形でも面の列挙順が入れ替わるだけで凸と凹が反転していた。）
     pub fn inspect_solid_edge(solid: &Solid, edge_id: u64) -> Result<EdgeInspection, String> {
         let mut matching_edge = None;
-        let mut adjacent_faces = Vec::new();
+        let mut uses: Vec<(Face, zenith_topo::Orientation)> = Vec::new();
 
         for face in &solid.outer_shell.faces {
-            for oe in &face.outer_wire.edges {
-                if oe.edge.id == edge_id {
-                    if matching_edge.is_none() {
-                        matching_edge = Some(oe.edge.clone());
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oe in &wire.edges {
+                    if oe.edge.id == edge_id {
+                        if matching_edge.is_none() {
+                            matching_edge = Some(oe.edge.clone());
+                        }
+                        uses.push((face.clone(), oe.orientation));
                     }
-                    adjacent_faces.push(face.clone());
                 }
             }
         }
@@ -147,29 +158,45 @@ impl DirectModeling {
             matching_edge.ok_or_else(|| format!("Edge ID {} not found in solid", edge_id))?;
         let mut insp = Self::inspect_edge(&edge);
 
-        if adjacent_faces.len() == 2 {
-            let insp_a = Self::inspect_face(&adjacent_faces[0])?;
-            let insp_b = Self::inspect_face(&adjacent_faces[1])?;
+        if uses.len() == 2 {
+            let mut side = Vec::with_capacity(2);
+            for (face, orientation) in &uses {
+                // 曲面の法線は場所で変わる。面の真ん中ではなく、**この稜の上**で
+                // 測らなければ二面角にならない。p-curve があればそこから
+                // (u, v) を引き、無い面だけ面全体の代表法線に落とす。
+                let normal = face_normal_at_edge(face, edge_id)
+                    .map_or_else(|| Self::inspect_face(face).map(|i| i.normal), Ok)?;
+                let travel = if orientation.is_forward() {
+                    insp.tangent
+                } else {
+                    -insp.tangent
+                };
+                let inward = normal.cross(&travel);
+                let Some(inward) = inward.try_normalize_safe(1e-12) else {
+                    return Ok(insp);
+                };
+                side.push((normal, inward));
+            }
 
-            let n_a = insp_a.normal;
-            let n_b = insp_b.normal;
+            let (n_a, t_a) = side[0];
+            let (_n_b, t_b) = side[1];
+            let raw = t_a.dot(&t_b).clamp(-1.0, 1.0).acos();
+            // 面 b の内側が面 a の外側から見て下にあるなら凸
+            let dihedral = if t_b.dot(&n_a) < 0.0 {
+                raw
+            } else {
+                std::f64::consts::TAU - raw
+            };
+            let dihedral_deg = dihedral.to_degrees();
 
-            let dot = n_a.dot(&n_b).clamp(-1.0, 1.0);
-            let angle_deg = dot.acos().to_degrees();
-
-            let cross = n_a.cross(&n_b);
-            let is_convex = cross.dot(&insp.tangent) >= -1e-6;
-
-            let kind = if angle_deg < 1e-3 {
+            insp.kind = if (dihedral_deg - 180.0).abs() < 1e-3 {
                 EdgeKind::Smooth
-            } else if is_convex {
+            } else if dihedral_deg < 180.0 {
                 EdgeKind::Convex
             } else {
                 EdgeKind::Concave
             };
-
-            insp.dihedral_angle_deg = Some(180.0 - angle_deg);
-            insp.kind = kind;
+            insp.dihedral_angle_deg = Some(dihedral_deg);
         }
 
         Ok(insp)
@@ -395,6 +422,21 @@ impl DirectModeling {
         }
 
         crate::validated_solid(Shell::closed(new_faces))
+    }
+
+    /// 任意ソリッドの指定したエッジIDに対してフィレットを適用
+    pub fn fillet_solid_edge(solid: &Solid, edge_id: u64, radius: f64) -> Result<Solid, String> {
+        crate::EdgeBlender::fillet_edge(solid, edge_id, radius)
+    }
+
+    /// 任意ソリッドの指定したエッジIDに対して面取りを適用
+    pub fn chamfer_solid_edge(solid: &Solid, edge_id: u64, distance: f64) -> Result<Solid, String> {
+        crate::EdgeBlender::chamfer_edge(solid, edge_id, distance)
+    }
+
+    /// 任意ソリッドのフィレット可能な稜一覧を取得
+    pub fn list_blendable_edges(solid: &Solid) -> Vec<crate::edge_blend::BlendableEdge> {
+        crate::EdgeBlender::blendable_edges(solid)
     }
 
     /// 直方体の指定した単一垂直エッジ（0: X=0,Y=0; 1: X=dx,Y=0; 2: X=dx,Y=dy; 3: X=0,Y=dy）に半径 radius のフィレットを適用
@@ -925,4 +967,33 @@ fn refit_plane(points: &[Point3], original: &PlaneSurface3) -> Result<PlaneSurfa
     }
 
     Ok(plane)
+}
+
+/// この面の、指定した稜の中点における外向き法線。
+///
+/// p-curve が付いている面なら、その稜の p-curve をパラメータ中央で評価して
+/// (u, v) を得て、そこで支持曲面の法線を測る。曲面では面の中央 (0.5, 0.5) の
+/// 法線と大きく違うため、二面角のように「稜の上での向き」を要る計算は
+/// これを使わなければ答えにならない。
+fn face_normal_at_edge(face: &Face, edge_id: u64) -> Option<Vec3> {
+    let pcurves = face.pcurves.as_ref()?;
+    let segment = std::iter::once(&pcurves.outer_loop)
+        .chain(pcurves.inner_loops.iter())
+        .flat_map(|loop_| loop_.segments.iter())
+        .find(|segment| segment.edge_id == edge_id)?;
+
+    let uv = segment.curve.evaluate(0.5);
+    let normal = match &face.geometry {
+        FaceGeometry::Plane(surface) => surface.normal,
+        FaceGeometry::Nurbs(surface) => surface.normal(uv.x, uv.y)?,
+        FaceGeometry::Coons(surface) => surface.normal(uv.x, uv.y)?,
+        FaceGeometry::Gordon(surface) => surface.normal(uv.x, uv.y)?,
+        FaceGeometry::Triangular(surface) => surface.normal(uv.x, uv.y)?,
+    };
+
+    Some(if face.orientation.is_forward() {
+        normal
+    } else {
+        -normal
+    })
 }

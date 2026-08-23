@@ -19,12 +19,19 @@ struct GridCell {
 }
 
 impl OrthogonalBoxBoolean {
+    /// 軸平行の箱同士の近道。
+    ///
+    /// `Ok(None)` は「この近道の出番ではない」で、**空の結果とは別物**です。
+    /// 以前は戻り値が `Option<Solid>` で空を表せず、`A - A` のように答えが
+    /// 空になる演算をエラーにしていました。4-6 が一般経路について
+    /// 「空の交差は答えであって失敗ではない」と直したのと同じことが、
+    /// この近道には入っていませんでした。
     pub(crate) fn boolean_axis_aligned_boxes_exact(
         solid_a: &Solid,
         solid_b: &Solid,
         op: BooleanOpType,
         tol: &Tolerance,
-    ) -> Result<Option<Solid>, String> {
+    ) -> Result<Option<crate::ExactBooleanResult>, String> {
         let Some(bounds_a) = Self::axis_aligned_box_bounds(solid_a, tol) else {
             return Ok(None);
         };
@@ -35,27 +42,30 @@ impl OrthogonalBoxBoolean {
         match op {
             BooleanOpType::Intersection => {
                 let Some(overlap) = bounds_a.intersection(bounds_b, tol) else {
-                    return Err(
-                        "Exact B-Rep boolean intersection has no positive volume overlap"
-                            .to_string(),
-                    );
+                    // 重なりが無いことを境界箱で確かめた枝。積は空であって、
+                    // 求められなかったわけではない。呼び出し側が空の結果を
+                    // 作れるよう、ここでは「この近道の出番ではない」と返す。
+                    return Ok(None);
                 };
-                Self::make_box_from_bounds(overlap).map(Some)
+                Self::make_box_from_bounds(overlap)
+                    .map(|solid| Some(crate::ExactBooleanResult::single(solid)))
             }
             BooleanOpType::Union => {
                 if let Some(union) = bounds_a.union_if_single_box(bounds_b, tol) {
-                    Self::make_box_from_bounds(union).map(Some)
+                    Self::make_box_from_bounds(union)
+                        .map(|solid| Some(crate::ExactBooleanResult::single(solid)))
                 } else if bounds_a.intersection(bounds_b, tol).is_some() {
-                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol).map(Some)
+                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol)
                 } else {
                     Ok(None)
                 }
             }
             BooleanOpType::Difference => {
                 if let Some(difference) = bounds_a.difference_if_single_box(bounds_b, tol) {
-                    Self::make_box_from_bounds(difference).map(Some)
+                    Self::make_box_from_bounds(difference)
+                        .map(|solid| Some(crate::ExactBooleanResult::single(solid)))
                 } else if bounds_a.intersection(bounds_b, tol).is_some() {
-                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol).map(Some)
+                    Self::build_orthogonal_box_boolean(bounds_a, bounds_b, op, tol)
                 } else {
                     Ok(None)
                 }
@@ -68,7 +78,7 @@ impl OrthogonalBoxBoolean {
         bounds_b: AxisAlignedBoxBounds,
         op: BooleanOpType,
         tol: &Tolerance,
-    ) -> Result<Solid, String> {
+    ) -> Result<Option<crate::ExactBooleanResult>, String> {
         let xs = sorted_unique_coords(
             &[
                 bounds_a.min.x,
@@ -124,12 +134,15 @@ impl OrthogonalBoxBoolean {
         }
 
         if occupied.iter().all(|is_occupied| !*is_occupied) {
-            return Err("Exact axis-aligned box boolean produced an empty result".to_string());
+            // どのセルも残らなかった。`A - A` がこれで、答えは空です。
+            // 求められなかったのではないので、エラーにしません（4-6）。
+            return Ok(Some(crate::ExactBooleanResult::from_solids(Vec::new())));
         }
         if !occupied_cells_are_connected(&occupied, nx, ny, nz) {
-            return Err(
-                "Exact axis-aligned box boolean produced multiple disjoint regions".to_string(),
-            );
+            // 離れた塊は、この近道では表せません（占有セルの外周から1枚の
+            // 閉じたシェルを組むため）。**表せないことは、答えが無いことでは
+            // ありません。** 一般経路は塊ごとに立体を返せるので、譲ります。
+            return Ok(None);
         }
 
         let mut faces = Vec::new();
@@ -149,7 +162,18 @@ impl OrthogonalBoxBoolean {
             }
         }
 
-        Solid::try_simple(Shell::closed(faces), tol).map_err(|err| err.to_string())
+        // ここで組めない形がひとつあります。**結果が2つ以上に分かれるとき**
+        // です。この近道は占有したセルの外周から1枚の閉じたシェルを組むので、
+        // 離れた塊は表せません。板を貫くスロットで切ると素の箱は2つに割れ、
+        // ここが失敗していました——**同じスロットが穴あきの板では通ります**。
+        // あちらは近道を外れて一般経路へ落ちるからです。
+        //
+        // 組めないことは「この近道の出番ではない」であって、答えが無いことでは
+        // ありません。エラーにせず、一般経路へ譲ります。
+        match Solid::try_simple(Shell::closed(faces), tol) {
+            Ok(solid) => Ok(Some(crate::ExactBooleanResult::single(solid))),
+            Err(_) => Ok(None),
+        }
     }
 
     fn make_box_from_bounds(bounds: AxisAlignedBoxBounds) -> Result<Solid, String> {

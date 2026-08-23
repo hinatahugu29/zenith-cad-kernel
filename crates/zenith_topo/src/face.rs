@@ -1,4 +1,4 @@
-use crate::edge::Orientation;
+use crate::edge::{Orientation, OrientedEdge};
 use crate::wire::Wire;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -6,7 +6,7 @@ use zenith_geom::{
     ControlPoint2, CoonsPatch3, ExtremumEngine, GordonSurface3, KnotVector, NurbsCurve2,
     NurbsSurface3, PlaneSurface3, Surface3, TriangularPatch3,
 };
-use zenith_math::{Point2, Point3, Tolerance};
+use zenith_math::{Point2, Point3, Tolerance, Vec3};
 
 static FACE_ID_GEN: AtomicU64 = AtomicU64::new(1);
 
@@ -120,6 +120,33 @@ impl Face {
     }
 
     /// 穴なしのFaceを作成
+    /// Whether the face covers its whole surface, with nothing trimmed away.
+    ///
+    /// A closed surface written as a single face - the way OpenCASCADE writes a
+    /// sphere or a torus - has no real boundary. Either there is none at all,
+    /// STEP's VERTEX_LOOP standing in as a single point, or what stands in for
+    /// one is the seam, traversed once each way, so every edge in the loop
+    /// appears twice.
+    ///
+    /// Such a loop encloses the whole parameter domain, but it cannot be read
+    /// that way from its p-curves: a point on the seam maps to both ends of the
+    /// domain at once, so the signed area it traces depends on which end the
+    /// projection happens to pick. The topology says it plainly, so ask that.
+    pub fn has_seam_only_boundary(&self, tol: f64) -> bool {
+        if !self.inner_wires.is_empty() {
+            return false;
+        }
+        let edges = &self.outer_wire.edges;
+        if edges.is_empty() {
+            return true;
+        }
+        edges.iter().enumerate().all(|(index, edge)| {
+            edges.iter().enumerate().any(|(other_index, other)| {
+                other_index != index && same_edge_geometry(edge, other, tol)
+            })
+        })
+    }
+
     pub fn simple(geometry: FaceGeometry, outer_wire: Wire) -> Self {
         Self::new(geometry, outer_wire, Vec::new(), Orientation::Forward, 1e-6)
     }
@@ -431,7 +458,125 @@ fn derive_wire_nurbs_boundary_pcurves(
         });
     }
 
+    settle_seam_segments(&mut segments, surface, tol);
+
     Ok(FacePcurveLoop { segments })
+}
+
+/// 継ぎ目に丸ごと乗っている区間を、ループの隣とつながる側へ寄せる。
+///
+/// `settle_seam_parameters` は稜1本の中で寄せ先を決めるので、**稜が丸ごと
+/// 継ぎ目に乗っている**ときは寄せ先が無く、そのまま返します。周期曲面では
+/// その稜の uv は2通りあり（u=0 と u=1 が同じ3D点）、投影はどちらを返しても
+/// 正しく見えます。両方が同じ側に落ちると、ループは行って戻るだけの
+/// **面積0の多角形**になります。
+///
+/// 実測: OpenCASCADE が書いた全周の円錐と半球は、母線2本がどちらも u=0 に
+/// 落ち、uv の符号付き面積がちょうど 0 になっていました。earcut は三角形を
+/// 1枚も返さず、**側面がメッシュから丸ごと消えます**（底面だけの 20 三角形、
+/// z 方向の広がり 0）。体積は別経路で積むので正しく、見えませんでした。
+///
+/// 寄せ先はループが決めます。継ぎ目に乗った区間の端は、隣の区間の端と
+/// 一致していなければなりません。
+fn settle_seam_segments(
+    segments: &mut [FacePcurveSegment],
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) {
+    if segments.len() < 2 {
+        return;
+    }
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    settle_seam_segment_axis(segments, u_min, u_max, surface, tol, true);
+    settle_seam_segment_axis(segments, v_min, v_max, surface, tol, false);
+}
+
+fn settle_seam_segment_axis(
+    segments: &mut [FacePcurveSegment],
+    min: f64,
+    max: f64,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+    along_u: bool,
+) {
+    let span = max - min;
+    if span <= 0.0 {
+        return;
+    }
+    // この軸が本当に周期的か。両端が同じ点に写らなければ、寄せてはいけない。
+    let middle = if along_u {
+        (surface.param_range().1 .0 + surface.param_range().1 .1) * 0.5
+    } else {
+        (surface.param_range().0 .0 + surface.param_range().0 .1) * 0.5
+    };
+    let (low_point, high_point) = if along_u {
+        (surface.evaluate(min, middle), surface.evaluate(max, middle))
+    } else {
+        (surface.evaluate(middle, min), surface.evaluate(middle, max))
+    };
+    if (high_point - low_point).norm() > tol.linear.max(1e-9) {
+        return;
+    }
+
+    let edge_of_domain = span * 1e-6;
+    let coordinate = |point: &Point2| if along_u { point.x } else { point.y };
+
+    // 曖昧なのは、**この軸の値が丸ごと片側に張り付いている**区間だけ。
+    // 「各制御点が min か max のどちらかにある」では足りません。円錐の底円の
+    // p-curve は u が 1 から 0 へ動く1次の直線で、制御点は 2 点ともちょうど
+    // 端にあります。それを曖昧と見ると、寄せ先を決める基準が無くなります。
+    let ambiguous: Vec<bool> = segments
+        .iter()
+        .map(|segment| {
+            let at = |target: f64| {
+                segment
+                    .curve
+                    .control_points
+                    .iter()
+                    .all(|control| (coordinate(&control.point) - target).abs() <= edge_of_domain)
+            };
+            at(min) || at(max)
+        })
+        .collect();
+    if ambiguous.iter().all(|flag| *flag) || ambiguous.iter().all(|flag| !*flag) {
+        return;
+    }
+
+    let count = segments.len();
+    for index in 0..count {
+        if !ambiguous[index] {
+            continue;
+        }
+        // 前の区間の終わり、次の区間の始まり。曖昧でない隣だけを見る。
+        let previous = (index + count - 1) % count;
+        let next = (index + 1) % count;
+        let mut wanted: Vec<f64> = Vec::new();
+        if !ambiguous[previous] {
+            let (_, t_max) = segments[previous].curve.param_range();
+            wanted.push(coordinate(&segments[previous].curve.evaluate(t_max)));
+        }
+        if !ambiguous[next] {
+            let (t_min, _) = segments[next].curve.param_range();
+            wanted.push(coordinate(&segments[next].curve.evaluate(t_min)));
+        }
+        if wanted.is_empty() {
+            continue;
+        }
+        let reference = wanted.iter().sum::<f64>() / wanted.len() as f64;
+        let nearer = if (reference - min).abs() <= (reference - max).abs() {
+            min
+        } else {
+            max
+        };
+
+        for control in &mut segments[index].curve.control_points {
+            if along_u {
+                control.point.x = nearer;
+            } else {
+                control.point.y = nearer;
+            }
+        }
+    }
 }
 
 fn match_nurbs_boundary_pcurve(
@@ -444,7 +589,150 @@ fn match_nurbs_boundary_pcurve(
         return Ok(curve);
     }
 
+    if let Ok(curve) = match_affine_patch_pcurve(edge, surface, tol) {
+        return Ok(curve);
+    }
+
     project_edge_to_nurbs_pcurve(edge, surface, tol, samples_per_edge)
+}
+
+/// A surface whose parameters map to space by an affine transform.
+///
+/// Converting a solid to B-splines turns every planar face into a patch like
+/// this: degree one each way, four corners, no weights. The parameters are then
+/// just coordinates in the plane, and there is nothing to approximate.
+struct AffinePatch {
+    origin: Point3,
+    du: Vec3,
+    dv: Vec3,
+    u_min: f64,
+    v_min: f64,
+}
+
+impl AffinePatch {
+    /// The parameters naming `point`, or `None` when it is off the plane.
+    fn parameters_of(&self, point: Point3, limit: f64) -> Option<Point2> {
+        let relative = point - self.origin;
+        let uu = self.du.dot(&self.du);
+        let uv = self.du.dot(&self.dv);
+        let vv = self.dv.dot(&self.dv);
+        let ru = relative.dot(&self.du);
+        let rv = relative.dot(&self.dv);
+
+        let det = uu * vv - uv * uv;
+        if det.abs() <= 1e-15 {
+            return None;
+        }
+        let along_u = (ru * vv - rv * uv) / det;
+        let along_v = (rv * uu - ru * uv) / det;
+
+        // 面内に無い点は写せない。有理曲線の制御点は曲面上には無いが、
+        // 平面の上には乗っているので、これで弾かれない。
+        if (relative - self.du * along_u - self.dv * along_v).norm() > limit {
+            return None;
+        }
+
+        Some(Point2::new(self.u_min + along_u, self.v_min + along_v))
+    }
+}
+
+/// Reads a surface's affine map, and checks that it really follows one.
+fn affine_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<AffinePatch> {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let u_span = u_max - u_min;
+    let v_span = v_max - v_min;
+    if !(u_span > 0.0 && v_span > 0.0) {
+        return None;
+    }
+
+    let origin = surface.evaluate(u_min, v_min);
+    let du = (surface.evaluate(u_max, v_min) - origin) / u_span;
+    let dv = (surface.evaluate(u_min, v_max) - origin) / v_span;
+
+    // 三隅から取った写像が本当に曲面と一致するか、格子で確かめる。
+    // 一致しなければアフィンではないので、近似の経路に任せる。
+    let extent = du.norm().max(dv.norm()).max(1.0) * u_span.max(v_span);
+    let limit = tol.linear.max(1e-9) * extent.max(1.0);
+    for i in 0..=4 {
+        for j in 0..=4 {
+            let u = u_min + u_span * i as f64 / 4.0;
+            let v = v_min + v_span * j as f64 / 4.0;
+            let expected = origin + du * (u - u_min) + dv * (v - v_min);
+            if (surface.evaluate(u, v) - expected).norm() > limit {
+                return None;
+            }
+        }
+    }
+
+    Some(AffinePatch {
+        origin,
+        du,
+        dv,
+        u_min,
+        v_min,
+    })
+}
+
+/// The exact p-curve of an edge on a surface whose parameters are affine.
+///
+/// An affine map carries a NURBS curve to a NURBS curve of the same degree,
+/// knots and weights, so the p-curve is the edge's own control points put
+/// through the map. Nothing is sampled and nothing is approximated, which is
+/// what the polyline path could not manage: a circle on such a patch came
+/// through as an octagon, 0.889 off its own edge and a tenth short on area.
+fn match_affine_patch_pcurve(
+    edge: &crate::edge::OrientedEdge,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> Result<NurbsCurve2, String> {
+    let patch = affine_patch(surface, tol)
+        .ok_or_else(|| "Surface parameters are not affine".to_string())?;
+
+    let scale = edge
+        .edge
+        .curve
+        .control_points
+        .iter()
+        .fold(0.0f64, |worst, cp| {
+            worst.max((cp.point - patch.origin).norm())
+        })
+        .max(1.0);
+    let limit = tol.linear.max(1e-9) * scale;
+
+    let mut control_points: Vec<ControlPoint2> = Vec::with_capacity(
+        edge.edge.curve.control_points.len(),
+    );
+    for cp in &edge.edge.curve.control_points {
+        let uv = patch.parameters_of(cp.point, limit).ok_or_else(|| {
+            format!("Edge {} leaves the plane of the patch", edge.edge.id)
+        })?;
+        control_points.push(ControlPoint2::new(uv, cp.weight));
+    }
+
+    let mut knots = edge.edge.curve.knots.clone();
+    if !edge.orientation.is_forward() {
+        control_points.reverse();
+        knots = reverse_knot_vector(&knots, edge.edge.curve.degree);
+    }
+
+    let curve = NurbsCurve2::new(edge.edge.curve.degree, control_points, knots)?;
+
+    // 主張で終わらせない。出来た p-curve を曲面に戻して、辺と一致するか測る。
+    let (t_min, t_max) = curve.param_range();
+    for step in 0..=16 {
+        let fraction = step as f64 / 16.0;
+        let uv = curve.evaluate(t_min + (t_max - t_min) * fraction);
+        let from_surface = surface.evaluate(uv.x, uv.y);
+        let from_edge = edge.evaluate_normalized(fraction);
+        if (from_surface - from_edge).norm() > limit {
+            return Err(format!(
+                "Edge {} affine p-curve differs from the edge",
+                edge.edge.id
+            ));
+        }
+    }
+
+    Ok(curve)
 }
 
 fn match_nurbs_outer_boundary_pcurve(
@@ -465,6 +753,12 @@ fn match_nurbs_outer_boundary_pcurve(
         (Point2::new(u_max, v_max), Point2::new(u_max, v_min)),
     ];
 
+    // 候補は「パラメータ空間の直線」なので、辺のパラメータ付けがその直線に
+    // アフィンに乗っているときしか正しくない。ここは構成と同じ分割数で
+    // 測っているので、乗っていない辺が節点だけで一致して通る余地がある。
+    // その場合でも 37 点で測り直す `validate_pcurves` が落とすため、誤答には
+    // ならない（明示的なエラーになる）。実際にそれで落ちる検体はまだ
+    // 見つかっていないので、直す根拠が測れるまで触らない。
     let samples = samples_per_edge.max(2);
     let mut best: Option<(f64, Point2, Point2)> = None;
 
@@ -501,32 +795,216 @@ fn match_nurbs_outer_boundary_pcurve(
     NurbsCurve2::bspline_from_points(1, vec![uv0, uv1])
 }
 
+/// Projects a 3D edge onto a NURBS surface as a polyline in parameter space.
+///
+/// Two things decide whether this is any good, and only one of them used to be
+/// checked. Even spacing confirmed that the sampled points sat on the surface,
+/// and never that the straight run between two of them followed the edge: a
+/// circle came through as an octagon, every corner exactly on the surface and
+/// the trimmed region a tenth too small. So the samples are placed where the
+/// curve needs them, judged by how far the chord strays from the edge, which is
+/// the same quantity validation measures.
+///
+/// The knots are the edge parameters the samples were taken at, so a given
+/// fraction along the p-curve is the same fraction along the edge. Spacing the
+/// knots evenly while spacing the samples unevenly breaks that correspondence,
+/// and the p-curve then reads as wrong even where it is right.
 fn project_edge_to_nurbs_pcurve(
     edge: &crate::edge::OrientedEdge,
     surface: &NurbsSurface3,
     tol: &Tolerance,
     samples_per_edge: usize,
 ) -> Result<NurbsCurve2, String> {
-    let samples = samples_per_edge.max(4);
-    let mut uv_points = Vec::with_capacity(samples + 1);
+    let on_surface_limit = tol.linear.max(1e-6) * 10.0;
     let mut max_distance: f64 = 0.0;
 
-    for i in 0..=samples {
-        let t = i as f64 / samples as f64;
+    let mut project = |t: f64, seed: Option<Point2>| -> Result<Point2, String> {
         let point = edge.evaluate_normalized(t);
-        let projection = ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)?;
+        let projection = match seed {
+            Some(uv) => ExtremumEngine::point_to_surface_seeded(
+                point,
+                surface,
+                uv.x,
+                uv.y,
+                32,
+                tol.parametric,
+            )?,
+            None => ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)?,
+        };
         max_distance = max_distance.max(projection.distance);
-        uv_points.push(Point2::new(projection.u, projection.v));
+        Ok(Point2::new(projection.u, projection.v))
+    };
+
+    let start = samples_per_edge.max(4);
+    let mut parameters: Vec<f64> = (0..=start).map(|i| i as f64 / start as f64).collect();
+    let mut uv_points: Vec<Point2> = Vec::with_capacity(parameters.len());
+    for t in &parameters {
+        uv_points.push(project(*t, None)?);
+    }
+    settle_seam_parameters(&mut uv_points, surface, tol);
+
+    // 弦の中点が辺から離れている区間を割る。継ぎ目をまたぐ区間はここでは
+    // 詰められないので、割らずに残す。
+    //
+    // 走査は**通しで何度も回す**。1回の通しで各区間はたかだか1度しか割らない
+    // （割った点の先へ進む）ので、詰まらない区間が予算を独り占めしない。
+    //
+    // 以前は1本の走査で、割った直後に同じ左半分を見直していた。辺自身が曲面
+    // から公差ぎりぎり（実測 9.78e-7）離れている区間は、いくら割っても弦が
+    // 公差 1e-6 を切れない。そこで **最初の区間だけを 4096 点の上限まで割り
+    // 続け、残りの区間は最初の8分割のまま**という p-curve が出来ていた。
+    // 3D の辺から最大 8.5e-3 離れる。皿モミ穴は 64 組中 7 組がこれで落ちて
+    // いた（`countersink_range_probe`）。
+    let deflection = tol.linear;
+    const MAX_POINTS: usize = 4096;
+    const MAX_PASSES: usize = 24;
+    for _pass in 0..MAX_PASSES {
+        let mut split_any = false;
+        let mut index = 0;
+        while index + 1 < parameters.len() && parameters.len() < MAX_POINTS {
+            let (t0, t1) = (parameters[index], parameters[index + 1]);
+            let middle = (t0 + t1) * 0.5;
+            let chord = uv_points[index] + (uv_points[index + 1] - uv_points[index]) * 0.5;
+            let strayed =
+                (surface.evaluate(chord.x, chord.y) - edge.evaluate_normalized(middle)).norm();
+
+            if strayed <= deflection || (t1 - t0) <= 1e-9 {
+                index += 1;
+                continue;
+            }
+
+            let uv = project(middle, Some(chord))?;
+            // 継ぎ目をまたぐ区間は、割っても弦が縮まない。無限に割らないよう抜ける。
+            // パラメータ空間で湾曲する曲線（有理パッチ上の直線など）の膨らみを
+            // 誤認してスキップしないよう、区間長に応じたマージンを設ける。
+            let before = uv_points[index];
+            let after = uv_points[index + 1];
+            let margin =
+                ((after.x - before.x).abs().max((after.y - before.y).abs()) * 0.5).max(1e-4);
+            let inside = uv.x >= before.x.min(after.x) - margin
+                && uv.x <= before.x.max(after.x) + margin
+                && uv.y >= before.y.min(after.y) - margin
+                && uv.y <= before.y.max(after.y) + margin;
+            if !inside {
+                index += 1;
+                continue;
+            }
+
+            parameters.insert(index + 1, middle);
+            uv_points.insert(index + 1, uv);
+            split_any = true;
+            // 割ってできた点の先へ進む。両側の半分は次の通しで見る。
+            index += 2;
+        }
+
+        if !split_any || parameters.len() >= MAX_POINTS {
+            break;
+        }
     }
 
-    if max_distance > tol.linear.max(1e-6) * 10.0 {
+    if max_distance > on_surface_limit {
         return Err(format!(
             "Edge {} projection to NURBS surface exceeds tolerance; max distance {max_distance:.6e}",
             edge.edge.id
         ));
     }
 
-    NurbsCurve2::bspline_from_points(1, uv_points)
+    // 1次のクランプ節点列。節点をとった辺のパラメータをそのまま使う。
+    let mut knots = Vec::with_capacity(parameters.len() + 2);
+    knots.push(parameters[0]);
+    knots.extend(parameters.iter().copied());
+    knots.push(parameters[parameters.len() - 1]);
+
+    NurbsCurve2::new(1, uv_points.into_iter().map(ControlPoint2::unweighted).collect(), KnotVector::new(knots))
+}
+
+/// Rewrites parameters that landed on a seam so the run reads as one path.
+///
+/// A point on the seam of a closed surface has two names, one at each end of
+/// the domain, and the projection has no reason to prefer either. When a run of
+/// samples picks the far one for its first point and the near one for the rest,
+/// the straight line joining them in parameter space crosses the whole domain,
+/// and the p-curve sweeps right round the surface between two neighbouring
+/// samples. That is where the twenty-unit gap on a radius-ten sphere came from:
+/// not an approximation, but a curve going the wrong way round.
+///
+/// Samples away from a seam are unambiguous, so they are the ones to trust; a
+/// seam sample is moved to whichever end sits nearer them. A run that is all
+/// seam is already consistent and is left alone.
+fn settle_seam_parameters(uv_points: &mut [Point2], surface: &NurbsSurface3, tol: &Tolerance) {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    settle_seam_axis(uv_points, u_min, u_max, tol, surface, true);
+    settle_seam_axis(uv_points, v_min, v_max, tol, surface, false);
+}
+
+fn settle_seam_axis(
+    uv_points: &mut [Point2],
+    min: f64,
+    max: f64,
+    tol: &Tolerance,
+    surface: &NurbsSurface3,
+    along_u: bool,
+) {
+    let span = max - min;
+    if span <= 0.0 || uv_points.len() < 2 {
+        return;
+    }
+    let edge_of_domain = span * 1e-9;
+    let coordinate = |uv: &Point2| if along_u { uv.x } else { uv.y };
+
+    let at_seam: Vec<bool> = uv_points
+        .iter()
+        .map(|uv| {
+            let value = coordinate(uv);
+            (value - min).abs() <= edge_of_domain || (value - max).abs() <= edge_of_domain
+        })
+        .collect();
+
+    // 端に居ない標本が一つも無ければ、寄せる先が無い。全部が継ぎ目上なら
+    // すでに揃っている。
+    if at_seam.iter().all(|seam| *seam) || at_seam.iter().all(|seam| !*seam) {
+        return;
+    }
+
+    for index in 0..uv_points.len() {
+        if !at_seam[index] {
+            continue;
+        }
+        // 一番近い、端に居ない標本を基準にする。
+        let Some(reference) = (0..uv_points.len())
+            .filter(|other| !at_seam[*other])
+            .min_by_key(|other| other.abs_diff(index))
+            .map(|other| coordinate(&uv_points[other]))
+        else {
+            continue;
+        };
+
+        let nearer = if (reference - min).abs() <= (reference - max).abs() {
+            min
+        } else {
+            max
+        };
+        let current = coordinate(&uv_points[index]);
+        if (current - nearer).abs() <= edge_of_domain {
+            continue;
+        }
+
+        // 両端が同じ点を指していることを確かめてから置き換える。継ぎ目でない
+        // 端をまたいでしまうと、面から外れた p-curve になる。
+        let other_end = uv_points[index];
+        let moved = if along_u {
+            Point2::new(nearer, other_end.y)
+        } else {
+            Point2::new(other_end.x, nearer)
+        };
+        let before = surface.evaluate(other_end.x, other_end.y);
+        let after = surface.evaluate(moved.x, moved.y);
+        if (after - before).norm() > tol.linear.max(1e-9) {
+            continue;
+        }
+
+        uv_points[index] = moved;
+    }
 }
 
 fn project_to_plane_uv(point: Point3, plane: &PlaneSurface3) -> Point2 {
@@ -694,4 +1172,20 @@ fn dense_loop_points(wire: &Wire, samples_per_edge: usize) -> Vec<Point3> {
         }
     }
     points
+}
+
+/// Whether two edge uses run along the same curve, either way round.
+///
+/// The midpoint is what separates two edges that share both vertices: a torus
+/// written as one face has a seam the long way round and a seam the short way,
+/// and both begin and end at the same point.
+fn same_edge_geometry(a: &OrientedEdge, b: &OrientedEdge, tol: f64) -> bool {
+    if (a.evaluate_normalized(0.5) - b.evaluate_normalized(0.5)).norm() > tol {
+        return false;
+    }
+    let (a_start, a_end) = (a.start_vertex().point, a.end_vertex().point);
+    let (b_start, b_end) = (b.start_vertex().point, b.end_vertex().point);
+    let close = |left: Point3, right: Point3| (left - right).norm() <= tol;
+    close(a_start, b_start) && close(a_end, b_end)
+        || close(a_start, b_end) && close(a_end, b_start)
 }

@@ -8,13 +8,60 @@ pub struct HelixBuilder;
 impl HelixBuilder {
     /// 3次元NURBS螺旋（ヘリックス）パス曲線の生成
     /// `radius`: 半径, `pitch`: 1回転あたりの進み量, `turns`: 巻き数（> 0.0）, `axis_origin`: 軸原点, `axis_dir`: 軸方向
+    /// 公差から刻みを決めて螺旋を組む。
+    ///
+    /// 螺旋は有理曲線では**厳密に表せない**。xy は真円になるが、真の螺旋は
+    /// z が角度に比例するのに対し、有理2次の角度 θ(t) は t に比例しない。
+    /// 両者は各区間の t = 0, 1/2, 1 で一致し、その間でずれる。90度刻みだと
+    /// 半径10・ピッチ6の螺旋で高さが **3.16e-2**（ピッチの 0.53%）外れる。
+    ///
+    /// 刻みを細かくすれば減る。減り方は [`segments_per_turn_for`] に測った
+    /// 値ごと書いてある。
     pub fn build_helix_curve(
         radius: f64,
         pitch: f64,
         turns: f64,
         axis_origin: Point3,
         axis_dir: Vec3,
-        _tol: &Tolerance,
+        tol: &Tolerance,
+    ) -> Result<NurbsCurve3, String> {
+        let per_turn = Self::segments_per_turn_for(pitch, tol);
+        Self::build_helix_curve_with_segments(radius, pitch, turns, axis_origin, axis_dir, per_turn)
+    }
+
+    /// 1周をいくつに刻むと、高さのずれが線形公差に収まるか。
+    ///
+    /// ずれは刻み角の**3乗**で減る。実測（半径10・ピッチ6・2周、1周を
+    /// 4, 8, 16, 32, 64, 128 に刻んだとき）:
+    ///
+    /// ```text
+    /// 3.1632e-2  3.7679e-3  4.6552e-4  5.8021e-5  7.2474e-6  9.0576e-7
+    ///        8.40       8.09       8.02       8.01       8.00
+    /// ```
+    ///
+    /// 係数は**ピッチに比例し、半径には依らない**（ずれは z 方向にしか
+    /// 出ない。半径10と30で同じ値になる）。4刻みで `pitch * 5.272e-3` なので、
+    /// そこから解く。
+    pub fn segments_per_turn_for(pitch: f64, tol: &Tolerance) -> usize {
+        let allowed = tol.linear.max(1e-12);
+        let at_four = pitch.abs() * 5.272e-3;
+        if at_four <= allowed {
+            return 4;
+        }
+        // at_four * (4 / n)^3 <= allowed
+        let needed = 4.0 * (at_four / allowed).cbrt();
+        (needed.ceil() as usize).clamp(4, 4096)
+    }
+
+    /// 1周あたりの刻み数を指定して螺旋を組む。刻みと精度の関係を測るために
+    /// 開けてある。
+    pub fn build_helix_curve_with_segments(
+        radius: f64,
+        pitch: f64,
+        turns: f64,
+        axis_origin: Point3,
+        axis_dir: Vec3,
+        segments_per_turn: usize,
     ) -> Result<NurbsCurve3, String> {
         if radius <= 1e-9 {
             return Err("Helix radius must be positive".to_string());
@@ -34,9 +81,8 @@ impl HelixBuilder {
         let x_axis = axis_dir_norm.cross(&arb).normalize();
         let y_axis = axis_dir_norm.cross(&x_axis).normalize();
 
-        // 90度（PI/2）ごとにセグメント分割
         let total_angle = turns * std::f64::consts::TAU;
-        let num_segments = (turns * 4.0).ceil() as usize;
+        let num_segments = (turns * segments_per_turn.max(4) as f64).ceil() as usize;
         let d_theta = total_angle / num_segments as f64;
         let dz = pitch * (d_theta / std::f64::consts::TAU);
         let wm = (d_theta / 2.0).cos();
@@ -101,7 +147,41 @@ impl HelixBuilder {
     ) -> Result<Solid, String> {
         let helix_path =
             Self::build_helix_curve(radius, pitch, turns, axis_origin, axis_dir, tol)?;
-        let sections = num_sections.max((turns * 16.0).ceil() as usize);
+        // ステーション数は掃引の精度をそのまま決める。断面の重心が経路の上に
+        // あり経路に垂直なら `V = A x L` がきっかり成り立つので、そこからの
+        // ずれで測れる。半径10・ピッチ6・2周、2x2 の角断面での実測:
+        //
+        // ```text
+        // stations   32        64        128       256       512      1024
+        // rel error  2.773e-5  2.924e-6  2.200e-7  1.491e-8  9.98e-10 3.17e-11
+        // ratio                    9.5      13.3      14.8      15.0     31.5
+        // ```
+        //
+        // 刻みの**4乗**で縮む。既定の下限は1周あたり 64 で、上の例なら
+        // 2.2e-7 に当たる。それより要るなら `num_sections` で上げる。
+        let sections = num_sections.max((turns * 64.0).ceil() as usize);
         crate::SweepBuilder::sweep_wire_along_curve(profile_wire, &helix_path, sections, tol)
+    }
+
+    /// 円形断面（丸線ワイヤ）のヘリカルスプリング（圧縮・引張コイルスプリング）ソリッドを生成
+    pub fn make_round_wire_spring(
+        radius: f64,
+        pitch: f64,
+        turns: f64,
+        wire_radius: f64,
+        axis_origin: Point3,
+        axis_dir: Vec3,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if wire_radius <= 1e-9 {
+            return Err("Wire radius must be positive".to_string());
+        }
+        if wire_radius >= radius {
+            return Err("Wire radius must be smaller than helix radius to prevent self-intersection".to_string());
+        }
+        let helix_path =
+            Self::build_helix_curve(radius, pitch, turns, axis_origin, axis_dir, tol)?;
+        let sections = (turns * 64.0).ceil().max(32.0) as usize;
+        crate::SweepBuilder::sweep_circle_along_curve(&helix_path, wire_radius, sections)
     }
 }

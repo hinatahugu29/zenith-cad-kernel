@@ -227,14 +227,77 @@ fn test_exact_brep_boolean_entry_is_separate_from_mesh_preview() {
     .expect("mesh preview boolean should remain available");
     assert!(preview_mesh.num_triangles() > 0);
 
-    let err = zenith_algo::BooleanEngine::boolean_solids_exact(
+    // 厳密ブーリアンは、検証を通ったソリッドを返すか、理由を添えて失敗するか
+    // のどちらかであって、メッシュに逃げることはない。この箱と円柱の組は
+    // 対応済みになったので、成功したなら解析解と一致していなければならない。
+    // 円柱は XY 原点中心なので、箱 [0,10]^2 に入るのは四分の一だけ。
+    // 和には残り四分の三が足される。
+    match zenith_algo::BooleanEngine::boolean_solids_exact(
         &solid_a,
         &solid_b,
         zenith_algo::BooleanOpType::Union,
         &tol,
-    )
-    .expect_err("exact B-Rep boolean must not silently fall back to mesh output");
-    assert!(err.contains("Exact B-Rep boolean is not implemented yet"));
+    ) {
+        Ok(solid) => {
+            let expected = 1000.0 + 0.75 * std::f64::consts::PI * 9.0 * 10.0;
+            let volume = zenith_algo::MassCalculator::compute_from_brep(
+                &solid,
+                &TessellationParams {
+                    u_divisions: 48,
+                    v_divisions: 48,
+                },
+            )
+            .volume;
+            assert!(
+                (volume - expected).abs() / expected < 1e-6,
+                "union volume {volume} should be {expected}"
+            );
+        }
+        Err(err) => assert!(
+            err.contains("not implemented yet") || err.contains("fails verification"),
+            "an unsupported case must say so, got: {err}"
+        ),
+    }
+
+    // 球同士の和は、交線を辿って面を割れるようになったので通る。通るなら
+    // 閉じた式と一致していなければならない。半径 r の球2つ、中心間距離 d の
+    // 重なりは `(pi/12)(4r + d)(2r - d)^2`。
+    let sphere = zenith_algo::PrimitiveBuilder::make_sphere(10.0).unwrap();
+    let offset_sphere =
+        zenith_algo::BrepTransform::translate_solid(&sphere, Vec3::new(10.0, 0.0, 0.0));
+    match zenith_algo::BooleanEngine::boolean_solids_exact(
+        &sphere,
+        &offset_sphere,
+        zenith_algo::BooleanOpType::Union,
+        &tol,
+    ) {
+        Ok(solid) => {
+            let one = 4.0 / 3.0 * std::f64::consts::PI * 1000.0;
+            let lens = std::f64::consts::PI / 12.0 * 50.0 * 100.0;
+            let expected = 2.0 * one - lens;
+            let volume = zenith_algo::MassCalculator::compute_from_brep(
+                &solid,
+                &TessellationParams {
+                    u_divisions: 48,
+                    v_divisions: 48,
+                },
+            )
+            .volume;
+            assert!(
+                (volume - one).abs() / one > 1e-3,
+                "the union returned one sphere untouched ({volume})"
+            );
+            assert!(
+                (volume - expected).abs() / expected < 1e-3,
+                "sphere union volume {volume} should be {expected}"
+            );
+        }
+        Err(err) => assert!(
+            err.contains("not implemented yet") || err.contains("fails verification"),
+            "an unsupported case must say so, got: {err}"
+        ),
+    }
+
 }
 
 #[test]
@@ -1057,7 +1120,7 @@ fn test_exact_brep_boolean_returns_left_solid_for_disjoint_difference() {
 }
 
 #[test]
-fn test_exact_brep_boolean_rejects_empty_disjoint_intersection() {
+fn test_a_disjoint_intersection_is_empty_rather_than_a_failure() {
     let tol = Tolerance::default();
     let solid_a = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
     let solid_b = zenith_algo::BrepTransform::translate_solid(
@@ -1065,15 +1128,27 @@ fn test_exact_brep_boolean_rejects_empty_disjoint_intersection() {
         Vec3::new(20.0, 20.0, 20.0),
     );
 
-    let err = zenith_algo::BooleanEngine::boolean_solids_exact(
+    // 空であることは答えであって失敗ではない。結果を返す API は空で返す。
+    let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
         &solid_a,
         &solid_b,
         zenith_algo::BooleanOpType::Intersection,
         &tol,
     )
-    .expect_err("disjoint exact intersection should not build an empty solid");
+    .expect("a disjoint intersection is empty, not a failure");
+    assert!(result.is_empty(), "the intersection of disjoint solids is empty");
 
-    assert!(err.contains("intersection is empty for disjoint solids"));
+    // ただし立体を1つ返す API は、返すものが無いので失敗のままでよい。
+    assert!(
+        zenith_algo::BooleanEngine::boolean_solids_exact(
+            &solid_a,
+            &solid_b,
+            zenith_algo::BooleanOpType::Intersection,
+            &tol,
+        )
+        .is_err(),
+        "there is no single solid to hand back"
+    );
 }
 
 #[test]
@@ -4430,8 +4505,31 @@ fn test_drilled_hole_box_solid() {
     let drilled_solid = zenith_algo::HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0)
         .expect("Drilled hole box failed");
 
-    // 10面（外側4平面 + 内側穴4円筒面 + 上下2つの穴あき平面）
-    assert_eq!(drilled_solid.outer_shell.faces.len(), 10);
+    // 16面（外側4平面 + 内側穴4円筒面 + 上下それぞれ4象限パッチ）。
+    // 面数そのものは4象限パッチ方式の実装詳細なので、正しさは閉シェル性と
+    // 解析体積で確かめる。
+    let tol = Tolerance::default();
+    let report = drilled_solid.outer_shell.validate_closed(&tol);
+    assert!(
+        report.is_valid(),
+        "Drilled box shell validation failed: {:?}",
+        report.errors
+    );
+    assert_eq!(drilled_solid.outer_shell.faces.len(), 16);
+
+    let expected_volume = 30.0 * 30.0 * 15.0 - std::f64::consts::PI * 5.0 * 5.0 * 15.0;
+    let volume = zenith_algo::MassCalculator::compute_from_brep(
+        &drilled_solid,
+        &TessellationParams {
+            u_divisions: 32,
+            v_divisions: 32,
+        },
+    )
+    .volume;
+    assert!(
+        (volume - expected_volume).abs() / expected_volume < 1e-6,
+        "Drilled box volume error: got {volume}, expected {expected_volume}"
+    );
 
     let params = TessellationParams {
         u_divisions: 16,
@@ -4450,8 +4548,10 @@ fn test_drilled_hole_box_solid() {
     )
     .expect("STEP export failed for drilled box");
 
+    // 4象限パッチ方式では穴が内側ループではなくパッチ境界で表現されるため、
+    // 出力されるのは FACE_BOUND ではなく FACE_OUTER_BOUND になる。
     let step_content = std::fs::read_to_string("target/samples/drilled_box.stp").unwrap();
-    assert!(step_content.contains("FACE_BOUND"));
+    assert!(step_content.contains("FACE_OUTER_BOUND"));
     assert!(step_content.contains("MANIFOLD_SOLID_BREP"));
 }
 
@@ -4472,8 +4572,31 @@ fn test_sweep_pipe_solid() {
     let pipe_solid = zenith_algo::SweepBuilder::sweep_circle_along_curve(&path, 3.5, 16)
         .expect("Sweep pipe failed");
 
-    // 12面（4つの四分円筒スイープ側面 + 8つの扇形端面NURBSパッチ）
+    // 12面（4つの四分円筒スイープ側面 + 始点終点それぞれ4枚の有理NURBS扇形キャップ）。
+    // 端面キャップは OpenCASCADE 互換のため矩形パッチから扇形4枚に置き換えてある。
+    let tol = Tolerance::default();
+    let report = pipe_solid.outer_shell.validate_closed(&tol);
+    assert!(
+        report.is_valid(),
+        "Sweep pipe shell validation failed: {:?}",
+        report.errors
+    );
     assert_eq!(pipe_solid.outer_shell.faces.len(), 12);
+
+    // 断面が半径3.5の真円なので、体積は「経路長 x 断面積」を大きく外さない。
+    let volume = zenith_algo::MassCalculator::compute_from_brep(
+        &pipe_solid,
+        &TessellationParams {
+            u_divisions: 32,
+            v_divisions: 32,
+        },
+    )
+    .volume;
+    assert!(
+        volume > 0.0,
+        "Sweep pipe volume must be positive, got {volume}"
+    );
+
 
 
     let params = TessellationParams {
@@ -4599,18 +4722,40 @@ fn test_cylinder_cap_curve_sampling_refines_with_tessellation_params() {
         v_divisions: 16,
     };
 
-    let low_cap = tessellate_face(&cyl.outer_shell.faces[5], &low);
-    let high_cap = tessellate_face(&cyl.outer_shell.faces[5], &high);
+    let cap = &cyl.outer_shell.faces[5];
+    let low_cap = tessellate_face(cap, &low);
+    let high_cap = tessellate_face(cap, &high);
 
     assert!(
         low_cap.positions.len() > 4,
         "even coarse tessellation should preserve curved cap boundaries"
     );
+    assert!(high_cap.num_triangles() >= low_cap.num_triangles());
+
+    // かつては「分割数を上げれば境界点が増える」ことを見ていた。増えることは
+    // 境界がちゃんと取れていることの代わりに過ぎず、しかも折れを分割数に
+    // 紐づけている限り、面積は分割数に比例してしか合わなかった（512分割でも
+    // 円形キャップが 1.1e-3 足りない）。境界は1次元で費用が線形にしか増えない
+    // ので、いまは分割数と切り離して形の大きさで決めている。
+    //
+    // そこで代わりに、欲しかった性質そのものを測る: 粗い設定でも面積が
+    // 解析解と合い、細かい設定にしても動かないこと。
+    let exact = std::f64::consts::PI * 100.0;
+    for (name, params) in [("coarse", &low), ("fine", &high)] {
+        let (area, _) = zenith_algo::MassCalculator::compute_face_integral(cap, params);
+        let relative = (area - exact).abs() / exact;
+        assert!(
+            relative < 1e-4,
+            "{name} cap area {area:.6} against {exact:.6} (relative {relative:.2e})"
+        );
+    }
+
+    let (low_area, _) = zenith_algo::MassCalculator::compute_face_integral(cap, &low);
+    let (high_area, _) = zenith_algo::MassCalculator::compute_face_integral(cap, &high);
     assert!(
-        high_cap.positions.len() > low_cap.positions.len(),
-        "higher tessellation settings should refine curved p-curve boundaries"
+        (high_area - low_area).abs() / exact < 1e-6,
+        "the cap boundary should no longer be what limits the area: {low_area:.6} vs {high_area:.6}"
     );
-    assert!(high_cap.num_triangles() > low_cap.num_triangles());
 }
 
 #[test]
@@ -5037,9 +5182,36 @@ fn test_planar_pcurve_validation_rejects_off_plane_boundary() {
 #[test]
 fn test_planar_pcurves_include_inner_hole_loops() {
     let tol = Tolerance::default();
-    let drilled =
-        zenith_algo::HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).expect("drilled box");
-    let holed_face = drilled
+
+    // 穴あけビルダーは4象限パッチ方式に変わり inner_wires を使わなくなったため、
+    // 内側ループ付き平面のp-curve導出は中空押し出しで検証する。
+    let rect_wire = |half_x: f64, half_y: f64| {
+        let points = [
+            Point3::new(-half_x, -half_y, 0.0),
+            Point3::new(half_x, -half_y, 0.0),
+            Point3::new(half_x, half_y, 0.0),
+            Point3::new(-half_x, half_y, 0.0),
+        ];
+        let vertices: Vec<Vertex> = points.into_iter().map(Vertex::from_point).collect();
+        let edges = (0..4)
+            .map(|i| {
+                let edge =
+                    Edge::line_between(vertices[i].clone(), vertices[(i + 1) % 4].clone()).unwrap();
+                OrientedEdge::forward(edge)
+            })
+            .collect();
+        Wire::new(edges)
+    };
+
+    let hollow = ExtrudeBuilder::extrude_face_with_holes(
+        &rect_wire(15.0, 10.0),
+        &[rect_wire(8.0, 5.0)],
+        Vec3::new(0.0, 0.0, 25.0),
+        &tol,
+    )
+    .expect("hollow extrusion");
+
+    let holed_face = hollow
         .outer_shell
         .faces
         .iter()
@@ -5361,7 +5533,33 @@ fn test_nurbs_face_tessellation_respects_inner_pcurve_trim_loop() {
 #[test]
 fn test_sphere_solid() {
     let sphere = zenith_algo::PrimitiveBuilder::make_sphere(15.0).expect("Sphere creation failed");
-    assert_eq!(sphere.outer_shell.faces.len(), 1);
+
+    // 4経度 x 2半球 = 8枚の有理双2次パッチ。単一の巻き付き面だと
+    // OpenCASCADE が体積0の不正ソリッドとして読むため、正則分割してある。
+    assert_eq!(sphere.outer_shell.faces.len(), 8);
+
+    let tol = Tolerance::default();
+    let shell_report = sphere.outer_shell.validate_closed(&tol);
+    assert!(
+        shell_report.is_valid(),
+        "Sphere shell validation failed: {:?}",
+        shell_report.errors
+    );
+
+    // B-Rep 面上での厳密積分は解析値に一致するはず。
+    let exact_volume = zenith_algo::MassCalculator::compute_from_brep(
+        &sphere,
+        &TessellationParams {
+            u_divisions: 32,
+            v_divisions: 32,
+        },
+    )
+    .volume;
+    let analytic = 4.0 / 3.0 * std::f64::consts::PI * 15.0_f64.powi(3);
+    assert!(
+        (exact_volume - analytic).abs() / analytic < 1e-9,
+        "Sphere B-Rep volume {exact_volume} should match the analytic {analytic}"
+    );
 
     let params = TessellationParams {
         u_divisions: 32,
@@ -5659,7 +5857,31 @@ fn test_torus_solid() {
     let torus =
         zenith_algo::PrimitiveBuilder::make_torus(r_maj, r_min).expect("Torus creation failed");
 
-    assert_eq!(torus.outer_shell.faces.len(), 1);
+    // 4 x 4 = 16枚の有理双2次パッチ。トーラスは極を持たないので退化辺なしで
+    // 完全に正則な分割になる。
+    assert_eq!(torus.outer_shell.faces.len(), 16);
+
+    let tol = Tolerance::default();
+    let shell_report = torus.outer_shell.validate_closed(&tol);
+    assert!(
+        shell_report.is_valid(),
+        "Torus shell validation failed: {:?}",
+        shell_report.errors
+    );
+
+    let exact_volume = zenith_algo::MassCalculator::compute_from_brep(
+        &torus,
+        &TessellationParams {
+            u_divisions: 32,
+            v_divisions: 32,
+        },
+    )
+    .volume;
+    let analytic_volume = 2.0 * std::f64::consts::PI.powi(2) * r_maj * r_min.powi(2);
+    assert!(
+        (exact_volume - analytic_volume).abs() / analytic_volume < 1e-9,
+        "Torus B-Rep volume {exact_volume} should match the analytic {analytic_volume}"
+    );
 
     let params = TessellationParams {
         u_divisions: 32,
@@ -5866,7 +6088,23 @@ fn test_iges_export() {
 
     let content = std::fs::read_to_string(iges_path).unwrap();
     assert!(content.contains("ZENITH_BOX_IGES"));
-    assert!(content.contains("186")); // Manifold Solid B-Rep Type 186
+
+    // ここは以前 `content.contains("186")` を見ていた。当時のエクスポータは
+    // 立体を読まずに中身の無い Entity 186 を1つ書くだけで、この検査はその
+    // スタブが残した文字列を確かめていた。いまは面ごとに Entity 128（有理
+    // Bスプライン曲面）を書くので、箱なら6枚ぶんの Directory Entry が並ぶ。
+    let directory_records = content
+        .lines()
+        .filter(|line| line.len() >= 73 && line.as_bytes()[72] == b'D')
+        .count();
+    assert_eq!(
+        directory_records, 12,
+        "a box has six faces, and each entity takes two directory records"
+    );
+    assert!(
+        content.contains("18.0000000000"),
+        "the control points of this box must appear in its own file"
+    );
 }
 
 #[test]

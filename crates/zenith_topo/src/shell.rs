@@ -37,6 +37,14 @@ pub struct ShellValidationReport {
     pub max_boundary_surface_distance: f64,
     pub pcurve_mismatch_count: usize,
     pub max_pcurve_distance: f64,
+    /// 幾何的には対になっているのに、**別の稜の実体**を指している辺の使用数。
+    ///
+    /// 閉性は座標で判定されるので、同じ位置に別々の `Edge` が並んでいても
+    /// 「閉じている」と出る。その立体には「この稜を共有する2面」が引けず、
+    /// 稜を選ぶ演算（フィレット・面取り・履歴）が掛からない。これは**診断**
+    /// であってゲートではない（`is_valid` には影響しない）。
+    #[serde(default)]
+    pub unshared_edge_entity_use_count: usize,
     pub errors: Vec<String>,
 }
 
@@ -48,12 +56,27 @@ impl ShellValidationReport {
 
 #[derive(Debug, Clone, Copy)]
 struct EdgeUse {
+    edge_id: u64,
     face_index: usize,
     wire_index: usize,
     edge_index: usize,
     start: Point3,
     end: Point3,
+    /// A point from the middle of the curve, to tell apart two edges that run
+    /// between the same pair of vertices. A torus written as one face has two
+    /// such edges - the seam the long way round and the seam the short way -
+    /// and both begin and end at the same point, so endpoints alone made every
+    /// use on that face look like a mate of every other.
+    middle: Point3,
 }
+
+/// How many places along each edge the p-curve is checked.
+///
+/// Deliberately coprime with the 8 the p-curves are built from: sampling at the
+/// construction points measures nothing, because the curve passes through them
+/// exactly by construction, and a curve that swept right round a sphere in
+/// between still read as zero.
+const PCURVE_VALIDATION_SAMPLES: usize = 37;
 
 impl Shell {
     pub fn new(faces: Vec<Face>, is_closed: bool) -> Self {
@@ -98,6 +121,7 @@ impl Shell {
             max_boundary_surface_distance: 0.0,
             pcurve_mismatch_count: 0,
             max_pcurve_distance: 0.0,
+            unshared_edge_entity_use_count: 0,
             errors: Vec::new(),
         };
 
@@ -123,7 +147,10 @@ impl Shell {
             }
 
             if face.pcurves.is_some() {
-                match face.validate_pcurves(tol, 8) {
+                // 構成に使った数と互いに素な標本数にする。p-curve は辺を8等分
+                // して作られるので、8で測ると自分が通ることの分かっている点しか
+                // 見ない。37 なら共有するのは両端だけになる。
+                match face.validate_pcurves(tol, PCURVE_VALIDATION_SAMPLES) {
                     Ok(pcurve_report) => {
                         report.pcurve_mismatch_count += pcurve_report.mismatch_count;
                         report.max_pcurve_distance =
@@ -141,7 +168,8 @@ impl Shell {
                 }
             }
 
-            if !face.outer_wire.is_closed(tol) {
+            // 境界を持たない面は、閉じていないのではなく囲むものが無い。
+            if !face.outer_wire.edges.is_empty() && !face.outer_wire.is_closed(tol) {
                 report.open_wire_count += 1;
                 report
                     .errors
@@ -202,7 +230,13 @@ impl Shell {
                     "Edge use f{}:w{}:e{} has {mate_count} matching mates",
                     edge_use.face_index, edge_use.wire_index, edge_use.edge_index
                 ));
-            } else if !opposite_direction_edge(edge_use, mates[0], tol.linear) {
+            } else if mates[0].edge_id != edge_use.edge_id {
+                // 座標では対になっているが、実体が別。閉じてはいるが、この稜
+                // からもう一方の面を引くことはできない。診断として数だけ残す。
+                report.unshared_edge_entity_use_count += 1;
+            }
+
+            if mate_count == 1 && !opposite_direction_edge(edge_use, mates[0], tol.linear) {
                 report.same_direction_edge_use_count += 1;
                 report.errors.push(format!(
                     "Edge use f{}:w{}:e{} and f{}:w{}:e{} share the same direction",
@@ -265,11 +299,13 @@ fn collect_wire_edge_uses(
         }
 
         edge_uses.push(EdgeUse {
+            edge_id: edge.edge.id,
             face_index,
             wire_index,
             edge_index,
             start: edge.start_vertex().point,
             end: edge.end_vertex().point,
+            middle: edge.evaluate_normalized(0.5),
         });
     }
 }
@@ -432,6 +468,15 @@ fn validate_planar_face_orientation(
         FaceGeometry::Nurbs(_) => true,
         _ => return,
     };
+
+    // 縫い目だけのループは面積では見分けられない。縫い目上の点は UV で
+    // 両端どちらにも写るので、投影がどちらを選ぶかで符号付き面積が揺れる。
+    // 代わりに位相で見る: どの辺も同じループ内にもう一度現れるなら、
+    // その面は曲面全体であって、ループは何も囲んでいない。
+    if seam_only_loop_allowed && face.has_seam_only_boundary(tol.linear) {
+        return;
+    }
+
     let Ok(pcurves) = face.pcurves(tol) else {
         return;
     };
@@ -508,8 +553,9 @@ fn same_edge_use(a: &EdgeUse, b: &EdgeUse) -> bool {
 }
 
 fn same_undirected_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
-    points_same(a.start, b.start, tol) && points_same(a.end, b.end, tol)
-        || points_same(a.start, b.end, tol) && points_same(a.end, b.start, tol)
+    points_same(a.middle, b.middle, tol)
+        && (points_same(a.start, b.start, tol) && points_same(a.end, b.end, tol)
+            || points_same(a.start, b.end, tol) && points_same(a.end, b.start, tol))
 }
 
 fn same_directed_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {

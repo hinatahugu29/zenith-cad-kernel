@@ -42,6 +42,19 @@ impl KnotVector {
         self.knots[degree]
     }
 
+    /// 反転したノットベクトルを生成
+    pub fn reversed(&self) -> Self {
+        let n = self.knots.len();
+        let u_min = self.knots[0];
+        let u_max = self.knots[n - 1];
+        let mut new_knots = Vec::with_capacity(n);
+        for i in 0..n {
+            new_knots.push(u_max - self.knots[n - 1 - i] + u_min);
+        }
+        Self { knots: new_knots }
+    }
+
+
     /// パラメータ範囲の最大値
     pub fn end_param(&self, num_ctrl_pts: usize) -> f64 {
         self.knots[num_ctrl_pts]

@@ -113,7 +113,151 @@ impl BooleanEngine {
         Self::boolean_solids_exact_result(solid_a, solid_b, op, tol)?.try_single()
     }
 
+    /// 厳密ブーリアン演算を実行し、同一平面の分割面を自動併合（FaceMerger）して
+    /// 実形状の面数・稜数に整理したソリッドを返す。
+    pub fn boolean_solids_exact_simplified(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        let raw = Self::boolean_solids_exact(solid_a, solid_b, op, tol)?;
+        let (simplified, _report) = crate::FaceMerger::simplify_solid(&raw, tol)?;
+        Ok(simplified)
+    }
+
+    /// 厳密ブーリアン演算を実行し、同一平面の分割面を自動併合（FaceMerger）した結果セットを返す。
+    pub fn boolean_solids_exact_result_simplified(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<ExactBooleanResult, String> {
+        let result = Self::boolean_solids_exact_result(solid_a, solid_b, op, tol)?;
+        let mut simplified_solids = Vec::with_capacity(result.solids.len());
+        for solid in &result.solids {
+            let (simplified, _) = crate::FaceMerger::simplify_solid(solid, tol)?;
+            simplified_solids.push(simplified);
+        }
+        Ok(ExactBooleanResult::from_solids(simplified_solids))
+    }
+
+    /// 1つのベース立体に対して複数のツール立体を一括で連続適用するバッチブーリアン演算
+    ///
+    /// `base`: ベースとなるソリッド
+    /// `tools`: 適用するツール立体群（複数の穴用円柱、複数の結合用リブなど）
+    /// `op`: ブーリアン演算種別
+    pub fn boolean_solids_batch(
+        base: &Solid,
+        tools: &[Solid],
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if tools.is_empty() {
+            return Ok(base.clone());
+        }
+
+        let mut current = base.clone();
+        for (idx, tool) in tools.iter().enumerate() {
+            match Self::boolean_solids_exact(&current, tool, op, tol) {
+                Ok(next) => {
+                    current = next;
+                }
+                Err(err) => {
+                    return Err(format!(
+                        "Batch boolean failed at tool index {idx} / {}: {err}",
+                        tools.len()
+                    ));
+                }
+            }
+        }
+
+        Ok(current)
+    }
+
+    /// Computes an exact B-Rep boolean and verifies the answer before handing
+    /// it back.
+    ///
+    /// A closed manifold shell is not proof of a correct boolean - returning
+    /// one operand untouched satisfies it - so the result is additionally
+    /// checked against the volume bounds and the point membership implied by
+    /// the operation. A result that fails becomes an error rather than a
+    /// plausible-looking wrong solid. Use
+    /// [`Self::boolean_solids_exact_result_unverified`] to skip the gate.
     pub fn boolean_solids_exact_result(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        op: BooleanOpType,
+        tol: &Tolerance,
+    ) -> Result<ExactBooleanResult, String> {
+        let result = Self::boolean_solids_exact_result_unverified(solid_a, solid_b, op, tol)?;
+
+        // 面片の組み立ては面を1枚ずつ作るので、同じ位置に別々の稜の実体が
+        // 並んだまま出てくる。閉性の検査は座標で見るので通ってしまうが、
+        // その立体には「この稜を共有する2面」が引けず、稜を選ぶ演算子
+        // （フィレット・面取り・履歴）が一切掛からない。ここで縫い合わせて
+        // から返す。形は動かない（頂点は公差内で一致するものだけを束ねる）。
+        let mut sewn_solids = Vec::with_capacity(result.solids.len());
+        for solid in &result.solids {
+            let (sewn, sew_report) = crate::Sewer::sew_solid(solid, tol).map_err(|err| {
+                format!("Exact B-Rep boolean produced a result that will not sew: {err}")
+            })?;
+            if !sew_report.is_watertight() {
+                return Err(format!(
+                    "Exact B-Rep boolean produced a result whose edges do not pair up: {}",
+                    sew_report.summary()
+                ));
+            }
+            sewn_solids.push(sewn);
+        }
+        let result = ExactBooleanResult::from_solids(sewn_solids);
+
+        let report = crate::BooleanResultVerifier::verify(solid_a, solid_b, &result.solids, op, tol);
+        if !report.is_valid() {
+            return Err(format!(
+                "Exact B-Rep boolean produced a result that fails verification: {}",
+                report.summary()
+            ));
+        }
+
+        Ok(result)
+    }
+
+    /// Whether the two solids' bounding boxes share more than a face.
+    ///
+    /// Boxes that only touch enclose no volume between them, so nothing can be
+    /// in both solids. This is a sound test in one direction only: boxes that
+    /// do overlap say nothing about whether the solids do, and those go on to
+    /// the ordinary path.
+    fn bounds_overlap_in_volume(solid_a: &Solid, solid_b: &Solid, tol: &Tolerance) -> bool {
+        let params = zenith_tess::TessellationParams::default();
+        let bounds = |solid: &Solid| {
+            let mesh = zenith_tess::tessellate_solid(solid, &params);
+            let mut low = [f64::INFINITY; 3];
+            let mut high = [f64::NEG_INFINITY; 3];
+            for point in &mesh.positions {
+                for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
+                    low[axis] = low[axis].min(value);
+                    high[axis] = high[axis].max(value);
+                }
+            }
+            (low, high)
+        };
+
+        let (low_a, high_a) = bounds(solid_a);
+        let (low_b, high_b) = bounds(solid_b);
+        (0..3).all(|axis| {
+            low_a[axis].is_finite()
+                && low_b[axis].is_finite()
+                && high_a[axis].min(high_b[axis]) - low_a[axis].max(low_b[axis]) > tol.linear
+        })
+    }
+
+    /// The raw boolean pipeline, without the correctness gate.
+    ///
+    /// Intended for diagnosing the pipeline itself; callers that need a
+    /// trustworthy solid should use [`Self::boolean_solids_exact_result`].
+    pub fn boolean_solids_exact_result_unverified(
         solid_a: &Solid,
         solid_b: &Solid,
         op: BooleanOpType,
@@ -134,9 +278,29 @@ impl BooleanEngine {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
         }
 
+        // 他所から来た立体は、こちらのビルダーとは別の持ち方をしています。
+        // 平面を B-spline で、全周を1枚の面で持つ。形は同じでも、この
+        // パイプラインはその持ち方では通りません（実測: 同じ円柱を同じ箱で
+        // 削って、ビルダー製は通り、読んだものは 9 本の稜が縫えずに落ちる）。
+        //
+        // 整えてから渡します。**元から整っている入力では何も起きません**
+        // ので、自前の立体の答えは動きません。詳しくは
+        // [`Regularizer::hold_like_our_own`]。
+        let held_a = crate::Regularizer::hold_like_our_own(solid_a, tol);
+        let held_b = crate::Regularizer::hold_like_our_own(solid_b, tol);
+        let solid_a = &held_a;
+        let solid_b = &held_b;
+
+        // 境界箱が体積を持って重ならないなら、積は空だと確かめられる。
+        // 面が触れているだけの配置はここに落ちる: 交線の候補はあるので
+        // 下の経路に入ってしまい、「未実装」と報告されていた。
+        if op == BooleanOpType::Intersection && !Self::bounds_overlap_in_volume(solid_a, solid_b, tol)
+        {
+            return Ok(ExactBooleanResult::from_solids(Vec::new()));
+        }
+
         if !Self::has_face_pair_candidates(solid_a, solid_b, tol) {
-            return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol)
-                .map(ExactBooleanResult::single);
+            return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol);
         }
         if let Some(result) =
             crate::cylinder_boolean::CylinderBoolean::boolean_axis_cylinder_and_slab_exact_result(
@@ -145,33 +309,41 @@ impl BooleanEngine {
         {
             return Ok(result);
         }
-        if let Some(solid) =
+        if let Some(result) =
             crate::orthogonal_boolean::OrthogonalBoxBoolean::boolean_axis_aligned_boxes_exact(
                 solid_a, solid_b, op, tol,
             )?
         {
-            return Ok(ExactBooleanResult::single(solid));
+            return Ok(result);
+        }
+
+        // 面で接しているだけで中身が重なっていない場合、差は A そのもの。
+        // 一般経路に流すと、B の同一平面が Boundary として採られて A の面と
+        // 重複し、非多様体になる。
+        if matches!(op, BooleanOpType::Difference) && !Self::interiors_overlap(solid_a, solid_b) {
+            return Ok(ExactBooleanResult::single(solid_a.clone()));
         }
 
         let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
             solid_a, solid_b, op, tol,
         );
         if shell_assembly.selection.stitch_report.is_closed_manifold() {
-            return crate::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(
+            return crate::BrepIntersectionBuilder::build_solids_from_selected_face_pieces(
                 &shell_assembly.selection.selected_face_pieces,
                 tol,
             )
-            .map(ExactBooleanResult::single);
+            .map(ExactBooleanResult::from_solids);
         }
         if shell_assembly.assembly.stitch_report.is_closed_manifold() {
-            return crate::BrepIntersectionBuilder::build_solid_from_selected_face_pieces(
+            return crate::BrepIntersectionBuilder::build_solids_from_selected_face_pieces(
                 &shell_assembly.assembly.selected_face_pieces,
                 tol,
             )
-            .map(ExactBooleanResult::single);
+            .map(ExactBooleanResult::from_solids);
         }
 
-        let report = Self::prepare_exact_boolean(solid_a, solid_b, op, tol)?;
+        let report =
+            Self::preparation_report_from_shell_assembly(solid_a, solid_b, &shell_assembly, tol)?;
         Err(format!(
             "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} skipped batch splits, {} classified split candidates, {} selected face pieces, {} cap loops, and {} cap faces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses; with caps it has {} face pieces, {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
             report.face_pair_candidate_count,
@@ -194,13 +366,83 @@ impl BooleanEngine {
         ))
     }
 
+    /// True when the two solids share interior volume, as opposed to merely
+    /// touching along a face or an edge.
+    ///
+    /// Touching solids still produce face-pair candidates, so the presence of
+    /// candidates says nothing about whether there is anything to cut away.
+    fn interiors_overlap(solid_a: &Solid, solid_b: &Solid) -> bool {
+        let params = TessellationParams {
+            u_divisions: 12,
+            v_divisions: 12,
+        };
+        let mesh_a = tessellate_solid(solid_a, &params);
+        let mesh_b = tessellate_solid(solid_b, &params);
+        if mesh_a.positions.is_empty() || mesh_b.positions.is_empty() {
+            return false;
+        }
+
+        let bounds = |mesh: &TriangleMesh| {
+            let mut min_pt = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+            let mut max_pt = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for point in &mesh.positions {
+                min_pt.x = min_pt.x.min(point.x);
+                min_pt.y = min_pt.y.min(point.y);
+                min_pt.z = min_pt.z.min(point.z);
+                max_pt.x = max_pt.x.max(point.x);
+                max_pt.y = max_pt.y.max(point.y);
+                max_pt.z = max_pt.z.max(point.z);
+            }
+            (min_pt, max_pt)
+        };
+
+        // 共通のバウンディングボックス内だけを見れば十分。
+        let (min_a, max_a) = bounds(&mesh_a);
+        let (min_b, max_b) = bounds(&mesh_b);
+        let min_pt = Point3::new(
+            min_a.x.max(min_b.x),
+            min_a.y.max(min_b.y),
+            min_a.z.max(min_b.z),
+        );
+        let max_pt = Point3::new(
+            max_a.x.min(max_b.x),
+            max_a.y.min(max_b.y),
+            max_a.z.min(max_b.z),
+        );
+        if min_pt.x >= max_pt.x || min_pt.y >= max_pt.y || min_pt.z >= max_pt.z {
+            return false;
+        }
+
+        let span = Vec3::new(
+            max_pt.x - min_pt.x,
+            max_pt.y - min_pt.y,
+            max_pt.z - min_pt.z,
+        );
+
+        const SAMPLES: usize = 512;
+        for index in 1..=SAMPLES {
+            let point = Point3::new(
+                min_pt.x + span.x * halton(index, 2),
+                min_pt.y + span.y * halton(index, 3),
+                min_pt.z + span.z * halton(index, 5),
+            );
+            if Self::is_point_inside_mesh(point, &mesh_a)
+                && Self::is_point_inside_mesh(point, &mesh_b)
+            {
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn has_face_pair_candidates(solid_a: &Solid, solid_b: &Solid, tol: &Tolerance) -> bool {
-        !crate::BrepIntersectionBuilder::collect_face_pair_candidates(
+        // 「あるかないか」だけの問いに交線の走査は要らない。
+        crate::BrepIntersectionBuilder::any_face_pair_may_intersect(
             &solid_a.outer_shell.faces,
             &solid_b.outer_shell.faces,
             tol,
         )
-        .is_empty()
     }
 
     fn boolean_solids_exact_without_intersections(
@@ -208,41 +450,52 @@ impl BooleanEngine {
         solid_b: &Solid,
         op: BooleanOpType,
         tol: &Tolerance,
-    ) -> Result<Solid, String> {
+    ) -> Result<ExactBooleanResult, String> {
         let a_inside_b = Self::solid_is_inside_or_on_boundary(solid_a, solid_b, tol);
         let b_inside_a = Self::solid_is_inside_or_on_boundary(solid_b, solid_a, tol);
 
         match op {
             BooleanOpType::Union => {
                 if a_inside_b {
-                    Ok(solid_b.clone())
+                    Ok(ExactBooleanResult::single(solid_b.clone()))
                 } else if b_inside_a {
-                    Ok(solid_a.clone())
+                    Ok(ExactBooleanResult::single(solid_a.clone()))
                 } else {
-                    Err("Exact B-Rep boolean union of disjoint solids requires compound result support".to_string())
+                    // 交わらない2立体の和は、1つの立体にはならないが、
+                    // 2つの立体からなる結果としては正しく表せる。
+                    Ok(ExactBooleanResult::from_solids(vec![
+                        solid_a.clone(),
+                        solid_b.clone(),
+                    ]))
                 }
             }
             BooleanOpType::Intersection => {
                 if a_inside_b {
-                    Ok(solid_a.clone())
+                    Ok(ExactBooleanResult::single(solid_a.clone()))
                 } else if b_inside_a {
-                    Ok(solid_b.clone())
+                    Ok(ExactBooleanResult::single(solid_b.clone()))
                 } else {
-                    Err("Exact B-Rep boolean intersection is empty for disjoint solids".to_string())
+                    // 交わらない2立体の積は空。空であることは失敗ではなく
+                    // 答えなので、エラーではなく空の結果で返す。ここは
+                    // 「重なりが無い」と幾何的に確かめた枝であって、
+                    // 「求められなかった」枝ではない。
+                    Ok(ExactBooleanResult::from_solids(Vec::new()))
                 }
             }
             BooleanOpType::Difference => {
                 if a_inside_b {
-                    Err("Exact B-Rep boolean difference is empty because input A is contained in input B".to_string())
+                    // A が B に含まれるなら A - B は空。これも答えのほう。
+                    Ok(ExactBooleanResult::from_solids(Vec::new()))
                 } else if b_inside_a {
                     Solid::try_new(
                         solid_a.outer_shell.clone(),
                         vec![solid_b.outer_shell.clone()],
                         tol,
                     )
+                    .map(ExactBooleanResult::single)
                     .map_err(|err| err.to_string())
                 } else {
-                    Ok(solid_a.clone())
+                    Ok(ExactBooleanResult::single(solid_a.clone()))
                 }
             }
         }
@@ -270,40 +523,49 @@ impl BooleanEngine {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
         }
 
-        let face_pair_candidate_count =
-            crate::BrepIntersectionBuilder::collect_face_pair_candidates(
-                &solid_a.outer_shell.faces,
-                &solid_b.outer_shell.faces,
-                tol,
-            )
-            .len();
+        let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
+            solid_a, solid_b, op, tol,
+        );
+        Self::preparation_report_from_shell_assembly(solid_a, solid_b, &shell_assembly, tol)
+    }
+
+    /// 既に組み立ててあるシェルから、そのままの数え上げを返す。
+    ///
+    /// この報告は数え上げのためだけにあるのに、以前はここで面の組の走査を
+    /// 5回やり直していました（面の組・交線・分割候補・色分け・シェルの
+    /// 組み立てが順に呼ばれ、後ろのものは前のものを内側でやり直します）。
+    /// 走査は面の組ごとにマーチングを走らせるので、報告を出す代償が
+    /// 演算そのものより大きくなっていました。組み立てが済んでいるなら、
+    /// その中身を数えれば同じ答えが出ます。
+    fn preparation_report_from_shell_assembly(
+        solid_a: &Solid,
+        solid_b: &Solid,
+        shell_assembly: &crate::BooleanShellAssembly,
+        tol: &Tolerance,
+    ) -> Result<ExactBooleanPreparationReport, String> {
+        let face_pair_candidate_count = shell_assembly.face_pair_candidate_count;
         if face_pair_candidate_count == 0 {
             return Err(
                 "Exact B-Rep boolean found no face-pair intersection candidates".to_string(),
             );
         }
 
-        let intersection_edge_candidate_count =
-            crate::BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        let intersection_edge_candidate_count = shell_assembly.edge_candidates.len();
+        let planar_splits =
+            crate::BrepIntersectionBuilder::planar_face_split_candidates_from_edge_candidates(
                 &solid_a.outer_shell.faces,
                 &solid_b.outer_shell.faces,
+                shell_assembly.edge_candidates.clone(),
                 tol,
-            )
-            .len();
-        let planar_split_candidate_count =
-            crate::BrepIntersectionBuilder::collect_planar_face_split_candidates(
-                &solid_a.outer_shell.faces,
-                &solid_b.outer_shell.faces,
-                tol,
-            )
-            .len();
-        let classified_splits =
-            crate::BrepIntersectionBuilder::collect_classified_planar_face_split_candidates(
-                solid_a, solid_b, tol,
             );
-        let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
-            solid_a, solid_b, op, tol,
-        );
+        let planar_split_candidate_count = planar_splits.len();
+        let classified_splits =
+            crate::BrepIntersectionBuilder::classified_planar_face_split_candidates_from_splits(
+                solid_a,
+                solid_b,
+                planar_splits,
+                tol,
+            );
         let planar_batch_split_face_count = shell_assembly.selection.batch_splits.splits_a.len()
             + shell_assembly.selection.batch_splits.splits_b.len();
         let planar_batch_applied_split_count = shell_assembly
@@ -481,4 +743,17 @@ impl BooleanEngine {
             }
         }
     }
+}
+
+/// Halton sequence, so the overlap samples spread evenly without a random
+/// source and stay identical between runs.
+fn halton(mut index: usize, base: usize) -> f64 {
+    let mut result = 0.0;
+    let mut fraction = 1.0 / base as f64;
+    while index > 0 {
+        result += (index % base) as f64 * fraction;
+        index /= base;
+        fraction /= base as f64;
+    }
+    result
 }

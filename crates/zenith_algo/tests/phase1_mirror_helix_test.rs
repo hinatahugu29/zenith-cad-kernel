@@ -42,9 +42,14 @@ fn test_mirror_box_and_cylinder() {
     let mesh_mir = tessellate_solid(&mirrored_box, &TessellationParams::default());
     let mass_orig = MassCalculator::compute_from_mesh(&mesh_orig);
     let mass_mir = MassCalculator::compute_from_mesh(&mesh_mir);
+    // 鏡映はアフィンなので、体積は近いのではなく厳密に一致する。実測は
+    // 差 1e-15 未満（許容 1e-3 でも通っていたが、それは 12桁ぶん何も見て
+    // いない）。ここが崩れるとしたら丸めではなく、写し方が壊れたときである。
     assert!(
-        (mass_orig.volume - mass_mir.volume).abs() < 1e-3,
-        "Volume must match after mirror"
+        (mass_orig.volume - mass_mir.volume).abs() < 1e-12,
+        "mirrored volume {} against {}",
+        mass_mir.volume,
+        mass_orig.volume
     );
 
     // 2. 円柱の斜め平面ミラー
@@ -123,4 +128,208 @@ fn test_helix_spring_solid() {
     let imported = StepImporter::import_solid_from_file(step_path).expect("STEP import failed");
     let _ = std::fs::remove_file(step_path);
     assert_eq!(imported.outer_shell.faces.len(), helix_solid.outer_shell.faces.len());
+}
+
+/// 組んだ螺旋曲線が、**厳密な螺旋**の上にあるか。
+///
+/// 螺旋は有理曲線では表せない。xy は真円になるが、真の螺旋は z が角度に比例
+/// するのに対し、有理2次の角度は媒介変数に比例しない。両者は各区間の
+/// t = 0, 1/2, 1 で一致し、その間でずれる。90度刻みだと半径10・ピッチ6で
+/// 高さが 3.16e-2 外れていた。刻みは公差から決まるようになっている。
+///
+/// 角度は標本を順に辿って連続に開く。周回番号を z から推し測ると、ピッチの
+/// ぶんだけ飛んだ答えが出て、存在しない欠陥を見ることになる（実際に一度
+/// 1.53 という値を見た）。
+#[test]
+fn test_helix_curve_follows_the_exact_helix_within_the_linear_tolerance() {
+    let tol = Tolerance::default();
+    for (radius, pitch, turns) in [(10.0, 6.0, 2.0), (30.0, 6.0, 2.0), (10.0, 12.0, 1.5)] {
+        let curve = HelixBuilder::build_helix_curve(
+            radius,
+            pitch,
+            turns,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            &tol,
+        )
+        .expect("helix curve");
+
+        let (t0, t1) = curve.param_range();
+        let samples = 2003;
+        let mut unwrapped = 0.0f64;
+        let mut previous = 0.0f64;
+        let mut worst_radius: f64 = 0.0;
+        let mut worst_height: f64 = 0.0;
+
+        for index in 0..=samples {
+            let t = t0 + (t1 - t0) * index as f64 / samples as f64;
+            let point = curve.evaluate(t);
+            let raw = point.y.atan2(point.x);
+            if index > 0 {
+                let mut step = raw - previous;
+                while step > std::f64::consts::PI {
+                    step -= std::f64::consts::TAU;
+                }
+                while step < -std::f64::consts::PI {
+                    step += std::f64::consts::TAU;
+                }
+                unwrapped += step;
+            }
+            previous = raw;
+
+            let radial = (point.x * point.x + point.y * point.y).sqrt();
+            worst_radius = worst_radius.max((radial - radius).abs());
+            let height = pitch * unwrapped / std::f64::consts::TAU;
+            worst_height = worst_height.max((point.z - height).abs());
+        }
+
+        assert!(
+            worst_radius < 1e-12,
+            "helix R{radius} p{pitch} left its cylinder by {worst_radius:.3e}"
+        );
+        assert!(
+            worst_height < tol.linear,
+            "helix R{radius} p{pitch} rises wrongly by {worst_height:.3e}, over {}",
+            tol.linear
+        );
+        assert!(
+            (unwrapped - turns * std::f64::consts::TAU).abs() < 1e-12,
+            "helix R{radius} p{pitch} swept {unwrapped} rather than {} radians",
+            turns * std::f64::consts::TAU
+        );
+    }
+}
+
+/// 螺旋掃引の体積が、閉じた式 `V = A x L` に乗るか。
+///
+/// 断面の重心が経路の上にあり経路に垂直なら、経路が曲がっていても
+/// この式はきっかり成り立つ。螺旋の経路長は閉じた式なので、これは
+/// 外の物差しである。
+///
+/// 以前の経路では、**掃引をいくら細かくしても** 4.278e-5 ずれた値に収束して
+/// いた。収束したことは正しさの証拠にならない。だからここは「収束するか」
+/// ではなく「**どこへ**収束するか」を見る。
+#[test]
+fn test_helix_sweep_volume_matches_the_closed_form() {
+    let tol = Tolerance::default();
+    let radius = 10.0;
+    let pitch = 6.0;
+    let turns = 2.0;
+    let expected = 4.0 * turns * ((std::f64::consts::TAU * radius).powi(2) + pitch * pitch).sqrt();
+
+    let solid = HelixBuilder::sweep_wire_along_helix(
+        &make_rect_wire(-1.0, 1.0, -1.0, 1.0),
+        radius,
+        pitch,
+        turns,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        64,
+        &tol,
+    )
+    .expect("helix solid");
+
+    let volume = MassCalculator::compute_from_brep(
+        &solid,
+        &TessellationParams {
+            u_divisions: 96,
+            v_divisions: 96,
+        },
+    )
+    .volume;
+    let error = (volume - expected).abs() / expected;
+    assert!(
+        error < 1e-6,
+        "helix volume {volume} is {error:.3e} from the closed form {expected}"
+    );
+}
+
+/// 刻みを細かくすると高さのずれが**3乗**で減ること。
+/// ここが 8 前後でなければ、刻みと精度の関係が変わっている。
+#[test]
+fn test_helix_height_error_falls_with_the_cube_of_the_step_angle() {
+    let height_error = |per_turn: usize| -> f64 {
+        let (radius, pitch, turns) = (10.0, 6.0, 2.0);
+        let curve = HelixBuilder::build_helix_curve_with_segments(
+            radius,
+            pitch,
+            turns,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            per_turn,
+        )
+        .expect("helix curve");
+        let (t0, t1) = curve.param_range();
+        let samples = 2003;
+        let mut unwrapped = 0.0f64;
+        let mut previous = 0.0f64;
+        let mut worst: f64 = 0.0;
+        for index in 0..=samples {
+            let t = t0 + (t1 - t0) * index as f64 / samples as f64;
+            let point = curve.evaluate(t);
+            let raw = point.y.atan2(point.x);
+            if index > 0 {
+                let mut step = raw - previous;
+                while step > std::f64::consts::PI {
+                    step -= std::f64::consts::TAU;
+                }
+                while step < -std::f64::consts::PI {
+                    step += std::f64::consts::TAU;
+                }
+                unwrapped += step;
+            }
+            previous = raw;
+            worst = worst.max((point.z - pitch * unwrapped / std::f64::consts::TAU).abs());
+        }
+        worst
+    };
+
+    let coarse = height_error(16);
+    let fine = height_error(32);
+    let ratio = coarse / fine;
+    assert!(
+        (6.0..12.0).contains(&ratio),
+        "halving the step should divide the height error by about 8, got {ratio:.2} \
+         (coarse {coarse:.3e}, fine {fine:.3e})"
+    );
+}
+
+#[test]
+fn test_round_wire_spring_is_valid_closed_solid_and_matches_analytic_volume() {
+    let tol = Tolerance::default();
+    let radius = 15.0;
+    let pitch = 8.0;
+    let turns = 2.5;
+    let wire_radius = 1.5;
+
+    let spring = HelixBuilder::make_round_wire_spring(
+        radius,
+        pitch,
+        turns,
+        wire_radius,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        &tol,
+    )
+    .expect("make_round_wire_spring");
+
+    assert!(spring.is_topologically_valid(&tol), "round wire spring must be valid closed solid");
+
+    let params = TessellationParams {
+        u_divisions: 16,
+        v_divisions: 16,
+    };
+    let mesh = tessellate_solid(&spring, &params);
+    let mass = MassCalculator::compute_from_mesh(&mesh);
+
+    let helix_length = turns * ((2.0 * std::f64::consts::PI * radius).powi(2) + pitch.powi(2)).sqrt();
+    let expected_vol = std::f64::consts::PI * wire_radius * wire_radius * helix_length;
+    let rel_err = (mass.volume - expected_vol).abs() / expected_vol;
+    assert!(
+        rel_err < 0.02,
+        "round wire spring volume relative error too large: got {}, expected {}, rel_err {}",
+        mass.volume,
+        expected_vol,
+        rel_err
+    );
 }

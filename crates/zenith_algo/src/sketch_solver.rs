@@ -168,6 +168,18 @@ impl SketchSolver {
                 None => return Err(format!("Singular Jacobian at iteration {}", iter)),
             };
 
+            // `is_fixed` を立てた点は動かさない。`add_fixed_point` は
+            // `FixedPoint` 拘束も足すのでそちらでも止まるが、フィールドは
+            // 公開されている。読まれない公開フィールドは、立てた人が「効いた」
+            // と思い込む罠になる。
+            let mut delta = delta;
+            for (index, point) in self.points.iter().enumerate() {
+                if point.is_fixed {
+                    delta[2 * index] = 0.0;
+                    delta[2 * index + 1] = 0.0;
+                }
+            }
+
             let x_new = &x + &delta;
             let (f_new, _) = self.eval_residuals_and_jacobian(&x_new);
 
@@ -411,4 +423,122 @@ impl SketchSolver {
 
         (f_vec, j_mat)
     }
+
+    /// スケッチの自由度 (DOF: Degrees of Freedom) を解析
+    /// 戻り値: (総変数自由度, 有効拘束ランク, 残余自由度)
+    pub fn degrees_of_freedom(&self) -> (usize, usize, usize) {
+        let analysis = self.analyse_freedom();
+        (analysis.total_dof, analysis.rank, analysis.remaining_dof)
+    }
+
+    fn analyse_freedom(&self) -> FreedomAnalysis {
+        let num_points = self.points.len();
+        if num_points == 0 {
+            return FreedomAnalysis::default();
+        }
+        let num_vars = num_points * 2;
+        let mut x = DVector::zeros(num_vars);
+        for (i, p) in self.points.iter().enumerate() {
+            x[2 * i] = p.x;
+            x[2 * i + 1] = p.y;
+        }
+        let (_, j) = self.eval_residuals_and_jacobian(&x);
+
+        // ヤコビアンは全点ぶんの列を持っている（`eval_residuals_and_jacobian` は
+        // `num_vars = 全点 x 2` で組む）。自由度と突き合わせるには、**動かせない
+        // 点の列を落としてから**階数を取らなければならない。落とさずに数えて
+        // いたので、階数が自由度を超えるという幾何学的にありえない値が出ていた
+        // （`sketch_solver_probe` に「Total DOF = 2, Rank = 5」と印字されていた）。
+        // `saturating_sub` がそれを 0 に丸めるため、自由度が残っているスケッチが
+        // `FullyConstrained` と報告されていた。
+        let free_columns: Vec<usize> = self
+            .points
+            .iter()
+            .enumerate()
+            .filter(|(_, point)| !point.is_fixed)
+            .flat_map(|(index, _)| [2 * index, 2 * index + 1])
+            .collect();
+        let total_dof = free_columns.len();
+
+        if j.nrows() == 0 || j.ncols() == 0 || total_dof == 0 {
+            return FreedomAnalysis {
+                total_dof,
+                rank: 0,
+                remaining_dof: total_dof,
+                active_equations: 0,
+            };
+        }
+
+        let free_jacobian =
+            DMatrix::from_fn(j.nrows(), total_dof, |row, column| j[(row, free_columns[column])]);
+
+        // 自由変数に何も掛けていない式（`add_fixed_point` が入れる FixedPoint の
+        // 2本など）は、制限したヤコビアンでは丸ごとゼロ行になる。階数には
+        // 入りようがないので、冗長さを数えるときの式の本数からも外す。外さずに
+        // 全拘束を数えると、点を1つ固定しただけで「冗長が2本ある」と報告する。
+        let active_equations = (0..free_jacobian.nrows())
+            .filter(|row| (0..total_dof).any(|column| free_jacobian[(*row, column)].abs() > 1e-12))
+            .count();
+
+        let svd = free_jacobian.svd(false, false);
+        let tol = 1e-7;
+        let rank = svd.singular_values.iter().filter(|&&s| s > tol).count();
+        let remaining_dof = total_dof.saturating_sub(rank);
+        FreedomAnalysis {
+            total_dof,
+            rank,
+            remaining_dof,
+            active_equations,
+        }
+    }
+
+    /// 現在のスケッチの拘束状態を判定
+    pub fn constraint_status(&self) -> SketchConstraintStatus {
+        let FreedomAnalysis {
+            total_dof,
+            rank,
+            remaining_dof,
+            active_equations,
+        } = self.analyse_freedom();
+        if self.constraints.is_empty() && total_dof > 0 {
+            return SketchConstraintStatus::UnderConstrained { remaining_dof };
+        }
+        // 式の本数は拘束の種類から数えるのではなく、**自由変数に実際に掛かって
+        // いる行を数える**。種類から数えると、点の固定のように自由変数へ一切
+        // 掛からない式まで冗長側に積み上がる。
+        let num_eqs = active_equations;
+
+        if num_eqs > rank && remaining_dof == 0 {
+            SketchConstraintStatus::OverConstrained {
+                redundant_constraints: num_eqs - rank,
+            }
+        } else if remaining_dof == 0 {
+            SketchConstraintStatus::FullyConstrained
+        } else {
+            SketchConstraintStatus::UnderConstrained { remaining_dof }
+        }
+    }
+}
+
+/// スケッチ拘束状態
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SketchConstraintStatus {
+    /// 不足拘束（残余自由度あり）
+    UnderConstrained { remaining_dof: usize },
+    /// 完全拘束（形状が一意に決定）
+    FullyConstrained,
+    /// 過剰拘束（冗長または矛盾する拘束が存在）
+    OverConstrained { redundant_constraints: usize },
+}
+
+/// 自由度解析の中間結果。
+///
+/// `degrees_of_freedom` の戻り値は3つ組で固定されているので、拘束状態の判定に
+/// 必要な「自由変数に実際に掛かっている式の本数」を運ぶためにこれを使う。
+#[derive(Debug, Clone, Copy, Default)]
+struct FreedomAnalysis {
+    total_dof: usize,
+    rank: usize,
+    remaining_dof: usize,
+    active_equations: usize,
 }

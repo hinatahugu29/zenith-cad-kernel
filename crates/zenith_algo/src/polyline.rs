@@ -141,17 +141,37 @@ impl PolylineBuilder {
             return Err("No path segments generated".to_string());
         }
 
-        // セグメント列から密なパス点列をサンプリング
-        let mut dense_path = Vec::new();
-        for seg in &segments {
-            match seg {
+        // セグメント列を**そのまま**1本の曲線に繋ぐ。
+        //
+        // 以前はここで密に標本を取り、1次（折れ線）の曲線にしていた。円弧が
+        // 弦に落ちるので、掃引した管の芯線は真のパスより短くなる。しかも
+        // 誤差の向きは決まっていて（内側に切る）、掃引をいくら細かくしても
+        // 消えない。実測で `断面積 x 経路長` から 3.9e-4 ずれていた。
+        let path_curve = Self::path_as_curve(&segments)?;
+        let stations = Self::station_count(&segments, radius);
+
+        crate::sweep::SweepBuilder::sweep_circle_along_curve(&path_curve, radius, stations)
+    }
+
+    /// 折れ線と円弧の列を、形を変えずに1本の曲線にする。
+    ///
+    /// 円弧は有理2次のまま、直線は同じ次数へ上げて（中点を制御点に置くだけ）
+    /// 繋ぐ。次数を揃えるのに標本を取り直すと、そこで形が変わる。
+    pub fn path_as_curve(segments: &[PathSegment]) -> Result<NurbsCurve3, String> {
+        let mut pieces = Vec::with_capacity(segments.len());
+        for segment in segments {
+            let piece = match segment {
                 PathSegment::Line { start, end } => {
-                    let len = (*end - *start).norm();
-                    let n = ((len / (radius * 0.5)).ceil() as usize).max(4);
-                    for step in 0..n {
-                        let t = step as f64 / n as f64;
-                        dense_path.push(*start + (*end - *start) * t);
-                    }
+                    let middle = Point3::from((start.coords + end.coords) * 0.5);
+                    NurbsCurve3::new(
+                        2,
+                        vec![
+                            ControlPoint3::unweighted(*start),
+                            ControlPoint3::unweighted(middle),
+                            ControlPoint3::unweighted(*end),
+                        ],
+                        KnotVector::clamped_uniform(3, 2),
+                    )?
                 }
                 PathSegment::Arc {
                     start,
@@ -159,32 +179,38 @@ impl PolylineBuilder {
                     end,
                     weight,
                     ..
-                } => {
-                    let n = 12;
-                    let curve = NurbsCurve3::new(
-                        2,
-                        vec![
-                            ControlPoint3::unweighted(*start),
-                            ControlPoint3::new(*mid_cp, *weight),
-                            ControlPoint3::unweighted(*end),
-                        ],
-                        KnotVector::clamped_uniform(3, 2),
-                    )?;
-                    for step in 0..n {
-                        let u = step as f64 / n as f64;
-                        dense_path.push(curve.evaluate(u));
-                    }
-                }
-            }
+                } => NurbsCurve3::new(
+                    2,
+                    vec![
+                        ControlPoint3::unweighted(*start),
+                        ControlPoint3::new(*mid_cp, *weight),
+                        ControlPoint3::unweighted(*end),
+                    ],
+                    KnotVector::clamped_uniform(3, 2),
+                )?,
+            };
+            pieces.push(piece);
         }
-        dense_path.push(*points.last().unwrap());
+        NurbsCurve3::join_clamped_beziers(&pieces)
+    }
 
-        // 密なパス点列から1次B-Spline（折れ線）曲線を生成
-        let n_dense = dense_path.len();
-        let cps: Vec<_> = dense_path.iter().map(|&p| ControlPoint3::unweighted(p)).collect();
-        let path_curve = NurbsCurve3::new(1, cps, KnotVector::clamped_uniform(n_dense, 1))?;
-
-        crate::sweep::SweepBuilder::sweep_circle_along_curve(&path_curve, radius, n_dense)
+    /// 掃引のステーション数。パスの長さと管の太さから決める。
+    fn station_count(segments: &[PathSegment], radius: f64) -> usize {
+        let mut length = 0.0;
+        for segment in segments {
+            length += match segment {
+                PathSegment::Line { start, end } => (*end - *start).norm(),
+                PathSegment::Arc { start, end, radius: r, center, .. } => {
+                    let a = *start - *center;
+                    let b = *end - *center;
+                    let cosine = (a.dot(&b) / (a.norm() * b.norm())).clamp(-1.0, 1.0);
+                    r * cosine.acos()
+                }
+            };
+        }
+        // 管の太さの4分の1ごとに1つ。掃引の誤差は刻みの4乗で減るので、
+        // これで `断面積 x 経路長` から 1e-7 台に収まる。
+        ((length / (radius * 0.25)).ceil() as usize).max(16)
     }
 
     /// 角丸めポリラインに沿って任意閉断面ワイヤを掃引した閉ソリッドを構築
@@ -199,42 +225,6 @@ impl PolylineBuilder {
             return Err("No path segments generated".to_string());
         }
 
-        let mut dense_path = Vec::new();
-        for seg in &segments {
-            match seg {
-                PathSegment::Line { start, end } => {
-                    let len = (*end - *start).norm();
-                    let n = ((len / 5.0).ceil() as usize).max(4);
-                    for step in 0..n {
-                        let t = step as f64 / n as f64;
-                        dense_path.push(*start + (*end - *start) * t);
-                    }
-                }
-                PathSegment::Arc {
-                    start,
-                    mid_cp,
-                    end,
-                    weight,
-                    ..
-                } => {
-                    let n = 12;
-                    let curve = NurbsCurve3::new(
-                        2,
-                        vec![
-                            ControlPoint3::unweighted(*start),
-                            ControlPoint3::new(*mid_cp, *weight),
-                            ControlPoint3::unweighted(*end),
-                        ],
-                        KnotVector::clamped_uniform(3, 2),
-                    )?;
-                    for step in 0..n {
-                        let u = step as f64 / n as f64;
-                        dense_path.push(curve.evaluate(u));
-                    }
-                }
-            }
-        }
-        dense_path.push(*path_points.last().unwrap());
 
         // 閉断面ワイヤの構築
         let num_p = profile_pts.len();
@@ -249,11 +239,18 @@ impl PolylineBuilder {
         }
         let profile_wire = Wire::new(edges);
 
-        let n_dense = dense_path.len();
-        let cps: Vec<_> = dense_path.iter().map(|&p| ControlPoint3::unweighted(p)).collect();
-        let path_curve = NurbsCurve3::new(1, cps, KnotVector::clamped_uniform(n_dense, 1))?;
+        // 円のパイプと同じく、セグメント列をそのまま1本の曲線に繋ぐ。
+        // 1次の折れ線に落とすと、円弧が弦になって芯線が短くなる。
+        let path_curve = Self::path_as_curve(&segments)?;
+        let extent = profile_pts
+            .iter()
+            .fold(0.0f64, |worst, point| {
+                worst.max((*point - profile_pts[0]).norm())
+            })
+            .max(1.0);
+        let stations = Self::station_count(&segments, extent * 0.5);
 
-        crate::sweep::SweepBuilder::sweep_wire_along_curve(&profile_wire, &path_curve, n_dense, tol)
+        crate::sweep::SweepBuilder::sweep_wire_along_curve(&profile_wire, &path_curve, stations, tol)
     }
 }
 
