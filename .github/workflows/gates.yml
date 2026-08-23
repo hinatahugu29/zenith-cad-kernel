@@ -1,0 +1,91 @@
+# このリポジトリのゲートのうち、外部カーネルを要らないものを自動で回す。
+#
+# **ここが緑でも、マージしてよいことにはなりません。** 本当の物差しは
+# OpenCASCADE との突き合わせ（tools/verify_*.py と freecad_cross_validate.py）
+# で、それには FreeCAD 1.1 が要ります。CI には入れられないので、
+# HANDOVER 8 章のコマンドを手元で通してください。
+#
+# CI が見るのは「壊れていないこと」で、「正しいこと」ではありません。
+# その区別は、このリポジトリでは重要です。
+
+name: gates
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-test-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      # 警告 0 はゲートです。警告付きで通していると、本当に効く警告が
+      # 混ざったときに見えなくなります。
+      - name: build with no warnings
+        run: cargo build --release --workspace --exclude zenith_py
+        env:
+          RUSTFLAGS: "-D warnings"
+
+      - name: test
+        run: cargo test --release --workspace --exclude zenith_py
+
+      # プローブは「落ちないこと」だけでなく、**判定の行**を見ます。
+      # WRONG と PANIC は、呼び手が答えと区別できないので致命です。
+      - name: probes must not report a wrong answer or a panic
+        run: |
+          set -euo pipefail
+          cargo build --release -p zenith_algo --examples
+          # いくつかのプローブは target/validation を読みます。他カーネルが
+          # 書いた検体はリポジトリに入っている（`tests/fixtures`）ので、
+          # そこから置いてから自前の形を書き出します。**生成物に依存させない**
+          # ため、検体は必ず追跡下に置いてください。
+          mkdir -p target/validation
+          cp crates/zenith_algo/tests/fixtures/*.step target/validation/
+          ./target/release/examples/export_validation_suite
+          fail=0
+          for probe in \
+            builder_audit planar_face_audit boolean_topology_probe \
+            mesh_watertight_probe slice_probe slice_robustness_probe \
+            sketch_solver_probe pcurve_fidelity_probe inertia_probe \
+            distance_probe interference_depth_probe regularize_probe \
+            countersink_range_probe face_split_probe ssi_probe \
+            boolean_gate_probe tess_density_probe step_import_audit \
+            robustness_probe closure_probe foreign_boolean_probe \
+            helix_volume_probe
+          do
+            echo "=== $probe"
+            if ! timeout 1200 "./target/release/examples/$probe" > "/tmp/$probe.txt" 2>&1; then
+              echo "$probe did not exit 0"
+              tail -20 "/tmp/$probe.txt"
+              fail=1
+              continue
+            fi
+            # 「WRONG 0」「PANIC 0」は健全。0 以外が書かれていたら落とす。
+            if grep -Eq "WRONG [1-9]|PANIC [1-9]" "/tmp/$probe.txt"; then
+              echo "$probe reported a wrong answer or a panic:"
+              grep -E "WRONG [1-9]|PANIC [1-9]" "/tmp/$probe.txt"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: keep the probe output for reading
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-output
+          path: /tmp/*_probe.txt
+          if-no-files-found: ignore
