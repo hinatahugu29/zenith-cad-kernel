@@ -1,0 +1,72 @@
+{
+  "subjects": [
+    {
+      "name": "block_inch",
+      "file": "target/representation/block_inch.step",
+      "unit": "INCH",
+      "millimetres_per_unit": 25.4,
+      "expected_volume_mm3": 24000.0,
+      "expected_bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        20.0,
+        30.0,
+        40.0
+      ],
+      "occ_read_volume_mm3": 23999.999999996475,
+      "occ_agrees": true
+    },
+    {
+      "name": "block_centimetre",
+      "file": "target/representation/block_centimetre.step",
+      "unit": "CENTIMETRE",
+      "millimetres_per_unit": 10.0,
+      "expected_volume_mm3": 24000.0,
+      "expected_bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        20.0,
+        30.0,
+        40.0
+      ],
+      "occ_read_volume_mm3": 24000.0,
+      "occ_agrees": true
+    },
+    {
+      "name": "cylinder_inch",
+      "file": "target/representation/cylinder_inch.step",
+      "unit": "INCH",
+      "millimetres_per_unit": 25.4,
+      "expected_volume_mm3": 12566.370614359172,
+      "expected_bbox_mm": [
+        -10.0,
+        -10.0,
+        0.0,
+        10.0,
+        10.0,
+        40.0
+      ],
+      "occ_read_volume_mm3": 12566.370614383923,
+      "occ_agrees": true
+    },
+    {
+      "name": "drilled_inch",
+      "file": "target/representation/drilled_inch.step",
+      "unit": "INCH",
+      "millimetres_per_unit": 25.4,
+      "expected_volume_mm3": 12321.902754903827,
+      "expected_bbox_mm": [
+        0.0,
+        0.0,
+        0.0,
+        30.0,
+        30.0,
+        15.0
+      ],
+      "occ_read_volume_mm3": 12321.902754900024,
+      "occ_agrees": true
+    }
+  ]
+}
