@@ -88,7 +88,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **厚み付け (Thicken)** | `thicken` | 単一パッチ（平面 / NURBS / Coons）の法線方向オフセットと側面閉鎖による完全密閉ソリッド化。`thicken_shell` は複数面シェルを受け取るが、**各面を個別に厚み付けして Union するだけ**で、検体は同一平面の長方形2枚のみ。非平面の隣接シートでの保証はない。 |
 | **インボリュート歯車** | `gear` | ピッチ円、基礎円、歯先円、歯底円による工業規格インボリュート平歯車。`make_spur_gear_with_root_fillet` の歯元は、**ホブ歯先丸みが転がりながら掃く円の包絡線**（創成トロコイド）。工具円の食い込み 0（厳密）、フィレット上の全点が工具円に乗る（5.08e-7）。外端はインボリュートの開始点と 1e-6 rad 以内で一致し、これは `inv` の式との**独立な**突き合わせ。既定の `make_spur_gear` は歯元が半径方向の直線で、そちらは断面積の閉じた式（`involute_profile_area`、実測 1.99e-9）を持つ。 |
 | **工業用穴・ザグリ・皿穴** | `hole` | 貫通丸穴、ザグリ穴（Counterbore）、皿モミ穴（Countersink: 64通り全合格）。 |
-| **厳密 B-Rep ブーリアン** | `boolean` | 直方体・円柱・球・角柱・穴あき立体の差（Difference）、和（Union）、積（Intersection）。検証ゲート `BooleanResultVerifier` による閉性・体積・内外判定保証。 |
+| **厳密 B-Rep ブーリアン** | `boolean` | 直方体・円柱・球・角柱・穴あき立体の差（Difference）、和（Union）、積（Intersection）。検証ゲート `BooleanResultVerifier` による閉性・体積・内外判定保証。**他カーネルが書いた立体**についても、軸に平行な切り手30配置・90演算で断るものは無し（WRONG 0・PANIC 0、検証つきの口で 88/90）。**切り手を傾けると 180演算中 27件が断られます**（HANDOVER 4-61）。 |
 | **面併合 (FaceMerger)** | `merge_faces` | ブーリアン出口での同一平面パッチ自動併合（`boolean_solids_exact_simplified`）。L字角柱 14面➔8面、穴あき 16面➔10面に最小化。 |
 | **稜フィレット / 面取り** | `edge_blend` | 任意ソリッドの直線凸稜に対する有理2次円筒フィレット曲面および平面面取り。体積誤差 $< 10^{-11}$。 |
 
@@ -121,7 +121,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | フォーマット / バインディング | 対応規格 | スペック詳細 |
 | :--- | :--- | :--- |
 | **STEP 出力** | ISO 10303-21 (AP214) | `MANIFOLD_SOLID_BREP` / `BREP_WITH_VOIDS`、`ADVANCED_FACE`、`PLANE`、有理B-spline曲面・曲線、稜を実体として共有する `EDGE_CURVE`。**2D トリム境界を `SURFACE_CURVE` ＋ 面ごとの `PCURVE` として出力**（1稜につきちょうど2本。書いている p-curve は 3D の辺と 3.2e-15〜2.9e-12 で一致）。複合エンティティ実体の括弧を含め Part 21 の構文に適合。**解析曲面は読めても書き出しは B-spline 化される** — 実装しないと決めた項目で、理由は HANDOVER 4-41 に。 |
-| **STEP 入力** | ISO 10303-21 | **曲面**: `PLANE` / `CYLINDRICAL` / `CONICAL` / `SPHERICAL` / `TOROIDAL` / 有理B-spline / `SURFACE_OF_LINEAR_EXTRUSION`。**曲線**: `LINE` / `CIRCLE` / `ELLIPSE` / `TRIMMED_CURVE` / `SURFACE_CURVE` / 有理B-spline。`FACE_BOUND` のみのファイルからの外周ループ自動判定、`BREP_WITH_VOIDS`。**未対応**: `SURFACE_OF_REVOLUTION`, `OFFSET_SURFACE`, `COMPOSITE_CURVE`, `POLYLINE`, 開シェル系表現 — 当たると**エンティティ名を名指ししてエラー**になる（既定の平面や直線に差し替えて黙って進むことはしない）。 |
+| **STEP 入力** | ISO 10303-21 | **曲面**: `PLANE` / `CYLINDRICAL` / `CONICAL` / `SPHERICAL` / `TOROIDAL` / 有理B-spline / `SURFACE_OF_LINEAR_EXTRUSION` / `SURFACE_OF_REVOLUTION`（角度方向は有理2次、断面方向は元の曲線の次数とノットで**厳密**。断面が軸を含む平面から外れていれば断る）。**曲線**: `LINE` / `CIRCLE` / `ELLIPSE` / `TRIMMED_CURVE` / `SURFACE_CURVE` / 有理B-spline。`FACE_BOUND` のみのファイルからの外周ループ自動判定、`BREP_WITH_VOIDS`。**未対応**: `OFFSET_SURFACE`, `COMPOSITE_CURVE`, `POLYLINE`, 開シェル系表現 — 当たると**エンティティ名を名指ししてエラー**になる（既定の平面や直線に差し替えて黙って進むことはしない）。**この一覧は、その実体が検体に入っていることを確かめてから書いてください**——`SURFACE_OF_REVOLUTION` は長らく「対応」と書かれた道具がありながら、検体に1つも入っておらず実際には読めませんでした（HANDOVER 4-60）。 |
 | **IGES エクスポート** | IGES 5.3 | 各面の支持曲面を **Entity 128（有理Bスプライン曲面）** として出力。80桁固定レコード、Global 26フィールド、D/P セクション対応。**トリム（Entity 144 / 142 / 126）は未出力**。`tools/verify_iges.py` で OpenCASCADE が5検体すべてを読み、曲面枚数一致・境界箱のずれ 0。 |
 | **2D DXF 図面出力** | AutoCAD DXF (AC1015) | 断面スライサーからの閉ポリライン図面（LWPOLYLINE）。レイヤーは OUTLINE / HOLE / CENTERLINE / HATCH を **テーブルに定義**するが、`generate_dxf_string` が自動で割り当てるのは OUTLINE と HOLE のみ。線種は全レイヤー CONTINUOUS で、HATCH エンティティは出力しない。 |
 | **OBJ / バイナリSTL / glTF** | 3D Mesh Formats | 頂点法線付きWavefront OBJ、バイナリSTL、glTF 2.0 JSON 出力。 |

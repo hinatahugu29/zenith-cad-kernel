@@ -30,7 +30,18 @@ OUT_DIR = os.path.join(
 
 
 def revolved_profile():
-    """L字の母線を Z 軸まわりに一周させる。OCC は SURFACE_OF_REVOLUTION を選ぶ。"""
+    """L字の母線を Z 軸まわりに一周させる。
+
+    **OCC は `SURFACE_OF_REVOLUTION` を選びません。** ここに「選ぶ」と書いて
+    ありましたが、実際に書かれるのは `CYLINDRICAL_SURFACE` と `PLANE` です
+    （母線が直線なので解析曲面に落ちます）。そのせいで、回転面の実体は
+    **検体に1つも入っていない**まま「対応範囲」に数えられていました。
+    インポーターは実際には読めず、それが分かったのは挽き物の検体
+    （`occ_reference_shapes.py` の `revolved_vase`）を足したときです（4-60）。
+
+    書いた実体は `swept_manifest.json` に出ます。**書いてある想定ではなく、
+    そこを見てください。**
+    """
     v = FreeCAD.Vector
     wire = Part.makePolygon([v(4, 0, 0), v(10, 0, 0), v(10, 0, 6), v(4, 0, 6), v(4, 0, 0)])
     face = Part.Face(wire)
