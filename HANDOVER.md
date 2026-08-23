@@ -31,7 +31,7 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 | 指標 | 値 |
 | :--- | :--- |
 | テストバイナリ | **94（doctest 込み）すべてグリーン（512テスト 100%合格、0 failed、0 ignored）** |
-| 診断プローブ | **常設26本**すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と `VERIFICATION_PLAYBOOK.md` の道具表にあります。**ここに名前を並べると必ず古くなる**ので、数だけ書いています |
+| 診断プローブ | **常設27本**すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と `VERIFICATION_PLAYBOOK.md` の道具表にあります。**ここに名前を並べると必ず古くなる**ので、数だけ書いています |
 | **他カーネルの立体のブーリアン** | 軸に平行な30配置・90演算で**断るものは無し**、WRONG 0・PANIC 0、恒等式の残差 4.04e-9。検証つきの公開 API では 88/90（残る2件は答えが正しいのにゲートが断るもの、4-51）。**切り手を 27 度傾けても断るものは無し**（180演算、`ZENITH_TILTED=1`、4-67） |
 | **実務で普通に出てくる形の読み取り** | フィレット・面取り・複数穴・スロット・ロフト・曲がり管・挽き物・中空・段付き軸の**9検体すべて**を、体積 3e-11 以内・面数一致で読む（`shape_variety_probe`、4-60） |
 | Python 往復 | `tools/verify_solid_api.py` 全合格（作る → ブーリアン → 稜を丸める → STEP → 読み直す） |
@@ -4455,7 +4455,7 @@ a cut end (-3.8817 9.1218 0.0000) does not lie on any wire of the face
 **残るのは `revolved_ring tilted drill` の1組（3演算）だけ**になりました。
 
 
-#### まだ通らないもの
+#### まだ通らないもの（4-67 で解決しました）
 
 `revolved_ring tilted drill` は3つとも越えて、次の壁に当たっています。
 
@@ -5457,8 +5457,8 @@ cargo run --release -p zenith_algo --example export_iges_suite        # target/i
 
 ## 8. リポジトリの状態
 
-作業ツリーはクリーンです（2026年8月23日時点）。ブランチは
-`main` だけで、`origin/main` と同期しています（4-61 まで反映済み）。
+作業ツリーはクリーンです（2026年8月24日時点）。ブランチは
+`main` だけで、`origin/main` と同期しています（4-67 まで反映済み）。
 
 追跡していないもの:
 
@@ -5496,10 +5496,11 @@ cargo run --release -p zenith_algo --example foreign_boolean_probe
 cargo run --release -p zenith_algo --example shape_variety_probe
 # read 9 of 9 / volume ok 9 / WRONG 0
 
-# 傾けた切り手も測るなら（26分かかるので既定では走りません）
+# 傾けた切り手も測るなら（30分ほどかかるので既定では走りません）
 $env:ZENITH_TILTED=1; cargo run --release -p zenith_algo --example foreign_boolean_probe
-# ok 53 / NOCUT 7 / 拒否 0 / WRONG 0 / PANIC 0、検証つきの口で 176/180。
-# **拒否が増えるのは既知**（4-61）。赤にするのは WRONG と PANIC と、返ってこないものです
+# ok 53 / NOCUT 7 / 拒否 0 / WRONG 0 / PANIC 0、検証つきの口で 176/180、恒等式の残差 7.88e-9。
+# **拒否が1件でも出たら赤**です（4-67 で 0 になりました）。検証つきの口の 176/180 は、
+# 答えが正しいのにゲートが断る4件（4-51）で、そこは既知です
 
 cargo build --release -p zenith_py
 py tools/verify_solid_api.py
