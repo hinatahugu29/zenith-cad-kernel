@@ -1289,17 +1289,38 @@ impl BrepIntersectionBuilder {
         //
         // 順序が要る。専用の経路を差し置いてここを先に通すと、回転した箱同士の
         // 和のように、既に通っていた割り方が別の割り方に置き換わって壊れる。
-        // **最後の受け皿**に置くこと。
         if applied_split_count == 0 && split_edges.len() >= 2 {
-            if let Ok((pieces, report)) = crate::FaceSplitter::split_by_chain(face, split_edges, tol)
-            {
-                if report.area_residual <= 1e-6 && pieces.len() >= 2 {
-                    return Ok(PlanarFaceMultiSplitResult {
-                        faces: pieces,
-                        applied_split_count: split_edges.len(),
-                        skipped_split_count: 0,
-                    });
+            // **鎖は1本とは限らない。** ここは来た稜を丸ごと1本の切り込みと
+            // して渡していた。トーラス片をドリルで抜く配置では、ドリルの側面
+            // 1枚に**出入り2箇所ぶん**の稜が届く。まとめて渡すと
+            // 「4 loose ends, not two」と断られ、面はそのまま残っていた。
+            //
+            // 端の繋がりで鎖に分け、**1本ずつ順に**当てる。平面の経路は既に
+            // そうしている（`group_edges_into_chains`）。
+            let chains = group_edges_into_chains(&deduplicate_split_edges(split_edges, tol), tol);
+            let mut chain_faces = vec![face.clone()];
+            let mut applied: usize = 0;
+            for chain in chains.iter().filter(|chain| chain.len() >= 2) {
+                let mut next_faces = Vec::new();
+                for current_face in chain_faces {
+                    match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
+                        Ok((pieces, report))
+                            if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                        {
+                            applied += 1;
+                            next_faces.extend(pieces);
+                        }
+                        _ => next_faces.push(current_face),
+                    }
                 }
+                chain_faces = next_faces;
+            }
+            if applied > 0 {
+                return Ok(PlanarFaceMultiSplitResult {
+                    faces: chain_faces,
+                    applied_split_count: split_edges.len(),
+                    skipped_split_count: 0,
+                });
             }
 
             // 繋いでも境界に届かない切り込みは、**面の内側で閉じている**
@@ -1968,9 +1989,17 @@ fn split_oriented_edge_at(
         t_max - (t_max - t_min) * t
     };
 
+    // **1スパンとは限らない。** ここは `split_bezier_at` だけを使っていて、
+    // 内部ノットを持つ境界稜——押し出したスプラインの輪郭がまさにこれ——を
+    // 「割れない」と断っていた。断られると面はそのまま残り、切り口が縫えない。
+    //
+    // `split_at` はノット挿入で割るので、多スパンでも有理でも通る。**割った
+    // 2本は元の曲線と同じ点を通る**（重みは挿入で保たれる）。1スパンでは
+    // これまでどおり de Casteljau のほうが安いので、先にそちらを試す。
     let (low, high) = curve
         .split_bezier_at(curve_param)
-        .ok_or_else(|| "Boundary edge is not a single splittable Bezier span".to_string())?;
+        .or_else(|| curve.split_at(curve_param))
+        .ok_or_else(|| "Boundary edge cannot be subdivided at the landing point".to_string())?;
     let (first, second) = if edge.orientation.is_forward() {
         (low, high)
     } else {
