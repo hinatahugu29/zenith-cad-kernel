@@ -184,6 +184,16 @@ enum Outcome {
     Panicked,
 }
 
+/// 検証つきの口でも通るかを別に数えます。
+///
+/// 恒等式は「返ってきた答えが互いに整合するか」を見るので、**ゲートに
+/// 拒否された結果でも測れる**ように検証なしの口を使います。ただしそれだけ
+/// だと、公開 API より甘い数字を報告することになります。実測でずれて
+/// いました（球の角は検証なしでは通り、検証つきでは落ちていた）。
+fn passes_the_gate(a: &Solid, b: &Solid, op: BooleanOpType, tol: &Tolerance) -> bool {
+    BooleanEngine::boolean_solids_exact_result(a, b, op, tol).is_ok()
+}
+
 fn run(a: &Solid, b: &Solid, op: BooleanOpType, tol: &Tolerance) -> Outcome {
     match catch_unwind(AssertUnwindSafe(|| {
         BooleanEngine::boolean_solids_exact_result_unverified(a, b, op, tol)
@@ -227,6 +237,9 @@ fn main() {
     // ok / refused / WRONG / PANIC
     let mut tally = [0usize; 4];
     let mut worst: f64 = 0.0;
+    // 検証つきの口で通った演算の数。恒等式の側とは別に数えます。
+    let mut gate_passed = 0usize;
+    let mut gate_total = 0usize;
 
     for name in subjects {
         let solids = match StepImporter::import_solids_from_file(&fixture(name)) {
@@ -268,6 +281,17 @@ fn main() {
                 }
             };
             let volume_b = volume(&b);
+
+            for op in [
+                BooleanOpType::Difference,
+                BooleanOpType::Intersection,
+                BooleanOpType::Union,
+            ] {
+                gate_total += 1;
+                if passes_the_gate(a, &b, op, &tol) {
+                    gate_passed += 1;
+                }
+            }
 
             let difference = run(a, &b, BooleanOpType::Difference, &tol);
             let intersection = run(a, &b, BooleanOpType::Intersection, &tol);
@@ -326,6 +350,9 @@ fn main() {
     println!(
         "ok {}   refused {}   WRONG {}   PANIC {}   worst identity residual {:.2e}",
         tally[0], tally[1], tally[2], tally[3], worst
+    );
+    println!(
+        "through the verified API: {gate_passed} of {gate_total} operation(s)"
     );
     println!();
     println!("split     = |V(A-B) + V(A^B) - V(A)| / V(A)");
