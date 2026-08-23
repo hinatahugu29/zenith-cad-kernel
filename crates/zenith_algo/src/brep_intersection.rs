@@ -218,7 +218,29 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // **相手のいない端から、隣の組を辿り直します。** 組を独立に辿ると、
+        // 隣の升に入るぶんの弧が短いときに抜けます（4-62）。
+        Self::trace_from_loose_ends_into(
+            faces_a,
+            faces_b,
+            &bboxes_a,
+            &bboxes_b,
+            &mut candidates,
+            tol,
+        );
+
         candidates
+    }
+
+    fn trace_from_loose_ends_into(
+        faces_a: &[Face],
+        faces_b: &[Face],
+        bboxes_a: &[Option<BoundingBox3>],
+        bboxes_b: &[Option<BoundingBox3>],
+        candidates: &mut Vec<FaceIntersectionCandidate>,
+        tol: &Tolerance,
+    ) {
+        trace_from_loose_ends(faces_a, faces_b, bboxes_a, bboxes_b, candidates, tol);
     }
 
     /// 面の組が1つでも交わり得るか、**交線を求めずに**答える。
@@ -6229,4 +6251,227 @@ fn hold_piece_like_its_face(piece: Face, tol: &Tolerance) -> Face {
     } else {
         piece
     }
+}
+
+/// 相手のいない交線の端から、隣の面の組を辿り直す。
+///
+/// # なぜ要るか
+///
+/// 面の組は1つずつ独立に辿っています。種は 12x12 の格子から選ぶので、
+/// **その升に入る弧が短いと、どの種も弧に乗りません**。交線は隣の組へ
+/// 続いているのに、そこだけ抜けます。
+///
+/// 実測（全周円錐を 27 度傾けたドリルで抜く、`march_stop_probe`）: 辿りは
+/// 8組とも正しくパッチの縁まで届いているのに、宙に浮いた端点が4つ残ります。
+/// その端点を測ると、**隣のパッチの継ぎ目にちょうど乗っています**。
+///
+/// ```text
+/// loose end (1.6256 -3.9533 11.4511) sits on:
+///     A0  distance 2.44e-5  (u 0.1854, v 0.4274)
+///     B2  distance 1.69e-5  (u 1.0000, v 0.5454)  <- パッチの縁
+///     B3  distance 2.45e-6  (u 0.0000, v 0.5454)
+/// ```
+///
+/// `A0 x B3` は B3 の縁で終わり、続きは `A0 x B2` にあります。その組は
+/// 「種はあったが一度も辿れなかった」と出ていました。
+///
+/// # やること
+///
+/// **端点は交線の上の点です。** そこを種にすれば、ニュートンは1歩で乗ります。
+/// 相手のいない端点を拾い、その点を含む「まだ交線の無い」面の組を、その点から
+/// 辿り直します。
+///
+/// 端点が2本の交線で共有されていれば、そこは既に繋がっているので触りません。
+fn trace_from_loose_ends(
+    faces_a: &[Face],
+    faces_b: &[Face],
+    bboxes_a: &[Option<BoundingBox3>],
+    bboxes_b: &[Option<BoundingBox3>],
+    candidates: &mut Vec<FaceIntersectionCandidate>,
+    tol: &Tolerance,
+) {
+    // 端点をすべて集め、共有されていないものだけ残す。
+    let mut ends: Vec<(usize, usize, Point3)> = Vec::new();
+    for candidate in candidates.iter() {
+        for point in candidate_end_points(&candidate.kind) {
+            ends.push((candidate.face_a_index, candidate.face_b_index, point));
+        }
+    }
+    if ends.is_empty() {
+        return;
+    }
+    let join = tol.linear * 1000.0;
+    let loose: Vec<(usize, usize, Point3)> = ends
+        .iter()
+        .filter(|(_, _, point)| {
+            ends.iter()
+                .filter(|(_, _, other)| (*other - *point).norm() <= join)
+                .count()
+                < 2
+        })
+        .cloned()
+        .collect();
+
+    // **既に「交線を持っている」組だけを既済とします。**
+    // 交わりを求めて `Unsupported` になった組も候補の列には入っているので、
+    // 素通しで数えると「もう見た」と判定してしまい、辿り直しが一度も
+    // 走りません（実測でそうなっていました）。
+    let mut covered: std::collections::BTreeSet<(usize, usize)> = candidates
+        .iter()
+        .filter(|candidate| !candidate_end_points(&candidate.kind).is_empty())
+        .map(|candidate| (candidate.face_a_index, candidate.face_b_index))
+        .collect();
+
+    let mut added = Vec::new();
+    for (from_a, from_b, point) in loose {
+        for (index_a, face_a) in faces_a.iter().enumerate() {
+            for (index_b, face_b) in faces_b.iter().enumerate() {
+                if covered.contains(&(index_a, index_b)) {
+                    continue;
+                }
+                // 元の組そのものは飛ばす。続きは**隣**にあります。
+                if index_a == from_a && index_b == from_b {
+                    continue;
+                }
+                if !face_bboxes_intersect(
+                    bboxes_a[index_a].as_ref(),
+                    bboxes_b[index_b].as_ref(),
+                    tol,
+                ) {
+                    continue;
+                }
+                let (Some(patch_a), Some(patch_b)) = (face_patch(face_a), face_patch(face_b))
+                else {
+                    continue;
+                };
+                // **その点が両方のパッチに乗っていること。** 乗っていない組は
+                // 続きではありません。
+                let Some(seed) = seed_on_patch(&patch_a, point, tol) else {
+                    continue;
+                };
+                if seed_on_patch(&patch_b, point, tol).is_none() {
+                    continue;
+                }
+
+                let extent = surface_patch_extent(&patch_a).max(surface_patch_extent(&patch_b));
+                let first_step = (extent * 0.1).max(tol.linear * 100.0);
+                let Some(edge) = march_one_branch(&patch_a, &patch_b, seed, first_step, tol) else {
+                    continue;
+                };
+                covered.insert((index_a, index_b));
+                added.push(FaceIntersectionCandidate {
+                    face_a_index: index_a,
+                    face_b_index: index_b,
+                    kind: FaceIntersectionKind::Curve { edge },
+                });
+            }
+        }
+    }
+    candidates.extend(added);
+}
+
+/// 面の交わりが持っている端点。
+fn candidate_end_points(kind: &FaceIntersectionKind) -> Vec<Point3> {
+    let ends_of = |edge: &Edge| {
+        let (t0, t1) = edge.curve.param_range();
+        vec![edge.curve.evaluate(t0), edge.curve.evaluate(t1)]
+    };
+    match kind {
+        FaceIntersectionKind::Curve { edge } => ends_of(edge),
+        FaceIntersectionKind::Curves { edges } => edges.iter().flat_map(ends_of).collect(),
+        FaceIntersectionKind::Line {
+            segment_start,
+            segment_end,
+            ..
+        } => vec![*segment_start, *segment_end],
+        _ => Vec::new(),
+    }
+}
+
+/// 面をマーチングに渡せるパッチにする。平面は境界が占めるぶんだけの
+/// 1次×1次パッチに直します（パラメータ範囲が無限なので、そのままでは
+/// 渡せません）。
+fn face_patch(face: &Face) -> Option<NurbsSurface3> {
+    match &face.geometry {
+        FaceGeometry::Nurbs(surface) => Some(surface.clone()),
+        FaceGeometry::Plane(plane) => planar_face_as_patch(face, plane),
+        _ => None,
+    }
+}
+
+/// 点がパッチの上に乗っていれば、その `(u, v)` を返す。
+fn seed_on_patch(patch: &NurbsSurface3, point: Point3, tol: &Tolerance) -> Option<(f64, f64)> {
+    let projection = ExtremumEngine::point_to_surface(point, patch, 64, 1e-13).ok()?;
+    // 辿りの端点は交線の上に丸め誤差ぶんだけ乗っています。実測で 2.4e-5。
+    // 公差そのものでは締めすぎるので、辿りの精度に合わせます。
+    let limit = (tol.linear * 1000.0).max(1e-4);
+    (projection.distance <= limit).then_some((projection.u, projection.v))
+}
+
+/// 種から1本だけ辿って、要求精度の曲線にする。
+///
+/// `fit_all_branches` と同じ刻みの決め方（測った収束次数から予測）を使います。
+/// 種が既に交線の上にあるので、枝を探す必要はありません。
+fn march_one_branch(
+    patch_a: &NurbsSurface3,
+    patch_b: &NurbsSurface3,
+    seed: (f64, f64),
+    first_step: f64,
+    tol: &Tolerance,
+) -> Option<Edge> {
+    let deviation_limit = tol.linear;
+    let mut step = first_step;
+    let mut previous: Option<(f64, f64)> = None;
+    for _ in 0..8 {
+        let Some(marched) =
+            zenith_geom::IntersectionMarcher::march(patch_a, patch_b, seed.0, seed.1, step, 2048, tol)
+        else {
+            step *= 0.5;
+            continue;
+        };
+        if marched.points.len() < 4 {
+            step *= 0.5;
+            continue;
+        }
+        let Some((curve, deviation)) =
+            zenith_geom::IntersectionMarcher::fit_curve(patch_a, patch_b, &marched, 3)
+        else {
+            step *= 0.5;
+            continue;
+        };
+        if deviation <= deviation_limit {
+            let (t0, t1) = curve.param_range();
+            let start = curve.evaluate(t0);
+            let end = curve.evaluate(t1);
+            if (end - start).norm() <= tol.linear {
+                return None;
+            }
+            return Some(Edge::new(
+                curve,
+                Vertex::new(start, tol.linear),
+                Vertex::new(end, tol.linear),
+                tol.linear,
+            ));
+        }
+        if marched.points.len() >= 2048 {
+            return None;
+        }
+        let next = match previous {
+            None => step * 0.5,
+            Some((before_step, before_deviation)) => {
+                let step_ratio = before_step / step;
+                let deviation_ratio = before_deviation / deviation;
+                if !(step_ratio > 1.0 && deviation_ratio > 1.0) {
+                    step * 0.5
+                } else {
+                    let order = (deviation_ratio.ln() / step_ratio.ln()).clamp(0.5, 6.0);
+                    let shrink = (deviation / deviation_limit).powf(1.0 / order) * 1.5;
+                    step / shrink.clamp(2.0, 16.0)
+                }
+            }
+        };
+        previous = Some((step, deviation));
+        step = next;
+    }
+    None
 }
