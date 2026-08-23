@@ -17,6 +17,17 @@ struct RawEntity {
 }
 
 struct ImportContext {
+    /// ファイルの長さの単位1つが何ミリか。
+    ///
+    /// **これを読まないと、答えは静かに間違います。** インチで書かれた
+    /// STEP は珍しくなく、数値をそのままミリとして読むと体積が 25.4^3 =
+    /// 16387 倍ずれます。返ってくるのは**閉じていて多様体で形も正しい立体**で、
+    /// 大きさだけが違う。閉性の検査も面の検査も恒等式も全部通ります。
+    ///
+    /// 実測（`step_unit_probe`、20x30x40 mm の箱）: インチのファイルで
+    /// 1.464570 mm^3、センチのファイルで 24.0 mm^3。どちらも解析解 24000 から
+    /// **ちょうど単位の3乗ぶん**外れていました。
+    length_scale: f64,
     raw_entities: HashMap<u64, RawEntity>,
     points: HashMap<u64, Point3>,
     directions: HashMap<u64, Vec3>,
@@ -31,6 +42,7 @@ struct ImportContext {
 impl ImportContext {
     fn new() -> Self {
         Self {
+            length_scale: 1.0,
             raw_entities: HashMap::new(),
             points: HashMap::new(),
             directions: HashMap::new(),
@@ -99,6 +111,9 @@ impl StepImporter {
         // 1. DATAセクションのエンティティ辞書を構築
         Self::parse_data_section(content, &mut ctx)?;
 
+        // 2. 長さの単位。座標を読む前に決めておく必要がある。
+        ctx.length_scale = Self::resolve_length_scale(&ctx)?;
+
         // 2. Solid B-Rep を探索
         let solid_ids = Self::solid_brep_ids(&ctx);
         if solid_ids.is_empty() {
@@ -159,6 +174,180 @@ impl StepImporter {
         }
 
         Ok(())
+    }
+
+    /// `TOKEN( ... )` の中身を、括弧の対応を数えて取り出す。
+    ///
+    /// **トークンと `(` の間には空白が入りえます。** STEP のファイルは 80 桁で
+    /// 折り返され、その折り返しがちょうどそこに来ることがあります。実測:
+    ///
+    /// ```text
+    /// #165 = ( GEOMETRIC_REPRESENTATION_CONTEXT(3)
+    /// GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#169)) GLOBAL_UNIT_ASSIGNED_CONTEXT
+    /// ((#166,#167,#168)) REPRESENTATION_CONTEXT('Context #1', ...) );
+    /// ```
+    ///
+    /// 行は空白で連結されるので、`GLOBAL_UNIT_ASSIGNED_CONTEXT(` を探しても
+    /// 当たりません。最初に単位を読もうとしたとき、これで**単位の文脈が無い
+    /// ファイル**に見え、係数 1 のまま素通りしました。
+    fn token_args<'a>(text: &'a str, token: &str) -> Option<&'a str> {
+        let mut from = 0usize;
+        while let Some(at) = text[from..].find(token) {
+            let start = from + at;
+            // 前が英数字なら、別の名前の末尾に当たっている（LENGTH_UNIT と
+            // PLANE_ANGLE_UNIT のような取り違えを避ける）。
+            let preceded_by_name = text[..start]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+            let rest = &text[start + token.len()..];
+            let open = rest.find(|c: char| !c.is_whitespace());
+            from = start + token.len();
+            if preceded_by_name {
+                continue;
+            }
+            let Some(open) = open else { continue };
+            if rest.as_bytes()[open] != b'(' {
+                continue;
+            }
+            let body = &rest[open + 1..];
+            let mut depth = 1usize;
+            for (index, ch) in body.char_indices() {
+                match ch {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(&body[..index]);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
+    /// ファイルの長さの単位1つが何ミリかを返す。
+    ///
+    /// 単位は `GLOBAL_UNIT_ASSIGNED_CONTEXT((#a,#b,#c))` が指しています。
+    /// そのうち長さのものを選び、係数に直します。
+    ///
+    /// - `( LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.) )` → 1
+    /// - `SI_UNIT($,.METRE.)`（接頭辞なし） → 1000
+    /// - `( CONVERSION_BASED_UNIT('INCH',#m) ... )` で
+    ///   `#m = LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#mm)` → 25.4
+    ///
+    /// **単位の文脈があるのに読めないときは、断ります。** そこで既定の
+    /// ミリに落とすと、インチのファイルが 16387 倍小さい立体として通ります。
+    /// 文脈そのものが無いファイルはミリとして読みます（省略できるのは
+    /// 最小限のファイルだけで、AP203/214/242 は必ず持っています）。
+    fn resolve_length_scale(ctx: &ImportContext) -> Result<f64, String> {
+        let Some(assigned) = ctx
+            .raw_entities
+            .values()
+            .find(|raw| Self::token_args(&raw.args, "GLOBAL_UNIT_ASSIGNED_CONTEXT").is_some())
+        else {
+            return Ok(1.0);
+        };
+
+        // GLOBAL_UNIT_ASSIGNED_CONTEXT((#1,#2,#3)) の中身。
+        let list = Self::token_args(&assigned.args, "GLOBAL_UNIT_ASSIGNED_CONTEXT")
+            .ok_or_else(|| "unit context has no unit list".to_string())?;
+
+        let mut seen: Vec<u64> = Vec::new();
+        for arg in list.trim().trim_start_matches('(').trim_end_matches(')').split(',') {
+            if let Some(id) = Self::parse_entity_ref(arg) {
+                seen.push(id);
+            }
+        }
+        if seen.is_empty() {
+            return Err(
+                "STEP unit context lists no units; cannot tell what the numbers mean".to_string(),
+            );
+        }
+
+        for id in &seen {
+            let Some(raw) = ctx.raw_entities.get(id) else {
+                continue;
+            };
+            if Self::token_args(&raw.args, "LENGTH_UNIT").is_none() {
+                continue;
+            }
+            return Self::length_unit_scale(ctx, *id, 0);
+        }
+
+        Err(format!(
+            "STEP unit context (#{:?}) names no length unit; cannot tell what the numbers mean",
+            seen
+        ))
+    }
+
+    /// 長さの単位の実体1つを、ミリへの係数に直す。`depth` は循環参照よけ。
+    fn length_unit_scale(ctx: &ImportContext, id: u64, depth: usize) -> Result<f64, String> {
+        if depth > 8 {
+            return Err(format!("STEP length unit #{id} refers to itself"));
+        }
+        let raw = ctx
+            .raw_entities
+            .get(&id)
+            .ok_or_else(|| format!("STEP length unit #{id} is not in the file"))?;
+
+        // 換算単位: 別の単位で測った長さ1つぶんが、この単位1つ。
+        if let Some(inner) = Self::token_args(&raw.args, "CONVERSION_BASED_UNIT") {
+            let measure_id = inner
+                .split(',')
+                .filter_map(Self::parse_entity_ref)
+                .next()
+                .ok_or_else(|| format!("STEP unit #{id} names no conversion factor"))?;
+            let measure = ctx
+                .raw_entities
+                .get(&measure_id)
+                .ok_or_else(|| format!("STEP unit factor #{measure_id} is not in the file"))?;
+            // LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#mm)
+            let value = Self::token_args(&measure.args, "LENGTH_MEASURE")
+                .and_then(|text| text.trim().parse::<f64>().ok())
+                .ok_or_else(|| format!("STEP unit factor #{measure_id} has no length measure"))?;
+            let base_id = Self::split_top_level_args(&measure.args)
+                .into_iter()
+                .filter_map(Self::parse_entity_ref)
+                .next()
+                .ok_or_else(|| format!("STEP unit factor #{measure_id} names no base unit"))?;
+            return Ok(value * Self::length_unit_scale(ctx, base_id, depth + 1)?);
+        }
+
+        // SI 単位: 接頭辞つきのメートル。
+        if let Some(body) = Self::token_args(&raw.args, "SI_UNIT") {
+            let mut fields = body.split(',');
+            let prefix = fields.next().unwrap_or("$").trim();
+            let name = fields.next().unwrap_or("").trim();
+            if name != ".METRE." {
+                return Err(format!("STEP length unit #{id} is not a metre: {name}"));
+            }
+            // メートルを基準に、ミリでの大きさ。
+            let scale = match prefix {
+                "$" => 1000.0,
+                ".KILO." => 1_000_000.0,
+                ".HECTO." => 100_000.0,
+                ".DECA." => 10_000.0,
+                ".DECI." => 100.0,
+                ".CENTI." => 10.0,
+                ".MILLI." => 1.0,
+                ".MICRO." => 1.0e-3,
+                ".NANO." => 1.0e-6,
+                ".PICO." => 1.0e-9,
+                other => {
+                    return Err(format!(
+                        "STEP length unit #{id} uses the prefix {other}, which Zenith does not know"
+                    ))
+                }
+            };
+            return Ok(scale);
+        }
+
+        Err(format!(
+            "STEP length unit #{id} is neither an SI unit nor a conversion-based one"
+        ))
     }
 
     fn parse_entity_ref(arg: &str) -> Option<u64> {
@@ -267,7 +456,9 @@ impl StepImporter {
                         let x = parts[0].trim().parse::<f64>().map_err(|e| e.to_string())?;
                         let y = parts[1].trim().parse::<f64>().map_err(|e| e.to_string())?;
                         let z = parts[2].trim().parse::<f64>().map_err(|e| e.to_string())?;
-                        let p = Point3::new(x, y, z);
+                        // 座標はここが唯一の入口。単位はここで掛ける。
+                        let scale = ctx.length_scale;
+                        let p = Point3::new(x * scale, y * scale, z * scale);
                         ctx.points.insert(id, p);
                         return Ok(p);
                     }
@@ -553,8 +744,9 @@ impl StepImporter {
             Some(id) => id,
             None => return Ok(None),
         };
+        // 半径は長さ。単位を掛ける。
         let radius = match circle_parts[2].parse::<f64>() {
-            Ok(r) if r > 1e-9 => r,
+            Ok(r) if r > 1e-9 => r * ctx.length_scale,
             _ => return Ok(None),
         };
         let (center, normal, ref_dir) = Self::get_axis2_placement(ctx, axis_id)?;
@@ -643,8 +835,9 @@ impl StepImporter {
             Some(id) => id,
             None => return Ok(None),
         };
+        // 半径は長さ。単位を掛ける。
         let radius = match parts[2].parse::<f64>() {
-            Ok(r) if r > 1e-9 => r,
+            Ok(r) if r > 1e-9 => r * ctx.length_scale,
             _ => return Ok(None),
         };
         let (center, normal, ref_dir) = Self::get_axis2_placement(ctx, axis_id)?;
@@ -837,6 +1030,8 @@ impl StepImporter {
         let Ok(magnitude) = parts[2].trim().parse::<f64>() else {
             return Ok(None);
         };
+        // 大きさは長さ。向きは無次元なので掛けない。
+        let magnitude = magnitude * ctx.length_scale;
         let direction = Self::get_direction(ctx, direction_id)?;
         Ok(Some(direction * magnitude))
     }
@@ -859,9 +1054,10 @@ impl StepImporter {
         let Some(axis_id) = Self::parse_entity_ref(parts[1]) else {
             return Ok(None);
         };
+        // 半軸は長さ。単位を掛ける。
         let (Ok(semi_x), Ok(semi_y)) = (
-            parts[2].trim().parse::<f64>(),
-            parts[3].trim().parse::<f64>(),
+            parts[2].trim().parse::<f64>().map(|v| v * ctx.length_scale),
+            parts[3].trim().parse::<f64>().map(|v| v * ctx.length_scale),
         ) else {
             return Ok(None);
         };
@@ -1053,13 +1249,16 @@ impl StepImporter {
                 .get(index)
                 .and_then(|arg| arg.trim().parse::<f64>().ok())
         };
+        // 半径類は長さ。単位を掛ける。角度（円錐の半頂角）には掛けない。
+        let unit_scale = ctx.length_scale;
+        let length = |index: usize| -> Option<f64> { number(index).map(|v| v * unit_scale) };
 
         if let Some((origin, z_dir, x_dir)) = placement {
             let patch = match raw.name.as_str() {
-                "CYLINDRICAL_SURFACE" => number(2).and_then(|radius| {
+                "CYLINDRICAL_SURFACE" => length(2).and_then(|radius| {
                     cylinder_patch_for_boundary(origin, z_dir, x_dir, radius, boundary_points)
                 }),
-                "CONICAL_SURFACE" => number(2).zip(number(3)).and_then(|(radius, semi_angle)| {
+                "CONICAL_SURFACE" => length(2).zip(number(3)).and_then(|(radius, semi_angle)| {
                     cone_patch_for_boundary(
                         origin,
                         z_dir,
@@ -1069,10 +1268,10 @@ impl StepImporter {
                         boundary_points,
                     )
                 }),
-                "SPHERICAL_SURFACE" => number(2).and_then(|radius| {
+                "SPHERICAL_SURFACE" => length(2).and_then(|radius| {
                     sphere_patch_for_boundary(origin, z_dir, x_dir, radius, boundary_points)
                 }),
-                "TOROIDAL_SURFACE" => number(2).zip(number(3)).and_then(|(major, minor)| {
+                "TOROIDAL_SURFACE" => length(2).zip(length(3)).and_then(|(major, minor)| {
                     torus_patch_for_boundary(origin, z_dir, x_dir, major, minor, boundary_points)
                 }),
                 _ => None,
@@ -1132,7 +1331,7 @@ impl StepImporter {
             let parts = Self::split_top_level_args(&raw.args);
             if parts.len() >= 3 {
                 if let Some(axis2_id) = Self::parse_entity_ref(parts[1]) {
-                    if let Ok(radius) = parts[2].parse::<f64>() {
+                    if let Ok(radius) = parts[2].parse::<f64>().map(|r| r * ctx.length_scale) {
                         if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
                             let y_dir = z_dir.cross(&x_dir).normalize();
                             let weight = std::f64::consts::FRAC_1_SQRT_2;
@@ -1165,7 +1364,7 @@ impl StepImporter {
             let parts = Self::split_top_level_args(&raw.args);
             if parts.len() >= 4 {
                 if let Some(axis2_id) = Self::parse_entity_ref(parts[1]) {
-                    let radius = parts[2].parse::<f64>().unwrap_or(1.0);
+                    let radius = parts[2].parse::<f64>().unwrap_or(1.0) * ctx.length_scale;
                     let semi_angle = parts[3].parse::<f64>().unwrap_or(0.0);
                     if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
                         let y_dir = z_dir.cross(&x_dir).normalize();
@@ -1201,7 +1400,7 @@ impl StepImporter {
             let parts = Self::split_top_level_args(&raw.args);
             if parts.len() >= 3 {
                 if let Some(axis2_id) = Self::parse_entity_ref(parts[1]) {
-                    if let Ok(radius) = parts[2].parse::<f64>() {
+                    if let Ok(radius) = parts[2].parse::<f64>().map(|r| r * ctx.length_scale) {
                         if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
                             let y_dir = z_dir.cross(&x_dir).normalize();
                             let weight = std::f64::consts::FRAC_1_SQRT_2;
