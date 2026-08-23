@@ -1304,6 +1304,26 @@ impl BrepIntersectionBuilder {
                     });
                 }
             }
+
+            // 繋いでも境界に届かない切り込みは、**面の内側で閉じている**
+            // ことがあります。球の角を箱で削ると、3枚の面が作る3本の弧が
+            // 球面上で輪になり、どの弧も面の境界には着きません。
+            // `split_by_chain` は「境界に届かない」と断り、面は無傷のまま
+            // 残って、相手側の弧に相手がいなくなります（4-50）。
+            //
+            // ここも**最後の受け皿**です。境界から境界へ届く切り込みが
+            // あるならそちらが先に通っているはずで、ここへは来ません。
+            if let Ok((pieces, report)) =
+                crate::FaceSplitter::split_by_interior_loop(face, split_edges, tol)
+            {
+                if report.area_residual <= 1e-6 && pieces.len() >= 2 {
+                    return Ok(PlanarFaceMultiSplitResult {
+                        faces: pieces,
+                        applied_split_count: split_edges.len(),
+                        skipped_split_count: 0,
+                    });
+                }
+            }
         }
 
         Ok(PlanarFaceMultiSplitResult {
