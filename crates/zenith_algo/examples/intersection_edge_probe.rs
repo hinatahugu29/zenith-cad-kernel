@@ -158,6 +158,7 @@ fn main() {
     for candidate in &edges {
     end_distance_report(&faces_a, &faces_b, &edges, &tol);
     duplicate_curve_report(&edges, &tol);
+    batch_split_report(&faces_a, &faces_b, &edges, &tol);
         let (t0, t1) = candidate.edge.curve.param_range();
         let start = candidate.edge.curve.evaluate(t0);
         let end = candidate.edge.curve.evaluate(t1);
@@ -438,5 +439,51 @@ fn duplicate_curve_report(edges: &[zenith_algo::IntersectionEdgeCandidate], tol:
     }
     if found == 0 {
         println!("    none");
+    }
+}
+
+/// 面に来た稜を**まとめて**渡したとき、パイプラインと同じ口が何と言うか。
+///
+/// `split_face_by_edge`（1本ずつ）や `split_by_chain`（鎖）は、実際に走る
+/// 経路の一部でしかありません。**穴を横切る面の受け皿（4-59）などは、
+/// `split_face_by_edges` を通らないと呼ばれません。**
+fn batch_split_report(
+    faces_a: &[zenith_topo::Face],
+    faces_b: &[zenith_topo::Face],
+    edges: &[zenith_algo::IntersectionEdgeCandidate],
+    tol: &Tolerance,
+) {
+    use std::collections::BTreeMap;
+    let mut by_a: BTreeMap<usize, Vec<zenith_topo::Edge>> = BTreeMap::new();
+    let mut by_b: BTreeMap<usize, Vec<zenith_topo::Edge>> = BTreeMap::new();
+    for candidate in edges {
+        by_a.entry(candidate.face_a_index)
+            .or_default()
+            .push(candidate.edge.clone());
+        by_b.entry(candidate.face_b_index)
+            .or_default()
+            .push(candidate.edge.clone());
+    }
+
+    println!("\n  what the pipeline's own splitter says, per face:");
+    for (label, groups, faces) in [("A", &by_a, faces_a), ("B", &by_b, faces_b)] {
+        for (index, group) in groups {
+            let face = &faces[*index];
+            let holes = face.inner_wires.len();
+            match BrepIntersectionBuilder::split_face_by_edges(face, group, tol) {
+                Ok(result) => println!(
+                    "    {label}{index:<3} {} edge(s), {holes} hole(s) -> {} piece(s) (applied {}, skipped {})",
+                    group.len(),
+                    result.faces.len(),
+                    result.applied_split_count,
+                    result.skipped_split_count
+                ),
+                Err(err) => println!(
+                    "    {label}{index:<3} {} edge(s), {holes} hole(s) -> {}",
+                    group.len(),
+                    err.chars().take(160).collect::<String>()
+                ),
+            }
+        }
     }
 }
