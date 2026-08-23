@@ -68,6 +68,55 @@ impl RegularizeReport {
 pub struct Regularizer;
 
 impl Regularizer {
+    /// 他所から来た立体を、自前のビルダーが作るのと同じ持ち方に整える。
+    ///
+    /// **形は変えません。持ち方だけを変えます。**
+    ///
+    /// 1. 制御点が1つの平面に乗っている NURBS 面を、平面として持ち直す。
+    ///    近似ではなく凸包の性質で決まります（[`NurbsSurface3::as_plane`]）。
+    /// 2. 全周1枚の面・全周1本の辺を刻む（[`Self::regularize_solid`]）。
+    ///
+    /// **順序が要ります。** 平面の p-curve は射影で厳密に出せるので、平面
+    /// として持ち直した面は「p-curve を失うと積分が変わる面」ではなくなり、
+    /// 正規化はその面が使っている閉じた辺を刻めるようになります。NURBS の
+    /// ままだと守られたままで、上下の円が刻めず、**正規化は何もしません**
+    /// （実測: OpenCASCADE が B-spline 化した円柱で、割った面 0・残した 1）。
+    ///
+    /// 自前のビルダーが作った立体に対しては、実測で**何も起きません**
+    /// （キャップは既に平面、側面は既に刻まれている。`regularize_probe` の
+    /// native cylinder は 6面のまま 0枚分割）。だから入口で通しても、
+    /// 元から整っている入力の答えは動きません。
+    ///
+    /// 効き目: `foreign_boolean_probe` が **ok 4 -> 15**（拒否 70 -> 38、
+    /// WRONG 0 のまま、恒等式の残差 5.21e-13 -> 8.40e-10）。
+    pub fn hold_like_our_own(solid: &Solid, tol: &Tolerance) -> Solid {
+        let mut out = solid.clone();
+        let mut recognised = false;
+        for shell in std::iter::once(&mut out.outer_shell).chain(out.inner_shells.iter_mut()) {
+            for face in &mut shell.faces {
+                let plane = match &face.geometry {
+                    FaceGeometry::Nurbs(surface) => surface.as_plane(),
+                    _ => None,
+                };
+                if let Some(plane) = plane {
+                    face.geometry = FaceGeometry::Plane(plane);
+                    // 平面の p-curve は射影なので、導出は厳密。導出できない
+                    // 面はそのまま（p-curve 無し）にして、後段の導出に任せる。
+                    face.pcurves = face.derive_plane_pcurves().ok();
+                    recognised = true;
+                }
+            }
+        }
+
+        let (regularized, report) = Self::regularize_solid(&out, tol);
+        // どちらも起きなかったなら、渡されたものをそのまま返す。整っている
+        // 入力に対して、複製で作り直した立体を返す理由はありません。
+        if !recognised && report.wrapped_faces_split == 0 && report.closed_edges_split == 0 {
+            return solid.clone();
+        }
+        regularized
+    }
+
     /// 外殻と内殻のそれぞれを正規化する。
     pub fn regularize_solid(solid: &Solid, tol: &Tolerance) -> (Solid, RegularizeReport) {
         let mut report = RegularizeReport::default();

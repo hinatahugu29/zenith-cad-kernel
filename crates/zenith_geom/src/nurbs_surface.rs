@@ -1,5 +1,6 @@
 use crate::bspline_basis::KnotVector;
 use crate::nurbs_curve::ControlPoint3;
+use crate::surface::{PlaneSurface3, Surface3};
 use serde::{Deserialize, Serialize};
 use zenith_math::{Point3, Vec3, Vec3Ext};
 
@@ -15,6 +16,79 @@ pub struct NurbsSurface3 {
 }
 
 impl NurbsSurface3 {
+    /// この曲面が平面そのものなら、その平面を返す。
+    ///
+    /// **当てるのではなく、決まります。** B-spline 曲面は制御点の凸包に
+    /// 含まれるので（重みが正なら有理でも同じ）、制御点が1つの平面に
+    /// 乗っているなら曲面はその平面から出られません。標本を見て「平面らしい」
+    /// と判断するのとは別物です。5章にある「最大半径に16点乗っていれば円柱」
+    /// のような当て方は、円錐を円柱として通しました。ここはそうなりません。
+    ///
+    /// 向きは曲面自身の法線に合わせます。適当に張ると裏返り、面が支持曲面と
+    /// 食い違って立体が無効になります（実測でそうなりました）。
+    ///
+    /// 重みが正でない制御点が1つでもあれば、凸包の性質が使えないので
+    /// `None` を返します。
+    pub fn as_plane(&self) -> Option<PlaneSurface3> {
+        let mut points: Vec<Point3> = Vec::new();
+        for row in &self.control_points {
+            for control in row {
+                if !(control.weight > 0.0) {
+                    return None;
+                }
+                points.push(control.point);
+            }
+        }
+        if points.len() < 3 {
+            return None;
+        }
+
+        let origin = points[0];
+        // 原点から一番遠い点、次にその向きから一番外れた点。細長い網でも
+        // 退化しない選び方。
+        let far = *points
+            .iter()
+            .max_by(|a, b| (**a - origin).norm().total_cmp(&(**b - origin).norm()))?;
+        let u_axis = far - origin;
+        if u_axis.norm() <= 1e-12 {
+            return None;
+        }
+        let off = *points.iter().max_by(|a, b| {
+            (**a - origin)
+                .cross(&u_axis)
+                .norm()
+                .total_cmp(&(**b - origin).cross(&u_axis).norm())
+        })?;
+        let normal = u_axis.cross(&(off - origin));
+        if normal.norm() <= 1e-12 {
+            return None;
+        }
+        let normal = normal / normal.norm();
+
+        // 網の広がりに対する相対で見る。絶対値で切ると、大きい形が落ちます。
+        let extent = points
+            .iter()
+            .map(|point| (*point - origin).norm())
+            .fold(0.0f64, f64::max)
+            .max(1.0);
+        let limit = extent * 1e-12;
+        if points
+            .iter()
+            .any(|point| (*point - origin).dot(&normal).abs() > limit)
+        {
+            return None;
+        }
+
+        let ((u_min, u_max), (v_min, v_max)) = Surface3::param_range(self);
+        let wanted = Surface3::normal(self, (u_min + u_max) * 0.5, (v_min + v_max) * 0.5)?;
+        let normal = if normal.dot(&wanted) >= 0.0 {
+            normal
+        } else {
+            -normal
+        };
+        PlaneSurface3::new(origin, u_axis, normal.cross(&u_axis))
+    }
+
     /// 新規作成（バリデーション付き）
     pub fn new(
         degree_u: usize,

@@ -37,11 +37,13 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
-use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
+use zenith_algo::{
+    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder, Regularizer,
+};
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
-use zenith_topo::Solid;
+use zenith_topo::{FaceGeometry, Solid};
 
 /// 求積の刻み。恒等式の両辺で同じものを使う。
 fn params() -> TessellationParams {
@@ -142,6 +144,34 @@ fn placements() -> Vec<Placement> {
     ]
 }
 
+/// 読んだ立体を、自前のビルダーが作るのと同じ持ち方に整えてから渡す。
+///
+/// 2つのことをします。どちらも形は変えません。
+///
+/// 1. 制御点が1平面に乗っている NURBS 面を、平面として持ち直す（`as_plane`）。
+///    これは近似ではなく凸包の性質で決まります。
+/// 2. 全周1枚の面と全周1本の辺を刻む（`Regularizer`）。
+///
+/// 1 が先で、順序が要ります。平面の p-curve は射影で厳密に出せるので、
+/// 平面として持ち直した面は「p-curve を失うと積分が変わる面」ではなくなり、
+/// 正規化が上下の円を刻めるようになります。NURBS のままだと守られたままで、
+/// **正規化は何もしません**（実測: 割った面 0、残した 1）。
+///
+/// `ZENITH_FOREIGN_CONDITION=1` で有効になります。既定は素のままです。
+fn condition(solid: &Solid, tol: &Tolerance) -> Solid {
+    let mut out = solid.clone();
+    for face in &mut out.outer_shell.faces {
+        if let FaceGeometry::Nurbs(surface) = &face.geometry {
+            if let Some(plane) = surface.as_plane() {
+                face.geometry = FaceGeometry::Plane(plane);
+                face.pcurves = face.derive_plane_pcurves().ok();
+            }
+        }
+    }
+    let (regularized, _) = Regularizer::regularize_solid(&out, tol);
+    regularized
+}
+
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
         .join(format!("occ_reference_{name}.step"))
@@ -215,7 +245,13 @@ fn main() {
                 continue;
             }
         };
-        let a = &solids[0];
+        let conditioned;
+        let a = if std::env::var_os("ZENITH_FOREIGN_CONDITION").is_some() {
+            conditioned = condition(&solids[0], &tol);
+            &conditioned
+        } else {
+            &solids[0]
+        };
         let volume_a = volume(a);
         let (low, high) = mesh_bounds(&tessellate_solid(a, &params()));
 

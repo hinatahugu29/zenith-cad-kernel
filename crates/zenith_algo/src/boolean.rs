@@ -278,6 +278,18 @@ impl BooleanEngine {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
         }
 
+        // 他所から来た立体は、こちらのビルダーとは別の持ち方をしています。
+        // 平面を B-spline で、全周を1枚の面で持つ。形は同じでも、この
+        // パイプラインはその持ち方では通りません（実測: 同じ円柱を同じ箱で
+        // 削って、ビルダー製は通り、読んだものは 9 本の稜が縫えずに落ちる）。
+        //
+        // 整えてから渡します。**元から整っている入力では何も起きません**
+        // ので、自前の立体の答えは動きません。詳しくは
+        // [`Regularizer::hold_like_our_own`]。
+        let held_a = crate::Regularizer::hold_like_our_own(solid_a, tol);
+        let held_b = crate::Regularizer::hold_like_our_own(solid_b, tol);
+        let solid_a = &held_a;
+        let solid_b = &held_b;
 
         // 境界箱が体積を持って重ならないなら、積は空だと確かめられる。
         // 面が触れているだけの配置はここに落ちる: 交線の候補はあるので
