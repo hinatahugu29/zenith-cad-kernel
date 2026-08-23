@@ -30,8 +30,10 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 
 | 指標 | 値 |
 | :--- | :--- |
-| テストバイナリ | **81（doctest 込み）すべてグリーン（455テスト 100%合格、0 failed、0 ignored）** |
-| 診断プローブ | 常設16本すべて exit 0（`builder_audit`, `planar_face_audit`, `boolean_topology_probe`, `mesh_watertight_probe`, `slice_probe`, `slice_robustness_probe`, `sketch_solver_probe`, `pcurve_fidelity_probe`, `inertia_probe`, `distance_probe`, `interference_depth_probe`, `regularize_probe`, `countersink_range_probe`, `face_split_probe`, `ssi_probe`, `boolean_gate_probe`） |
+| テストバイナリ | **93（doctest 込み）すべてグリーン（501テスト 100%合格、0 failed、0 ignored）** |
+| 診断プローブ | **常設26本**すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と `VERIFICATION_PLAYBOOK.md` の道具表にあります。**ここに名前を並べると必ず古くなる**ので、数だけ書いています |
+| **他カーネルの立体のブーリアン** | 軸に平行な30配置・90演算で**断るものは無し**、WRONG 0・PANIC 0、恒等式の残差 4.04e-9。検証つきの公開 API では 88/90（残る2件は答えが正しいのにゲートが断るもの、4-51）。**切り手を 27 度傾けると 180演算中 27件が拒否**（`ZENITH_TILTED=1`、4-61） |
+| **実務で普通に出てくる形の読み取り** | フィレット・面取り・複数穴・スロット・ロフト・曲がり管・挽き物・中空・段付き軸の**9検体すべて**を、体積 3e-11 以内・面数一致で読む（`shape_variety_probe`、4-60） |
 | Python 往復 | `tools/verify_solid_api.py` 全合格（作る → ブーリアン → 稜を丸める → STEP → 読み直す） |
 | **出力用メッシュ** | **測った全分割数で完全閉多様体（Watertight Manifold）**。4〜32分割の全9通り（`mesh_watertight_probe`）に加え、48・64・96・128・192・256 でも open: 0, non-manifold: 0, degenerate: 0 を実測（4-34 解消、4-37 で範囲を確認）。格子パッチ内は適応細分を掛けないので、弦誤差は分割数で決まる（32分割で体積差 1e-3 台） |
 | **断面の輪郭連結** | 溶接距離ではなく**メッシュの位相**（頂点添字・辺添字）で繋ぐ。公差を持たないので、分割数を 4〜256 のどこに振っても閉じる（4-37） |
@@ -197,6 +199,49 @@ OpenCASCADE 自身に同じ形を書かせるための道具です。
 ---
 
 残りは性質の違う塊に分かれます。上から順に大きい仕事です。
+
+### 3-N. いま最優先の2つ（2026年8月23日時点）
+
+**これが次に手を付けるものです。** どちらも場所まで測ってあります。
+
+#### 3-N-1. 傾けた切り手で、交線が取りこぼされる（4-61）
+
+```bash
+cargo run --release -p zenith_algo --example intersection_edge_probe -- cone_full "tilted drill"
+```
+
+円錐の側面は4分の1面に割れていますが、**そのうち1枚には交線が1本も届かず**、
+届いた交線も端が面の境界（`x = 0` と `y = 0` の平面）ではなく**内側で
+止まっています**。輪が閉じないので蓋が作れません。
+
+180演算のうち27件がこれで断られます。落ちるのは**検体を貫く**切り方だけで
+（`tilted drill` 6件、`tilted slab` 3件）、角落としは全検体通ります。
+
+疑うのは `IntersectionMarcher::march` の打ち切り条件です。`MarchedIntersection`
+は `stopped_at_boundary` と「接点の手前で止まったか」を持っているので、
+**まずそこを出させてください**。いまは面の内側で終わった交線をそのまま
+受け取っています。「境界に着かなかった枝は切り込みではない」と判定できれば、
+少なくとも黙って半端な交線を渡すのはやめられます。
+
+#### 3-N-2. 正しい答えをゲートが断る2件（4-51）
+
+`sphere corner` の差と和。**答えは OpenCASCADE と 3.4e-9 で一致していて、
+断っているのはこちらのゲートです。**
+
+```bash
+cargo run --release -p zenith_algo --example membership_mismatch_probe
+```
+
+食い違う標本は球面から 0.0002〜0.2 のところにいます。検証は A・B・結果の
+**3つのメッシュに別々に**内外を訊くので、同じ球面の別々の近似が面の近くで
+割れます。
+
+**帯を作って緩める方向は2回とも失敗しています**（三角形の大きさ、頂点法線）。
+どちらも `boolean_scale_and_empty_test` が止めました。やるなら、標本から
+**B-rep の面までの厳密な距離**を `ExtremumEngine` で測る方向です。
+食い違った標本だけ測れば済むので（383点中10点）、費用は問題になりません。
+
+---
 
 ### 3-Z. ブーリアン結果のメッシュが重い — 済（4-39）
 
@@ -2258,6 +2303,12 @@ Unsupported surface entity SURFACE_OF_LINEAR_EXTRUSION (#58).
 **回転体は `SURFACE_OF_REVOLUTION` になりませんでした。** OpenCASCADE は
 解析曲面に落とせる形は落とします。事前に「回転面が要る」と思って書き始めて
 いたら、要らないものを作っていました。
+
+> **補足（4-60、2026/08/23）**: これは**この母線に限った話**でした。ここの
+> 母線は直線なので円柱に落ちます。**スプラインの母線**を回すと OpenCASCADE は
+> `SURFACE_OF_REVOLUTION` を書き、インポーターはそれを読めませんでした。
+> 「1つの検体で出なかった」は「要らない」ではありません。挽き物の検体
+> （`occ_reference_shapes.py` の `revolved_vase`）で分かり、いまは読めます。
 
 #### 足したもの
 
@@ -4341,7 +4392,11 @@ IGES は引数を読まずに固定文字列を返していました。手掛か
 `CYLINDRICAL_SURFACE` に落ちていました。出てきたのは
 `SURFACE_OF_LINEAR_EXTRUSION` と `ELLIPSE` です（4-38）。
 **相手が何を書くかは、相手に書かせて数えるのがいちばん速い**です。
-道具は `tools/occ_reference_swept.py` にあります。
+道具は `tools/occ_reference_swept.py` にあります。**ただし「1つの検体で
+出なかった」を「要らない」と読まないでください。** ここで回転面が出なかった
+のは母線が直線だったからで、スプラインの母線を回すと出ます。そちらは
+インポーターが読めないままでしたが、**検体に1つも入っていなかったので
+誰も気づけませんでした**（4-60）。
 
 **症状を測ったからといって、原因まで測ったことにはなりません。**
 3-Z には「同じ形なのにブーリアン結果が最大 17.5 倍重い」という**測った症状**と、
@@ -4808,7 +4863,7 @@ cargo run --release -p zenith_algo --example export_iges_suite        # target/i
 ## 8. リポジトリの状態
 
 作業ツリーはクリーンです（2026年8月23日時点）。ブランチは
-`main` です（4-54 まで反映済み）。
+`main` だけで、`origin/main` と同期しています（4-61 まで反映済み）。
 
 追跡していないもの:
 
@@ -4842,6 +4897,14 @@ cargo run --release -p zenith_algo --example export_iges_suite
 
 cargo run --release -p zenith_algo --example foreign_boolean_probe
 # ok 26 / NOCUT 4 / 拒否 0 / WRONG 0 / PANIC 0、検証つきの口で 88/90、恒等式の残差 4.04e-9。返ってこないものが1件でも出たら赤
+
+cargo run --release -p zenith_algo --example shape_variety_probe
+# read 9 of 9 / volume ok 9 / WRONG 0
+
+# 傾けた切り手も測るなら（26分かかるので既定では走りません）
+$env:ZENITH_TILTED=1; cargo run --release -p zenith_algo --example foreign_boolean_probe
+# ok 44 / NOCUT 7 / 拒否 27 / WRONG 0 / PANIC 0、検証つきの口で 149/180。
+# **拒否が増えるのは既知**（4-61）。赤にするのは WRONG と PANIC と、返ってこないものです
 
 cargo build --release -p zenith_py
 py tools/verify_solid_api.py
