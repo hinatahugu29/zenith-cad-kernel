@@ -3867,6 +3867,15 @@ fn clip_curve_to_planar_face_trim(
     if polygon.len() < 3 {
         return None;
     }
+    // **穴の中は面の外です。** 外周だけで見ていたので、穴を通る交線が面の上に
+    // あることになっていました。円環の平らなキャップに、穴を素通りする丸棒の
+    // 側面が作る円がそれで、実際には触れていないのに交線として通ります。
+    let holes: Vec<Vec<Point2>> = pcurves
+        .inner_loops
+        .iter()
+        .map(|inner| sample_pcurve_loop(inner, 48))
+        .filter(|polygon| polygon.len() >= 3)
+        .collect();
 
     let (t0, t1) = edge.curve.param_range();
     let span = t1 - t0;
@@ -3877,7 +3886,15 @@ fn clip_curve_to_planar_face_trim(
     let margin = tol.parametric.max(1e-9);
     let inside = |t: f64| -> bool {
         let point = edge.curve.evaluate(t.clamp(t0, t1));
-        point_in_polygon_2d(project_to_plane_uv(point, plane), &polygon, margin)
+        let uv = project_to_plane_uv(point, plane);
+        if !point_in_polygon_2d(uv, &polygon, margin) {
+            return false;
+        }
+        // 穴の内側は面ではない。境界の上は内側として扱うので、穴の縁に
+        // 乗った点は「面の上」に残ります（そこは本当に面の一部です）。
+        !holes
+            .iter()
+            .any(|hole| point_in_polygon_2d(uv, hole, -margin))
     };
 
     const SAMPLES: usize = 257;
@@ -3986,7 +4003,51 @@ fn clip_segment_to_planar_face_trim(
     else {
         return Some(current_interval);
     };
+
+    // **穴の中は面の外です。** 外周の内側から、内側ループの内側を引きます。
+    // 引かないと、穴を素通りするだけの相手が交わっていることになります。
+    let mut intervals = intervals;
+    for inner in &pcurves.inner_loops {
+        let Some(hole) = segment_inside_pcurve_loop_intervals(uv_start, uv_end, inner, tol) else {
+            continue;
+        };
+        intervals = subtract_intervals(intervals, &hole, tol.parametric);
+        if intervals.is_empty() {
+            return None;
+        }
+    }
+
     intersect_interval_set(current_interval, &intervals, tol.parametric)
+}
+
+/// `base` から `cut` を取り除く。どちらも昇順に整っている必要はありません。
+fn subtract_intervals(base: Vec<(f64, f64)>, cut: &[(f64, f64)], tol: f64) -> Vec<(f64, f64)> {
+    let epsilon = tol.max(1e-12);
+    let mut remaining = base;
+    for hole in cut {
+        let mut next = Vec::with_capacity(remaining.len() + 1);
+        for (start, end) in remaining {
+            // 重なりが無ければそのまま残す。
+            if hole.1 <= start + epsilon || hole.0 >= end - epsilon {
+                next.push((start, end));
+                continue;
+            }
+            if hole.0 > start + epsilon {
+                next.push((start, hole.0));
+            }
+            if hole.1 < end - epsilon {
+                next.push((hole.1, end));
+            }
+        }
+        remaining = next;
+        if remaining.is_empty() {
+            break;
+        }
+    }
+    remaining
+        .into_iter()
+        .filter(|(start, end)| end - start > epsilon)
+        .collect()
 }
 
 /// Trim-clips a UV segment against a p-curve loop.
