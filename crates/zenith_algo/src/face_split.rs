@@ -123,6 +123,28 @@ impl FaceSplitter {
             ));
         }
 
+        // **巻き方を、面の向きと突き合わせます。**
+        //
+        // ループの並びは辿った順でしかなく、面がどちら向きかを見ていません。
+        // 逆に巻いた片を返すと、形も面積も合ったまま、**共有する稜を両側が
+        // 同じ向きに辿ります**。閉じた多様体ではそれは起こりえないので、
+        // 縫合が落ちます。実測: 円錐の角を箱で削る積・和で、縫えない稜 0・
+        // 非多様体 0 のまま**同方向の稜が 6 本**出ていました。
+        //
+        // 正規化の側には 4-46 で同じ検査を入れてあります。こちらに入れて
+        // いなかったので、球では偶然合っていて円錐で合いませんでした。
+        let ordered = if interior_loop_winds_with(face, &ordered, tol) {
+            ordered
+        } else {
+            ordered
+                .iter()
+                .rev()
+                .map(|oriented| {
+                    OrientedEdge::new(oriented.edge.clone(), oriented.orientation.reversed())
+                })
+                .collect()
+        };
+
         let loop_wire = Wire::new(ordered.clone());
         // 内側の片は、ループをそのまま外周にする。
         let inside = Face::new(
@@ -468,6 +490,56 @@ fn oriented_end(oriented: &OrientedEdge) -> Point3 {
 ///
 /// 端点が1度しか現れない辺が両端になる。輪になっている（すべての端点が2度
 /// 現れる）集まりは、境界に着地しないので断る。
+/// 内側のループが、面の向きと同じ側を囲んでいるか。
+///
+/// 媒介変数空間での符号付き面積で見ます。`Forward` の面なら正、`Reversed` の
+/// 面なら負が正しい向きです（シェルの検証がそう見ています）。
+///
+/// p-curve が出せない面では判定できないので、そのときは並べ替えません。
+/// 触らないほうが、当てずっぽうで裏返すよりましです。
+fn interior_loop_winds_with(face: &Face, ordered: &[OrientedEdge], tol: &Tolerance) -> bool {
+    let candidate = Face::new(
+        face.geometry.clone(),
+        Wire::new(ordered.to_vec()),
+        Vec::new(),
+        face.orientation,
+        face.tolerance,
+    );
+    let Ok(pcurves) = candidate.pcurves(tol) else {
+        return true;
+    };
+
+    let mut area = 0.0;
+    let mut previous: Option<zenith_math::Point2> = None;
+    let mut first: Option<zenith_math::Point2> = None;
+    for segment in &pcurves.outer_loop.segments {
+        let (t0, t1) = segment.curve.param_range();
+        const SAMPLES: usize = 8;
+        for step in 0..=SAMPLES {
+            let point = segment
+                .curve
+                .evaluate(t0 + (t1 - t0) * step as f64 / SAMPLES as f64);
+            if first.is_none() {
+                first = Some(point);
+            }
+            if let Some(last) = previous {
+                area += last.x * point.y - point.x * last.y;
+            }
+            previous = Some(point);
+        }
+    }
+    if let (Some(last), Some(start)) = (previous, first) {
+        area += last.x * start.y - start.x * last.y;
+    }
+    let area = area * 0.5;
+    let oriented = if face.orientation.is_forward() {
+        area
+    } else {
+        -area
+    };
+    oriented > tol.parametric
+}
+
 /// 閉じたループになる稜の並びを、端から端へ辿って揃える。
 ///
 /// `order_chain` は「1度しか出ない端点が2つ」を道の端として使いますが、
