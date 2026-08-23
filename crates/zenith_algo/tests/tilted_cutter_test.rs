@@ -301,4 +301,67 @@ mod revolved_ring {
             difference + intersection
         );
     }
+
+    /// 境界箱 (-10,-10,0)-(10,10,6) に対する `centre drill` を傾けたもの。
+    ///
+    /// **切り込みが穴の縁から出て穴の縁へ戻ります。** 答えの片方は
+    /// 「外周を外側の輪、[穴の弧＋切り込み] を内側の輪」に持つ**穴のある面**
+    /// で、そこを組み立てられるようになったのが 4-67 です。
+    fn tilted_drill_for_ring() -> Solid {
+        let upright = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_cylinder(3.6, 18.0).expect("drill"),
+            Vec3::new(0.0, 0.0, -6.0),
+        );
+        tilt(&upright, Vec3::new(0.0, 0.0, 3.0))
+    }
+
+    fn drill(op: BooleanOpType) -> Vec<Solid> {
+        let tol = Tolerance::default();
+        BooleanEngine::boolean_solids_exact_result(
+            &fixture("revolved_ring"),
+            &tilted_drill_for_ring(),
+            op,
+            &tol,
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "revolved_ring / tilted drill / {op:?} refused: {}",
+                err.chars().take(140).collect::<String>()
+            )
+        })
+        .solids
+    }
+
+    /// OpenCASCADE（`occ_cut_reference.py revolved_ring "tilted drill" --box -10 -10 0 10 10 6`）。
+    const OCC_DRILL_DIFFERENCE: f64 = 1567.804501;
+
+    #[test]
+    fn the_tilted_drill_bites_the_bore() {
+        let got = volume(&drill(BooleanOpType::Difference));
+        assert!(
+            (got - VOLUME).abs() > 1e-6,
+            "the difference came back as the untouched ring ({got})"
+        );
+        let relative = (got - OCC_DRILL_DIFFERENCE).abs() / OCC_DRILL_DIFFERENCE;
+        assert!(
+            relative <= 1e-6,
+            "difference {got} against OpenCASCADE's {OCC_DRILL_DIFFERENCE} (relative {relative:.3e})"
+        );
+    }
+
+    #[test]
+    fn the_drilled_halves_add_back_up() {
+        let difference = volume(&drill(BooleanOpType::Difference));
+        let intersection = volume(&drill(BooleanOpType::Intersection));
+        assert!(
+            intersection > 1.0,
+            "the intersection came out empty ({intersection})"
+        );
+        let relative = (difference + intersection - VOLUME).abs() / VOLUME;
+        assert!(
+            relative <= 1e-7,
+            "V(A-B) + V(A^B) = {} against V(A) = {VOLUME} (relative {relative:.3e})",
+            difference + intersection
+        );
+    }
 }
