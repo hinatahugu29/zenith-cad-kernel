@@ -621,7 +621,7 @@ impl BrepIntersectionBuilder {
             let reversed_score =
                 stitch_report_score(&diagnose_selected_face_stitching(&reversed_pieces, tol));
 
-            let base_score = stitch_report_score(&diagnose_selected_face_stitching(
+            let base = stitch_report_score(&diagnose_selected_face_stitching(
                 &selected_face_pieces,
                 tol,
             ));
@@ -630,9 +630,20 @@ impl BrepIntersectionBuilder {
             } else {
                 (forward_score, forward_piece)
             };
-            // 既に閉じている選択面にキャップを足すと二重になるため、
-            // ステッチが改善する場合だけ採用する
-            if best_score < base_score {
+            // **蓋は塞ぐことはあっても壊してはいけない。**
+            //
+            // ここは以前 `(未整合, 非多様体, 同方向)` の辞書順で比べていた。
+            // 未整合が先頭なので、**非多様体を6本作ってでも未整合を2本減らす**
+            // 選択が「改善」と判定される。実測: 押し出したスプラインをスラブで
+            // 切ると (10, 0, 0) から (8, 6, 0) になり、それが採用されていた。
+            // B 側の切断面が既に選ばれているところへ蓋を重ねた形である。
+            //
+            // 未整合は「まだ閉じていない」、非多様体は「壊れている」。
+            // 減らしてよいのは前者だけで、後者を増やす取引は無い。
+            let closes_without_breaking = best_score.0 < base.0
+                && best_score.1 <= base.1
+                && best_score.2 <= base.2;
+            if closes_without_breaking {
                 selected_face_pieces.push(best_piece);
             }
         }
@@ -4226,14 +4237,23 @@ fn segment_inside_pcurve_loop_intervals(
         match pcurve_segment_crossings(&segment.curve, start, direction) {
             Some(crossings) => cuts.extend(crossings),
             None => {
-                // 高次スパンは従来どおり折れ線近似で交差位置を求める
-                let points = segment.curve.sample_points(CLASSIFICATION_SAMPLES);
-                for pair in points.windows(2) {
-                    if let Some(t) =
-                        segment_segment_intersection_t(start, end, pair[0], pair[1], tol.parametric)
-                    {
-                        cuts.push(t);
-                    }
+                // 閉じた式が無い次数（3次以上、あるいは多スパン）。
+                // **折れ線で代用しない。** 32点の折れ線で交差位置を取ると、
+                // 弦と曲線のずれがそのまま交点のずれになる。実測: 押し出した
+                // スプラインを平面で切ると、側面から出た交線の端が y = 2.7446、
+                // 同じスプラインを境界に持つ蓋から出た交線の端が y = 2.7423 で、
+                // **2.3e-3 ずれて輪が閉じず**、蓋が1枚も作れていなかった。
+                //
+                // 直線までの符号付き距離は曲線に沿って滑らかなので、符号の
+                // 変わる区間を折れ線で挟んでから、曲線そのもので二分する。
+                // 次数に依らず丸め誤差まで詰まる。
+                for t in pcurve_crossings_by_bisection(
+                    &segment.curve,
+                    start,
+                    direction,
+                    CLASSIFICATION_SAMPLES,
+                ) {
+                    cuts.push(t);
                 }
             }
         }
@@ -4309,6 +4329,71 @@ fn pcurve_segment_crossings(
     )
 }
 
+
+/// 直線と p-curve の交点を、**曲線そのもの**の上で求める。
+///
+/// 直線までの符号付き距離 `f(t) = n·(C(t) - start)` は曲線に沿って滑らか
+/// なので、符号が変わる区間を粗い標本で挟み、そこを二分すれば次数に依らず
+/// 丸め誤差まで詰められる。返すのは直線側のパラメータ（`start` を 0、
+/// `start + direction` を 1 とする）。
+///
+/// **折れ線の交点で代用しないための関数である。** 弦と曲線のずれはそのまま
+/// 交点のずれになり、同じ曲線を境界に持つ別の面から出た交線と端が食い違う。
+fn pcurve_crossings_by_bisection(
+    curve: &zenith_geom::NurbsCurve2,
+    start: Point2,
+    direction: Vec2,
+    samples: usize,
+) -> Vec<f64> {
+    let normal = Vec2::new(-direction.y, direction.x);
+    let signed = |t: f64| normal.dot(&(curve.evaluate(t) - start));
+    let on_line = |t: f64| {
+        let point = curve.evaluate(t);
+        (point - start).dot(&direction) / direction.norm_squared()
+    };
+
+    let (t_min, t_max) = curve.param_range();
+    let samples = samples.max(4);
+    let mut found = Vec::new();
+    // 標本そのものが線に乗っている場合。二分では挟めないので拾っておく。
+    let zero = normal.norm() * 1e-12;
+
+    let mut previous = (t_min, signed(t_min));
+    if previous.1.abs() <= zero {
+        found.push(on_line(t_min));
+    }
+    for step in 1..=samples {
+        let t = t_min + (t_max - t_min) * (step as f64 / samples as f64);
+        let value = signed(t);
+        if value.abs() <= zero {
+            found.push(on_line(t));
+        } else if previous.1 * value < 0.0 {
+            // 符号が変わった。曲線の上で二分する。
+            let (mut low, mut low_value) = previous;
+            let mut high = t;
+            for _ in 0..80 {
+                let mid = 0.5 * (low + high);
+                if mid <= low || mid >= high {
+                    break;
+                }
+                let mid_value = signed(mid);
+                if mid_value == 0.0 {
+                    low = mid;
+                    break;
+                }
+                if low_value * mid_value < 0.0 {
+                    high = mid;
+                } else {
+                    low = mid;
+                    low_value = mid_value;
+                }
+            }
+            found.push(on_line(0.5 * (low + high)));
+        }
+        previous = (t, value);
+    }
+    found
+}
 fn solve_linear_bernstein(b0: f64, b1: f64) -> Vec<f64> {
     let slope = b1 - b0;
     if slope.abs() <= f64::EPSILON {
@@ -4379,26 +4464,6 @@ fn merge_intervals(mut intervals: Vec<(f64, f64)>, tol: f64) -> Vec<(f64, f64)> 
     }
     merged.push(current);
     merged
-}
-
-fn segment_segment_intersection_t(
-    p0: Point2,
-    p1: Point2,
-    q0: Point2,
-    q1: Point2,
-    tol: f64,
-) -> Option<f64> {
-    let r = p1 - p0;
-    let s = q1 - q0;
-    let denom = cross2(r, s);
-    if denom.abs() <= tol.max(1e-12) {
-        return None;
-    }
-
-    let qp = q0 - p0;
-    let t = cross2(qp, s) / denom;
-    let u = cross2(qp, r) / denom;
-    (t >= -tol && t <= 1.0 + tol && u >= -tol && u <= 1.0 + tol).then_some(t)
 }
 
 fn point_in_polygon_2d(point: Point2, polygon: &[Point2], tol: f64) -> bool {

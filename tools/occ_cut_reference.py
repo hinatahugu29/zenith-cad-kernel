@@ -62,10 +62,31 @@ def cutter(kind, box):
     raise SystemExit(f"unknown cutter {kind}")
 
 
+class ExplicitBox:
+    """渡された6数そのものの箱。OCC の `BoundBox` と同じ読み方ができる。"""
+
+    def __init__(self, values):
+        (
+            self.XMin,
+            self.YMin,
+            self.ZMin,
+            self.XMax,
+            self.YMax,
+            self.ZMax,
+        ) = values
+
+
 def main():
     if len(sys.argv) < 3:
-        raise SystemExit("usage: occ_cut_reference.py <subject> <slab|drill|corner>")
+        raise SystemExit(
+            "usage: occ_cut_reference.py <subject> <slab|drill|corner>"
+            " [--box xmin ymin zmin xmax ymax zmax]"
+        )
     subject, kind = sys.argv[1], sys.argv[2]
+    given_box = None
+    if "--box" in sys.argv:
+        at = sys.argv.index("--box")
+        given_box = ExplicitBox([float(v) for v in sys.argv[at + 1 : at + 7]])
 
     path = os.path.join(FIXTURES, f"occ_reference_{subject}.step")
     solid = Part.Shape()
@@ -74,7 +95,7 @@ def main():
     # 切り手の置き方はプローブと同じで、**メッシュではなく厳密な境界箱**から
     # 決めます。プローブ側はメッシュの箱を使うので、丸い形ではわずかに違う
     # 箱になりえます。ずれると別の配置を測ることになるので、そこも出します。
-    box = solid.BoundBox
+    box = given_box if given_box is not None else solid.BoundBox
     tool = cutter(kind, box)
 
     difference = solid.cut(tool)

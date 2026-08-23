@@ -211,5 +211,23 @@ fn main() {
             piece.location,
             if piece.reverse_orientation { " reversed" } else { "" }
         );
+        // **輪を丸ごと出す。** 縫えない稜だけ見ていると、「片が足りない」のか
+        // 「片の輪が元の稜をそのまま抱えている」のかが分かれません。
+        // 実測: 蓋の片が、割ったはずのスプラインを端から端まで持っていました。
+        if std::env::args().any(|arg| arg == "--wires") {
+            for wire in
+                std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter())
+            {
+                for oriented in &wire.edges {
+                    let (t0, t1) = oriented.edge.curve.param_range();
+                    let start = oriented.edge.curve.evaluate(t0);
+                    let end = oriented.edge.curve.evaluate(t1);
+                    println!(
+                        "        ({:8.4} {:8.4} {:8.4}) -> ({:8.4} {:8.4} {:8.4})",
+                        start.x, start.y, start.z, end.x, end.y, end.z
+                    );
+                }
+            }
+        }
     }
 }
