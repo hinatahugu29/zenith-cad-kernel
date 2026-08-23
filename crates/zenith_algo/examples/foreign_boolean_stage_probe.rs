@@ -21,10 +21,12 @@ use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
 use zenith_topo::Solid;
 
+/// **`foreign_boolean_probe` と同じ刻み**。切り手は境界箱から置くので、
+/// ここが違うと同じ名前の配置が別の配置になります（実測でずれていました）。
 fn params() -> TessellationParams {
     TessellationParams {
-        u_divisions: 32,
-        v_divisions: 32,
+        u_divisions: 64,
+        v_divisions: 64,
     }
 }
 

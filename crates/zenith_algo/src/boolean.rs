@@ -536,10 +536,19 @@ impl BooleanEngine {
             return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
         }
 
+        // **本番と同じ入力で数えます。** 演算のほうは入口で立体を整えるので
+        // （`Regularizer::hold_like_our_own`）、ここで整えずに数えると
+        // **別の走行の内訳**を報告することになります。実測でずれていました:
+        // 輪をスラブで切る配置を、演算は 6 組・8 稜・蓋 2 枚で走っているのに、
+        // この報告は 4 組・6 稜・蓋 0 枚と言っていました。**そしてその数字を
+        // 見て、残り23件の分類をしていました。**
+        let held_a = crate::Regularizer::hold_like_our_own(solid_a, tol);
+        let held_b = crate::Regularizer::hold_like_our_own(solid_b, tol);
+
         let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
-            solid_a, solid_b, op, tol,
+            &held_a, &held_b, op, tol,
         );
-        Self::preparation_report_from_shell_assembly(solid_a, solid_b, &shell_assembly, tol)
+        Self::preparation_report_from_shell_assembly(&held_a, &held_b, &shell_assembly, tol)
     }
 
     /// 既に組み立ててあるシェルから、そのままの数え上げを返す。
