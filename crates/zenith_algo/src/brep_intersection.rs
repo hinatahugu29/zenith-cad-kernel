@@ -5989,7 +5989,39 @@ fn split_planar_face_across_holes(
         let mut hits = landings[index].clone();
         if hits.is_empty() {
             if index > 0 {
+                // 触られていない穴は、あとで含む領域へ配ります。
                 free_wires.push((*wire).clone());
+                continue;
+            }
+            // **外周は、切り込みが当たっていなくてもグラフに要ります。**
+            // 落とすと、外周に囲まれた領域そのものが巡回に出てきません。
+            // 円環の穴の縁から出て穴の縁へ戻る切り込みでは、答えの片方が
+            // 「外周を外側の輪、[穴の弧＋切り込み] を内側の輪」に持つ面に
+            // なりますが、外周が無いとそれを組み立てられません（4-67）。
+            let mut pieces: Vec<Vec<OrientedEdge>> = wire
+                .edges
+                .iter()
+                .map(|oriented| vec![oriented.clone()])
+                .collect();
+            // 閉じた稜が1本だけの輪（全周の円がこれ）は、そのままだと
+            // 始点と終点が同じで弧になりません。半分に割ります。
+            if pieces.len() == 1 {
+                let oriented = &wire.edges[0];
+                let Ok(Some(first)) = oriented_edge_portion(oriented, 0.0, 0.5, tol) else {
+                    continue;
+                };
+                let Ok(Some(second)) = oriented_edge_portion(oriented, 0.5, 1.0, tol) else {
+                    continue;
+                };
+                pieces = vec![vec![first], vec![second]];
+            }
+            for path in pieces {
+                let start = node_index(&mut nodes, oriented_start_point(&path[0]), tol);
+                let end = node_index(&mut nodes, oriented_end_point(&path[path.len() - 1]), tol);
+                if start == end {
+                    continue;
+                }
+                arcs.push(Arc { from: start, to: end, path });
             }
             continue;
         }
@@ -6125,10 +6157,21 @@ fn split_planar_face_across_holes(
     let face_winding = signed_area_2d(&outer_polygon).signum();
     let mut regions: Vec<Wire> = Vec::new();
     let mut outlines: Vec<Vec<Point2>> = Vec::new();
+    // 面ごとに、その巡回が通った節点。**外形をどの面に付けるかを決めるのに
+    // 要ります。** 同じ連結成分の外形を自分の面に付けると、面積が 0 になって
+    // しまいます（実測でそうなりました。外周の外形が外周の面の穴になり、
+    // 314.16 の面が 0 になりました）。
+    let mut region_nodes: Vec<std::collections::BTreeSet<usize>> = Vec::new();
+    // 連結成分の外形（面積が負の閉路を裏返したもの）と、通った節点。
+    let mut component_outlines: Vec<(Wire, Vec<Point2>, std::collections::BTreeSet<usize>)> =
+        Vec::new();
     for cycle in &cycles {
         let mut edges = Vec::new();
+        let mut touched: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
         for index in cycle {
             edges.extend(directed[*index].path.iter().cloned());
+            touched.insert(directed[*index].from);
+            touched.insert(directed[*index].to);
         }
         let wire = Wire::new(edges);
         let polygon: Vec<Point2> = wire
@@ -6136,37 +6179,88 @@ fn split_planar_face_across_holes(
             .iter()
             .map(|point| project_to_plane_uv(*point, plane))
             .collect();
-        if polygon.len() < 3 || signed_area_2d(&polygon) <= 0.0 {
+        if polygon.len() < 3 {
             continue;
         }
-        let Some(inside) = interior_sample_2d(&polygon, tol.parametric) else {
+        // **面積が負の閉路は、その連結成分の「外形」です。** 捨てずに取って
+        // おいて、あとでそれを含む面の穴にします。外周と穴まわりが繋がって
+        // いない配置では、答えの片方が穴のある面になり、その穴がこれです
+        // （4-67）。
+        if signed_area_2d(&polygon) <= 0.0 {
+            let mut reversed_polygon = polygon.clone();
+            reversed_polygon.reverse();
+            // **穴の輪は、外周と逆向きでなければなりません。** 巡回が出す
+            // 外形は既に外周と逆向き（面積が負）なので、そのまま持ちます。
+            // 裏返して持つと、縫合で「同じ向きに2度使われた稜」が出ます
+            // （実測で 12 本。片は1枚だけで、それが相手全部と衝突しました）。
+            // 判定に使う多角形のほうだけ、向きを揃えたものを持ちます。
+            component_outlines.push((wire, reversed_polygon, touched));
+            continue;
+        }
+        // **代表点は穴を避けて取ります。** 外周に囲まれた領域の重心は、
+        // 円環では穴の中に落ちます。そこで内外を訊くと、正しい領域が
+        // 「穴の中だから面ではない」と捨てられます（4-67）。
+        let Some(inside) = interior_sample_2d(&polygon, &hole_polygons, tol.parametric) else {
             continue;
         };
         if !point_in_polygon_2d(inside, &outer_polygon, tol.parametric) {
             continue;
         }
-        if hole_polygons
-            .iter()
-            .any(|hole| point_in_polygon_2d(inside, hole, tol.parametric))
-        {
-            continue;
-        }
         regions.push(if face_winding < 0.0 { reversed_wire(&wire) } else { wire });
         outlines.push(polygon);
+        region_nodes.push(touched);
     }
 
     if regions.len() < 2 {
         return Err("cutting across the hole did not divide the face".to_string());
     }
 
-    // 8. 着地の無かった穴は、それを含む領域の穴として戻します。
+    // 8. 連結成分の外形を、それを含むいちばん小さい面の穴にします。
+    //
+    // 外周と、穴まわり（穴の弧＋切り込み）が繋がっていない配置では、答えの
+    // 片方が**穴のある面**になります。巡回は連結成分ごとにしか閉路を出せない
+    // ので、その穴は「別の成分の外形」として出てきます。
+    let mut holes_for: Vec<Vec<Wire>> = vec![Vec::new(); regions.len()];
+    for (outline_wire, outline_polygon, outline_nodes) in &component_outlines {
+        let Some(sample) = interior_sample_2d(outline_polygon, &[], tol.parametric) else {
+            continue;
+        };
+        // 含む面のうち、いちばん小さいものに付けます。
+        let mut best: Option<(usize, f64)> = None;
+        for (index, region_polygon) in outlines.iter().enumerate() {
+            // **同じ連結成分の面には付けません。** 外形はその成分の外側の
+            // 縁なので、自分の面の穴にすると面積が 0 になります。
+            if !region_nodes[index].is_disjoint(outline_nodes) {
+                continue;
+            }
+            if !point_in_polygon_2d(sample, region_polygon, tol.parametric) {
+                continue;
+            }
+            let area = signed_area_2d(region_polygon).abs();
+            if best.is_none_or(|(_, best_area)| area < best_area) {
+                best = Some((index, area));
+            }
+        }
+        // どの面にも含まれない外形は、いちばん外側の成分のものです。
+        // それは面ではなく「面の外」なので、捨てます。
+        if let Some((index, _)) = best {
+            // 面のほうは `face_winding` に揃えてあるので、穴はその逆にします。
+            holes_for[index].push(if face_winding < 0.0 {
+                reversed_wire(outline_wire)
+            } else {
+                outline_wire.clone()
+            });
+        }
+    }
+
     let mut faces: Vec<Face> = regions
         .into_iter()
-        .map(|wire| {
+        .zip(holes_for)
+        .map(|(wire, holes)| {
             Face::new(
                 face.geometry.clone(),
                 wire,
-                Vec::new(),
+                holes,
                 face.orientation,
                 face.tolerance,
             )
@@ -6205,7 +6299,9 @@ fn split_planar_face_across_holes(
         .sum();
     if expected > 0.0 && (got - expected).abs() / expected > 1e-6 {
         return Err(format!(
-            "the regions add up to {got:.6e} against the face's {expected:.6e}"
+            "the regions add up to {got:.6e} against the face's {expected:.6e} ({} face(s), {} outline(s))",
+            faces.len(),
+            component_outlines.len()
         ));
     }
 
@@ -6257,7 +6353,14 @@ fn locate_on_any_wire(wires: &[&Wire], point: Point3, tol: &Tolerance) -> Option
 
 /// 多角形の**内側**の点を1つ返す。重心は凹形では外に出るので、辺から内側へ
 /// わずかに寄せた点を順に試す。
-fn interior_sample_2d(polygon: &[Point2], tol: f64) -> Option<Point2> {
+fn interior_sample_2d(polygon: &[Point2], holes: &[Vec<Point2>], tol: f64) -> Option<Point2> {
+    let usable = |candidate: Point2| {
+        point_in_polygon_2d(candidate, polygon, tol)
+            && !point_on_polygon_boundary(candidate, polygon, tol)
+            && !holes
+                .iter()
+                .any(|hole| point_in_polygon_2d(candidate, hole, tol))
+    };
     let count = polygon.len() as f64;
     let sum = polygon
         .iter()
@@ -6265,9 +6368,7 @@ fn interior_sample_2d(polygon: &[Point2], tol: f64) -> Option<Point2> {
             Point2::new(sum.x + point.x, sum.y + point.y)
         });
     let centroid = Point2::new(sum.x / count, sum.y / count);
-    if point_in_polygon_2d(centroid, polygon, tol)
-        && !point_on_polygon_boundary(centroid, polygon, tol)
-    {
+    if usable(centroid) {
         return Some(centroid);
     }
 
@@ -6287,9 +6388,7 @@ fn interior_sample_2d(polygon: &[Point2], tol: f64) -> Option<Point2> {
         };
         for sign in [1.0_f64, -1.0] {
             let candidate = mid + inward * (step * sign);
-            if point_in_polygon_2d(candidate, polygon, tol)
-                && !point_on_polygon_boundary(candidate, polygon, tol)
-            {
+            if usable(candidate) {
                 return Some(candidate);
             }
         }
