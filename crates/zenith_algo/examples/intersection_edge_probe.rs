@@ -156,6 +156,7 @@ fn main() {
     println!("\n  {} intersection edge(s)", edges.len());
     let mut ends: Vec<(Point3, Point3)> = Vec::new();
     for candidate in &edges {
+    end_distance_report(&faces_a, &faces_b, &edges, &tol);
         let (t0, t1) = candidate.edge.curve.param_range();
         let start = candidate.edge.curve.evaluate(t0);
         let end = candidate.edge.curve.evaluate(t1);
@@ -311,5 +312,77 @@ fn chain_report(
                 ),
             }
         }
+    }
+}
+
+/// 交線の端が、その面の境界からどれだけ離れているかを面ごとに出す。
+///
+/// **「the splitting curve ends 5.073e-4 away from the boundary」は、
+/// その面の worst しか教えません。** どの端点がどの境界稜から離れているのかは
+/// 分からないので、分割が断られたときに何を直せばよいか決められません。
+///
+/// ここは端点を1つずつ、いちばん近い境界稜への厳密な距離とともに出します。
+/// 許容は `tol.linear * 10 * (境界の広がり)` です（`FaceSplitter` と同じ）。
+fn end_distance_report(
+    faces_a: &[zenith_topo::Face],
+    faces_b: &[zenith_topo::Face],
+    edges: &[zenith_algo::IntersectionEdgeCandidate],
+    tol: &Tolerance,
+) {
+    use zenith_geom::ExtremumEngine;
+
+    println!("\n  how far each cut end sits from the face boundary:");
+    let mut worst_over = 0usize;
+    for candidate in edges {
+        let (t0, t1) = candidate.edge.curve.param_range();
+        for (label, index, face, end) in [
+            ("A", candidate.face_a_index, &faces_a[candidate.face_a_index], t0),
+            ("A", candidate.face_a_index, &faces_a[candidate.face_a_index], t1),
+            ("B", candidate.face_b_index, &faces_b[candidate.face_b_index], t0),
+            ("B", candidate.face_b_index, &faces_b[candidate.face_b_index], t1),
+        ] {
+            let point = candidate.edge.curve.evaluate(end);
+            // 境界の広がりから許容を出します（`FaceSplitter` と同じ規則）。
+            let extent = {
+                let points = face.outer_wire.sample_points(16);
+                let mut worst: f64 = 0.0;
+                for (i, a) in points.iter().enumerate() {
+                    for b in points.iter().skip(i + 1) {
+                        worst = worst.max((a - b).norm());
+                    }
+                }
+                worst.max(1.0)
+            };
+            let limit = tol.linear * 10.0 * extent;
+
+            let mut closest = f64::INFINITY;
+            let mut which = usize::MAX;
+            for (edge_index, oriented) in face.outer_wire.edges.iter().enumerate() {
+                let Ok(projection) =
+                    ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 128, 1e-13)
+                else {
+                    continue;
+                };
+                if projection.distance < closest {
+                    closest = projection.distance;
+                    which = edge_index;
+                }
+            }
+            if !closest.is_finite() {
+                continue;
+            }
+            // 境界に乗っている端は普通のことなので、外れているものだけ出します。
+            if closest <= limit {
+                continue;
+            }
+            worst_over += 1;
+            println!(
+                "    {label}{index:<2} end ({:8.4} {:8.4} {:8.4}) is {closest:.3e} from boundary edge {which} (allowed {limit:.3e})",
+                point.x, point.y, point.z
+            );
+        }
+    }
+    if worst_over == 0 {
+        println!("    every end sits on its face boundary");
     }
 }
