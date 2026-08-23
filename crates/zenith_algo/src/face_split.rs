@@ -79,6 +79,105 @@ impl FaceSplitter {
         Self::split_by_chain(face, std::slice::from_ref(split), tol)
     }
 
+    /// 面の**内側で閉じたループ**で `face` を2枚に割る。
+    ///
+    /// 境界から境界へ届く切り込みとは別の形です。球の八分片を、角に置いた箱の
+    /// 3面が切ると、交線は3本の弧になり、**3本で球面上の閉じたループ**を
+    /// 作ります。どの弧も八分片の境界に着かないので、`split_by_chain` は
+    /// 「境界に届かない」と断ります。実測では、断られた結果 A の面は1枚も
+    /// 割られず、B 側の平面パッチが持つ弧に相手がいなくなっていました
+    /// （`unmatched_edge_probe`）。
+    ///
+    /// 割り方は素直です。**曲面はそのままで、境界だけを付け替えます。**
+    ///
+    /// - 内側の片: ループを**外周**にした面。
+    /// - 外側の片: 元の外周のまま、ループを**穴**として足した面。
+    ///
+    /// 面積の和が元に戻ることを測って返します。戻らなければ、ループが本当に
+    /// 面の内側にあったのかを疑ってください。
+    pub fn split_by_interior_loop(
+        face: &Face,
+        loop_edges: &[Edge],
+        tol: &Tolerance,
+    ) -> Result<(Vec<Face>, FaceSplitReport), String> {
+        if loop_edges.is_empty() {
+            return Err("an interior cut needs at least one curve".to_string());
+        }
+        if !face.inner_wires.is_empty() {
+            return Err("splitting a face that already has holes is not implemented".to_string());
+        }
+
+        let ordered = order_closed_loop(loop_edges, tol)?;
+
+        // ループが本当にこの面の上にあるか。構成に使っていない位置で測る。
+        let scale = boundary_extent(&face.outer_wire).max(1.0);
+        let limit = tol.linear * 10.0 * scale;
+        let mut curve_off_surface: f64 = 0.0;
+        for piece in &ordered {
+            curve_off_surface =
+                curve_off_surface.max(Self::distance_to_surface(face, &piece.edge.curve, 23)?);
+        }
+        if curve_off_surface > limit {
+            return Err(format!(
+                "the interior loop leaves the face by {curve_off_surface:.3e}, over {limit:.3e}"
+            ));
+        }
+
+        let loop_wire = Wire::new(ordered.clone());
+        // 内側の片は、ループをそのまま外周にする。
+        let inside = Face::new(
+            face.geometry.clone(),
+            loop_wire.clone(),
+            Vec::new(),
+            face.orientation,
+            face.tolerance,
+        );
+        // 外側の片は、元の外周のまま、ループを穴として持つ。**穴のワイヤは
+        // 外周と逆に巻きます。**
+        let hole = Wire::new(
+            ordered
+                .iter()
+                .rev()
+                .map(|oriented| {
+                    OrientedEdge::new(oriented.edge.clone(), oriented.orientation.reversed())
+                })
+                .collect(),
+        );
+        let outside = Face::new(
+            face.geometry.clone(),
+            face.outer_wire.clone(),
+            vec![hole],
+            face.orientation,
+            face.tolerance,
+        );
+
+        let params = TessellationParams::default();
+        let original_area = MassCalculator::compute_face_integral(face, &params).0;
+        let pieces = vec![inside, outside];
+        let piece_areas: Vec<f64> = pieces
+            .iter()
+            .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+            .collect();
+        let area_residual = if original_area.abs() > 1e-12 {
+            (piece_areas.iter().sum::<f64>() - original_area).abs() / original_area.abs()
+        } else {
+            (piece_areas.iter().sum::<f64>() - original_area).abs()
+        };
+
+        Ok((
+            pieces,
+            FaceSplitReport {
+                original_area,
+                piece_areas,
+                area_residual,
+                curve_off_surface,
+                // 内側のループは境界に着きません。着いていたら、それは
+                // 境界から境界への切り込みで、こちらの口ではありません。
+                ends_off_boundary: 0.0,
+            },
+        ))
+    }
+
     /// 端で繋がった何本かの曲線を1本の切り込みとして `face` を2枚に割る。
     ///
     /// 曲面同士の交線は、相手のパッチの境界で細切れになって届く。円柱を円柱で
@@ -369,6 +468,74 @@ fn oriented_end(oriented: &OrientedEdge) -> Point3 {
 ///
 /// 端点が1度しか現れない辺が両端になる。輪になっている（すべての端点が2度
 /// 現れる）集まりは、境界に着地しないので断る。
+/// 閉じたループになる稜の並びを、端から端へ辿って揃える。
+///
+/// `order_chain` は「1度しか出ない端点が2つ」を道の端として使いますが、
+/// 閉じたループでは**そういう点はありません**。どの端点もちょうど2回出ます。
+/// そこが違うだけで、辿り方は同じです。
+fn order_closed_loop(loop_edges: &[Edge], tol: &Tolerance) -> Result<Vec<OrientedEdge>, String> {
+    let limit = tol.linear.max(1e-9) * 10.0;
+    let same = |a: Point3, b: Point3| (a - b).norm() <= limit;
+
+    // 閉じているなら、どの端点もちょうど2回出ます。1回や3回があれば
+    // 閉じたループではありません。
+    let mut endpoints: Vec<(Point3, usize)> = Vec::new();
+    for edge in loop_edges {
+        for point in [edge.start_vertex.point, edge.end_vertex.point] {
+            match endpoints.iter_mut().find(|(known, _)| same(*known, point)) {
+                Some((_, count)) => *count += 1,
+                None => endpoints.push((point, 1)),
+            }
+        }
+    }
+    if let Some((point, count)) = endpoints.iter().find(|(_, count)| *count != 2) {
+        return Err(format!(
+            "the cut is not a closed loop: ({:.4} {:.4} {:.4}) is used {count} time(s), not 2",
+            point.x, point.y, point.z
+        ));
+    }
+
+    let mut used = vec![false; loop_edges.len()];
+    let mut ordered: Vec<OrientedEdge> = Vec::with_capacity(loop_edges.len());
+    // どこから始めても閉じたループは同じものになります。最初の稜の向きを
+    // そのまま採ります。
+    used[0] = true;
+    ordered.push(OrientedEdge::forward(loop_edges[0].clone()));
+    let start = loop_edges[0].start_vertex.point;
+    let mut here = loop_edges[0].end_vertex.point;
+
+    while ordered.len() < loop_edges.len() {
+        let mut advanced = false;
+        for (index, edge) in loop_edges.iter().enumerate() {
+            if used[index] {
+                continue;
+            }
+            if same(edge.start_vertex.point, here) {
+                used[index] = true;
+                here = edge.end_vertex.point;
+                ordered.push(OrientedEdge::forward(edge.clone()));
+                advanced = true;
+                break;
+            }
+            if same(edge.end_vertex.point, here) {
+                used[index] = true;
+                here = edge.start_vertex.point;
+                ordered.push(OrientedEdge::reversed(edge.clone()));
+                advanced = true;
+                break;
+            }
+        }
+        if !advanced {
+            return Err("the cut does not join up into one loop".to_string());
+        }
+    }
+
+    if !same(here, start) {
+        return Err("the cut does not come back to where it started".to_string());
+    }
+    Ok(ordered)
+}
+
 fn order_chain(chain: &[Edge], tol: &Tolerance) -> Result<Vec<OrientedEdge>, String> {
     let limit = tol.linear.max(1e-9) * 10.0;
     let same = |a: Point3, b: Point3| (a - b).norm() <= limit;
