@@ -76,13 +76,42 @@ class ExplicitBox:
         ) = values
 
 
+def tilt(shape, box):
+    """切り手を境界箱の中心まわりに 27 度傾ける。
+
+    `foreign_boolean_probe` の `ZENITH_TILTED=1` と同じ変換です。軸 (1,1,1)、
+    27 度。**軸に平行な配置は、面の組がすべて座標面に乗るので特別に易しい**
+    ので、傾けたぶんも外の物差しに当てられるようにしてあります。
+    """
+    centre = FreeCAD.Vector(
+        (box.XMin + box.XMax) * 0.5,
+        (box.YMin + box.YMax) * 0.5,
+        (box.ZMin + box.ZMax) * 0.5,
+    )
+    moved = shape.copy()
+    moved.translate(centre.multiply(-1.0))
+    moved.rotate(FreeCAD.Vector(0, 0, 0), FreeCAD.Vector(1, 1, 1), 27.0)
+    centre = FreeCAD.Vector(
+        (box.XMin + box.XMax) * 0.5,
+        (box.YMin + box.YMax) * 0.5,
+        (box.ZMin + box.ZMax) * 0.5,
+    )
+    moved.translate(centre)
+    return moved
+
+
 def main():
     if len(sys.argv) < 3:
         raise SystemExit(
             "usage: occ_cut_reference.py <subject> <slab|drill|corner>"
             " [--box xmin ymin zmin xmax ymax zmax]"
+            "\n  the cutter may be given as 'tilted drill' etc., which turns it"
+            " 27 degrees about (1,1,1) through the box centre"
         )
     subject, kind = sys.argv[1], sys.argv[2]
+    tilted = kind.startswith("tilted ")
+    if tilted:
+        kind = kind[len("tilted "):]
     given_box = None
     if "--box" in sys.argv:
         at = sys.argv.index("--box")
@@ -97,12 +126,14 @@ def main():
     # 箱になりえます。ずれると別の配置を測ることになるので、そこも出します。
     box = given_box if given_box is not None else solid.BoundBox
     tool = cutter(kind, box)
+    if tilted:
+        tool = tilt(tool, box)
 
     difference = solid.cut(tool)
     intersection = solid.common(tool)
     union = solid.fuse(tool)
 
-    print(f"subject {subject}  cutter {kind}")
+    print(f"subject {subject}  cutter {'tilted ' if tilted else ''}{kind}")
     print(
         f"  bbox            ({box.XMin:.4f} {box.YMin:.4f} {box.ZMin:.4f})"
         f" - ({box.XMax:.4f} {box.YMax:.4f} {box.ZMax:.4f})"

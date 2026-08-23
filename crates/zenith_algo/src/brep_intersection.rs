@@ -1245,6 +1245,8 @@ impl BrepIntersectionBuilder {
         let mut faces = vec![face.clone()];
         let mut applied_split_count = 0;
         let mut skipped_split_count: usize = 0;
+        // 1本では当たらなかった稜。**あとで鎖にまとめて当て直します。**
+        let mut leftover: Vec<Edge> = Vec::new();
 
         for split_edge in split_edges {
             let mut next_faces = Vec::new();
@@ -1263,6 +1265,7 @@ impl BrepIntersectionBuilder {
 
             if !applied_this_edge {
                 skipped_split_count += 1;
+                leftover.push(split_edge.clone());
             }
             faces = next_faces;
         }
@@ -1377,6 +1380,44 @@ impl BrepIntersectionBuilder {
                         applied_split_count: split_edges.len(),
                         skipped_split_count: 0,
                     });
+                }
+            }
+        }
+
+        // **1本でも当たると、鎖の経路が一度も走りませんでした。**
+        //
+        // 上の2つの受け皿はどちらも `applied_split_count == 0` を条件にして
+        // います。1枚の面に**2本の鎖**が届き、片方が1本の稜で単独に当たると、
+        // もう片方は当たらないまま捨てられます。実測（全周円錐を傾けた
+        // ドリルで抜く）:
+        //
+        // ```text
+        // A0   3 split edge(s) -> 2 piece(s) (applied 1, skipped 2)
+        // B1   4 split edge(s) -> 2 piece(s) (applied 1, skipped 3)
+        // ```
+        //
+        // **当たらなかった稜だけ**を鎖にまとめて、当たった片に対して当て直し
+        // ます。全部当たっていれば残りは無く、ここは素通りします。
+        if applied_split_count > 0 && leftover.len() >= 2 {
+            let chains = group_edges_into_chains(&deduplicate_split_edges(&leftover, tol), tol);
+            for chain in chains.iter().filter(|chain| chain.len() >= 2) {
+                let mut next_faces = Vec::new();
+                let mut applied_this_chain = false;
+                for current_face in faces {
+                    match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
+                        Ok((pieces, report))
+                            if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                        {
+                            applied_this_chain = true;
+                            next_faces.extend(pieces);
+                        }
+                        _ => next_faces.push(current_face),
+                    }
+                }
+                faces = next_faces;
+                if applied_this_chain {
+                    applied_split_count += chain.len();
+                    skipped_split_count = skipped_split_count.saturating_sub(chain.len());
                 }
             }
         }

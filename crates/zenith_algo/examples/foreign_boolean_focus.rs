@@ -44,7 +44,31 @@ fn mesh_bounds(mesh: &TriangleMesh) -> (Point3, Point3) {
     (low, high)
 }
 
+/// 切り手を境界箱の中心まわりに 27 度傾ける。`foreign_boolean_probe` と同じ。
+///
+/// **軸に平行な切り手だけでは足りません。** 傾けると面の組が座標面から
+/// 外れ、平面同士の交線も等パラメータ線も一般の場合になります（4-61）。
+fn tilt(solid: &Solid, low: &Point3, high: &Point3) -> Result<Solid, String> {
+    let centre = Vec3::new(
+        (low.x + high.x) * 0.5,
+        (low.y + high.y) * 0.5,
+        (low.z + high.z) * 0.5,
+    );
+    let axis = Vec3::new(1.0, 1.0, 1.0);
+    let transform = zenith_math::Transform3::from_translation(centre)
+        .compose(&zenith_math::Transform3::from_axis_angle(
+            &axis,
+            27f64.to_radians(),
+        ))
+        .compose(&zenith_math::Transform3::from_translation(-centre));
+    BrepTransform::transform_solid(solid, &transform)
+}
+
 fn cutter(kind: &str, low: &Point3, high: &Point3) -> Result<Solid, String> {
+    if let Some(base) = kind.strip_prefix("tilted ") {
+        let upright = cutter(base, low, high)?;
+        return tilt(&upright, low, high);
+    }
     let size = Vec3::new(high.x - low.x, high.y - low.y, high.z - low.z);
     match kind {
         "slab" => {
@@ -81,7 +105,9 @@ fn cutter(kind: &str, low: &Point3, high: &Point3) -> Result<Solid, String> {
                 ),
             ))
         }
-        other => Err(format!("unknown cutter {other}; use slab, drill or corner")),
+        other => Err(format!(
+            "unknown cutter {other}; use slab, drill, corner, or the same with a \"tilted \" prefix"
+        )),
     }
 }
 
