@@ -42,7 +42,32 @@ fn mesh_bounds(mesh: &TriangleMesh) -> (Point3, Point3) {
     (low, high)
 }
 
+/// 切り手を、境界箱の中心まわりに 27 度傾ける。
+///
+/// **軸に平行な切り手だけでは足りません。** `foreign_boolean_probe` に
+/// 傾けた配置を足したところ、`tilted drill` が複数の検体で断られました。
+/// 名前の頭に `tilted ` を付けると、同じ切り手を傾けて返します。
+fn tilt(solid: &Solid, low: &Point3, high: &Point3) -> Option<Solid> {
+    let centre = Vec3::new(
+        (low.x + high.x) * 0.5,
+        (low.y + high.y) * 0.5,
+        (low.z + high.z) * 0.5,
+    );
+    let axis = Vec3::new(1.0, 1.0, 1.0);
+    let transform = zenith_math::Transform3::from_translation(centre)
+        .compose(&zenith_math::Transform3::from_axis_angle(
+            &axis,
+            27f64.to_radians(),
+        ))
+        .compose(&zenith_math::Transform3::from_translation(-centre));
+    BrepTransform::transform_solid(solid, &transform).ok()
+}
+
 fn cutter(kind: &str, low: &Point3, high: &Point3) -> Option<Solid> {
+    if let Some(base) = kind.strip_prefix("tilted ") {
+        let upright = cutter(base, low, high)?;
+        return tilt(&upright, low, high);
+    }
     let size = Vec3::new(high.x - low.x, high.y - low.y, high.z - low.z);
     match kind {
         "slab" => {

@@ -41,7 +41,7 @@ use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder, Regularizer,
 };
 use zenith_io::StepImporter;
-use zenith_math::{Point3, Tolerance, Vec3};
+use zenith_math::{Point3, Tolerance, Transform3, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
 use zenith_topo::{FaceGeometry, Solid};
 
@@ -127,8 +127,41 @@ fn corner_block(low: &Point3, high: &Point3) -> Result<Solid, String> {
     ))
 }
 
+/// 切り手を、境界箱の中心まわりに 27 度だけ傾ける。
+///
+/// **これまで、軸に平行な切り手しか測っていませんでした。** 回転した箱の
+/// ブーリアンは4回取り下げている難所です（第5章）が、それを**他カーネルの
+/// 立体に対して**測ったことはありません。
+///
+/// 角度も軸も、検体の対称面に乗らないものを選びます。27 度は 30 や 45 と
+/// 違って、どの検体の刻み（4分割・8分割）とも噛み合いません。
+fn tilt_about_centre(solid: &Solid, low: &Point3, high: &Point3) -> Result<Solid, String> {
+    let centre = Vec3::new(
+        (low.x + high.x) * 0.5,
+        (low.y + high.y) * 0.5,
+        (low.z + high.z) * 0.5,
+    );
+    let axis = Vec3::new(1.0, 1.0, 1.0);
+    let transform = Transform3::from_translation(centre)
+        .compose(&Transform3::from_axis_angle(&axis, 27f64.to_radians()))
+        .compose(&Transform3::from_translation(-centre));
+    BrepTransform::transform_solid(solid, &transform)
+}
+
+fn tilted_slab(low: &Point3, high: &Point3) -> Result<Solid, String> {
+    tilt_about_centre(&half_slab(low, high)?, low, high)
+}
+
+fn tilted_drill(low: &Point3, high: &Point3) -> Result<Solid, String> {
+    tilt_about_centre(&centre_drill(low, high)?, low, high)
+}
+
+fn tilted_corner(low: &Point3, high: &Point3) -> Result<Solid, String> {
+    tilt_about_centre(&corner_block(low, high)?, low, high)
+}
+
 fn placements() -> Vec<Placement> {
-    vec![
+    let mut list = vec![
         Placement {
             name: "half slab",
             build: half_slab,
@@ -141,7 +174,33 @@ fn placements() -> Vec<Placement> {
             name: "corner block",
             build: corner_block,
         },
-    ]
+    ];
+
+    // 傾けた切り手。軸に平行な配置では、面の組がすべて座標面に乗るので、
+    // 平面同士の交線も等パラメータ線も特別に易しくなります。
+    //
+    // **既定では走らせません。** 傾けると1件あたりの走査が重く、30配置で
+    // 6分だったものが60配置で50分を超えます。CI は1つのプローブに20分しか
+    // 与えていないので、そこを超えると測定そのものが落ちます。
+    // `ZENITH_TILTED=1` で足します。
+    if std::env::var("ZENITH_TILTED").is_ok() {
+        list.extend([
+            Placement {
+                name: "tilted slab",
+                build: tilted_slab,
+            },
+            Placement {
+                name: "tilted drill",
+                build: tilted_drill,
+            },
+            Placement {
+                name: "tilted corner",
+                build: tilted_corner,
+            },
+        ]);
+    }
+
+    list
 }
 
 /// 読んだ立体を、自前のビルダーが作るのと同じ持ち方に整えてから渡す。
@@ -229,7 +288,7 @@ fn main() {
     ];
 
     println!(
-        "{:<18} {:<14} {:>14} {:>14} {:>14} {:>11} {:>11}  {}",
+        "{:<18} {:<15} {:>14} {:>14} {:>14} {:>11} {:>11}  {}",
         "subject", "cutter", "V(A-B)", "V(A^B)", "V(AuB)", "split", "incl-excl", "verdict"
     );
     println!("{}", "-".repeat(126));

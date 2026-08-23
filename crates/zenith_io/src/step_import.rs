@@ -946,6 +946,139 @@ impl StepImporter {
         .map(Some)
     }
 
+
+    /// `AXIS1_PLACEMENT('', #origin, #direction)`
+    ///
+    /// `AXIS2_PLACEMENT_3D` と違い、横向きの基準方向を持たない。回転面の軸は
+    /// これで書かれる。
+    fn get_axis1_placement(
+        ctx: &mut ImportContext,
+        axis_id: u64,
+    ) -> Result<Option<(Point3, Vec3)>, String> {
+        let raw = ctx
+            .raw_entities
+            .get(&axis_id)
+            .ok_or_else(|| format!("Entity #{} not found", axis_id))?
+            .clone();
+        if raw.name != "AXIS1_PLACEMENT" {
+            return Ok(None);
+        }
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 3 {
+            return Ok(None);
+        }
+        let (Some(origin_id), Some(direction_id)) = (
+            Self::parse_entity_ref(parts[1]),
+            Self::parse_entity_ref(parts[2]),
+        ) else {
+            return Ok(None);
+        };
+        let origin = Self::get_point(ctx, origin_id)?;
+        let direction = Self::get_direction(ctx, direction_id)?;
+        let Some(direction) = direction.try_normalize(1e-12) else {
+            return Ok(None);
+        };
+        Ok(Some((origin, direction)))
+    }
+
+    /// `SURFACE_OF_REVOLUTION('', #swept_curve, #axis1_placement)`
+    ///
+    /// 断面曲線を軸まわりに回した曲面。OpenCASCADE は、曲がった軌道に沿った
+    /// 掃引（曲がり管）や、円錐・円柱・トーラスに落ちない回転体をこの形で書く。
+    ///
+    /// **既存の検体には1つも入っていませんでした。** インポーターは
+    /// 「読める曲面」の一覧にこれを挙げておらず、実際に断ります。回転体は
+    /// 旋盤部品でもパイプでも普通に出てくる形です。
+    ///
+    /// 厳密に表せます。回転は角度方向に**有理2次**（円弧の標準の組み方）、
+    /// 断面方向は元の曲線の次数とノットをそのまま使えばよく、これは
+    /// `revolve_profile` が既に持っている組み方そのものです。解析曲面
+    /// （円柱・円錐・トーラス）も同じ関数を通っています。
+    ///
+    /// 断面は**軸を含む平面の上に乗っていなければなりません**。そうでない
+    /// 曲線を回すと、できるのは回転面ではなく螺旋面です。制御点が軸を含む
+    /// 半平面から外れていたら断ります——近いところを通るもっともらしい面を
+    /// 返すと、その先の分割と選別が静かに間違います。
+    ///
+    /// 角度の範囲は境界から取ります。解析曲面と同じで、STEP の掃引面は範囲を
+    /// 持たないからです。
+    fn revolution_patch(
+        ctx: &mut ImportContext,
+        raw: &RawEntity,
+        boundary_points: &[Point3],
+    ) -> Result<Option<NurbsSurface3>, String> {
+        let parts = Self::split_top_level_args(&raw.args);
+        if parts.len() < 3 {
+            return Ok(None);
+        }
+        let (Some(curve_id), Some(axis_id)) = (
+            Self::parse_entity_ref(parts[1]),
+            Self::parse_entity_ref(parts[2]),
+        ) else {
+            return Ok(None);
+        };
+
+        let Some(basis) = Self::swept_basis_curve(ctx, curve_id)? else {
+            return Ok(None);
+        };
+        let Some((origin, axis)) = Self::get_axis1_placement(ctx, axis_id)? else {
+            return Ok(None);
+        };
+        if basis.control_points.len() < 2 {
+            return Ok(None);
+        }
+
+        // 断面がどの半平面に乗っているかを、いちばん軸から離れた制御点で
+        // 決めます。軸の上に乗った点（半径 0）は向きを決められません。
+        let mut reference: Option<Vec3> = None;
+        let mut widest = 0.0;
+        for control_point in &basis.control_points {
+            let (_, radial) = axis_frame_coords(control_point.point, origin, axis);
+            if radial.norm() > widest {
+                widest = radial.norm();
+                reference = radial.try_normalize(1e-12);
+            }
+        }
+        let Some(x_axis) = reference else {
+            return Ok(None);
+        };
+        let y_axis = axis.cross(&x_axis);
+
+        // 断面を (半径, 軸方向, 重み) に直します。**半平面から外れていたら
+        // 断ります。**
+        let scale = widest.max(1.0);
+        let mut profile: Vec<(f64, f64, f64)> = Vec::with_capacity(basis.control_points.len());
+        for control_point in &basis.control_points {
+            let (axial, radial) = axis_frame_coords(control_point.point, origin, axis);
+            if radial.dot(&y_axis).abs() > scale * 1e-9 {
+                return Ok(None);
+            }
+            profile.push((radial.dot(&x_axis), axial, control_point.weight));
+        }
+
+        // 角度の範囲は境界から。軸の上に乗った点は角度を持たないので外します。
+        let mut angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
+        for point in boundary_points {
+            let (_, radial) = axis_frame_coords(*point, origin, axis);
+            if radial.norm() <= scale * 1e-9 {
+                continue;
+            }
+            angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)));
+        }
+        let (start_angle, sweep) = angular_span(&mut angles);
+
+        Ok(revolve_profile(
+            origin,
+            axis,
+            x_axis,
+            y_axis,
+            &profile,
+            basis.knots.clone(),
+            basis.degree,
+            start_angle,
+            sweep,
+        ))
+    }
     /// 掃引面の断面になっている曲線。端点を必要としない形だけを受け取る。
     fn swept_basis_curve(
         ctx: &mut ImportContext,
@@ -1238,6 +1371,14 @@ impl StepImporter {
             }
         }
 
+        if raw.name == "SURFACE_OF_REVOLUTION" {
+            if let Some(nurbs) = Self::revolution_patch(ctx, &raw, boundary_points)? {
+                let geom = FaceGeometry::Nurbs(nurbs);
+                ctx.surfaces.insert(id, geom.clone());
+                return Ok(geom);
+            }
+        }
+
         // どの解析曲面も AXIS2_PLACEMENT_3D を第2引数に取り、その後に半径類が続く。
         let parts = Self::split_top_level_args(&raw.args);
         let placement = parts
@@ -1502,7 +1643,7 @@ impl StepImporter {
         Err(format!(
             "Unsupported surface entity {} (#{}). Zenith reads PLANE, \
              CYLINDRICAL_SURFACE, CONICAL_SURFACE, SPHERICAL_SURFACE, \
-             TOROIDAL_SURFACE and (rational) B_SPLINE_SURFACE_WITH_KNOTS",
+             TOROIDAL_SURFACE, SURFACE_OF_LINEAR_EXTRUSION, SURFACE_OF_REVOLUTION \n             and (rational) B_SPLINE_SURFACE_WITH_KNOTS",
             raw.name, id
         ))
     }
