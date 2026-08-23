@@ -170,7 +170,7 @@ fn main() {
         let (index, middle) = users[0];
         let piece = &pieces[index];
         println!(
-            "    piece {index:>3} ({:?}, {:?}{}) midpoint ({:.4} {:.4} {:.4})",
+            "    piece {index:>3} ({:?}, {:?}{}) mid ({:.4} {:.4} {:.4})",
             piece.operand,
             piece.location,
             if piece.reverse_orientation { ", reversed" } else { "" },
@@ -178,6 +178,21 @@ fn main() {
             middle.y,
             middle.z
         );
+        // 端点も出す。**中点が同じでも端点が違えば別の稜**で、相手が
+        // いないのはその食い違いのことがあります。
+        for wire in std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                let start = oriented.edge.start_vertex.point;
+                let end = oriented.edge.end_vertex.point;
+                if key_of(start, end, grid) != *_key {
+                    continue;
+                }
+                println!(
+                    "          from ({:.4} {:.4} {:.4}) to ({:.4} {:.4} {:.4})",
+                    start.x, start.y, start.z, end.x, end.y, end.z
+                );
+            }
+        }
     }
     if lonely == 0 {
         println!("    none");
