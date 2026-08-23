@@ -159,3 +159,66 @@ mod cone {
         );
     }
 }
+
+/// 全周トーラス。管の底の継ぎ目で四半パッチが2枚出会い、**同じ2点を結ぶ
+/// 別々の弧**が交線として出ます（中点は 3.839 離れています）。稜を端点だけで
+/// 見分けていたころは、閉じた殻なのに非多様体と報告されて断られていました
+/// （4-65）。
+mod torus {
+    use super::*;
+
+    const VOLUME: f64 = 3789.928090;
+    /// OpenCASCADE（`occ_cut_reference.py torus "tilted slab" --box -16 -16 -4 16 16 4`）。
+    const OCC_DIFFERENCE: f64 = 1937.013599;
+
+    /// 境界箱 (-16,-16,-4)-(16,16,4) に対する `half slab` を傾けたもの。
+    fn tilted_slab() -> Solid {
+        let upright = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_box(19.2, 64.0, 16.0).expect("slab"),
+            Vec3::new(-19.52, -32.0, -8.0),
+        );
+        tilt(&upright, Vec3::new(0.0, 0.0, 0.0))
+    }
+
+    fn cut(op: BooleanOpType) -> Vec<Solid> {
+        let tol = Tolerance::default();
+        BooleanEngine::boolean_solids_exact_result(&fixture("torus"), &tilted_slab(), op, &tol)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "torus / tilted slab / {op:?} refused: {}",
+                    err.chars().take(140).collect::<String>()
+                )
+            })
+            .solids
+    }
+
+    #[test]
+    fn the_tilted_slab_takes_a_piece() {
+        let got = volume(&cut(BooleanOpType::Difference));
+        assert!(
+            (got - VOLUME).abs() > 1e-6,
+            "the difference came back as the untouched torus ({got})"
+        );
+        let relative = (got - OCC_DIFFERENCE).abs() / OCC_DIFFERENCE;
+        assert!(
+            relative <= 1e-4,
+            "difference {got} against OpenCASCADE's {OCC_DIFFERENCE} (relative {relative:.3e})"
+        );
+    }
+
+    #[test]
+    fn the_two_halves_add_back_up() {
+        let difference = volume(&cut(BooleanOpType::Difference));
+        let intersection = volume(&cut(BooleanOpType::Intersection));
+        assert!(
+            intersection > VOLUME * 1e-3,
+            "the intersection came out empty ({intersection})"
+        );
+        let relative = (difference + intersection - VOLUME).abs() / VOLUME;
+        assert!(
+            relative <= 1e-7,
+            "V(A-B) + V(A^B) = {} against V(A) = {VOLUME} (relative {relative:.3e})",
+            difference + intersection
+        );
+    }
+}
