@@ -4132,14 +4132,19 @@ fn clip_curve_to_planar_face_trim(
     let inside = |t: f64| -> bool {
         let point = edge.curve.evaluate(t.clamp(t0, t1));
         let uv = project_to_plane_uv(point, plane);
-        if !point_in_polygon_2d(uv, &polygon, margin) {
+        // **境目は曲線そのもので決めます。** 折れ線で判定すると、二分は
+        // 折れ線に詰まり、面の境界からたわみのぶん（半径10・48刻みで
+        // 1.3e-3）ずれた位置で切れます（4-63）。
+        let in_outer = point_inside_pcurve_loop(uv, &pcurves.outer_loop, tol)
+            .unwrap_or_else(|| point_in_polygon_2d(uv, &polygon, margin));
+        if !in_outer {
             return false;
         }
-        // 穴の内側は面ではない。境界の上は内側として扱うので、穴の縁に
-        // 乗った点は「面の上」に残ります（そこは本当に面の一部です）。
-        !holes
-            .iter()
-            .any(|hole| point_in_polygon_2d(uv, hole, -margin))
+        // 穴の内側は面ではない。
+        !pcurves.inner_loops.iter().zip(holes.iter()).any(|(inner, hole)| {
+            point_inside_pcurve_loop(uv, inner, tol)
+                .unwrap_or_else(|| point_in_polygon_2d(uv, hole, -margin))
+        })
     };
 
     const SAMPLES: usize = 257;
@@ -6513,6 +6518,102 @@ fn march_one_branch(
         };
         previous = Some((step, deviation));
         step = next;
+    }
+    None
+}
+
+/// 点がトリムループの内側かを、**交点の個数**で答える。
+///
+/// # なぜ要るか
+///
+/// 交線を面のトリムで切るとき、内外の境目は二分で詰めます。**その内外判定が
+/// 折れ線に対してだと、詰め先は折れ線であって面の境界ではありません。**
+/// 実測: 円錐の上面（半径 4）の境界を1区間 48 点で刻むと、切り口の端が
+/// 半径 3.99954 に落ちます——真の円の内側 4.6e-4。同じ点を別の面のクリップが
+/// 出すと 3.8251 で、**どちらの折れ線で切ったかで 5e-4 食い違います**。
+/// 分割はそれを「the splitting curve ends 5.073e-4 away from the boundary」
+/// として断ります（許容 8e-5）。
+///
+/// # やり方
+///
+/// 点からループの外まで線分を引き、**交わった回数の偶奇**で決めます。線分と
+/// p-curve の交点は閉じた式（1スパンの1次・2次）か曲線上の二分で厳密に出る
+/// ので（4-56）、境目は丸め誤差まで詰まります。
+///
+/// **区間の中点を折れ線で見る方法は使えません。** 点が境界のすぐ近くにある
+/// とき——二分の終盤はまさにそこです——中点も境界のすぐ近くにあり、折れ線の
+/// 判定が外れます。実測でそれをやって、ずれが 5.073e-4 から 1.473e-3 へ
+/// 悪化しました（4-63）。
+///
+/// 交点が重なる向き（境界の頂点を貫く、接する）では数が狂うので、重なりが
+/// あれば別の向きで測り直します。3方向とも駄目なら `None` を返し、呼び手は
+/// 従来どおり折れ線で見ます。
+fn point_inside_pcurve_loop(
+    point: Point2,
+    loop_data: &FacePcurveLoop,
+    _tol: &Tolerance,
+) -> Option<bool> {
+    // ループの広がり。線分はここから確実に外へ出る長さにします。
+    let mut low = Point2::new(f64::INFINITY, f64::INFINITY);
+    let mut high = Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for segment in &loop_data.segments {
+        for control_point in &segment.curve.control_points {
+            let uv = control_point.point;
+            low.x = low.x.min(uv.x);
+            low.y = low.y.min(uv.y);
+            high.x = high.x.max(uv.x);
+            high.y = high.y.max(uv.y);
+        }
+    }
+    if !(low.x.is_finite() && high.x.is_finite()) {
+        return None;
+    }
+    let span = (high.x - low.x).abs().max((high.y - low.y).abs()).max(1.0);
+    let reach = span * 4.0;
+    let separation = 1e-9;
+
+    for raw_direction in [
+        Vec2::new(1.0, 0.37),
+        Vec2::new(-0.41, 1.0),
+        Vec2::new(0.73, -1.0),
+    ] {
+        let Some(unit) = raw_direction.try_normalize(1e-12) else {
+            continue;
+        };
+        let direction = unit * reach;
+
+        let mut crossings: Vec<f64> = Vec::new();
+        let mut usable = true;
+        for segment in &loop_data.segments {
+            let found = match pcurve_segment_crossings(&segment.curve, point, direction) {
+                Some(values) => values,
+                None => pcurve_crossings_by_bisection(&segment.curve, point, direction, 32),
+            };
+            for t in found {
+                // 線分の手前と奥だけを見ます。始点そのものに乗った交点は、
+                // 点が境界の上にあるということなので、内側として扱います。
+                if t < -separation || t > 1.0 + separation {
+                    continue;
+                }
+                if t.abs() <= separation {
+                    return Some(true);
+                }
+                crossings.push(t);
+            }
+        }
+
+        crossings.sort_by(f64::total_cmp);
+        for pair in crossings.windows(2) {
+            if (pair[1] - pair[0]).abs() <= separation {
+                // 頂点を貫いた、あるいは接した。この向きでは数えられません。
+                usable = false;
+                break;
+            }
+        }
+        if !usable {
+            continue;
+        }
+        return Some(crossings.len() % 2 == 1);
     }
     None
 }
