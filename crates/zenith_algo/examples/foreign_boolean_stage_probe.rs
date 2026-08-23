@@ -131,8 +131,15 @@ fn main() {
             };
             for (op_name, op) in ops {
                 // 通るものはここでは見ない。断ったものだけ並べる。
-                if BooleanEngine::boolean_solids_exact_result(a, &b, op, &tol).is_ok() {
-                    continue;
+                match BooleanEngine::boolean_solids_exact_result(a, &b, op, &tol) {
+                    Ok(_) => continue,
+                    Err(err) if std::env::var_os("ZENITH_SHOW_REASON").is_some() => {
+                        println!(
+                            "{name:<17} {kind:<7} {op_name:<13} REASON {}",
+                            err.as_str().chars().take(900).collect::<String>()
+                        );
+                    }
+                    Err(_) => {}
                 }
                 refused += 1;
                 match BooleanEngine::prepare_exact_boolean(a, &b, op, &tol) {
