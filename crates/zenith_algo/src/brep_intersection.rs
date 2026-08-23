@@ -1434,6 +1434,17 @@ impl BrepIntersectionBuilder {
 struct StitchEdgeUse {
     start: Point3,
     end: Point3,
+    /// 稜の途中の点。**端点だけでは稜を見分けられません。**
+    ///
+    /// 同じ2点を結ぶ別々の弧は普通にあります。トーラスを傾けたスラブで切ると、
+    /// 管の底の継ぎ目（半径 12・z = -4 の円）の上で2つの四半パッチが出会い、
+    /// 継ぎ目の同じ2点を結ぶ**2本の弧**が交線として出ます。中点は 3.839 離れて
+    /// おり、別の曲線です。
+    ///
+    /// 端点だけで突き合わせると、この2本が1本と数えられ、閉じた殻なのに
+    /// 「同じ稜が3回使われている」（非多様体）と報告されます。**壊れていたのは
+    /// 立体ではなく、数え方でした**（4-65）。
+    middle: Point3,
 }
 
 fn collect_batch_splits_for_faces(
@@ -3237,13 +3248,16 @@ fn collect_wire_stitch_edge_uses(
     for edge in &wire.edges {
         let start = edge.start_vertex().point;
         let end = edge.end_vertex().point;
+        // 稜の途中の点。向きに依らないので、反転しても同じものを使います。
+        let middle = edge.evaluate_normalized(0.5);
         if reverse_orientation {
             edge_uses.push(StitchEdgeUse {
                 start: end,
                 end: start,
+                middle,
             });
         } else {
-            edge_uses.push(StitchEdgeUse { start, end });
+            edge_uses.push(StitchEdgeUse { start, end, middle });
         }
     }
 }
@@ -3488,8 +3502,13 @@ fn reverse_wire(wire: &Wire) -> Wire {
 }
 
 fn same_undirected_stitch_edge(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -> bool {
-    (points_same_3d(a.start, b.start, tol) && points_same_3d(a.end, b.end, tol))
-        || (points_same_3d(a.start, b.end, tol) && points_same_3d(a.end, b.start, tol))
+    let ends_match = (points_same_3d(a.start, b.start, tol) && points_same_3d(a.end, b.end, tol))
+        || (points_same_3d(a.start, b.end, tol) && points_same_3d(a.end, b.start, tol));
+    // **端点が同じでも、別の弧かもしれません。** 途中の点まで見ます。
+    // 公差は端点と同じでは足りません——分割の仕方が違う2枚が同じ稜を持つとき、
+    // 中点は稜の長さに対して丸め誤差ぶん動きます。稜の長さに対する相対で取ります。
+    let reach = (a.start - a.end).norm().max(1.0);
+    ends_match && points_same_3d(a.middle, b.middle, tol.max(reach * 1e-6))
 }
 
 fn opposite_stitch_edge_direction(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -> bool {

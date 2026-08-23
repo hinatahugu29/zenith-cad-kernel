@@ -394,6 +394,14 @@ fn append_wire_signature_points(
     for edge in &wire.edges {
         points.push(quantized_point3(edge.start_vertex().point, tol)?);
         points.push(quantized_point3(edge.end_vertex().point, tol)?);
+        // **端点だけでは面を見分けられません。** 同じ2点を結ぶ別々の弧で
+        // 囲まれた2枚の面は、端点の集合が同じなので「重複した面」と報告され
+        // ます。トーラスを傾けたスラブで切ると、管の底の継ぎ目の上で実際に
+        // そうなります（中点は 3.839 離れており、別の曲線です)。
+        //
+        // `EdgeUse` は前から中点を持っています。署名だけが持っていません
+        // でした（4-65）。
+        points.push(quantized_point3(edge.evaluate_normalized(0.5), tol)?);
     }
     Some(())
 }
@@ -558,12 +566,32 @@ fn same_undirected_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
             || points_same(a.start, b.end, tol) && points_same(a.end, b.start, tol))
 }
 
+/// 2つの稜の使用が、**同じ稜を同じ向きに**使っているか。
+///
+/// **端点だけでは足りません。** 同じ2点を結ぶ別々の弧は普通にあります。
+/// トーラスを傾けたスラブで切ると、管の底の継ぎ目の上で四半パッチが2枚
+/// 出会い、同じ2点を結ぶ2本の弧が出ます（中点は 3.839 離れています）。
+/// 端点だけで見ると、閉じた殻なのに「同じ稜を2度同じ向きに使っている」と
+/// 報告されます（4-65）。
+///
+/// `EdgeUse` は前から `middle` を持っていました。**使っていなかっただけ**です。
 fn same_directed_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
-    points_same(a.start, b.start, tol) && points_same(a.end, b.end, tol)
+    points_same(a.start, b.start, tol)
+        && points_same(a.end, b.end, tol)
+        && same_middle(a, b, tol)
 }
 
 fn opposite_direction_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
-    points_same(a.start, b.end, tol) && points_same(a.end, b.start, tol)
+    points_same(a.start, b.end, tol)
+        && points_same(a.end, b.start, tol)
+        && same_middle(a, b, tol)
+}
+
+/// 途中の点が同じか。公差は稜の長さに対する相対で取ります——分割の仕方が
+/// 違う2枚が同じ稜を持つとき、中点は丸め誤差ぶん動きます。
+fn same_middle(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
+    let reach = (a.start - a.end).norm().max(1.0);
+    points_same(a.middle, b.middle, tol.max(reach * 1e-6))
 }
 
 fn points_same(a: Point3, b: Point3, tol: f64) -> bool {

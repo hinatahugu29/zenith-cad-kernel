@@ -157,6 +157,7 @@ fn main() {
     let mut ends: Vec<(Point3, Point3)> = Vec::new();
     for candidate in &edges {
     end_distance_report(&faces_a, &faces_b, &edges, &tol);
+    duplicate_curve_report(&edges, &tol);
         let (t0, t1) = candidate.edge.curve.param_range();
         let start = candidate.edge.curve.evaluate(t0);
         let end = candidate.edge.curve.evaluate(t1);
@@ -384,5 +385,58 @@ fn end_distance_report(
     }
     if worst_over == 0 {
         println!("    every end sits on its face boundary");
+    }
+}
+
+/// 同じ2点を結ぶ交線が2本あるとき、それが**同じ曲線**かを見る。
+///
+/// 面の継ぎ目の上を走る交線は、その継ぎ目を挟む2枚の面の**どちらからも**
+/// 出てきます。同じ曲線なら、それは切り込みではなく**接触の記録**であって、
+/// そのまま渡すと稜が3回使われて非多様体になります。
+///
+/// 端点だけでは見分けられません（別々の弧が同じ2点を結ぶことは普通に
+/// あります）。中点まで測ります。
+fn duplicate_curve_report(edges: &[zenith_algo::IntersectionEdgeCandidate], tol: &Tolerance) {
+    println!("\n  cuts that connect the same two points:");
+    let mid = |candidate: &zenith_algo::IntersectionEdgeCandidate| {
+        let (t0, t1) = candidate.edge.curve.param_range();
+        candidate.edge.curve.evaluate((t0 + t1) * 0.5)
+    };
+    let ends = |candidate: &zenith_algo::IntersectionEdgeCandidate| {
+        let (t0, t1) = candidate.edge.curve.param_range();
+        (
+            candidate.edge.curve.evaluate(t0),
+            candidate.edge.curve.evaluate(t1),
+        )
+    };
+    let join = tol.linear * 1000.0;
+    let mut found = 0usize;
+    for (i, left) in edges.iter().enumerate() {
+        for right in edges.iter().skip(i + 1) {
+            let (la, lb) = ends(left);
+            let (ra, rb) = ends(right);
+            let same = ((la - ra).norm() <= join && (lb - rb).norm() <= join)
+                || ((la - rb).norm() <= join && (lb - ra).norm() <= join);
+            if !same {
+                continue;
+            }
+            found += 1;
+            let gap = (mid(left) - mid(right)).norm();
+            println!(
+                "    A{} x B{}  and  A{} x B{}  midpoints {gap:.3e} apart{}",
+                left.face_a_index,
+                left.face_b_index,
+                right.face_a_index,
+                right.face_b_index,
+                if gap <= join {
+                    "  <- **the same curve, produced twice**"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+    if found == 0 {
+        println!("    none");
     }
 }
