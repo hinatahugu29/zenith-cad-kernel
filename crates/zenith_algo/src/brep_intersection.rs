@@ -3593,17 +3593,8 @@ fn face_boundary_bbox(face: &Face) -> Option<BoundingBox3> {
     let mut bbox = BoundingBox3::empty();
 
     let take = |wire: &zenith_topo::Wire, bbox: &mut BoundingBox3| {
-        for point in wire.sample_points(12) {
-            if point3_is_finite(point) {
-                bbox.extend_point(point);
-            }
-        }
         for oriented in &wire.edges {
-            for control in &oriented.edge.curve.control_points {
-                if point3_is_finite(control.point) {
-                    bbox.extend_point(control.point);
-                }
-            }
+            extend_by_curve_hull(bbox, &oriented.edge.curve);
         }
     };
 
@@ -3613,6 +3604,66 @@ fn face_boundary_bbox(face: &Face) -> Option<BoundingBox3> {
     }
 
     bbox.is_valid().then_some(bbox)
+}
+
+/// 曲線を細分し、断片ごとの制御多角形で箱を広げる。
+///
+/// **緩い上界では足りません。** この箱は2つの仕事をしており、片方は緩めては
+/// いけないからです。
+///
+/// 1. 面の組を候補に入れるかの絞り込み — **外してはいけない**
+/// 2. 求めた交線の切り詰め（`clip_candidate_to_face_bboxes`）— **緩めてはいけない**
+///
+/// 生の制御多角形は 1 に足りて 2 に緩すぎます。実測: `occ_reference_revolved_ring`
+/// を角の箱で削る配置で、交線が面の外まで残って縫えない稜が 11 本出て、
+/// **それまで通っていた配置が拒否になりました**。
+///
+/// 曲線を分けると、断片の制御多角形は曲線に近づきます（はみ出しは区間長の
+/// 2乗で縮む）。分けても凸包の性質は保たれるので、**保証つきのまま、きつい
+/// 箱**になります。3回（8断片）で、円弧のはみ出しはおよそ 1/64 です。
+///
+/// 分ける回数を増やせばもっときつくなりますが、絞り込みは面の枚数ぶん走る
+/// ので、際限なくは分けられません。
+fn extend_by_curve_hull(bbox: &mut BoundingBox3, curve: &zenith_geom::NurbsCurve3) {
+    const LEVELS: usize = 3;
+
+    // 重みが正でなければ凸包の性質が使えません。そのときだけ標本で妥協します
+    // （**標本は上界ではありません**が、生の制御点より実物に近い）。
+    if curve.control_points.iter().any(|control| !(control.weight > 0.0)) {
+        let (t0, t1) = curve.param_range();
+        for step in 0..=64 {
+            let point = curve.evaluate(t0 + (t1 - t0) * step as f64 / 64.0);
+            if point3_is_finite(point) {
+                bbox.extend_point(point);
+            }
+        }
+        return;
+    }
+
+    let mut pieces = vec![curve.clone()];
+    for _ in 0..LEVELS {
+        let mut next = Vec::with_capacity(pieces.len() * 2);
+        for piece in pieces {
+            let (t0, t1) = piece.param_range();
+            match piece.split_at((t0 + t1) * 0.5) {
+                Some((left, right)) => {
+                    next.push(left);
+                    next.push(right);
+                }
+                // 分けられない曲線は、そのままの制御多角形で使う。
+                None => next.push(piece),
+            }
+        }
+        pieces = next;
+    }
+
+    for piece in &pieces {
+        for control in &piece.control_points {
+            if point3_is_finite(control.point) {
+                bbox.extend_point(control.point);
+            }
+        }
+    }
 }
 
 fn face_bboxes_intersect(
