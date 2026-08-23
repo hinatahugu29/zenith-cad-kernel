@@ -89,7 +89,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 82 テストバイナリ（doctest 込み）、460 テスト、失敗 0。
+**期待**: 83 テストバイナリ（doctest 込み）、464 テスト、失敗 0。
 
 所要はおよそ **10〜11分**です。ただし**この環境の壁時計は当てになりません**
 （下の 2-3 を読んでください）。時間で良し悪しを判断しないでください。曲面同士が交わるブーリアン（球×球、円柱×円柱、
@@ -656,6 +656,7 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `tess_density_probe` | 三角形数が頼んだ分割数に対して素直に増えるか（いま比 1.00・単調） |
 | `foreign_boolean_probe` | **他カーネルの立体を読んで切る**。恒等式 `V(A-B)+V(A^B)=V(A)` と包除で見るので、切った形の閉じた式は要りません |
 | `step_unit_probe` | **ミリ以外の単位で書かれた STEP** を正しい大きさで読めているか。検体は `tools/make_unit_step.py` が作り、OCC が解析解どおりに読み戻すことを確かめてある |
+| `step_representation_probe` | 同じ形を**違う書き方**（1ファイルに複数立体、解析曲面か B-spline か）で書いたファイルが、同じ答えになるか。**個数も見ます** |
 | `export_iges_suite` | IGES 5.3 の検体を書き出す（突き合わせは `tools/verify_iges.py`） |
 
 **不具合を追うための診断**
