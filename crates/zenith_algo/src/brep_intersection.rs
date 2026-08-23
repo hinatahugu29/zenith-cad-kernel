@@ -5931,19 +5931,53 @@ fn split_planar_face_across_holes(
     let mut landings: Vec<Vec<WireHit>> = vec![Vec::new(); wires.len()];
     let mut crosses_a_hole = false;
     for cut in &cuts {
-        let start = locate_on_any_wire(&wires, cut.start_vertex.point, tol)
-            .ok_or_else(|| "a cut end does not lie on any wire of the face".to_string())?;
-        let end = locate_on_any_wire(&wires, cut.end_vertex.point, tol)
-            .ok_or_else(|| "a cut end does not lie on any wire of the face".to_string())?;
-        if start.0 != end.0 {
-            crosses_a_hole = true;
+        // **どの点かを言います。** 断り文が「どこかの端」としか言わないと、
+        // 追いかける人は面の全部の稜を自分で測ることになります。
+        let name = |point: zenith_math::Point3| {
+            format!(
+                "a cut end ({:.4} {:.4} {:.4}) does not lie on any wire of the face",
+                point.x, point.y, point.z
+            )
+        };
+        // **切り込みどうしの継ぎ目は、境界に乗らなくてかまいません。**
+        // 切り込みが鎖になっていると、中の継ぎ目は面の内側にあります。実測:
+        // 輪を傾けたスラブで切ると、鎖の継ぎ目が半径 9.9137（外周 10、穴 4）
+        // に来て、「どのワイヤにも乗らない」と断っていました（4-66）。
+        // 境界に着かなければならないのは、**相手のいない端**だけです。
+        let shared_with_another_cut = |point: zenith_math::Point3| {
+            cuts.iter()
+                .flat_map(|other| [other.start_vertex.point, other.end_vertex.point])
+                .filter(|other| (*other - point).norm() <= tol.linear * 1000.0)
+                .count()
+                >= 2
+        };
+        let start = locate_on_any_wire(&wires, cut.start_vertex.point, tol);
+        let end = locate_on_any_wire(&wires, cut.end_vertex.point, tol);
+        if start.is_none() && !shared_with_another_cut(cut.start_vertex.point) {
+            return Err(name(cut.start_vertex.point));
         }
-        landings[start.0].push(start.1);
-        landings[end.0].push(end.1);
+        if end.is_none() && !shared_with_another_cut(cut.end_vertex.point) {
+            return Err(name(cut.end_vertex.point));
+        }
+        // **穴に関わっているかどうかで決めます。** 「外周と穴をつなぐ切り込みが
+        // あるか」で見ていたので、穴の縁だけに着く切り込み——傾けたドリルが
+        // 円環の中を噛む配置がそれです——を断っていました（4-66）。
+        // ここは最後の受け皿なので、普通の経路で割れる面はここへ来ません。
+        for landing in [&start, &end].into_iter().flatten() {
+            if landing.0 > 0 {
+                crosses_a_hole = true;
+            }
+        }
+        if let Some(start) = start {
+            landings[start.0].push(start.1);
+        }
+        if let Some(end) = end {
+            landings[end.0].push(end.1);
+        }
     }
     if !crosses_a_hole {
-        // 穴を横切っていないなら、ここの仕事ではありません。
-        return Err("no cut runs between two different wires".to_string());
+        // 穴に関わっていないなら、ここの仕事ではありません。
+        return Err("no cut reaches an inner wire".to_string());
     }
 
     // 2. ワイヤを着地点で細分して弧にする。着地の無いワイヤは丸ごと残し、
@@ -6125,22 +6159,6 @@ fn split_planar_face_across_holes(
         return Err("cutting across the hole did not divide the face".to_string());
     }
 
-    // 7. **面積の和が元に戻ること。** 閉じた輪になっただけでは足りません。
-    let expected = signed_area_2d(&outer_polygon).abs()
-        - hole_polygons
-            .iter()
-            .map(|hole| signed_area_2d(hole).abs())
-            .sum::<f64>();
-    let got: f64 = outlines
-        .iter()
-        .map(|outline| signed_area_2d(outline).abs())
-        .sum();
-    if expected.abs() > 0.0 && (got - expected).abs() / expected.abs() > 1e-6 {
-        return Err(format!(
-            "the regions add up to {got:.6e} against the face's {expected:.6e}"
-        ));
-    }
-
     // 8. 着地の無かった穴は、それを含む領域の穴として戻します。
     let mut faces: Vec<Face> = regions
         .into_iter()
@@ -6164,6 +6182,33 @@ fn split_planar_face_across_holes(
         );
         faces = distribute_inner_wires(&carrier, faces, plane, tol)?;
     }
+
+    // **面積の和が元に戻ること。** 閉じた輪になっただけでは、領域の
+    // 取り違えは分かりません。
+    //
+    // 面積は uv の多角形ではなく、**面そのものの積分**で測ります。多角形は
+    // 曲がった境界を弦で置き換えるので、切り込みが傾いていると誤差が判定の
+    // 帯を超えます。実測: 輪を傾けたスラブで切ると相対 1.1e-5 で、帯は 1e-6
+    // でした。**判定に使う量は、判定の帯より細かく測れていなければなりません**
+    // （4-66）。
+    let integral_params = TessellationParams::default();
+    let expected = MassCalculator::compute_face_integral(face, &integral_params)
+        .0
+        .abs();
+    let got: f64 = faces
+        .iter()
+        .map(|piece| {
+            MassCalculator::compute_face_integral(piece, &integral_params)
+                .0
+                .abs()
+        })
+        .sum();
+    if expected > 0.0 && (got - expected).abs() / expected > 1e-6 {
+        return Err(format!(
+            "the regions add up to {got:.6e} against the face's {expected:.6e}"
+        ));
+    }
+
     Ok(faces)
 }
 

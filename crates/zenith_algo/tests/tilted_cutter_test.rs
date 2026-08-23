@@ -222,3 +222,83 @@ mod torus {
         );
     }
 }
+
+/// 輪（円環のキャップを持つ）。**穴のある面を傾いた切り込みで割ります。**
+/// 面積の判定が多角形で粗かった件、鎖の継ぎ目に境界を要求していた件、
+/// 「穴を横切る」を狭く取りすぎていた件——3つとも、ここで断っていました
+/// （4-66）。
+mod revolved_ring {
+    use super::*;
+
+    const VOLUME: f64 = 1583.362697;
+    /// OpenCASCADE（`occ_cut_reference.py revolved_ring "tilted slab" --box -10 -10 0 10 10 6`）。
+    const OCC_DIFFERENCE: f64 = 808.697682;
+
+    /// 境界箱 (-10,-10,0)-(10,10,6) に対する `half slab` を傾けたもの。
+    fn tilted_slab() -> Solid {
+        let upright = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_box(12.0, 40.0, 12.0).expect("slab"),
+            Vec3::new(-12.2, -20.0, -3.0),
+        );
+        tilt(&upright, Vec3::new(0.0, 0.0, 3.0))
+    }
+
+    fn cut(op: BooleanOpType) -> Vec<Solid> {
+        let tol = Tolerance::default();
+        BooleanEngine::boolean_solids_exact_result(
+            &fixture("revolved_ring"),
+            &tilted_slab(),
+            op,
+            &tol,
+        )
+        .unwrap_or_else(|err| {
+            panic!(
+                "revolved_ring / tilted slab / {op:?} refused: {}",
+                err.chars().take(140).collect::<String>()
+            )
+        })
+        .solids
+    }
+
+    #[test]
+    fn the_tilted_slab_takes_a_piece() {
+        let got = volume(&cut(BooleanOpType::Difference));
+        assert!(
+            (got - VOLUME).abs() > 1e-6,
+            "the difference came back as the untouched ring ({got})"
+        );
+        let relative = (got - OCC_DIFFERENCE).abs() / OCC_DIFFERENCE;
+        assert!(
+            relative <= 1e-6,
+            "difference {got} against OpenCASCADE's {OCC_DIFFERENCE} (relative {relative:.3e})"
+        );
+    }
+
+    /// **穴が残っていること。** 円環を割ったあとも、内側の壁は結果の一部です。
+    #[test]
+    fn the_bore_survives() {
+        let got = volume(&cut(BooleanOpType::Difference));
+        // 穴を失えば、その体積ぶん増えます（π·16·6 のうち切り残るぶん）。
+        let solid_disc = std::f64::consts::PI * 100.0 * 6.0;
+        assert!(
+            got < solid_disc * 0.6,
+            "the bore was lost: {got} against the solid disc {solid_disc}"
+        );
+    }
+
+    #[test]
+    fn the_two_halves_add_back_up() {
+        let difference = volume(&cut(BooleanOpType::Difference));
+        let intersection = volume(&cut(BooleanOpType::Intersection));
+        assert!(
+            intersection > VOLUME * 1e-3,
+            "the intersection came out empty ({intersection})"
+        );
+        let relative = (difference + intersection - VOLUME).abs() / VOLUME;
+        assert!(
+            relative <= 1e-7,
+            "V(A-B) + V(A^B) = {} against V(A) = {VOLUME} (relative {relative:.3e})",
+            difference + intersection
+        );
+    }
+}
