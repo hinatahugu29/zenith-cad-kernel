@@ -131,7 +131,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **穴あき多角形三角化** | Earcut アルゴリズムによる穴あき平面の高速・ロバスト三角化 | ✅ 完了 | `zenith_tess::surface_tess` (`earcutr`) |
 | **マルチコア超並列テッセレーション** | Rayon による全CPUコア並列データ処理メッシング | ✅ 完了 | `zenith_tess::surface_tess` (`rayon`) |
 | **ガウス発散定理 物性値計算** | 任意B-Repメッシュから厳密な体積・表面積・重心を数学的積分 | ✅ 完了 | `zenith_algo::MassCalculator` |
-| **点群包含・内外判定** | 3D点 $P$ がソリッドの内部/外部/境界にあるかをロバスト判定 | ✅ 完了 | `zenith_algo::SolidClassifier` |
+| **点群包含・内外判定** | 3D点 $P$ がソリッドの内部/外部/境界にあるかを判定。**`SolidClassifier` は実在しません**（この表が3箇所で名指ししていましたが、`struct` も `enum` もありません）。実体は `zenith_algo::exact_inside`（B-Rep の面へ厳密に射影して符号で決める。境界の上と、同着の面が接平面に乗る場合は「決めない」を返す）と `BooleanEngine::is_point_inside_mesh`（メッシュ基準） | ✅ 完了 | `zenith_algo::exact_inside` |
 | **メッシュ縫合・マニホールド化** | 共有頂点インデックスの統合・エッジ連結検査 | ✅ 完了 | `zenith_tess::mesh` |
 
 ---
@@ -240,7 +240,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **穴あき多角形三角化** | Earcut アルゴリズムによる穴あき平面の高速・ロバスト三角化 | ✅ 完了 | `zenith_tess::surface_tess` (`earcutr`) |
 | **マルチコア超並列テッセレーション** | Rayon による全CPUコア並列データ処理メッシング | ✅ 完了 | `zenith_tess::surface_tess` (`rayon`) |
 | **ガウス発散定理 物性値計算** | 任意B-Repメッシュから厳密な体積・表面積・重心を数学的積分 | ✅ 完了 | `zenith_algo::MassCalculator` |
-| **点群包含・内外判定** | 3D点 $P$ がソリッドの内部/外部/境界にあるかをロバスト判定 | ✅ 完了 | `zenith_algo::SolidClassifier` |
+| **点群包含・内外判定** | 3D点 $P$ がソリッドの内部/外部/境界にあるかを判定。**`SolidClassifier` は実在しません**（この表が3箇所で名指ししていましたが、`struct` も `enum` もありません）。実体は `zenith_algo::exact_inside`（B-Rep の面へ厳密に射影して符号で決める。境界の上と、同着の面が接平面に乗る場合は「決めない」を返す）と `BooleanEngine::is_point_inside_mesh`（メッシュ基準） | ✅ 完了 | `zenith_algo::exact_inside` |
 | **メッシュ縫合・マニホールド化** | 共有頂点インデックスの統合・エッジ連結検査 | ✅ 完了 | `zenith_tess::mesh` |
 
 ---
@@ -349,7 +349,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **穴あき多角形三角化** | Earcut アルゴリズムによる穴あき平面の高速・ロバスト三角化 | ✅ 完了 | `zenith_tess::surface_tess` (`earcutr`) |
 | **マルチコア超並列テッセレーション** | Rayon による全CPUコア並列データ処理メッシング | ✅ 完了 | `zenith_tess::surface_tess` (`rayon`) |
 | **ガウス発散定理 物性値計算** | 任意B-Repメッシュから厳密な体積・表面積・重心を数学的積分 | ✅ 完了 | `zenith_algo::MassCalculator` |
-| **点群包含・内外判定** | 3D点 $P$ がソリッドの内部/外部/境界にあるかをロバスト判定 | ✅ 完了 | `zenith_algo::SolidClassifier` |
+| **点群包含・内外判定** | 3D点 $P$ がソリッドの内部/外部/境界にあるかを判定。**`SolidClassifier` は実在しません**（この表が3箇所で名指ししていましたが、`struct` も `enum` もありません）。実体は `zenith_algo::exact_inside`（B-Rep の面へ厳密に射影して符号で決める。境界の上と、同着の面が接平面に乗る場合は「決めない」を返す）と `BooleanEngine::is_point_inside_mesh`（メッシュ基準） | ✅ 完了 | `zenith_algo::exact_inside` |
 | **メッシュ縫合・マニホールド化** | 共有頂点インデックスの統合・エッジ連結検査 | ✅ 完了 | `zenith_tess::mesh` |
 
 ---
