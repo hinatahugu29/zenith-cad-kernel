@@ -714,6 +714,35 @@ impl<'a> SectionRefiner<'a> {
         // 隣の面や面の外へ飛んでいる。受け取らない。
         let limit = chord * 0.25;
 
+        if let Some(point) = self.best_settled(middle, origin, normal, tol, limit) {
+            return Some(point);
+        }
+
+        // **種が古いと、隣の解に落ちます。** 種は前の弦の答えで、輪郭を辿って
+        // いるあいだは近いのですが、継ぎ目をまたいだところで別の枝へ行きます。
+        // そこへ落ちた点は残差が大きく、下の「探索の粗さを採用しない」判定に
+        // 引っかかって捨てられます。**捨てられた弦は生の弦のまま積まれる**ので、
+        // 刻みを細かくするほど本物の補正が小さくなり、ある密度から補正が
+        // まるごと効かなくなります。実測で、読んだトーラスの赤道断面は
+        // 128分割で 4.83e-11、256分割で 2.11e-6——**細かくしたほうが悪い**。
+        //
+        // 1度だけ種を捨てて引き直します。効くのは捨てられた弦だけなので、
+        // 通っている弦の費用は変わりません。
+        for seed in self.seeds.iter_mut() {
+            *seed = None;
+        }
+        self.best_settled(middle, origin, normal, tol, limit)
+    }
+
+    /// すべての面に対して詰めてみて、いちばん動きの小さい採用できる点を返す。
+    fn best_settled(
+        &mut self,
+        middle: Point3,
+        origin: Point3,
+        normal: Vec3,
+        tol: &Tolerance,
+        limit: f64,
+    ) -> Option<Point3> {
         let mut best: Option<(f64, Point3)> = None;
         for index in 0..self.surfaces.len() {
             let Some((point, residual)) = self.settle_on(index, middle, origin, normal, tol) else {
