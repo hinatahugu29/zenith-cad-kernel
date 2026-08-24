@@ -46,15 +46,63 @@ pub struct EdgeInspection {
 /// Plasticity風 ダイレクトモデリング・幾何クエリエンジン
 pub struct DirectModeling;
 
+/// 三角形メッシュの、面積で重み付けした重心。
+///
+/// 面1枚の重心はこれです。`MassCalculator::compute_from_mesh` の
+/// `center_of_mass` は原点からの四面体分割による**体積**の重心なので、
+/// 閉じていないメッシュ（面1枚）に掛けると意味を持ちません。
+fn area_weighted_centroid(mesh: &zenith_tess::TriangleMesh) -> Option<Point3> {
+    let mut total = 0.0;
+    let mut moment = Vec3::new(0.0, 0.0, 0.0);
+    for triangle in &mesh.indices {
+        let a = mesh.positions[triangle[0] as usize];
+        let b = mesh.positions[triangle[1] as usize];
+        let c = mesh.positions[triangle[2] as usize];
+        let area = (b - a).cross(&(c - a)).norm() * 0.5;
+        if !(area > 0.0) {
+            continue;
+        }
+        total += area;
+        moment += (a.coords + b.coords + c.coords) / 3.0 * area;
+    }
+    if !(total > 0.0) {
+        return None;
+    }
+    Some(Point3::from(moment / total))
+}
+
 impl DirectModeling {
     /// 選択されたFaceの厳密な面積・重心・法線ベクトル・各座標平面との角度を解析
     pub fn inspect_face(face: &Face) -> Result<FaceInspection, String> {
         let tess_params = zenith_tess::TessellationParams {
-            u_divisions: 16,
-            v_divisions: 16,
+            u_divisions: 64,
+            v_divisions: 64,
         };
         let mesh = zenith_tess::tessellate_face(face, &tess_params);
         let mass = crate::mass_properties::MassCalculator::compute_from_mesh(&mesh);
+
+        // **面積はメッシュから取ってはいけません。** メッシュは弦なので、
+        // 円形の面では内接多角形の面積になります。16分割で測っていたときは、
+        // 読んだ円柱の蓋（真値 314.159265）が 314.151328——相対 2.5e-5 ——
+        // でした。仕様書はここを「厳密表面積」と書いています。
+        //
+        // 平面の面は、Green の定理で p-curve に沿った線積分に落ちるので
+        // **厳密に**出ます（円形のトリムは真の面積になり、内接多角形には
+        // なりません）。曲面の面はパラメータ領域の求積で、分割数で収束します。
+        // どちらも `compute_face_integral` が持っています。
+        let (area, _volume_share) =
+            crate::mass_properties::MassCalculator::compute_face_integral(face, &tess_params);
+
+        // **重心も、メッシュの物性値から取ってはいけません。** あちらは原点
+        // からの四面体分割で**体積**の重心を出すので、開いた面1枚に掛けると
+        // 意味のない点が返ります。読んだ円柱の上蓋（z = 40、真値 (0,0,40)）は
+        // **(0, 0, 30)** と出ていました——四面体の重心が原点から 3/4 の所に
+        // 来るので、ちょうど 0.75 x 40 です。下蓋は z = 0 なので偶然正しく
+        // 見えていました。
+        //
+        // 面の重心は、面積で重み付けした三角形の重心の平均です。多角形の
+        // 境界では厳密、曲がった境界では分割数で収束します。
+        let centroid = area_weighted_centroid(&mesh).unwrap_or(mass.center_of_mass);
 
         let normal = match &face.geometry {
             FaceGeometry::Plane(p) => {
@@ -95,8 +143,8 @@ impl DirectModeling {
         let angle_to_yz_deg = normal.dot(&x_axis).clamp(-1.0, 1.0).acos().to_degrees();
 
         Ok(FaceInspection {
-            area: mass.surface_area,
-            centroid: mass.center_of_mass,
+            area,
+            centroid,
             normal,
             angle_to_xy_deg,
             angle_to_xz_deg,

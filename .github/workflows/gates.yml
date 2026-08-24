@@ -67,7 +67,7 @@ jobs:
             helix_volume_probe cutter_placement_probe cone_slab_probe \
             intersection_edge_probe shape_variety_probe march_stop_probe \
             gate_membership_probe foreign_distance_probe foreign_slice_probe \
-            grid_fallback_probe
+            grid_fallback_probe foreign_edit_probe
           do
             echo "=== $probe"
             if ! timeout 1200 "./target/release/examples/$probe" > "/tmp/$probe.txt" 2>&1; then
