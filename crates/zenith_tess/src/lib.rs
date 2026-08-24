@@ -7,6 +7,6 @@ pub mod surface_tess;
 pub use mesh::TriangleMesh;
 pub use stitched::tessellate_solid_stitched;
 pub use surface_tess::{
-    face_uv_triangulation, tessellate_face, tessellate_shell, tessellate_solid, tessellate_surface,
+    face_parameter_area, face_uv_triangulation, tessellate_face, tessellate_shell, tessellate_solid, tessellate_surface,
     TessellationParams, UvTriangulation,
 };
