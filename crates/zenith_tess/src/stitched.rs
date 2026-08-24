@@ -566,6 +566,22 @@ fn segments_for_edge(oriented: &OrientedEdge, deflection: f64, minimum: usize) -
     MAX_SEGMENTS
 }
 
+/// 極を持つ面の、境界3辺から格子の刻み数を読む。
+///
+/// 潰れた側に稜が無いので、残るのは「向かい合う2辺」と「1辺」です。
+/// 向かい合う2辺は同じ刻み数でなければならず、そうでなければ格子は張れません。
+fn degenerate_side_counts(counts: &[usize]) -> Option<(usize, usize)> {
+    if counts.len() != 3 {
+        return None;
+    }
+    for (a, b, odd) in [(0, 1, 2), (0, 2, 1), (1, 2, 0)] {
+        if counts[a] == counts[b] {
+            return Some((counts[odd].max(1), counts[a].max(1)));
+        }
+    }
+    None
+}
+
 /// パラメータ矩形の縁が境界になっているパッチを、構造格子で張る。
 ///
 /// 共有点がその格子の縁にちょうど乗ることを確かめてから使い、乗った点の
@@ -633,6 +649,18 @@ fn grid_patch(
         (counts[0].max(1), counts[1].max(1))
     } else if !counts.is_empty() && counts.iter().all(|c| *c == counts[0]) {
         (counts[0].max(1), counts[0].max(1))
+    } else if counts.len() == 3 && degenerate_side_counts(counts).is_some() {
+        // **極を持つ面は、境界が3辺しかありません。** 円錐の側面や、他カーネル
+        // から読んだ回転面がそれで、潰れた側（頂点）には稜がありません。
+        // 4辺の規則にも「全部同じ」にも当てはまらないので、格子を張れる形
+        // なのに毎回断られ、earcut ＋ 適応細分へ落ちていました。読んだ円錐は
+        // それで、自前の円錐の 5〜10 倍の三角形になり（16分割で 16,874 対
+        // 2,046）、しかも粗密が偏るので断面の輪郭が乱れていました。
+        //
+        // 潰れた行/列がまるごと1点に潰れていることは、この下の border_ok が
+        // 曲面そのものを見て確かめます。ここで通しても、そこが崩れていれば
+        // 格子は採用されません。
+        degenerate_side_counts(counts).expect("checked just above")
     } else {
         if std::env::var("ZENITH_GRID_WHY").is_ok() {
             eprintln!("GRIDWHY segment_counts {counts:?}");
