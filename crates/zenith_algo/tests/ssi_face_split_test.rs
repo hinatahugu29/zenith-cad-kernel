@@ -12,7 +12,8 @@
 
 use std::f64::consts::FRAC_1_SQRT_2;
 
-use zenith_algo::FaceSplitter;
+use zenith_algo::{FaceSplitter, MassCalculator};
+use zenith_tess::TessellationParams;
 use zenith_geom::{ControlPoint3, IntersectionMarcher, KnotVector, NurbsCurve3, NurbsSurface3};
 use zenith_math::{Point3, Tolerance};
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Orientation, Vertex, Wire};
@@ -161,28 +162,34 @@ fn a_cylinder_patch_splits_along_its_intersection_with_a_sphere() {
         assert!(piece.outer_wire.is_closed(&tol));
     }
 
-    // 3. 面積を足す。ここが合わなければ領域を取り違えている。
+    // 3. 面積を足す。ここが合わなければ領域を取り違えている。判定そのものは
+    // パラメータ面積です（4-76）。
     assert!(
         report.area_residual < 1e-6,
-        "the pieces do not add up: residual {:.3e} (pieces {:?}, original {})",
+        "the pieces do not add up: residual {:.3e} (parameter areas {:?}, original {})",
         report.area_residual,
-        report.piece_areas,
-        report.original_area
+        report.piece_parameter_areas,
+        report.original_parameter_area
     );
 
+    // **閉じた式と突き合わせるのは 3D の面積**なので、ここで自分で積む。
     // 元の四半パッチの面積には閉じた式がある: r * (pi/2) * 高さ。
+    let params = TessellationParams::default();
     let whole = 5.0 * std::f64::consts::FRAC_PI_2 * 40.0;
+    let original_3d = MassCalculator::compute_face_integral(&face, &params).0;
     assert!(
-        (report.original_area - whole).abs() / whole < 1e-9,
-        "the patch area should be {whole}, got {}",
-        report.original_area
+        (original_3d - whole).abs() / whole < 1e-9,
+        "the patch area should be {whole}, got {original_3d}"
     );
     // どちらの片も潰れていないこと。片方が 0 でも「和は合う」ので、別に見る。
-    for area in &report.piece_areas {
+    let piece_areas: Vec<f64> = pieces
+        .iter()
+        .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+        .collect();
+    for area in &piece_areas {
         assert!(
             *area > whole * 0.05,
-            "a piece came out empty: {:?}",
-            report.piece_areas
+            "a piece came out empty: {piece_areas:?}"
         );
     }
 }

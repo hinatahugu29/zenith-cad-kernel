@@ -315,7 +315,15 @@ fn test_exact_brep_boolean_preparation_reports_pipeline_counts() {
     .expect("exact boolean preparation report");
 
     assert!(report.face_pair_candidate_count > 0);
-    assert!(report.intersection_edge_candidate_count <= report.face_pair_candidate_count);
+    // **交線の数は、面の組の数を超えることがあります**（2026/08/25、4-80）。
+    //
+    // ここは長らく `<=` で見ていました。交線が面の組ごとのマーチングからしか
+    // 出てこなかった頃は成り立ちます。いまは**相手が既に持っている稜**のうち
+    // こちらの平面をまたぐものも拾うので、組の数とは無関係に増えます。
+    //
+    // 実測（この検体）: 面の組 12、交線 14。増えた2本は円柱の継ぎ目で、箱の
+    // 面 `y = 0` の上に乗り、両側にパッチがあります——**本物の交線です**。
+    assert!(report.intersection_edge_candidate_count > 0);
     assert!(report.planar_split_candidate_count <= report.intersection_edge_candidate_count);
     assert!(
         report.planar_batch_applied_split_count + report.planar_batch_skipped_split_count

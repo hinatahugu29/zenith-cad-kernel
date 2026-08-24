@@ -39,6 +39,62 @@ impl UvTriangulation {
     }
 }
 
+/// 面のトリム領域の**パラメータ面積**（外周 − 穴）。
+///
+/// # 何のためにあるか
+///
+/// 面を割ったとき、「片の面積の和が元に戻るか」で領域の取り違え（重複・
+/// 取りこぼし）を見ています。**その検算に 3D の面積は要りません。**
+/// 割る前と割ったあとで**同じ曲面の同じパラメータ領域**を見ているので、
+/// パラメータ面積が合えば領域は合っています。
+///
+/// 3D の面積を積むほうは、トリム境界（実測で 4000 点級）を earcut に通し、
+/// たわみで 30 倍に細分し、三角形1枚につき6点を評価します。**ブーリアン
+/// 1回の仕事の 90% がそこでした**（HANDOVER 4-75）。こちらは折れ線の
+/// 多角形面積そのもので、曲面を1回も評価しません。
+///
+/// 境界の標本は積分側と**同じ取り方**（`LoopFidelity::Exact`）にしてあります。
+/// 元と片で取り方が違うと、合うはずのものが合いません。
+///
+/// p-curve が無く導出もできない面では `None` を返します（そのときは呼ぶ側が
+/// 3D の面積に落ちてください）。
+pub fn face_parameter_area(face: &Face) -> Option<f64> {
+    let derived_holder;
+    let face = if face.pcurves.is_some() {
+        face
+    } else {
+        let pcurves = match &face.geometry {
+            FaceGeometry::Plane(_) => face.plane_pcurves().ok()?,
+            _ => face.pcurves(&Tolerance::default()).ok()?,
+        };
+        let mut with = face.clone();
+        with.pcurves = Some(pcurves);
+        derived_holder = with;
+        &derived_holder
+    };
+    let pcurves = face.pcurves.as_ref()?;
+    let params = TessellationParams::default();
+
+    let loop_area = |pcurve_loop: &FacePcurveLoop| {
+        let uvs = sample_pcurve_loop_uv(pcurve_loop, &params, LoopFidelity::Exact);
+        if uvs.len() < 3 {
+            return 0.0;
+        }
+        // 巻き方は面ごとに違うので、大きさだけ使います。穴は外周から引きます。
+        let mut twice_area = 0.0;
+        for index in 0..uvs.len() {
+            let here = uvs[index];
+            let next = uvs[(index + 1) % uvs.len()];
+            twice_area += here.x * next.y - next.x * here.y;
+        }
+        (twice_area * 0.5).abs()
+    };
+
+    let outer = loop_area(&pcurves.outer_loop);
+    let holes: f64 = pcurves.inner_loops.iter().map(loop_area).sum();
+    Some(outer - holes)
+}
+
 /// Triangulates a face's trimmed parameter domain.
 ///
 /// Planar faces are triangulated exactly by their trim loops. NURBS faces use
@@ -535,13 +591,42 @@ fn trimmed_uv_triangulation(
         .map(|chunk| [chunk[0], chunk[1], chunk[2]])
         .collect();
 
-    refine_uv_triangulation_protected(
-        surface,
-        params,
-        &mut uvs,
-        &mut triangles,
-        &HashSet::new(),
-    );
+    // **ブーリアン1回の仕事の大半がここです**（実測: 交差した円柱で、曲面
+    // 評価 1500万回のうち 1350万回。HANDOVER 4-75）。トリムされた面の面積を
+    // 積むたびに、境界の折れ線（実測で 4115 点）を earcut に通し、そこから
+    // 出た細長い三角形を細分するので、1枚が 4 万〜16 万枚になります。
+    //
+    // `ZENITH_TRIM_WHY=1` で、1回ぶんの枚数が出ます。
+    //
+    // `ZENITH_NO_TRIM_REFINE=1` は**細分を止めます。答えが変わります**——
+    // 「細分は表示のためで、積分には要らないのでは」を確かめるための口です。
+    // 実測では**要りました**（曲面の面積が相対 6e-5 動き、面分割が 1e-6 の
+    // 関門で断られるようになります）。速くするために外す口ではありません。
+    let before_refinement = triangles.len();
+    let skip_refinement = std::env::var_os("ZENITH_NO_TRIM_REFINE").is_some();
+    if skip_refinement {
+        eprintln!(
+            "ZENITH_NO_TRIM_REFINE is set: trimmed faces are integrated on the unrefined \
+             triangulation and their areas are WRONG (measured: 6e-5 relative on a cylinder)"
+        );
+    } else {
+        refine_uv_triangulation_protected(
+            surface,
+            params,
+            &mut uvs,
+            &mut triangles,
+            &HashSet::new(),
+        );
+    }
+    if std::env::var_os("ZENITH_TRIM_WHY").is_some() {
+        eprintln!(
+            "TRIMWHY boundary {} pts, earcut {} tris -> refined {} tris (x{:.1})",
+            outer_uvs.len(),
+            before_refinement,
+            triangles.len(),
+            triangles.len() as f64 / before_refinement.max(1) as f64
+        );
+    }
     UvTriangulation { uvs, triangles }
 }
 

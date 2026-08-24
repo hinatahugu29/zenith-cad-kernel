@@ -347,6 +347,17 @@ impl BrepIntersectionBuilder {
                 }])
             })
             .flatten()
+            // **1点に潰れた交線は、接触の記録です。位相を作らせません**
+            // （3-1 の規約。2026/08/25、4-80）。
+            //
+            // 球が箱の面に極で触れると、そこに長さ 0 の「交線」が立ちます
+            // （実測: `box × sphere` で6本、すべて極の1点）。切り込みとして
+            // 渡すと、箱の面に**行って戻るだけの切れ目**が入り、その面の
+            // メッシュに穴が開きます（実測: union の結果に、対になっていない
+            // 稜が2本と長さ 0 の稜が1本）。
+            //
+            // 点で触れているだけの場所は、割る理由になりません。
+            .filter(|candidate| sampled_edge_extent(&candidate.edge) > tol.linear)
             .collect()
     }
 
@@ -581,6 +592,18 @@ impl BrepIntersectionBuilder {
             tol,
         ));
 
+        // **面積を囲まない面片は、面ではありません。**
+        //
+        // 相手の立体の稜が、こちらの面の**境界の上**に乗る配置——45度回した
+        // 箱どうしがそれ——では、面をその稜で割ると「面そのもの」と「行って
+        // 戻るだけの切れ目」の2枚が出ます。切れ目のほうは面積 0 で、境界を
+        // 1本も新しく持ちませんが、**同じ稜をもう2回使います**。それが
+        // 縫合の非多様体として出ていました（HANDOVER 3-N-1。実測では
+        // `box × box` 45度回転の差で 12、積で 22）。
+        //
+        // 落としても形は動きません。面積 0 の面は立体の境界に何も足しません。
+        selected_face_pieces.retain(|piece| !face_encloses_no_area(&piece.face, tol));
+
         // 同じ平面に重なって乗る面は、両オペランドから同じ領域が採られる。
         // そのまま縫うと同じ稜を4回使うことになるので、ここで解消する。
         resolve_coincident_face_pieces(&mut selected_face_pieces, tol);
@@ -692,8 +715,19 @@ impl BrepIntersectionBuilder {
             tol,
         );
         let face_pair_candidate_count = face_pair_candidates.len();
-        let edge_candidates =
+        let mut edge_candidates =
             Self::intersection_edge_candidates_from_face_pairs(face_pair_candidates, tol);
+        edge_candidates.extend(collect_edges_already_on_a_plane(&faces_a, &faces_b, tol));
+        edge_candidates.extend(
+            collect_edges_already_on_a_plane(&faces_b, &faces_a, tol)
+                .into_iter()
+                .map(|candidate| IntersectionEdgeCandidate {
+                    // 役割が入れ替わっているので、添字を戻す。
+                    face_a_index: candidate.face_b_index,
+                    face_b_index: candidate.face_a_index,
+                    edge: candidate.edge,
+                }),
+        );
         let selection = Self::selected_face_pieces_from_candidates(
             solid_a,
             solid_b,
@@ -1362,7 +1396,16 @@ impl BrepIntersectionBuilder {
         //
         // 順序が要る。専用の経路を差し置いてここを先に通すと、回転した箱同士の
         // 和のように、既に通っていた割り方が別の割り方に置き換わって壊れる。
-        if applied_split_count == 0 && split_edges.len() >= 2 {
+        //
+        // **1本でもここへ来ます**（2026/08/25）。以前は「2本以上」を条件に
+        // していたので、**曲面に届いた交線がちょうど1本のとき、汎用の
+        // 面分割器を一度も試さずに諦めていました**。球を平面で切ると、球の
+        // パッチ1枚に弧が1本だけ届きます。専用の経路は「円柱の側面と分かる
+        // パッチしか割れない」と断り、そこで終わっていました（3-N-1）。
+        //
+        // ここは**どの経路も入らなかったときの受け皿**なので、広げても
+        // 既に通っている割り方を横取りしません。
+        if applied_split_count == 0 && !split_edges.is_empty() {
             // **鎖は1本とは限らない。** ここは来た稜を丸ごと1本の切り込みと
             // して渡していた。トーラス片をドリルで抜く配置では、ドリルの側面
             // 1枚に**出入り2箇所ぶん**の稜が届く。まとめて渡すと
@@ -1373,7 +1416,7 @@ impl BrepIntersectionBuilder {
             let chains = group_edges_into_chains(&deduplicate_split_edges(split_edges, tol), tol);
             let mut chain_faces = vec![face.clone()];
             let mut applied: usize = 0;
-            for chain in chains.iter().filter(|chain| chain.len() >= 2) {
+            for chain in chains.iter() {
                 let mut next_faces = Vec::new();
                 for current_face in chain_faces {
                     match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
@@ -3383,17 +3426,27 @@ pub(crate) fn all_solid_faces(solid: &Solid) -> Vec<Face> {
     faces
 }
 
-fn nest_cavity_shells_into_solids(mut simple_solids: Vec<Solid>, _tol: &Tolerance) -> Vec<Solid> {
+fn nest_cavity_shells_into_solids(simple_solids: Vec<Solid>, _tol: &Tolerance) -> Vec<Solid> {
     if simple_solids.len() <= 1 {
         return simple_solids;
     }
 
     let params = TessellationParams::default();
-    simple_solids.sort_by(|a, b| {
-        let vol_a = MassCalculator::compute_from_brep(a, &params).volume;
-        let vol_b = MassCalculator::compute_from_brep(b, &params).volume;
-        vol_b.partial_cmp(&vol_a).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // **体積は先に1回ずつ measure してから並べます。**
+    //
+    // 比較関数の中で積んでいたので、`sort_by` が比較するたびに立体を丸ごと
+    // 積分し直していました（比較は O(n log n) 回あります）。1回の積分は面を
+    // 全部三角形に割って6点則を当てるので、並べ替えの代金としては桁違いです。
+    // 順序は同じです。
+    let mut with_volume: Vec<(f64, Solid)> = simple_solids
+        .into_iter()
+        .map(|solid| {
+            let volume = MassCalculator::compute_from_brep(&solid, &params).volume;
+            (volume, solid)
+        })
+        .collect();
+    with_volume.sort_by(|(a, _), (b, _)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let simple_solids: Vec<Solid> = with_volume.into_iter().map(|(_, solid)| solid).collect();
 
     let meshes: Vec<TriangleMesh> = simple_solids
         .iter()
@@ -4844,6 +4897,15 @@ fn intersect_nurbs_patches(
         tol,
     );
 
+    // `ZENITH_SSI_WHY=1` で、辿れた枝と、落とした枝の理由が1行ずつ出ます。
+    // **交線が1本も取れないと、その面の組は `Unsupported` になり、ブーリアンは
+    // そこから先に進めません。** 落ちた理由が分からないと、交差の実装が悪いのか
+    // 種が見つからないのかを切り分けられません。
+    let explain = std::env::var_os("ZENITH_SSI_WHY").is_some();
+    if explain {
+        eprintln!("SSIWHY {} branch(es) marched", branches.len());
+    }
+
     let mut edges = Vec::new();
     for (curve, marched, _) in branches {
         // パッチの**縁に沿って**走る交線は、切り込みではなく接触の記録である。
@@ -4851,13 +4913,29 @@ fn intersect_nurbs_patches(
         // 縁に沿った線がいくつも出る。切り込みとして渡すと、面はそこで割れずに
         // 「境界に届かない」と断られ、しかも本物の切り込みを押しのける。
         if marched_runs_along_a_patch_edge(&marched, surface_a, surface_b) {
+            if explain {
+                eprintln!("  dropped: runs along a patch edge ({} points)", marched.points.len());
+            }
             continue;
         }
         let (t0, t1) = curve.param_range();
         let start = curve.evaluate(t0);
         let end = curve.evaluate(t1);
         if (end - start).norm() <= tol.linear {
+            if explain {
+                eprintln!(
+                    "  dropped: the two ends meet ({:.3e} apart, {} marched points)",
+                    (end - start).norm(),
+                    marched.points.len()
+                );
+            }
             continue;
+        }
+        if explain {
+            eprintln!(
+                "  kept: ({:.3} {:.3} {:.3}) -> ({:.3} {:.3} {:.3}), {} marched points",
+                start.x, start.y, start.z, end.x, end.y, end.z, marched.points.len()
+            );
         }
         edges.push(Edge::new(
             curve,
@@ -5809,6 +5887,196 @@ fn curve_parameter_of_point(
     }
 
     Some(t)
+}
+
+/// **相手が既に持っている稜のうち、こちらの平面をまたいでいるもの**を、
+/// 交線の候補として拾う。
+///
+/// # なぜ要るか
+///
+/// 切る平面が、相手の立体の**継ぎ目にちょうど重なる**ことがあります。球を
+/// 中心を通る平面で切ると、切り口の大円は球のパッチの経線そのものです
+/// （実測: `box × sphere` で、球が持つ8本の稜が `x = 20` の上に**厳密に**
+/// 乗っています。長さは 15.705 = πr/2）。
+///
+/// このとき、**マーチングは何も見つけません**。どのパッチも平面を内部で
+/// 横切っておらず、境界で接しているだけだからです（実測: 16組すべてで
+/// 「0 branch」。HANDOVER 4-78 の欠陥1）。辿る必要はありません——
+/// **交線はもう相手の稜として存在します。**
+///
+/// # 何を「またいでいる」と呼ぶか
+///
+/// 稜が平面の上に乗っているだけでは足りません。**その稜を共有する相手の2枚が、
+/// 平面の反対側にある**ことを見ます。
+///
+/// - 球の経線: 隣り合うパッチは経度 0..90 と 90..180 で、`x = 20` の反対側
+///   にあります。**またいでいる**
+/// - 箱どうしを面で合わせた配置: 合わさっている面は平面の**上**にあり、
+///   反対側にはなりません。**またいでいない**（同一平面の重なりは別の経路が
+///   扱います）
+///
+/// これを見ないと、面を突き合わせただけの配置に交線を作ってしまいます。
+fn collect_edges_already_on_a_plane(
+    planar_faces: &[Face],
+    other_faces: &[Face],
+    tol: &Tolerance,
+) -> Vec<IntersectionEdgeCandidate> {
+    let mut out = Vec::new();
+
+    for (face_a_index, face_a) in planar_faces.iter().enumerate() {
+        let FaceGeometry::Plane(plane) = &face_a.geometry else {
+            continue;
+        };
+
+        for (face_b_index, face_b) in other_faces.iter().enumerate() {
+            for oriented in &face_b.outer_wire.edges {
+                let edge = &oriented.edge;
+                if !edge_lies_on_plane(edge, plane, tol) {
+                    continue;
+                }
+                if sampled_edge_extent(edge) <= tol.linear {
+                    continue;
+                }
+                // 平面の面の中に入っていなければ、この面は割れません。
+                if !edge_midpoint_inside_planar_face(face_a, plane, edge, tol) {
+                    continue;
+                }
+                if !other_solid_crosses_here(other_faces, edge, plane, tol) {
+                    continue;
+                }
+                if std::env::var_os("ZENITH_ONPLANE_WHY").is_some() {
+                    let s = edge.start_vertex.point;
+                    let e = edge.end_vertex.point;
+                    eprintln!(
+                        "ONPLANE face {face_a_index} takes edge {} ({:.3} {:.3} {:.3})->({:.3} {:.3} {:.3}) from face {face_b_index}",
+                        edge.id, s.x, s.y, s.z, e.x, e.y, e.z
+                    );
+                }
+                out.push(IntersectionEdgeCandidate {
+                    face_a_index,
+                    face_b_index,
+                    edge: edge.clone(),
+                });
+            }
+        }
+    }
+
+    out
+}
+
+/// 稜の中点が、平面の面のトリムの内側にあるか。
+fn edge_midpoint_inside_planar_face(
+    face: &Face,
+    plane: &PlaneSurface3,
+    edge: &Edge,
+    tol: &Tolerance,
+) -> bool {
+    let boundary: Vec<Point2> = face
+        .outer_wire
+        .sample_points(16)
+        .iter()
+        .map(|point| project_to_plane_uv(*point, plane))
+        .collect();
+    if boundary.len() < 3 {
+        return false;
+    }
+    let uv = project_to_plane_uv(edge_midpoint(edge), plane);
+    point_in_polygon_2d(uv, &boundary, tol.parametric)
+}
+
+/// この稜のところで、相手の立体が平面をまたいでいるか。
+///
+/// 稜を共有する面を集め、その面の代表点が平面のどちら側にあるかを見ます。
+/// 両側にあれば、またいでいます。
+fn other_solid_crosses_here(
+    other_faces: &[Face],
+    edge: &Edge,
+    plane: &PlaneSurface3,
+    tol: &Tolerance,
+) -> bool {
+    let mut positive = false;
+    let mut negative = false;
+
+    // **`id` では突き合わせられません。** 同じ弧を共有していても、面ごとに
+    // 別の `Edge` の実体を持っていることがあります（実測: 球の経線は隣り合う
+    // パッチで id 13 と 21 でした。座標は同じです）。位置で見ます。
+    let start = edge.start_vertex.point;
+    let end = edge.end_vertex.point;
+    let middle = edge_midpoint(edge);
+    let same_edge = |other: &Edge| {
+        let other_start = other.start_vertex.point;
+        let other_end = other.end_vertex.point;
+        let spans_match = (points_same_3d(other_start, start, tol.linear)
+            && points_same_3d(other_end, end, tol.linear))
+            || (points_same_3d(other_start, end, tol.linear)
+                && points_same_3d(other_end, start, tol.linear));
+        spans_match && points_same_3d(edge_midpoint(other), middle, tol.linear * 10.0)
+    };
+
+    for face in other_faces {
+        let uses_edge = std::iter::once(&face.outer_wire)
+            .chain(face.inner_wires.iter())
+            .flat_map(|wire| wire.edges.iter())
+            .any(|oriented| same_edge(&oriented.edge));
+        if !uses_edge {
+            continue;
+        }
+        // 面の代表点（境界の標本の平均）で側を決めます。面が平面の上に
+        // 丸ごと乗っているなら、どちらでもありません。
+        let points = face.outer_wire.sample_points(16);
+        if points.is_empty() {
+            continue;
+        }
+        let mut sum = 0.0;
+        let mut count = 0.0;
+        for point in &points {
+            sum += (point - plane.origin).dot(&plane.normal);
+            count += 1.0;
+        }
+        let side = sum / count;
+        if side > tol.linear {
+            positive = true;
+        } else if side < -tol.linear {
+            negative = true;
+        }
+    }
+
+    positive && negative
+}
+
+/// 面片が面積を囲んでいないか。
+///
+/// 外側のワイヤを折れ線に落とし、Newell の式でベクトル面積を取ります。行って
+/// 戻るだけのワイヤはここで**ちょうど 0** になります。曲がった面でも折れ線は
+/// 面積を過小評価するだけなので、健全な面が 0 と判定されることはありません。
+///
+/// 判定は長さで正規化します（`面積 <= 公差 × 周長`）。「平均して公差より薄い」
+/// という意味で、大きさの単位に依りません。
+fn face_encloses_no_area(face: &Face, tol: &Tolerance) -> bool {
+    let points = face.outer_wire.sample_points(8);
+    if points.len() < 3 {
+        return true;
+    }
+
+    // **重心を引いてから足します。** 原点から遠い面では、大きな数どうしの
+    // 差になって桁が落ちます。和は平行移動で変わらないので、形は動きません。
+    let mut center = Vec3::zeros();
+    for point in &points {
+        center += point.coords;
+    }
+    center /= points.len() as f64;
+
+    let mut vector_area = Vec3::zeros();
+    let mut perimeter = 0.0;
+    for index in 0..points.len() {
+        let current = points[index].coords - center;
+        let next = points[(index + 1) % points.len()].coords - center;
+        vector_area += current.cross(&next);
+        perimeter += (next - current).norm();
+    }
+    let area = vector_area.norm() * 0.5;
+
+    perimeter <= tol.linear || area <= tol.linear * perimeter
 }
 
 /// Removes the duplication that arises when both operands contribute the same

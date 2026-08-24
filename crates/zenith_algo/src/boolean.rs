@@ -1,6 +1,6 @@
 use zenith_math::{Point3, RobustPredicates, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
-use zenith_topo::{Shape, Solid};
+use zenith_topo::{Edge, Shape, Solid};
 
 /// ブーリアン演算の種類
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,6 +371,27 @@ impl BooleanEngine {
         // まさにそれです）だけ、ここに来ます。
         if matches!(op, BooleanOpType::Difference) && !Self::interiors_overlap(solid_a, solid_b) {
             return Ok(ExactBooleanResult::single(solid_a.clone()));
+        }
+
+        // **答えそのものが非多様体である配置がここに来ます。**
+        //
+        // 「接触は、それ自体では位相を作らない」と決めた以上（HANDOVER 3-1）、
+        // 線でしか触れていない答えは `Solid` では持てません。ここで測って、
+        // そうならば**場所を名指しして断ります**。「未実装」と言うのとは
+        // 意味が違います——実装しても返せないものです。
+        //
+        // 測り方は [`crate::contact`]。交線のまわりで材料がいくつに分かれて
+        // いるかを、A と B の内外の**角度の区間**から決めます。
+        let edges: Vec<Edge> = shell_assembly
+            .edge_candidates
+            .iter()
+            .map(|candidate| candidate.edge.clone())
+            .collect();
+        if let Some(pinch) = crate::contact::find_result_pinch(solid_a, solid_b, &edges, op, tol) {
+            return Err(format!(
+                "Exact B-Rep boolean refuses this placement: {}",
+                pinch.describe()
+            ));
         }
 
         Err(format!(
