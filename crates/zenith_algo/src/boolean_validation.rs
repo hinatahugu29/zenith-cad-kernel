@@ -357,28 +357,39 @@ pub fn exact_inside(point: Point3, solid: &Solid, tol: &Tolerance) -> Option<boo
         return None;
     }
 
-    // 稜や角では2枚以上の面が同着になる。**全部に訊いて、割れたら決めない。**
-    // 1枚だけ見ると、寄せた先の法線が隣の面のものと食い違う配置で符号を
-    // 取り違えます。
+    // 稜や角では2枚以上の面が同着になる。**全部に訊いて、1枚でも「外」と
+    // 言えば外**です。
+    //
+    // 割れたら決めない、にしていたときは、円錐の底の縁の斜め外にいる点が
+    // 決まりませんでした（底の平面から見れば内、母線から見れば外）。
+    // 決まらないほうが安全に見えますが、これは決められます。
+    //
+    // 稜が最近点になるのは、**凸稜なら外側の点だけ、凹稜なら内側の点だけ**
+    // です（凸稜の内向き法線錐と、凹稜の外向き法線錐は、どちらも空）。
+    // したがって内側と言えるのは、同着の面が**全部**内と言うときだけ。
+    // 凹稜の内側の点は、実際にどちらの面から見ても内側にあります。
     let band = nearest * 1e-6 + 1e-12;
-    let mut side: Option<bool> = None;
+    let graze = nearest * 1e-9;
+    let mut grazed = false;
     for projection in projections
         .iter()
         .filter(|projection| projection.distance <= nearest + band)
     {
         let outward = (point - projection.foot).dot(&projection.outward_normal);
-        if outward.abs() <= 1e-15 {
-            return None;
+        if outward > graze {
+            return Some(false);
         }
-        let inside = outward < 0.0;
-        match side {
-            None => side = Some(inside),
-            Some(previous) if previous != inside => return None,
-            Some(_) => {}
+        if outward >= -graze {
+            // その面の接平面の上に乗っている。内とは言い切れない。
+            grazed = true;
         }
     }
 
-    side
+    if grazed {
+        None
+    } else {
+        Some(true)
+    }
 }
 
 /// 複数の立体の合併に対する内外判定。
