@@ -1,6 +1,6 @@
 # 検証手順書 — Zenith CAD Kernel
 
-**対象コミット**: `kernel-accuracy-hardening` ブランチ
+**対象コミット**: `main` ブランチ
 **最終確認**: 2026年8月22日（監査による是正 — HANDOVER 4-37 / 4-38 まで）
 
 この文書は、**このリポジトリを初めて見る人（または別の AI モデル）が、
@@ -142,7 +142,7 @@ cargo run --release -p zenith_algo --example boolean_envelope
 
 ```text
 supported: 39   wrong-result: 0   unsupported/error: 6   (total 45)
-worst analytic agreement: 6.75e-8  (sphere x sphere intersection)
+worst analytic agreement: 6.68e-8  (sphere x sphere intersection)
 solve work: 108381805 surface evaluations, 1134888 marching Newton iterations, 5724 marches
             360 seed searches, 936073 point-surface projections (56976 of them
             searching the whole domain for a start), 144 whole-solid tessellations
@@ -160,7 +160,7 @@ solve work: 108381805 surface evaluations, 1134888 marching Newton iterations, 5
 
 **`worst analytic agreement` を必ず見てください。** 45行の表は体積を3桁でしか
 出さないので、精度が3桁落ちても表は同じに見えます。この行は解析解を持つ
-25ケースのうち最悪のものを出します。曲面同士は 5.92e-9 〜 6.75e-8 で、
+25ケースのうち最悪のものを出します。曲面同士は 5.92e-9 〜 6.68e-8 で、
 これは交線の当てはめ精度（1e-7 台、4-12）から従う値です。
 
 **`wrong-result` は全期間ゼロです。** 1件でも出たら、それは性能改善であっても
@@ -659,6 +659,7 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `ring_corner_probe` | 輪の角を箱で削る配置を、読んだ立体とビルダーの立体で並べる。両方落ちればブーリアン自身の穴 |
 | `unmatched_edge_probe [検体] [切り手] [演算]` | **縫えなかった稜を位置と持ち主で名指しする**。本数だけでは、足りないのが面なのか向きなのか分かりません |
 | `membership_mismatch_probe` | 検証の標本点が**面からどれだけ離れているか**を出す。ゲートが正しい答えを拒否したとき、それが形の誤りか判定の誤りかを分けるため（4-51） |
+| `gate_membership_probe` | **ゲート**。`sphere` に角の箱を当てた6演算が、検証つきの口を通るか。断られた演算が1件でもあれば非ゼロ終了。`foreign_boolean_probe` の傾け版は30分かかるので、ゲートの判定そのものを触るときはこちらで測る。`ZENITH_GATE_DETAIL=1` で標本を1点ずつ出す（4-68） |
 | `cone_corner_probe` | 段ごとに体積を出す（面片から組んだ直後、縫合後）。**どの段で答えが変わるか**を1回で決めるため（4-53） |
 | `step_unit_probe` | **ミリ以外の単位で書かれた STEP** を正しい大きさで読めているか。検体は `tools/make_unit_step.py` が作り、OCC が解析解どおりに読み戻すことを確かめてある |
 | `step_representation_probe` | 同じ形を**違う書き方**（1ファイルに複数立体、解析曲面か B-spline か）で書いたファイルが、同じ答えになるか。**個数も見ます** |
