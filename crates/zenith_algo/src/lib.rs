@@ -51,7 +51,7 @@ pub use boolean::{
     BooleanEngine, BooleanOpType, ExactBooleanPreparationReport, ExactBooleanResult,
 };
 pub use boolean_validation::{
-    BooleanResultReport, BooleanResultVerifier, BooleanVerificationParams,
+    exact_inside, BooleanResultReport, BooleanResultVerifier, BooleanVerificationParams,
 };
 pub use bolt::BoltBuilder;
 pub use brep_intersection::{
