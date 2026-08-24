@@ -152,7 +152,120 @@ impl ExtremumEngine {
             }
         }
 
-        Self::refine_surface_projection(point, surface, best_u, best_v, min_dist_sq, max_iterations, tolerance)
+        // **当たりが極（退化した行）だったら、そこからは降りられません。**
+        //
+        // 極では u をいくら動かしても 3D の点が変わらないので、上の詰めは
+        // 「u を選び直す」ことができません。v を1目盛動かすと、**当たった
+        // ときの u の経線**に沿って動くだけで、たいてい遠くなります。そこで
+        // 8回とも改善が無く、**極そのものが答えとして残ります**。
+        //
+        // 実測: 半径10の球を (20,10,10) に置き、球面上の点 (20, 9.5542, 0.0099)
+        // を射影すると **0.446 ずれた極**が返っていました（点は面の上にあるので
+        // 正しい答えは 0）。原点に置いた同じ球では起きません——粗格子の当たりが
+        // たまたま極にならないからです。**置き方で答えが変わっていました。**
+        //
+        // ここに落ちたら、**隣の v で u を全域から選び直します**。
+        // 経線さえ決まれば、あとはニュートンが降ります。
+        // **近いほうを選んではいけません。** 極のすぐ隣にある点では、極そのもの
+        // のほうが「隣の行」より近いことがあります（実測: 極から 0.14、隣の行は
+        // 0.33）。近さで選ぶと極が残り、また降りられません。
+        //
+        // **両方から降ろして、着いた先で選びます。** 降りる先が本物の最近点なら、
+        // 出発点がどちらでも同じところへ行きます。
+        let from_grid = Self::refine_surface_projection(
+            point,
+            surface,
+            best_u,
+            best_v,
+            min_dist_sq,
+            max_iterations,
+            tolerance,
+        );
+        let Some((seed_u, seed_v, seed_dist_sq)) =
+            Self::escape_degenerate_seed(point, surface, best_u, best_v)
+        else {
+            return from_grid;
+        };
+
+        let from_meridian = Self::refine_surface_projection(
+            point,
+            surface,
+            seed_u,
+            seed_v,
+            seed_dist_sq,
+            max_iterations,
+            tolerance,
+        );
+        match (from_grid, from_meridian) {
+            (Ok(grid), Ok(meridian)) => Ok(if meridian.distance < grid.distance {
+                meridian
+            } else {
+                grid
+            }),
+            (Ok(only), Err(_)) | (Err(_), Ok(only)) => Ok(only),
+            (Err(err), Err(_)) => Err(err),
+        }
+    }
+
+    /// 当たりが退化した位置（極）なら、**隣の行で経線を選び直した種**を返す。
+    ///
+    /// 退化していないなら `None`。**近いかどうかでは選びません**——ここは
+    /// 「どの経線を降りるか」を決めるためだけの種で、近さは降りた先で比べます。
+    fn escape_degenerate_seed(
+        point: Point3,
+        surface: &NurbsSurface3,
+        best_u: f64,
+        best_v: f64,
+    ) -> Option<(f64, f64, f64)> {
+        let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+        let (_, su, sv) = surface.evaluate_derivatives_1st(best_u, best_v);
+
+        // 退化の判定は、もう片方の向きとの比で見ます。大きさの単位に依りません。
+        let u_collapsed = su.norm() <= sv.norm() * 1e-6;
+        let v_collapsed = sv.norm() <= su.norm() * 1e-6;
+        if !u_collapsed && !v_collapsed {
+            return None;
+        }
+
+        // 潰れているほうを全域から選び直し、潰れていないほうは1目盛だけ動かす。
+        // 動かす向きは、範囲の内側へ。
+        let samples = 32;
+        let mut found: Option<(f64, f64, f64)> = None;
+        let consider = |u: f64, v: f64, found: &mut Option<(f64, f64, f64)>| {
+            let distance_sq = (surface.evaluate(u, v) - point).norm_squared();
+            if distance_sq < found.map(|(_, _, d)| d).unwrap_or(f64::INFINITY) {
+                *found = Some((u, v, distance_sq));
+            }
+        };
+
+        if u_collapsed {
+            let step = (v_max - v_min) / samples as f64;
+            let toward_inside = if (best_v - v_min).abs() <= (v_max - best_v).abs() {
+                step
+            } else {
+                -step
+            };
+            let v = (best_v + toward_inside).clamp(v_min, v_max);
+            for index in 0..=samples {
+                let u = u_min + (u_max - u_min) * index as f64 / samples as f64;
+                consider(u, v, &mut found);
+            }
+        }
+        if v_collapsed {
+            let step = (u_max - u_min) / samples as f64;
+            let toward_inside = if (best_u - u_min).abs() <= (u_max - best_u).abs() {
+                step
+            } else {
+                -step
+            };
+            let u = (best_u + toward_inside).clamp(u_min, u_max);
+            for index in 0..=samples {
+                let v = v_min + (v_max - v_min) * index as f64 / samples as f64;
+                consider(u, v, &mut found);
+            }
+        }
+
+        found
     }
 
     /// 最近傍点の探索を、与えられた (u, v) から始める。
