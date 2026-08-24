@@ -116,6 +116,8 @@ impl SamplePlan {
             visit(inner, &mut counts);
         }
 
+        balance_opposite_edges(solid, &mut counts);
+
         Self {
             counts,
             fallback: fine,
@@ -124,6 +126,63 @@ impl SamplePlan {
 
     fn segments_for(&self, edge_id: u64) -> usize {
         *self.counts.get(&edge_id).unwrap_or(&self.fallback)
+    }
+}
+
+/// 4辺の面の、向かい合う稜の刻み数を揃える。
+///
+/// 構造格子は「対辺の刻み数が一致」することを求めます。刻み数は稜ごとに
+/// **その稜自身のたわみ**で決めるので、半径の違う2つの円は違う数になります。
+/// 読んだ円錐台がそれで、下の円 256・上の円 128 となり、格子から落ちて
+/// earcut ＋ 適応細分へ行っていました（32分割で 100,286 三角形）。
+///
+/// 揃えるときは**多いほうへ**上げます。減らすと、その稜を使う別の面の弦が
+/// 粗くなるからです。刻み数は稜ごとに1つだけ持つので、上げた結果は両側の面が
+/// そのまま見ます——**継ぎ目は開きません**。
+///
+/// 1回上げると別の面の対が崩れることがあるので、変わらなくなるまで繰り返し
+/// ます。上げる方向にしか動かないので必ず止まります。
+fn balance_opposite_edges(solid: &Solid, counts: &mut BTreeMap<u64, usize>) {
+    let faces = || {
+        std::iter::once(&solid.outer_shell)
+            .chain(solid.inner_shells.iter())
+            .flat_map(|shell| shell.faces.iter())
+    };
+
+    for _round in 0..8 {
+        let mut changed = false;
+        for face in faces() {
+            // 平面は格子を張らないので、揃える必要がありません。
+            if matches!(face.geometry, FaceGeometry::Plane(_)) {
+                continue;
+            }
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                if wire.edges.len() != 4 {
+                    continue;
+                }
+                for (a, b) in [(0usize, 2usize), (1, 3)] {
+                    let (id_a, id_b) = (wire.edges[a].edge.id, wire.edges[b].edge.id);
+                    if id_a == id_b {
+                        continue;
+                    }
+                    let want = counts
+                        .get(&id_a)
+                        .copied()
+                        .unwrap_or(1)
+                        .max(counts.get(&id_b).copied().unwrap_or(1));
+                    for id in [id_a, id_b] {
+                        let slot = counts.entry(id).or_insert(1);
+                        if *slot < want {
+                            *slot = want;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
     }
 }
 
