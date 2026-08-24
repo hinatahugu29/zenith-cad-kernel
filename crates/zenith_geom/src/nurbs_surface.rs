@@ -572,6 +572,71 @@ impl NurbsSurface3 {
         let cross = du.cross(&dv);
         cross.try_normalize_safe(1e-12)
     }
+
+    /// 法線。退化点では**まわりからの極限**を返す。
+    ///
+    /// 回転面の極では片方の偏微分が消えるので、`normal` はそこで `None` を
+    /// 返します。それは点そのものについては正しいのですが、**面はその点で
+    /// 滑らかなことが多い**——球の極の接平面は軸に直交します。読んだ球の
+    /// 軸上にある点は、最近点がちょうど極になるので、`None` のままだと
+    /// 「その面には足が無い」ことになっていました。中心線は実務でいくらでも
+    /// 出てきます。
+    ///
+    /// 極限は、`(u, v)` から領域の内側へ**斜めに4方向**寄せて取ります。
+    /// 4方向のうち法線が取れたものが**互いに一致したときだけ**返します。
+    /// 円錐の頂点のように、寄せる向きで法線が変わる点では一致しないので、
+    /// そこは `None` のままです。**滑らかでない点に法線を作りません。**
+    pub fn normal_or_limit(&self, u: f64, v: f64) -> Option<Vec3> {
+        if let Some(normal) = self.normal(u, v) {
+            return Some(normal);
+        }
+
+        let ((u_min, u_max), (v_min, v_max)) = self.param_range();
+        let u_span = u_max - u_min;
+        let v_span = v_max - v_min;
+        if u_span <= 0.0 || v_span <= 0.0 {
+            return None;
+        }
+
+        for scale in [1e-6, 1e-5, 1e-4, 1e-3] {
+            let du = u_span * scale;
+            let dv = v_span * scale;
+            let mut agreed: Option<Vec3> = None;
+            let mut found = 0usize;
+            let mut split = false;
+
+            for (su, sv) in [(1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+                let uu = (u + su * du).clamp(u_min, u_max);
+                let vv = (v + sv * dv).clamp(v_min, v_max);
+                // 寄せた先が同じ点なら、その向きからは何も分かりません。
+                if (uu - u).abs() < du * 0.5 && (vv - v).abs() < dv * 0.5 {
+                    continue;
+                }
+                let Some(candidate) = self.normal(uu, vv) else {
+                    continue;
+                };
+                found += 1;
+                match agreed {
+                    None => agreed = Some(candidate),
+                    Some(previous) => {
+                        if previous.dot(&candidate) < 1.0 - 1e-6 {
+                            split = true;
+                        }
+                    }
+                }
+            }
+
+            if split {
+                // 寄せる向きで法線が変わる。ここは滑らかではありません。
+                return None;
+            }
+            if found > 0 {
+                return agreed;
+            }
+        }
+
+        None
+    }
 }
 
 #[cfg(test)]

@@ -103,3 +103,75 @@ fn a_point_off_the_corner_of_a_box_still_has_a_foot() {
     // 中は中。
     assert_eq!(exact_inside(Point3::new(4.5, 4.5, 4.5), &unit, &tol), Some(true));
 }
+
+/// 回転面の**極**。最近点がちょうど極に来る配置。
+///
+/// 極では片方の偏微分が消えるので `NurbsSurface3::normal` は `None` を
+/// 返します。それは点そのものについては正しいのですが、面はそこで滑らか
+/// なので、**まわりからの極限**が採れます（`normal_or_limit`）。採らずに
+/// いたとき、読んだ球の**中心線の上にある点は1つも足を持ちません**でした。
+/// 中心線は実務でいくらでも出てきます。
+#[test]
+fn a_point_on_the_axis_of_a_read_sphere_has_a_foot() {
+    let sphere = foreign_sphere();
+    let tol = Tolerance::default();
+
+    for (point, distance, inside) in [
+        (Point3::new(0.0, 0.0, 25.0), 15.0, false),
+        (Point3::new(0.0, 0.0, -25.0), 15.0, false),
+        (Point3::new(0.0, 0.0, 5.0), 5.0, true),
+        (Point3::new(0.0, 0.0, -5.0), 5.0, true),
+    ] {
+        let projection =
+            nearest_boundary_projection(point, &sphere).expect("the pole is still a point of the face");
+        assert!(
+            (projection.distance - distance).abs() < 1e-9,
+            "{point:?}: expected {distance}, got {}",
+            projection.distance
+        );
+        assert_eq!(exact_inside(point, &sphere, &tol), Some(inside), "{point:?}");
+    }
+}
+
+/// 2枚の面が縁でちょうど同着になる配置。
+///
+/// 読んだ円錐（r10 → 0、高さ 20）の底の縁の斜め外。底の平面から見れば内、
+/// 母線から見れば外で、符号が割れます。**割れたら決めない**にしていた
+/// ときは、境界から 11 も離れた点が「決められない」になっていました。
+///
+/// 稜が最近点になるのは凸稜なら外側の点だけなので、1枚でも「外」と言えば
+/// 外で決まります。
+#[test]
+fn a_point_off_the_rim_of_a_read_cone_is_outside() {
+    let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
+        .join("occ_reference_cone_full.step");
+    let cone = StepImporter::import_solids_from_file(&path)
+        .expect("read the cone")
+        .into_iter()
+        .next()
+        .expect("one solid");
+    let tol = Tolerance::default();
+
+    // 底の縁 (10, 0, 0) の斜め外。最近点は縁そのもの。
+    let point = Point3::new(20.0, 0.0, 5.0);
+    let projection = nearest_boundary_projection(point, &cone).expect("a foot on the cone");
+    assert!(
+        (projection.distance - 125f64.sqrt()).abs() < 1e-9,
+        "expected sqrt(125), got {}",
+        projection.distance
+    );
+    assert_eq!(exact_inside(point, &cone, &tol), Some(false));
+
+    // 頂点の真上。最近点は頂点。
+    let point = Point3::new(0.0, 0.0, 30.0);
+    let projection = nearest_boundary_projection(point, &cone).expect("a foot on the cone");
+    assert!(
+        (projection.distance - 10.0).abs() < 1e-9,
+        "expected 10, got {}",
+        projection.distance
+    );
+    assert_eq!(exact_inside(point, &cone, &tol), Some(false));
+
+    // 中は中。
+    assert_eq!(exact_inside(Point3::new(0.0, 0.0, 10.0), &cone, &tol), Some(true));
+}

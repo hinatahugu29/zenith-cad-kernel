@@ -56,7 +56,7 @@ graph TD
 | **トリム曲面 (Trimmed Surface)** | `trimmed_surface` | UVパラメータ領域内の2D NURBS閉境界による内外判定・トリム。**`FaceGeometry` に含まれていない**ので、B-Rep の面としては使えない（面のトリムは境界ワイヤと p-curve が担っている）。 |
 | **最小回転標架 (RMF)** | `sweep` | Bishop標架 / Rodrigues回転によるねじれ（Twist）のない3D曲線進行標架。 |
 | **ロバスト幾何述語** | `zenith_math::predicates` | Jonathan Shewchuk の適応精度浮動小数点述語（`robust::orient2d`, `orient3d`）統合によるクラッシュ防止。 |
-| **最短距離・最近傍点探索** | `extremum` | 3D点からNURBS曲線（1変数）・曲面（2変数）への最短距離パラメータ探索（ニュートン・ラフソン法）。 |
+| **最短距離・最近傍点探索** | `extremum` | 3D点からNURBS曲線（1変数）・曲面（2変数）への最短距離パラメータ探索（ニュートン・ラフソン法）。立体の境界への射影は `zenith_algo::nearest_boundary_projection` が担い、トリムの外に落ちた足は面の境界の稜へ寄せる。回転面の極では法線の**極限**を採る（`normal_or_limit`）。**他カーネルから読んだ球・円柱・円錐・トーラス**に対し、軸の上・縁の斜め外・頂点の真上を含む36チェックが閉じた式と一致（最悪 3.55e-15、`foreign_distance_probe`）。 |
 
 ---
 
