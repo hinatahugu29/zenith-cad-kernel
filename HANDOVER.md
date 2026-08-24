@@ -17,6 +17,17 @@
 ## 1. まず動かして状態を確認する
 
 ```bash
+bash tools/fast_test.sh
+```
+
+被覆は `cargo test` と**同じ**で、テストバイナリを並列に走らせるぶんだけ
+速くなります（`cargo test` はバイナリを1本ずつ順に走らせるので、重い数本の
+合計がそのまま壁時計になり、実測で約13分。**縮んだ時間はまだ測っていません**
+——最初に走らせた人が 4-73 の表の下に書き足してください）。
+
+素で回すならこちら。
+
+```bash
 cargo test --release --workspace --exclude zenith_py
 ```
 
@@ -31,7 +42,7 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 | 指標 | 値 |
 | :--- | :--- |
 | テストバイナリ | **95（doctest 込み）すべてグリーン（518テスト 100%合格、0 failed、0 ignored）** |
-| 診断プローブ | **常設33本**すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と `VERIFICATION_PLAYBOOK.md` の道具表にあります。**ここに名前を並べると必ず古くなる**ので、数だけ書いています |
+| 診断プローブ | **常設34本**すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と `VERIFICATION_PLAYBOOK.md` の道具表にあります。**ここに名前を並べると必ず古くなる**ので、数だけ書いています |
 | **他カーネルの立体のブーリアン** | 軸に平行な30配置・90演算で**断るものは無し**、WRONG 0・PANIC 0、恒等式の残差 4.04e-9。**検証つきの公開 API でも 90/90**。**切り手を 27 度傾けても断るものは無し**（180演算、`ZENITH_TILTED=1`、恒等式の残差 7.88e-9、**検証つきの口で 180/180**、4-67、4-68） |
 | **実務で普通に出てくる形の読み取り** | フィレット・面取り・複数穴・スロット・ロフト・曲がり管・挽き物・中空・段付き軸の**9検体すべて**を、体積 3e-11 以内・面数一致で読む（`shape_variety_probe`、4-60） |
 | Python 往復 | `tools/verify_solid_api.py` 全合格（作る → ブーリアン → 稜を丸める → STEP → 読み直す） |
@@ -202,27 +213,57 @@ OpenCASCADE 自身に同じ形を書かせるための道具です。
 
 ### 3-N. いま最優先のもの（2026年8月24日時点）
 
-#### 3-N-1. 正しい答えをゲートが断る4件 — 済（4-68）
+**ここから始めてください。場所と、何が起きているかまで測ってあります。**
 
-**解消しました。** 他カーネルの立体のブーリアンは、軸に平行な切り手で
-**90/90**、27 度傾けた切り手を足して **180/180** が検証つきの口を通ります。
-閾値ぎりぎりで通ったのではなく、**厳密に訊き直した標本の食い違いが 0** です。
+#### 3-N-1. 割れなかった交線のうち、接触の記録であるものを落とす
 
-**原因は判定の甘さではありませんでした。** 距離の射影が2種類の面を捨てて
-いて、読んだ球は「面を1枚も持たない立体」として扱われていました。詳しくは
-4-68 に。`DistanceEngine` と干渉判定も同じ経路を使っていたので、そちらも
-一緒に直っています。
+`boolean_envelope` の45ケースで通らない6件を、`ZENITH_SPLIT_WHY=1` で
+全件分解しました（3-1 に表）。**機構は2つで、そのうち3件が同じ**です。
 
-**次に手を付けるものは、下の 3-0 の考え方で選んでください。** いま名指し
-できる穴で大きいのは、2Dスケッチが3Dと繋がっていないこと（3-0-0 の末尾4行）
-と、まだ測っていない経路です。**4-68 もまた「測っていない領域にプローブを
-当てたら出てきた」ものでした**——自前ビルダーの立体は必ず境界ワイヤを持つので、
-既存の検体はこの欠陥を1つも測っていませんでした。
+| 件 | unmatched | 非多様体 | 割れなかった交線 |
+| :--- | ---: | ---: | :--- |
+| `box × box` 45度回転 difference | 0 | **12** | A の面の境界に沿って走る |
+| `box × box` 45度回転 intersection | 0 | **22** | 同上 |
+| `box × cylinder` 接線 difference | 0 | **4** | 接触線 `(0,10,0) → (0,10,20)` そのもの |
+
+どれも「面を1枚も割れなかった交線」が `leftover` に積まれて組み立てに回り、
+反対側の割られた面片と同じ稜を重ねて使っています。**unmatched が 0 なのが
+証拠です**——取りこぼしではなく、面片が多すぎる。
+
+**やること**: 割れなかった交線のうち、**接触の記録であるもの**（面の境界に
+沿う、あるいは接触線そのもの）を `leftover` に積まない。3-1 で決めた規約
+——「接触は、それ自体では位相を作らない」——がそのまま実装になります。
+
+場所は `crates/zenith_algo/src/brep_intersection.rs` の
+`skipped_split_count` を数えているところ（`leftover.push(...)` の直前）です。
+
+**測り方**: 落としたあと、非多様体の使用数（12 / 22 / 4）がどう動くかを
+見てください。**0 になれば片づきます。**
 
 ```bash
-cargo run --release -p zenith_algo --example gate_membership_probe
-# 既知の4件だけを数秒で測る。断られた演算が1件でも出たら赤
+cargo run --release -p zenith_algo --example contact_placement_probe
+ZENITH_SPLIT_WHY=1 cargo run --release -p zenith_algo --example contact_placement_probe
 ```
+
+#### 3-N-2. そのあと: 交線が球の極で点に潰れる（残り3件）
+
+`box × sphere` の3演算はこちらで、**向きが逆です**（unmatched 12 /
+非多様体 0 ＝ 面片が足りない）。切る平面が球の極を通ると、交線がそこで
+点に潰れます（`Split edge is degenerate`）。3-1 に実測。
+
+**同じ4面接触でも、極を通らない置き方なら3演算とも通ります。** つまり
+接触ではなく極の問題です。**3-N-1 を直しても、これは動きません。**
+
+#### 済んだもの
+
+**3-N-1 にあった「正しい答えをゲートが断る4件」は解消しました**（4-68）。
+他カーネルの立体のブーリアンは、軸に平行な切り手で **90/90**、27度傾けた
+切り手を足して **180/180** が検証つきの口を通ります。閾値ぎりぎりで通った
+のではなく、**厳密に訊き直した標本の食い違いが 0** です。
+
+原因は判定の甘さではなく、距離の射影が2種類の面を捨てていたことでした。
+`DistanceEngine` と干渉判定も同じ経路を使っていたので、そちらも一緒に
+直っています。
 
 ---
 
@@ -6188,7 +6229,7 @@ any wire of the face」は、どの端かを言いません。名指しするよ
 | `crates/zenith_io` | STEP 読み書き、STL/OBJ/glTF/DXF/IGES |
 | `crates/zenith_py` | PyO3 バインディング（`#[pyfunction]` 58個 ＋ `#[pymethods]` 2ブロック） |
 | `crates/zenith_server` | Seamless プロトコルの TCP 骨組み。**中身は未実装**で、常に空メッシュを返す（`write_generate_mesh_empty`）。カーネルは呼んでいない |
-| `crates/zenith_algo/examples/` | **測定・診断ツール**（71個） |
+| `crates/zenith_algo/examples/` | **測定・診断ツール**（72個） |
 | `crates/zenith_algo/tests/fixtures/` | OpenCASCADE が書いた STEP 10本。`include_str!` で読むので `target/` を消しても検査は走る |
 | `tools/*.py` | FreeCAD ヘッドレス検証（`verify_*` はゲート、`occ_*` は診断・検体生成用） |
 | `target/showcase/` | 代表24形状の STEP。作り方は 7 章 |
@@ -6284,6 +6325,9 @@ cargo run --release -p zenith_algo --example foreign_edit_probe
 
 cargo run --release -p zenith_algo --example foreign_inertia_probe
 # 32 check(s), 0 miss(es)。読んだ立体の重心と慣性が閉じた式に乗るか（4-73）
+
+cargo run --release -p zenith_algo --example contact_placement_probe
+# **非多様体を返したもの 0** が赤の線。断られること自体は赤にしない（3-1）
 
 # 傾けた切り手も測るなら（30分ほどかかるので既定では走りません）
 $env:ZENITH_TILTED=1; cargo run --release -p zenith_algo --example foreign_boolean_probe
