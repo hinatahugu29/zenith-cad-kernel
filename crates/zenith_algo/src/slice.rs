@@ -659,7 +659,20 @@ impl<'a> SectionRefiner<'a> {
             let point = points[index];
             let previous = points[(index + count - 1) % count];
             let next = points[(index + 1) % count];
-            let neighbourhood = (point - previous).norm().max((next - point).norm());
+            // **短いほうで測ります。** 詰めの補正は弦のたわみの大きさしか出ない
+            // はずで、たわみは**局所の弦の細かさ**で決まります。長いほうを
+            // 使っていたので、片側が長い弦につながる点では限界が桁で広がり、
+            // **別の面まで引っぱられて**いました。
+            //
+            // 実測: 円柱を軸を含む平面で切ると、蓋を横切る弦の端（y = 9.582）は
+            // 片側 0.2477・もう片側 9.582 で、限界が 2.395 になります。そこへ
+            // 円筒側面への射影が届き、点は縁（y = 10）まで 0.418 動いていました。
+            // **同じ弦の上を滑るので面積は変わらず**、周長だけが 120 に対して
+            // 120.52 になります——外からは気づけません。
+            //
+            // 一様に刻まれた断面では短いほうと長いほうが同じなので、そこは
+            // 何も変わりません（実測でも円・円環の断面は 1e-11 台のまま）。
+            let neighbourhood = (point - previous).norm().min((next - point).norm());
             let limit = (neighbourhood * 0.25).max(tol.linear);
 
             let mut best: Option<(f64, Point3)> = None;

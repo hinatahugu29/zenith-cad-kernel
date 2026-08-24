@@ -40,31 +40,7 @@ struct Case {
     loops: usize,
     /// 平面だけで決まる断面か。そうならどの分割数でも厳密であるべき。
     exact: bool,
-    /// 周長が既知の残差を持つ配置。面積とループ数は見るが、周長では落とさない。
-    ///
-    /// **測ったうえで残していることだけを、ここに入れてください。** 何を
-    /// 確かめたかは下の `KNOWN_PERIMETER_RESIDUAL` に書いてあります。
-    known_perimeter_residual: bool,
 }
-
-/// 円柱を軸を含む平面で切ると、周長が 120 に対して 120.52（64分割）になります。
-///
-/// 分かっていること:
-///
-/// - **面積は厳密**（1.4e-16）。ループ数も 1 で正しい。
-/// - **メッシュは正しい。** 蓋を x = 0 で切った線分は 12 本で、[-10, 10] を
-///   ちょうど 20.000000000 で敷き詰め、重なりは無い。
-/// - 余分はすべて y 方向（sum|dz| は 80 で厳密、sum|dy| が 40 に対して 40.52）。
-/// - 輪郭の点列が、蓋の上で 10 → 9.990 → 9.970 → 9.927 → 9.830 → **10** → 0
-///   と往復している。往復なので**面積には出ません**。
-/// - 余分は刻みを倍にするごとに半分になる（0.516 → 0.266 → 0.135）。
-///
-/// つまり欠陥はメッシュではなく、その後（線分の連結か積算）にあります。
-/// 連結の分岐を「入ってきた向きを継ぐ」ほうへ変えても数字は動かなかったので、
-/// **原因はまだ名指しできていません**。切断平面がメッシュの頂点をちょうど
-/// 通る配置——対称面で切る、いちばん普通の置き方——で出ます。
-const KNOWN_PERIMETER_RESIDUAL: &str =
-    "周長のみ既知の残差。面積・ループ数は厳密（プローブ冒頭の説明を参照）";
 
 fn fixture(name: &str) -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
@@ -119,7 +95,6 @@ fn cases() -> Vec<Case> {
             perimeter: p0,
             loops: 1,
             exact: false,
-            known_perimeter_residual: false,
         },
         Case {
             subject: "sphere r10",
@@ -131,7 +106,6 @@ fn cases() -> Vec<Case> {
             perimeter: p6,
             loops: 1,
             exact: false,
-            known_perimeter_residual: false,
         },
         Case {
             subject: "sphere r10",
@@ -148,7 +122,6 @@ fn cases() -> Vec<Case> {
             perimeter: pt,
             loops: 1,
             exact: false,
-            known_perimeter_residual: false,
         },
         Case {
             subject: "cylinder r10 h40",
@@ -160,7 +133,6 @@ fn cases() -> Vec<Case> {
             perimeter: 20.0 * PI,
             loops: 1,
             exact: false,
-            known_perimeter_residual: false,
         },
         Case {
             subject: "cylinder r10 h40",
@@ -173,7 +145,6 @@ fn cases() -> Vec<Case> {
             perimeter: 120.0,
             loops: 1,
             exact: true,
-            known_perimeter_residual: true,
         },
         Case {
             subject: "cone r10 h20",
@@ -185,7 +156,6 @@ fn cases() -> Vec<Case> {
             perimeter: pc,
             loops: 1,
             exact: false,
-            known_perimeter_residual: false,
         },
         Case {
             subject: "torus R12 r4",
@@ -197,7 +167,6 @@ fn cases() -> Vec<Case> {
             perimeter: pt0,
             loops: 2,
             exact: false,
-            known_perimeter_residual: false,
         },
         Case {
             subject: "torus R12 r4",
@@ -209,7 +178,6 @@ fn cases() -> Vec<Case> {
             perimeter: pt2,
             loops: 2,
             exact: false,
-            known_perimeter_residual: false,
         },
     ]
 }
@@ -274,8 +242,7 @@ fn main() {
             // 平面だけで決まる断面は、どの刻みでも厳密。曲面を含むものは、
             // ここでは緩く見て、**縮むか**を下で見ます。
             let bound = if case.exact { 1e-12 } else { 1e-3 };
-            let perimeter_ok = case.known_perimeter_residual || perimeter_relative < bound;
-            let ok = relative < bound && perimeter_ok && loops_ok;
+            let ok = relative < bound && perimeter_relative < bound && loops_ok;
             if !ok {
                 failures += 1;
             }
@@ -290,13 +257,7 @@ fn main() {
                 section.total_perimeter,
                 section.signed_loop_areas.len(),
                 case.loops,
-                if !ok {
-                    "MISS"
-                } else if case.known_perimeter_residual {
-                    "ok (周長は既知の残差)"
-                } else {
-                    "ok"
-                }
+                if ok { "ok" } else { "MISS" }
             );
         }
 
@@ -330,9 +291,6 @@ fn main() {
             "測れませんでした".to_string()
         };
         println!("{:>18}   {}", "", verdict);
-        if case.known_perimeter_residual {
-            println!("{:>18}   {}", "", KNOWN_PERIMETER_RESIDUAL);
-        }
         println!();
     }
 
