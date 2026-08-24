@@ -20,9 +20,19 @@
 //! 領域を取り違えている（重複か取りこぼし）。閉じたワイヤになったこと、
 //! p-curve が辺に乗っていることだけでは、そこは分からない。
 //!
-//! 面積は導出した p-curve でトリムした領域を積むので、[`zenith_tess`] が
-//! p-curve を持たない面を「トリム前の面」として積んでいた間は、この検査は
-//! 意味を成さなかった。
+//! **その面積は、2026/08/25 から「パラメータ面積」です**（4-77）。割る前と
+//! 割ったあとで見ているのは同じ曲面の同じパラメータ領域なので、パラメータの
+//! 上で足し算が合えば領域は合っている。**3D の面積を積む必要はない**——
+//! そちらはトリム境界（実測で 4000 点級）を三角形 3万〜16万枚に割って6点則を
+//! 当てるので、ブーリアン1回の仕事の 90% がそこに行っていた（4-75）。
+//!
+//! もう1つ、**面積を囲まない片が出ていないか**を見る。和が合うだけでは
+//! 「割れた」と言えない（片方が 0 でも和は合う）。以前は 3D 側が偶然
+//! これを捕まえたり逃したりしていた（4-76）。
+//!
+//! **3D の面積が要るなら、返った片から呼ぶ側が積む。** 閉じた式と突き合わせる
+//! プローブとテストはそうしている。判定に使わないものを検査で使うので、同じ量を
+//! 両側から見ることになる。
 
 use zenith_geom::{ExtremumEngine, NurbsCurve3};
 use zenith_math::{Point3, Tolerance};
@@ -32,12 +42,25 @@ use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Vertex, Wire};
 use crate::mass_properties::MassCalculator;
 
 /// 割った結果と、その割り方が正しかったかを測った値。
+///
+/// # 面積は**パラメータ面積**です（2026/08/25、4-76）
+///
+/// 以前はここに 3D の面積が入っていて、割る前と割ったあとで積み比べて
+/// いました。**その積分がブーリアン1回の仕事の 90% でした**（4-75）。
+///
+/// 確かめたいのは「領域を取り違えていないか」で、割る前と割ったあとは
+/// **同じ曲面の同じパラメータ領域**を見ています。パラメータ面積で足し算が
+/// 合えば領域は合っており、そちらは曲面を1回も評価しません。実測でも、
+/// 揃うところでは 3〜4 桁鋭く出ます（3D は三角形の細かさの誤差を含むため）。
+///
+/// **3D の面積が要るなら、返った片から呼ぶ側が積んでください**
+/// （`MassCalculator::compute_face_integral`）。判定には要りません。
 #[derive(Debug, Clone, PartialEq)]
 pub struct FaceSplitReport {
-    /// 元の面の面積。
-    pub original_area: f64,
-    /// 出来た各片の面積。
-    pub piece_areas: Vec<f64>,
+    /// 元の面の**パラメータ面積**（外周 − 穴）。
+    pub original_parameter_area: f64,
+    /// 出来た各片の**パラメータ面積**。
+    pub piece_parameter_areas: Vec<f64>,
     /// 片の面積の和が元からどれだけずれたか（相対）。
     pub area_residual: f64,
     /// 分割線が面から離れていた最大距離。
@@ -47,12 +70,14 @@ pub struct FaceSplitReport {
 }
 
 /// 複数の曲線で割った結果と、その割り方が正しかったかを測った値。
+///
+/// 面積は [`FaceSplitReport`] と同じく**パラメータ面積**です（4-76）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MultiSplitReport {
-    /// 元の面の面積。
-    pub original_area: f64,
-    /// 出来た各片の面積。
-    pub piece_areas: Vec<f64>,
+    /// 元の面の**パラメータ面積**。
+    pub original_parameter_area: f64,
+    /// 出来た各片の**パラメータ面積**。
+    pub piece_parameter_areas: Vec<f64>,
     /// 片の面積の和が元からどれだけずれたか（相対）。
     pub area_residual: f64,
     /// 実際に入った切り込みの本数。
@@ -61,6 +86,146 @@ pub struct MultiSplitReport {
     pub cuts_refused: usize,
     /// 入らなかった理由。診断のために残す。
     pub refusals: Vec<String>,
+}
+
+/// 割り方を面積で検算した結果。
+struct ParameterAreaCheck {
+    original: f64,
+    pieces: Vec<f64>,
+    residual: f64,
+    /// パラメータ面積で測れたか。`false` なら 3D の面積に落ちています。
+    ///
+    /// **落ちるのは、p-curve が取れない面があるときだけ**です。球のパッチを
+    /// 極を通る弧で割った片がそれでした（3-N-1）。安いほうで測れないから
+    /// といって断るのは筋が違います——**検算は高いほうでもできます。**
+    parametric: bool,
+}
+
+/// 面積を囲まない片は、片ではありません。
+///
+/// 元に対してこの割合より小さい片が出たら、**割れていない**と見なします。
+/// 実測で出てくる潰れた片は 1e-14〜1e-17 の桁で、意味のある片
+/// （いちばん小さいもので 0.03 程度）とは大きく離れています。
+const NULL_PIECE_FRACTION: f64 = 1e-9;
+
+/// 元の面と片を**パラメータ面積**で突き合わせる。
+///
+/// 3D の面積を積むのと**同じことを確かめて**、曲面を1回も評価しません
+/// （[`zenith_tess::face_parameter_area`]）。割る前と割ったあとで同じ曲面の
+/// 同じパラメータ領域を見ているので、領域の取り違えはこちらにも同じように
+/// 出ます。
+///
+/// `ZENITH_AREA_CHECK_WHY=1` を付けると、3D 側の残差と1行ずつ並べて出ます。
+///
+/// どれかの面で p-curve が取れなければ `None`。**そのときは検算できません**
+/// ので、呼ぶ側は割り方を断ってください（黙って通すほうが危ない）。
+fn parameter_area_check(face: &Face, pieces: &[Face]) -> ParameterAreaCheck {
+    match parameter_areas(face, pieces) {
+        Some((original, areas)) => ParameterAreaCheck::new(original, areas, true),
+        None => {
+            // **測れないなら、高いほうで測ります。** 断りません。
+            let params = TessellationParams::default();
+            let original = MassCalculator::compute_face_integral(face, &params).0;
+            let areas = pieces
+                .iter()
+                .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+                .collect();
+            ParameterAreaCheck::new(original, areas, false)
+        }
+    }
+}
+
+/// 元と片のパラメータ面積。1枚でも取れなければ `None`。
+fn parameter_areas(face: &Face, pieces: &[Face]) -> Option<(f64, Vec<f64>)> {
+    let original = zenith_tess::face_parameter_area(face)?;
+    let mut areas = Vec::with_capacity(pieces.len());
+    for piece in pieces {
+        areas.push(zenith_tess::face_parameter_area(piece)?);
+    }
+    Some((original, areas))
+}
+
+impl ParameterAreaCheck {
+    fn new(original: f64, pieces: Vec<f64>, parametric: bool) -> Self {
+        let summed: f64 = pieces.iter().sum();
+        let residual = if original.abs() > 1e-12 {
+            (summed - original).abs() / original.abs()
+        } else {
+            (summed - original).abs()
+        };
+        Self {
+            original,
+            pieces,
+            residual,
+            parametric,
+        }
+    }
+}
+
+/// 面積を囲まない片が出ていないか。出ていたら、その添字と大きさを言う。
+///
+/// **この判定は、以前は偶然に効いていました。** 潰れた片はトリムが読めない
+/// ので、3D の面積を積むほうが曲面のパラメータ矩形まるごとに落ち、面積が
+/// 元の4倍などに膨らんで残差の関門に引っかかっていました。落ちた先が小さい
+/// ときは素通りしていました（実測で両方あります。4-76）。いまは大きさを
+/// 直接見ます。
+fn null_piece(check: &ParameterAreaCheck) -> Option<(usize, f64)> {
+    let scale = check.original.abs();
+    check
+        .pieces
+        .iter()
+        .enumerate()
+        .find(|(_, area)| area.abs() <= scale * NULL_PIECE_FRACTION)
+        .map(|(index, area)| (index, *area))
+}
+
+/// いま使っているパラメータ側の判定と、**以前の 3D 側**を並べて出す
+/// （`ZENITH_AREA_CHECK_WHY=1`）。
+///
+/// 入れ替えたあとも残してあります。**3D 側は重いので、既定では走りません。**
+/// 判定を疑ったとき、両方を1行ずつ並べて見るための口です（4-76 の実測は
+/// これで取りました）。
+fn compare_area_checks(label: &str, face: &Face, pieces: &[Face], check: &ParameterAreaCheck) {
+    if std::env::var_os("ZENITH_AREA_CHECK_WHY").is_none() {
+        return;
+    }
+    let params = TessellationParams::default();
+    let original_3d = MassCalculator::compute_face_integral(face, &params).0;
+    let pieces_3d: Vec<f64> = pieces
+        .iter()
+        .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+        .collect();
+    let summed_3d: f64 = pieces_3d.iter().sum();
+    let residual_3d = if original_3d.abs() > 1e-12 {
+        (summed_3d - original_3d).abs() / original_3d.abs()
+    } else {
+        (summed_3d - original_3d).abs()
+    };
+
+    let null = null_piece(check);
+    let verdict = if check.residual > 1e-6 || null.is_some() {
+        "REFUSE"
+    } else {
+        "pass"
+    };
+    eprintln!(
+        "AREACHECK {label:<22} pieces {:>2}  {} {:>10.3e} {:<6} {:<10}  3d {:>10.3e} {}",
+        pieces.len(),
+        // 落ちていたら、左の数字も 3D です（p-curve が取れない面があった）。
+        if check.parametric { "uv" } else { "3d*" },
+        check.residual,
+        verdict,
+        match null {
+            Some((index, _)) => format!("null piece {index}"),
+            None => String::new(),
+        },
+        residual_3d,
+        if (residual_3d > 1e-6) == (verdict == "REFUSE") {
+            "3d agrees"
+        } else {
+            "**3d differs**"
+        }
+    );
 }
 
 /// 面の上の曲線で面を割る。
@@ -173,25 +338,15 @@ impl FaceSplitter {
             face.tolerance,
         );
 
-        let params = TessellationParams::default();
-        let original_area = MassCalculator::compute_face_integral(face, &params).0;
         let pieces = vec![inside, outside];
-        let piece_areas: Vec<f64> = pieces
-            .iter()
-            .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
-            .collect();
-        let area_residual = if original_area.abs() > 1e-12 {
-            (piece_areas.iter().sum::<f64>() - original_area).abs() / original_area.abs()
-        } else {
-            (piece_areas.iter().sum::<f64>() - original_area).abs()
-        };
+        let check = Self::checked_areas("split_by_interior_loop", face, &pieces)?;
 
         Ok((
             pieces,
             FaceSplitReport {
-                original_area,
-                piece_areas,
-                area_residual,
+                original_parameter_area: check.original,
+                piece_parameter_areas: check.pieces,
+                area_residual: check.residual,
                 curve_off_surface,
                 // 内側のループは境界に着きません。着いていたら、それは
                 // 境界から境界への切り込みで、こちらの口ではありません。
@@ -286,6 +441,30 @@ impl FaceSplitter {
         let forward = walk(edges, from, to, tol)?;
         let backward = walk(edges, to, from, tol)?;
 
+        // **切り込みの端を、境界の着地点にぴったり合わせます**（2026/08/25）。
+        //
+        // 上の 2 で、端が境界から `limit`（大きさに比例。20 幅の面で 2e-4）
+        // 以内にあることは確かめました。ところが組み上げたワイヤの閉性は
+        // `tol.linear`（1e-6）で見るので、**着地は認めたのに閉じていないと
+        // 断る**、という食い違いが残っていました。
+        //
+        // 実測（球を平面で切る。3-N-1）: 弧の端が極から **1.669e-5** ずれ、
+        // 「piece 0 came out with an open wire」で断られていました。極では
+        // パラメータが潰れるので、辿った交線の端はそこへぴったりは着きません。
+        //
+        // 着地点は境界の上の点で、**真の交線もそこを通ります**。合わせるのは
+        // 近似を真値へ寄せる向きです。ずれが `limit` を超えていたら、上の 2 が
+        // 既に断っています。
+        let start_target = forward
+            .first()
+            .map(|oriented| oriented.start_vertex().point)
+            .ok_or_else(|| "the boundary walk came out empty".to_string())?;
+        let end_target = forward
+            .last()
+            .map(|oriented| oriented.end_vertex().point)
+            .ok_or_else(|| "the boundary walk came out empty".to_string())?;
+        let cut = &snapped_onto_boundary(cut, start_target, end_target, limit)?;
+
         let cut_forward: Vec<OrientedEdge> = cut.to_vec();
         let cut_backward: Vec<OrientedEdge> = cut
             .iter()
@@ -341,29 +520,39 @@ impl FaceSplitter {
         }
 
         // 4. 面積を測って足す。ここが合わなければ領域を取り違えている。
-        let params = TessellationParams::default();
-        let original_area = MassCalculator::compute_face_integral(face, &params).0;
-        let piece_areas: Vec<f64> = pieces
-            .iter()
-            .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
-            .collect();
-        let summed: f64 = piece_areas.iter().sum();
-        let area_residual = if original_area.abs() > 1e-12 {
-            (summed - original_area).abs() / original_area.abs()
-        } else {
-            (summed - original_area).abs()
-        };
+        let check = Self::checked_areas("split_by_chain", face, &pieces)?;
 
         Ok((
             pieces,
             FaceSplitReport {
-                original_area,
-                piece_areas,
-                area_residual,
+                original_parameter_area: check.original,
+                piece_parameter_areas: check.pieces,
+                area_residual: check.residual,
                 curve_off_surface,
                 ends_off_boundary,
             },
         ))
+    }
+
+    /// 割った結果を**パラメータ面積**で検算する。
+    ///
+    /// 検算できない（p-curve が取れない）ときと、**面積を囲まない片が出た**
+    /// ときは、割れなかったこととして断ります。もっともらしい割り方を返すより、
+    /// 割れなかったと言うほうが良い、というのがこのモジュールの方針です。
+    fn checked_areas(
+        label: &str,
+        face: &Face,
+        pieces: &[Face],
+    ) -> Result<ParameterAreaCheck, String> {
+        let check = parameter_area_check(face, pieces);
+        compare_area_checks(label, face, pieces, &check);
+        if let Some((index, area)) = null_piece(&check) {
+            return Err(format!(
+                "{label}: piece {index} encloses no area ({area:.3e} of {:.3e}), so this is not a split",
+                check.original
+            ));
+        }
+        Ok(check)
     }
 
     /// 複数の曲線で1枚の面を割る。
@@ -380,8 +569,6 @@ impl FaceSplitter {
         splits: &[Edge],
         tol: &Tolerance,
     ) -> Result<(Vec<Face>, MultiSplitReport), String> {
-        let params = TessellationParams::default();
-        let original_area = MassCalculator::compute_face_integral(face, &params).0;
 
         let mut pieces = vec![face.clone()];
         let mut applied = 0usize;
@@ -418,23 +605,17 @@ impl FaceSplitter {
             }
         }
 
-        let piece_areas: Vec<f64> = pieces
-            .iter()
-            .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
-            .collect();
-        let summed: f64 = piece_areas.iter().sum();
-        let area_residual = if original_area.abs() > 1e-12 {
-            (summed - original_area).abs() / original_area.abs()
-        } else {
-            (summed - original_area).abs()
-        };
+        // ここでは潰れた片を断りません。1本も当たらなければ片は元の面1枚の
+        // ままで、それは「割れなかった」であって欠陥ではないからです。
+        let check = parameter_area_check(face, &pieces);
+        compare_area_checks("split_by_curves", face, &pieces, &check);
 
         Ok((
             pieces,
             MultiSplitReport {
-                original_area,
-                piece_areas,
-                area_residual,
+                original_parameter_area: check.original,
+                piece_parameter_areas: check.pieces,
+                area_residual: check.residual,
                 cuts_applied: applied,
                 cuts_refused: splits.len() - applied,
                 refusals,
@@ -674,6 +855,63 @@ fn boundary_extent(wire: &Wire) -> f64 {
     })
 }
 
+/// 切り込みの両端を、境界の上の着地点にぴったり合わせた写しを返す。
+///
+/// クランプされた B-spline は、**端の制御点がそのまま端点**です。そこを
+/// 差し替えれば、曲線の途中は動かさずに端だけを合わせられます。頂点も
+/// 同じ点に置き直します。
+///
+/// 動かす距離が `limit` を超えていたら、それは着地していないということなので
+/// 断ります（呼ぶ側が先に測っていますが、ここでも念のため見ます）。
+fn snapped_onto_boundary(
+    cut: &[OrientedEdge],
+    start_target: Point3,
+    end_target: Point3,
+    limit: f64,
+) -> Result<Vec<OrientedEdge>, String> {
+    let mut out = cut.to_vec();
+    let last = out.len() - 1;
+    move_traversal_end(&mut out[0], true, start_target, limit)?;
+    move_traversal_end(&mut out[last], false, end_target, limit)?;
+    Ok(out)
+}
+
+/// 辿る向きで見た端（始点側 or 終点側）を、指定の点へ動かす。
+fn move_traversal_end(
+    oriented: &mut OrientedEdge,
+    at_traversal_start: bool,
+    target: Point3,
+    limit: f64,
+) -> Result<(), String> {
+    // 辿る向きの「始め」は、順向きなら曲線の始点、逆向きなら曲線の終点。
+    let move_curve_start = oriented.orientation.is_forward() == at_traversal_start;
+
+    let control_points = &mut oriented.edge.curve.control_points;
+    let index = if move_curve_start {
+        0
+    } else {
+        control_points.len() - 1
+    };
+    let shift = (target - control_points[index].point).norm();
+    if shift <= f64::EPSILON {
+        return Ok(());
+    }
+    if shift > limit {
+        return Err(format!(
+            "the splitting curve would have to move {shift:.3e} to meet the boundary, over {limit:.3e}"
+        ));
+    }
+    control_points[index].point = target;
+
+    // 頂点も置き直す。ここを忘れると、稜の実体と端点が食い違ったまま残る。
+    if move_curve_start {
+        oriented.edge.start_vertex.point = target;
+    } else {
+        oriented.edge.end_vertex.point = target;
+    }
+    Ok(())
+}
+
 /// 点が巡回のどこに乗るかを、`辺の番号 + 辺内の割合` で返す。
 ///
 /// 割合は曲線の媒介変数で測る。弧長ではないが、同じ物差しで一貫していれば
@@ -826,7 +1064,23 @@ fn orient_between(
 #[cfg(test)]
 mod tests {
     use super::FaceSplitter;
+    use crate::mass_properties::MassCalculator;
     use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
+    use zenith_tess::TessellationParams;
+
+    /// 片の **3D の面積**。
+    ///
+    /// 割り方の判定はパラメータ面積でやります（4-76）が、閉じた式と
+    /// 突き合わせるのは 3D の面積です。**判定に使わないものを、検査では
+    /// 使います**——同じ量を両側から見ることになるので、そのほうが強い。
+    fn areas_3d(pieces: &[Face]) -> Vec<f64> {
+        let params = TessellationParams::default();
+        pieces
+            .iter()
+            .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+            .collect()
+    }
+
     use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3};
     use zenith_math::{Point3, Tolerance, Vec3};
     use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Orientation, Vertex, Wire};
@@ -982,16 +1236,15 @@ mod tests {
             );
 
             let lower = radius * (z0 * FRAC_PI_2 + slope * radius);
-            let best = report
-                .piece_areas
+            let piece_areas = areas_3d(&pieces);
+            let best = piece_areas
                 .iter()
                 .map(|area| (area - lower).abs() / lower)
                 .fold(f64::INFINITY, f64::min);
             assert!(
                 best < 1e-6,
                 "z0 {z0} slope {slope}: no piece matches the closed form {lower}, \
-                 got {:?} (closest {best:.3e})",
-                report.piece_areas
+                 got {piece_areas:?} (closest {best:.3e})"
             );
 
             for piece in &pieces {
@@ -1019,9 +1272,9 @@ mod tests {
             Vertex::from_point(Point3::new(0.0, 10.0, 0.0)),
         )
         .unwrap();
-        let (_, report) = FaceSplitter::split_by_curve(&face, &split, &tol).expect("corner cut");
+        let (pieces, report) = FaceSplitter::split_by_curve(&face, &split, &tol).expect("corner cut");
         assert!(report.area_residual < 1e-14);
-        for area in &report.piece_areas {
+        for area in &areas_3d(&pieces) {
             assert!(
                 (area - 50.0).abs() < 1e-12,
                 "half of the square is 50, got {area}"
@@ -1039,15 +1292,14 @@ mod tests {
         assert_eq!(pieces.len(), 2);
         assert!(report.area_residual < 1e-14);
         let triangle = 0.5 * 6.0 * 7.0;
-        let best = report
-            .piece_areas
+        let piece_areas = areas_3d(&pieces);
+        let best = piece_areas
             .iter()
             .map(|area| (area - triangle).abs())
             .fold(f64::INFINITY, f64::min);
         assert!(
             best < 1e-12,
-            "the corner piece should be {triangle}, got {:?}",
-            report.piece_areas
+            "the corner piece should be {triangle}, got {piece_areas:?}"
         );
     }
 
@@ -1082,13 +1334,13 @@ mod tests {
         assert_eq!(report.cuts_refused, 0, "{:?}", report.refusals);
         assert!(report.area_residual < 1e-12);
 
-        let mut areas = report.piece_areas.clone();
+        let piece_areas = areas_3d(&pieces);
+        let mut areas = piece_areas.clone();
         areas.sort_by(|a, b| a.partial_cmp(b).unwrap());
         for (area, expected) in areas.iter().zip([30.0, 30.0, 40.0]) {
             assert!(
                 (area - expected).abs() < 1e-9,
-                "pieces should be 30, 30 and 40, got {:?}",
-                report.piece_areas
+                "pieces should be 30, 30 and 40, got {piece_areas:?}"
             );
         }
 
@@ -1108,11 +1360,12 @@ mod tests {
             "the three pieces do not add up: {:.3e}",
             report.area_residual
         );
-        for area in &report.piece_areas {
+        let piece_areas = areas_3d(&pieces);
+        let total: f64 = piece_areas.iter().sum();
+        for area in &piece_areas {
             assert!(
-                *area > report.original_area * 0.05,
-                "a piece came out empty: {:?}",
-                report.piece_areas
+                *area > total * 0.05,
+                "a piece came out empty: {piece_areas:?}"
             );
         }
     }

@@ -9,7 +9,8 @@
 //! 面積の和は元の面に戻ります。戻らなければ、穴が抜けていないか、内側を
 //! 二重に数えています。
 
-use zenith_algo::FaceSplitter;
+use zenith_algo::{FaceSplitter, MassCalculator};
+use zenith_tess::TessellationParams;
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, PlaneSurface3};
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Vertex, Wire};
@@ -65,15 +66,21 @@ fn the_two_pieces_add_back_up_to_the_original() {
     assert_eq!(pieces.len(), 2, "an interior loop makes exactly two pieces");
     assert!(
         report.area_residual <= 1e-9,
-        "the pieces do not add back up: {:.3e} (original {:.6}, pieces {:?})",
+        "the pieces do not add back up: {:.3e} (parameter areas: original {:.6}, pieces {:?})",
         report.area_residual,
-        report.original_area,
-        report.piece_areas
+        report.original_parameter_area,
+        report.piece_parameter_areas
     );
 
     // 内側の片は 6x6 = 36、外側は 400 - 36 = 364。**どちらがどちらかも
     // 見ます** — 合計だけでは、内側と外側を取り違えても通ります。
-    let mut areas = report.piece_areas.clone();
+    // 判定はパラメータ面積でしますが（4-76）、閉じた式と突き合わせるのは
+    // **3D の面積**です。ここで自分で積みます。
+    let params = TessellationParams::default();
+    let mut areas: Vec<f64> = pieces
+        .iter()
+        .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+        .collect();
     areas.sort_by(f64::total_cmp);
     assert!(
         (areas[0] - 36.0).abs() <= 1e-9,

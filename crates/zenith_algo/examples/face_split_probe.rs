@@ -16,7 +16,8 @@
 
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
 
-use zenith_algo::FaceSplitter;
+use zenith_algo::{FaceSplitter, MassCalculator};
+use zenith_tess::TessellationParams;
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3};
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Vertex, Wire};
@@ -147,6 +148,16 @@ struct Subject {
     expected_piece: Option<f64>,
 }
 
+/// 片の **3D の面積**。判定はパラメータ面積でしますが（4-76）、閉じた式と
+/// 突き合わせるのはこちらです。
+fn areas_3d(pieces: &[Face]) -> Vec<f64> {
+    let params = TessellationParams::default();
+    pieces
+        .iter()
+        .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+        .collect()
+}
+
 fn main() {
     let tol = Tolerance::default();
     let mut subjects: Vec<Subject> = Vec::new();
@@ -239,30 +250,30 @@ fn main() {
     for subject in &subjects {
         match FaceSplitter::split_by_curve(&subject.face, &subject.split, &tol) {
             Ok((pieces, report)) => {
-                let summed: f64 = report.piece_areas.iter().sum();
+                // **判定はパラメータ面積**（4-76）。閉じた式と突き合わせるのは
+                // 3D の面積なので、返った片からここで積む。
+                let piece_areas = areas_3d(&pieces);
+                let summed: f64 = piece_areas.iter().sum();
+                let original_3d = MassCalculator::compute_face_integral(
+                    &subject.face,
+                    &TessellationParams::default(),
+                )
+                .0;
+                let closest = |expected: f64| {
+                    piece_areas
+                        .iter()
+                        .map(|area| (area - expected).abs() / expected.abs())
+                        .fold(f64::INFINITY, f64::min)
+                };
                 let against = subject
                     .expected_piece
-                    .map(|expected| {
-                        let best = report
-                            .piece_areas
-                            .iter()
-                            .map(|area| (area - expected).abs() / expected.abs())
-                            .fold(f64::INFINITY, f64::min);
-                        format!("{best:.2e}")
-                    })
+                    .map(|expected| format!("{:.2e}", closest(expected)))
                     .unwrap_or_else(|| "-".to_string());
 
                 let bad = report.area_residual > 1e-6
                     || subject
                         .expected_piece
-                        .map(|expected| {
-                            report
-                                .piece_areas
-                                .iter()
-                                .map(|area| (area - expected).abs() / expected.abs())
-                                .fold(f64::INFINITY, f64::min)
-                                > 1e-6
-                        })
+                        .map(|expected| closest(expected) > 1e-6)
                         .unwrap_or(false);
                 if bad {
                     problems += 1;
@@ -275,7 +286,7 @@ fn main() {
                     subject.name,
                     pieces.len(),
                     summed,
-                    report.original_area,
+                    original_3d,
                     report.area_residual,
                     against,
                     report.curve_off_surface
@@ -359,7 +370,9 @@ fn main() {
     for (name, face, cuts) in &multi {
         match FaceSplitter::split_by_curves(face, cuts, &tol) {
             Ok((pieces, report)) => {
-                let summed: f64 = report.piece_areas.iter().sum();
+                let summed: f64 = areas_3d(&pieces).iter().sum();
+                let original_3d =
+                    MassCalculator::compute_face_integral(face, &TessellationParams::default()).0;
                 let bad = report.area_residual > 1e-6 || report.cuts_refused > 0;
                 if bad {
                     multi_problems += 1;
@@ -372,7 +385,7 @@ fn main() {
                     pieces.len(),
                     report.cuts_applied,
                     summed,
-                    report.original_area,
+                    original_3d,
                     report.area_residual
                 );
                 for reason in report.refusals.iter().take(2) {
