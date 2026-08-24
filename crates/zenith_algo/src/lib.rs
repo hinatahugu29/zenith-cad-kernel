@@ -63,7 +63,7 @@ pub use brep_intersection::{
     PlanarOperandBatchSplits, SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };
 pub use brep_transform::BrepTransform;
-pub use distance::{DistanceEngine, DistanceResult};
+pub use distance::{nearest_boundary_projection, BoundaryProjection, DistanceEngine, DistanceResult};
 pub use face_split::{FaceSplitReport, FaceSplitter, MultiSplitReport};
 pub use regularize::{RegularizeReport, Regularizer, StepInterop};
 pub use cap::CapBuilder;
