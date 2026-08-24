@@ -53,6 +53,9 @@ pub struct BooleanResultReport {
     pub sample_count: usize,
     pub classified_sample_count: usize,
     pub membership_mismatch_count: usize,
+    /// メッシュでは食い違ったが、B-Rep の面への厳密な射影では述語と合った
+    /// 標本の数。**曲面の刻みの差を見ていただけ**のものがここに来る。
+    pub exact_agreement_count: usize,
     pub errors: Vec<String>,
 }
 
@@ -116,6 +119,7 @@ impl BooleanResultVerifier {
             sample_count: 0,
             classified_sample_count: 0,
             membership_mismatch_count: 0,
+            exact_agreement_count: 0,
             errors: Vec::new(),
         };
 
@@ -293,8 +297,23 @@ impl BooleanResultVerifier {
             };
 
             report.classified_sample_count += 1;
-            if expected != in_r {
-                report.membership_mismatch_count += 1;
+            if expected == in_r {
+                continue;
+            }
+
+            // メッシュどうしの食い違いは、形の誤りとは限りません。A の球面と
+            // 結果の球面は**同じ曲面の別々の弦**なので、面から 0.0002 の
+            // ところにいる標本はそれだけで割れます。断る前に、B-Rep の面へ
+            // 厳密に射影して訊き直します。
+            match exact_membership(point, solid_a, solid_b, result, op, tol) {
+                // 厳密にも述語と合わない。これは形の誤りです。
+                Some(true) => report.membership_mismatch_count += 1,
+                // 厳密には合っている。メッシュの刻みを見ていただけでした。
+                Some(false) => report.exact_agreement_count += 1,
+                // 決められない（境界の上、または射影が採れない）。**メッシュの
+                // 判定をそのまま残します。** 決められないことを理由に許すと、
+                // ゲートが緩みます。
+                None => report.membership_mismatch_count += 1,
             }
         }
 
@@ -313,6 +332,102 @@ impl BooleanResultVerifier {
         let _ = tol;
         report
     }
+}
+
+/// 標本が立体の内側にあるかを、メッシュではなく **B-Rep の面**で決める。
+///
+/// いちばん近い面へ射影し、その足からの向きを面の外向き法線と突き合わせます。
+/// 曲面の刻みが入らないので、面から 0.0002 のところでも答えが動きません。
+///
+/// 決められない場合は `None` を返します。
+///
+/// - 足が境界の上（`tol.linear` 以内）にある。内でも外でもありません。
+/// - どの面のトリム領域にも射影が落ちない。稜の近くで起こります。
+pub fn exact_inside(point: Point3, solid: &Solid, tol: &Tolerance) -> Option<bool> {
+    let projections = crate::distance::boundary_projections(point, solid);
+    let nearest = projections
+        .iter()
+        .map(|projection| projection.distance)
+        .fold(f64::INFINITY, f64::min);
+    if !nearest.is_finite() {
+        return None;
+    }
+    // 境界の上に乗っている点は、内でも外でもない。
+    if nearest <= tol.linear {
+        return None;
+    }
+
+    // 稜や角では2枚以上の面が同着になる。**全部に訊いて、割れたら決めない。**
+    // 1枚だけ見ると、寄せた先の法線が隣の面のものと食い違う配置で符号を
+    // 取り違えます。
+    let band = nearest * 1e-6 + 1e-12;
+    let mut side: Option<bool> = None;
+    for projection in projections
+        .iter()
+        .filter(|projection| projection.distance <= nearest + band)
+    {
+        let outward = (point - projection.foot).dot(&projection.outward_normal);
+        if outward.abs() <= 1e-15 {
+            return None;
+        }
+        let inside = outward < 0.0;
+        match side {
+            None => side = Some(inside),
+            Some(previous) if previous != inside => return None,
+            Some(_) => {}
+        }
+    }
+
+    side
+}
+
+/// 複数の立体の合併に対する内外判定。
+///
+/// 1つでも内側と言えれば内側です。それ以外は、決められないものが1つでも
+/// あれば `None`、無ければ外側。
+fn exact_inside_any(point: Point3, solids: &[Solid], tol: &Tolerance) -> Option<bool> {
+    let mut undecided = false;
+    for solid in solids {
+        match exact_inside(point, solid, tol) {
+            Some(true) => return Some(true),
+            Some(false) => {}
+            None => undecided = true,
+        }
+    }
+    if undecided {
+        None
+    } else {
+        Some(false)
+    }
+}
+
+/// 食い違った標本を、3つとも B-Rep で訊き直す。
+///
+/// 返り値は「**まだ食い違っているか**」です。`Some(true)` は厳密にも
+/// 食い違っている（＝形の誤り）、`Some(false)` は厳密には合っている、
+/// `None` は決められない。
+///
+/// **許す方向にしか使いません。** メッシュで合っていた標本はここへ来ないので、
+/// この関数が新たに食い違いを作ることはありません。
+fn exact_membership(
+    point: Point3,
+    solid_a: &Solid,
+    solid_b: &Solid,
+    result: &[Solid],
+    op: BooleanOpType,
+    tol: &Tolerance,
+) -> Option<bool> {
+    let in_a = exact_inside(point, solid_a, tol)?;
+    let in_b = exact_inside(point, solid_b, tol)?;
+    let in_r = exact_inside_any(point, result, tol)?;
+
+    let expected = match op {
+        BooleanOpType::Union => in_a || in_b,
+        BooleanOpType::Intersection => in_a && in_b,
+        BooleanOpType::Difference => in_a && !in_b,
+    };
+
+    Some(expected != in_r)
 }
 
 /// Inside test with a three-ray consensus. Returns `None` when the rays

@@ -29,7 +29,7 @@
 //!    離れていなければ（＝トリムされた面の上にあれば）採用する。
 
 use zenith_geom::ExtremumEngine;
-use zenith_math::{Point2, Point3, Tolerance};
+use zenith_math::{Point2, Point3, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
 use zenith_topo::{FaceGeometry, Solid};
 
@@ -430,49 +430,139 @@ fn settle_on_surfaces(
 
 /// 点をこの立体の面へ射影する。トリム境界の外に落ちた射影は採らない。
 fn project_onto_solid(point: Point3, solid: &Solid) -> Option<Point3> {
-    let mut best: Option<(f64, Point3)> = None;
+    nearest_boundary_projection(point, solid).map(|projection| projection.foot)
+}
+
+/// 立体の境界上でいちばん近い点と、そこでの**外向き法線**。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoundaryProjection {
+    pub distance: f64,
+    pub foot: Point3,
+    pub outward_normal: Vec3,
+}
+
+/// 点から立体の境界へ、B-Rep の面そのものを使って射影する。
+///
+/// メッシュは弦なので、曲面の近くでは刻みぶんだけずれる。ここは支持曲面へ
+/// ニュートン法で落として、その足が**その面のトリム領域の内側にあるか**を
+/// p-curve で確かめてから採る。トリムの外に落ちた面は、その点の面ではない。
+///
+/// 外向き法線は支持曲面の法線を面の向きで反転したもの。テッセレーションが
+/// 三角形の向きを決めるときと同じ規則（`zenith_tess` の `oriented_normal`）。
+pub fn nearest_boundary_projection(
+    point: Point3,
+    solid: &Solid,
+) -> Option<BoundaryProjection> {
+    boundary_projections(point, solid)
+        .into_iter()
+        .reduce(|best, candidate| {
+            if candidate.distance < best.distance {
+                candidate
+            } else {
+                best
+            }
+        })
+}
+
+/// 面ごとに、その面の上でいちばん近い点を1つ返す。
+///
+/// 足がトリム領域の外に落ちたら、**その面の境界の稜**へ寄せます。以前は
+/// そこで面ごと捨てていたので、直方体の角の外にいる点はどの面にも足を持たず、
+/// 立体そのものへの距離が出ませんでした（6面すべてが「自分の長方形の外」と
+/// 答える）。捨てるのではなく寄せるのが正しく、寄せた先が本当の最近点です。
+pub(crate) fn boundary_projections(point: Point3, solid: &Solid) -> Vec<BoundaryProjection> {
+    let mut projections = Vec::new();
 
     for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
         for face in &shell.faces {
-            let (candidate, uv) = match &face.geometry {
-                FaceGeometry::Plane(plane) => {
-                    let offset = (point - plane.origin).dot(&plane.normal);
-                    let foot = point - plane.normal * offset;
-                    let local = foot - plane.origin;
-                    (
-                        foot,
-                        Point2::new(local.dot(&plane.u_axis), local.dot(&plane.v_axis)),
-                    )
-                }
-                FaceGeometry::Nurbs(surface) => {
-                    match ExtremumEngine::point_to_surface(point, surface, 48, 1e-12) {
-                        Ok(projection) => (
-                            surface.evaluate(projection.u, projection.v),
-                            Point2::new(projection.u, projection.v),
-                        ),
-                        Err(_) => continue,
-                    }
-                }
-                _ => continue,
-            };
-
-            // 面の支持曲面の上ではあっても、**トリムされた領域の外**なら
-            // この面の点ではない。以前はメッシュからの距離で代用していたが、
-            // その帯を三角形の大きさから取っていたため、直方体では 14 mm も
-            // あり、まったく別の面への射影まで通っていた（離れた2つの直方体の
-            // 距離が 0 になっていた）。
-            if !uv_is_inside_face(face, uv) {
-                continue;
-            }
-
-            let distance = (candidate - point).norm();
-            if best.map(|(d, _)| distance < d).unwrap_or(true) {
-                best = Some((distance, candidate));
+            if let Some(projection) = face_projection(point, face) {
+                projections.push(projection);
             }
         }
     }
 
-    best.map(|(_, candidate)| candidate)
+    projections
+}
+
+/// この面の上で、点にいちばん近い所。
+fn face_projection(point: Point3, face: &zenith_topo::Face) -> Option<BoundaryProjection> {
+    let on_support = support_foot(point, face);
+
+    // 足がトリムの内側にあれば、それが最近点。
+    if let Some((foot, uv, normal)) = on_support {
+        if uv_is_inside_face(face, uv) {
+            return Some(BoundaryProjection {
+                distance: (foot - point).norm(),
+                foot,
+                outward_normal: oriented(normal, face),
+            });
+        }
+    }
+
+    // 外に落ちたら、面の境界の稜へ寄せる。
+    let mut best: Option<Point3> = None;
+    let wires = std::iter::once(&face.outer_wire).chain(face.inner_wires.iter());
+    for wire in wires {
+        for oriented_edge in &wire.edges {
+            let Ok(projection) =
+                ExtremumEngine::point_to_curve(point, &oriented_edge.edge.curve, 64, 1e-12)
+            else {
+                continue;
+            };
+            if best
+                .map(|current| projection.distance < (current - point).norm())
+                .unwrap_or(true)
+            {
+                best = Some(projection.closest_point);
+            }
+        }
+    }
+
+    let foot = best?;
+    // 稜の上の点でも法線は支持曲面から取れる。稜は面の上にあるので、
+    // そこへ射影し直せば (u, v) が出る。
+    let (_, _, normal) = support_foot(foot, face)?;
+    Some(BoundaryProjection {
+        distance: (foot - point).norm(),
+        foot,
+        outward_normal: oriented(normal, face),
+    })
+}
+
+/// 支持曲面の上の足と、その (u, v)、その点の法線。トリムは見ない。
+fn support_foot(point: Point3, face: &zenith_topo::Face) -> Option<(Point3, Point2, Vec3)> {
+    match &face.geometry {
+        FaceGeometry::Plane(plane) => {
+            let offset = (point - plane.origin).dot(&plane.normal);
+            let foot = point - plane.normal * offset;
+            let local = foot - plane.origin;
+            Some((
+                foot,
+                Point2::new(local.dot(&plane.u_axis), local.dot(&plane.v_axis)),
+                plane.normal,
+            ))
+        }
+        FaceGeometry::Nurbs(surface) => {
+            let projection = ExtremumEngine::point_to_surface(point, surface, 48, 1e-12).ok()?;
+            let normal = surface.normal(projection.u, projection.v)?;
+            Some((
+                surface.evaluate(projection.u, projection.v),
+                Point2::new(projection.u, projection.v),
+                normal,
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// 支持曲面の法線を、面の向きで外向きに直す。テッセレーションが三角形の
+/// 向きを決めるときと同じ規則（`zenith_tess` の `oriented_normal`）。
+fn oriented(normal: Vec3, face: &zenith_topo::Face) -> Vec3 {
+    if face.orientation.is_forward() {
+        normal
+    } else {
+        -normal
+    }
 }
 
 /// この (u, v) が、面のトリム境界の内側にあるか。
@@ -483,6 +573,25 @@ fn uv_is_inside_face(face: &zenith_topo::Face, uv: Point2) -> bool {
     let Ok(pcurves) = face.pcurves(&Tolerance::default()) else {
         return false;
     };
+
+    // 境界のワイヤを1本も持たない面は、**トリムされていない**。支持曲面の
+    // パラメータ領域そのものが面で、射影はその中に落ちる。
+    //
+    // ここを「外側ループが空 ⇒ 内側には何も無い」と読んでいました。他カーネル
+    // から読んだ球や円柱は**全周1枚の面**で来るので、その立体は面を1枚も持た
+    // ないのと同じ扱いになり、距離の計算からも内外の判定からも丸ごと落ちて
+    // いました。`DistanceEngine` が読んだ球に対して答えていた値は、面を1枚も
+    // 見ずに出したものです。
+    if pcurves.outer_loop.segments.is_empty() {
+        if !face.outer_wire.edges.is_empty() {
+            // 稜はあるのに p-curve が空。境界が分からないので採らない。
+            return false;
+        }
+        return !pcurves
+            .inner_loops
+            .iter()
+            .any(|hole| point_in_loop(hole, uv));
+    }
 
     if !point_in_loop(&pcurves.outer_loop, uv) {
         return false;
