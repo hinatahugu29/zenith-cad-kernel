@@ -1072,6 +1072,14 @@ impl BrepIntersectionBuilder {
             let mut next_faces = Vec::new();
             let mut applied_this_edge = false;
 
+            // 割れなかった理由は、これまで捨てていました。**飛ばされた交線は
+            // 面を割らないまま残る**ので、反対側の割られた面片と同じ稜を
+            // 重ねて使い、縫合が非多様体になります（`box × box` 45度回転の
+            // difference / intersection がそれで、HANDOVER 3-2）。
+            // `ZENITH_SPLIT_WHY=1` で理由が1行ずつ出ます。
+            let explain = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
+            let mut reasons: Vec<String> = Vec::new();
+
             for current_face in faces {
                 match Self::split_planar_face_by_edge(&current_face, split_edge, tol) {
                     Ok(split_faces) => {
@@ -1079,12 +1087,28 @@ impl BrepIntersectionBuilder {
                         applied_this_edge = true;
                         next_faces.extend(split_faces);
                     }
-                    Err(_) => next_faces.push(current_face),
+                    Err(reason) => {
+                        if explain {
+                            reasons.push(reason);
+                        }
+                        next_faces.push(current_face);
+                    }
                 }
             }
 
             if !applied_this_edge {
                 skipped_split_count += 1;
+                if explain {
+                    let start = split_edge.start_vertex.point;
+                    let end = split_edge.end_vertex.point;
+                    eprintln!(
+                        "SPLITWHY edge ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4}) split nothing",
+                        start.x, start.y, start.z, end.x, end.y, end.z
+                    );
+                    for reason in &reasons {
+                        eprintln!("  {}", reason.chars().take(140).collect::<String>());
+                    }
+                }
             }
             faces = next_faces;
         }
@@ -1252,6 +1276,14 @@ impl BrepIntersectionBuilder {
             let mut next_faces = Vec::new();
             let mut applied_this_edge = false;
 
+            // 割れなかった理由は、これまで捨てていました。**飛ばされた交線は
+            // 面を割らないまま残る**ので、反対側の割られた面片と同じ稜を重ねて
+            // 使い、縫合が非多様体になります（`box × box` 45度回転の
+            // difference / intersection がそれ。HANDOVER 3-2）。
+            // `ZENITH_SPLIT_WHY=1` で理由が1行ずつ出ます。
+            let explain = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
+            let mut reasons: Vec<String> = Vec::new();
+
             for current_face in faces {
                 match Self::split_face_by_edge(&current_face, split_edge, tol) {
                     Ok(split_faces) => {
@@ -1259,12 +1291,28 @@ impl BrepIntersectionBuilder {
                         applied_this_edge = true;
                         next_faces.extend(split_faces);
                     }
-                    Err(_) => next_faces.push(current_face),
+                    Err(reason) => {
+                        if explain {
+                            reasons.push(reason);
+                        }
+                        next_faces.push(current_face);
+                    }
                 }
             }
 
             if !applied_this_edge {
                 skipped_split_count += 1;
+                if explain {
+                    let start = split_edge.start_vertex.point;
+                    let end = split_edge.end_vertex.point;
+                    eprintln!(
+                        "SPLITWHY ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4}) split nothing",
+                        start.x, start.y, start.z, end.x, end.y, end.z
+                    );
+                    for reason in &reasons {
+                        eprintln!("  {}", reason.chars().take(160).collect::<String>());
+                    }
+                }
                 leftover.push(split_edge.clone());
             }
             faces = next_faces;
