@@ -409,6 +409,36 @@ fn patch_mesh(
         );
     }
 
+    // **前提を測ります**（4-85 で推論のまま2回外したので）。uv では面積 0 なのに
+    // 3D では面積を持つ三角形が、本当に出ているのか。`ZENITH_TESS_WHY=1` で出ます。
+    if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+        let uv_area = |t: &[usize; 3]| {
+            let (a, b, c) = (uvs[t[0]], uvs[t[1]], uvs[t[2]]);
+            ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5
+        };
+        let mut flat_in_uv = 0usize;
+        let mut area_in_3d = 0.0f64;
+        let mut total_uv = 0.0f64;
+        for triangle in &triangles {
+            let a = uv_area(triangle);
+            total_uv += a;
+            if a <= 1e-14 {
+                flat_in_uv += 1;
+                if let (Some(pa), Some(pb), Some(pc)) = (
+                    fixed.get(triangle[0]).copied().flatten(),
+                    fixed.get(triangle[1]).copied().flatten(),
+                    fixed.get(triangle[2]).copied().flatten(),
+                ) {
+                    area_in_3d += (pb - pa).cross(&(pc - pa)).norm() * 0.5;
+                }
+            }
+        }
+        eprintln!(
+            "TESSWHY   三角形 {}、uv で面積 0 のもの {flat_in_uv} 枚（その 3D 面積の和 {area_in_3d:.6}）、uv 面積の和 {total_uv:.9}",
+            triangles.len()
+        );
+    }
+
     let mut mesh = TriangleMesh::new();
     for (index, uv) in uvs.iter().enumerate() {
         let position = match fixed.get(index).copied().flatten() {
