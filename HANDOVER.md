@@ -8114,7 +8114,7 @@ any wire of the face」は、どの端かを言いません。名指しするよ
 | `crates/zenith_tess` | テッセレーション（積分領域はノット区間に整合） |
 | `crates/zenith_io` | STEP 読み書き、STL/OBJ/glTF/DXF/IGES |
 | `crates/zenith_py` | PyO3 バインディング（`#[pyfunction]` 58個 ＋ `#[pymethods]` 2ブロック） |
-| `crates/zenith_server` | Seamless プロトコルの TCP 骨組み。**中身は未実装**で、常に空メッシュを返す（`write_generate_mesh_empty`）。カーネルは呼んでいない |
+| `crates/zenith_server` | Seamless プロトコルの TCP 骨組み。`create_stack` / `delete_stack` 以外の**中身は未実装**で、操作名を含む明示エラーを返す。カーネルは呼んでいない |
 | `crates/zenith_algo/examples/` | **測定・診断ツール**（73個） |
 | `crates/zenith_algo/tests/fixtures/` | OpenCASCADE が書いた STEP 10本。`include_str!` で読むので `target/` を消しても検査は走る |
 | `tools/*.py` | FreeCAD ヘッドレス検証（`verify_*` はゲート、`occ_*` は診断・検体生成用） |
