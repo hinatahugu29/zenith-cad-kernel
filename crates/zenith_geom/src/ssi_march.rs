@@ -374,7 +374,8 @@ impl IntersectionMarcher {
         let here = s1.evaluate(state[0], state[1]);
         for (_, index, target) in &crossed {
             let mut trial = *state;
-            if Self::newton_to_bound(s1, s2, &mut trial, *index, *target, tol).is_none() {
+            let crossing_gap = Self::newton_to_bound(s1, s2, &mut trial, *index, *target, tol);
+            if crossing_gap.is_none() {
                 continue;
             }
             let landed = s1.evaluate(trial[0], trial[1]);
@@ -387,6 +388,57 @@ impl IntersectionMarcher {
                 Some((_, sine)) if sine >= TANGENCY_SINE_LIMIT => {}
                 _ => continue,
             }
+
+            // **交線がその縁を横切るのではなく、接して触れているだけ**のことが
+            // あります。そこは重根なので、上の解き方では位置が
+            // $\sqrt{arepsilon}$ でしか決まりません（4-81。実測で 2.36e-5）。
+            // 速度がゼロになる点を解くほうは単根で、倍精度まで詰まります。
+            //
+            // 採るのは次を**全部**満たすときだけです。分類のしきい値を置かず、
+            // **出てきた答えのほうを測ります。**
+            //
+            // 1. その縁の上に乗っている（横切る配置では極値は縁の上に来ない）
+            // 2. ギャップが、横切るほうの解より小さい
+            // 3. そこでも交線の向きが決まっている（接点そのものではない）
+            // 4. 元の点からの距離が `reach` を超えない
+            let mut extremum = trial;
+            let explain = std::env::var_os("ZENITH_LAND_WHY").is_some();
+            match Self::newton_to_bound_extremum(s1, s2, &mut extremum, *index, tol) {
+                Some(extremum_gap) => {
+                    let on_bound = (extremum[*index] - *target).abs() <= tol.parametric;
+                    // **ギャップの比較は使えません。** 接する点では残差が位置を
+                    // 決めないので（この関数の少し上に同じことが書いてあります）、
+                    // 位置が 2.36e-5 ずれていてもギャップは 0 になります。実測で
+                    // 「extremum gap 0.000e0 vs crossing 0.000e0」が並びました。
+                    //
+                    // 代わりに、**極値の解が縁の上に乗っていること**だけを見ます。
+                    // 縁を横切る配置では、速度がゼロになる点は縁の上に来ないので、
+                    // そこで落ちます。判定のしきい値を置かずに済みます。
+                    let within_reach =
+                        (s1.evaluate(extremum[0], extremum[1]) - here).norm() <= reach;
+                    let still_transversal = matches!(
+                        Self::tangent(s1, s2, &extremum),
+                        Some((_, sine)) if sine >= TANGENCY_SINE_LIMIT
+                    );
+                    if explain {
+                        eprintln!(
+                            "LANDWHY(A) index {index} target {target}: extremum gap {:.3e} vs crossing {:.3e}; on_bound {on_bound} ({:.3e}) reach {within_reach} transversal {still_transversal}",
+                            extremum_gap,
+                            crossing_gap.unwrap_or(f64::NAN),
+                            (extremum[*index] - *target).abs()
+                        );
+                    }
+                    if on_bound && within_reach && still_transversal {
+                        trial = extremum;
+                    }
+                }
+                None => {
+                    if explain {
+                        eprintln!("LANDWHY(A) index {index} target {target}: extremum did not converge");
+                    }
+                }
+            }
+
             return Some(trial);
         }
 
@@ -502,6 +554,116 @@ impl IntersectionMarcher {
         }
     }
 
+    /// 交線がその縁に**接して**触れているとき、交点ではなく**極値**を解く。
+    ///
+    /// ## なぜ要るのか
+    ///
+    /// `newton_to_bound` は「両曲面の上にあり、かつ `state[which] = value`」を
+    /// 解きます。縁を**横切る**ときはそれでよいのですが、**接する**ときは
+    /// そこが重根になり、ヤコビアンが特異になります。残差を $arepsilon$ まで
+    /// 詰めても、位置は $\sqrt{2 r arepsilon}$ でしか決まりません。
+    ///
+    /// 実測（球を45度回して中心を通る平面で切る、4-81）: 残差 1.393e-11 に
+    /// 対して位置は極から **2.36e-5** ずれ、$\sqrt{2 	imes 10 	imes
+    /// 1.393	imes10^{-11}} = 2.4	imes10^{-5}$ と一致しました。**精度を
+    /// 上げても平方根でしか縮みません。**
+    ///
+    /// ## 代わりに解くもの
+    ///
+    /// 接する点は「交線に沿って `state[which]` が極値をとる点」です。そこでは
+    /// **速度がゼロ**になり、これは**単根**なので倍精度まで詰まります。
+    ///
+    /// 3本は今までどおり `p1 = p2`。4本目を「`state[which]` の、交線に沿った
+    /// 速度が 0」に差し替えます。その行だけは中心差分で作ります——ここは
+    /// ニュートンの傾きとしてしか使わないので、桁が半分落ちても収束には
+    /// 効きません。
+    fn newton_to_bound_extremum(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        state: &mut [f64; 4],
+        which: usize,
+        tol: &Tolerance,
+    ) -> Option<f64> {
+        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
+        let limit = tol.linear.min(1e-10);
+
+        for _ in 0..40 {
+            crate::work_counter::count_marching_newton_iteration();
+            let (p1, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
+            let (p2, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
+            let gap = p1 - p2;
+            let speed = Self::bound_speed(s1, s2, state, which)?;
+
+            if gap.norm() <= limit && speed.abs() <= 1e-13 {
+                return Some(gap.norm());
+            }
+
+            // 4本目の行は中心差分。刻みはパラメータの幅に合わせる。
+            let spans = [
+                u_max - u_min,
+                v_max - v_min,
+                s_max - s_min,
+                t_max - t_min,
+            ];
+            let mut row = [0.0f64; 4];
+            for index in 0..4 {
+                let step = (spans[index].abs().max(1.0)) * 1e-4;
+                let mut plus = *state;
+                let mut minus = *state;
+                plus[index] += step;
+                minus[index] -= step;
+                let (Some(a), Some(b)) = (
+                    Self::bound_speed(s1, s2, &plus, which),
+                    Self::bound_speed(s1, s2, &minus, which),
+                ) else {
+                    return None;
+                };
+                row[index] = (a - b) / (2.0 * step);
+            }
+
+            let jacobian = nalgebra::Matrix4::new(
+                du1.x, dv1.x, -du2.x, -dv2.x, du1.y, dv1.y, -du2.y, -dv2.y, du1.z, dv1.z, -du2.z,
+                -dv2.z, row[0], row[1], row[2], row[3],
+            );
+            let rhs = nalgebra::Vector4::new(-gap.x, -gap.y, -gap.z, -speed);
+            let delta = jacobian.lu().solve(&rhs)?;
+            if !delta.iter().all(|value| value.is_finite()) {
+                return None;
+            }
+            state[0] = (state[0] + delta[0]).clamp(u_min, u_max);
+            state[1] = (state[1] + delta[1]).clamp(v_min, v_max);
+            state[2] = (state[2] + delta[2]).clamp(s_min, s_max);
+            state[3] = (state[3] + delta[3]).clamp(t_min, t_max);
+        }
+
+        let gap = s1.evaluate(state[0], state[1]) - s2.evaluate(state[2], state[3]);
+        (gap.norm() <= tol.linear).then_some(gap.norm())
+    }
+
+    /// 交線に沿って進むとき、`state[which]` がどれだけの速さで動くか。
+    ///
+    /// 単位を持たない量にするため、そのパラメータ対の速さで割ります。
+    fn bound_speed(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        state: &[f64; 4],
+        which: usize,
+    ) -> Option<f64> {
+        let (direction, _) = Self::tangent(s1, s2, state)?;
+        let (surface, u, v, index) = if which < 2 {
+            (s1, state[0], state[1], which)
+        } else {
+            (s2, state[2], state[3], which - 2)
+        };
+        let (a, b) = Self::parameter_velocity(surface, u, v, direction)?;
+        let magnitude = (a * a + b * b).sqrt();
+        if !(magnitude > 0.0) {
+            return None;
+        }
+        Some(if index == 0 { a } else { b } / magnitude)
+    }
+
     /// 交線の進む向きと、2つの法線のなす角の正弦。
     ///
     /// 正弦は「そこで交線の位置がどれだけ決まるか」を表す。小さいほど、
@@ -509,8 +671,25 @@ impl IntersectionMarcher {
     fn tangent(s1: &NurbsSurface3, s2: &NurbsSurface3, state: &[f64; 4]) -> Option<(Vec3, f64)> {
         let (_, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
         let (_, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
-        let n1 = du1.cross(&dv1).try_normalize_safe(1e-12)?;
-        let n2 = du2.cross(&dv2).try_normalize_safe(1e-12)?;
+        // **極では du x dv が消えます。** これはパラメータの退化であって、
+        // 面はそこで滑らかです（球の極の接平面は軸に直交します）。
+        //
+        // ここで `None` を返すと、**極値を解く側（`newton_to_bound_extremum`）が
+        // 極に近づいた瞬間に止まります**。まわりからの極限を採ります
+        // （`normal_or_limit`、4-69）。寄せる向きで法線が変わる点——円錐の
+        // 頂点のような、本当に滑らかでない点——では極限も取れないので、
+        // そこは従来どおり `None` です。
+        //
+        // **これ単独では何も変わりません。** 極値を解く側と揃って初めて
+        // 効きます（4-82。5章の「単独で効果が測れない部品」）。
+        let n1 = match du1.cross(&dv1).try_normalize_safe(1e-12) {
+            Some(normal) => normal,
+            None => s1.normal_or_limit(state[0], state[1])?,
+        };
+        let n2 = match du2.cross(&dv2).try_normalize_safe(1e-12) {
+            Some(normal) => normal,
+            None => s2.normal_or_limit(state[2], state[3])?,
+        };
         let cross = n1.cross(&n2);
         let sine = cross.norm();
         Some((cross.try_normalize_safe(1e-12)?, sine))
@@ -679,6 +858,26 @@ impl IntersectionMarcher {
                         Some((_, sine)) if sine >= TANGENCY_SINE_LIMIT => {}
                         _ => continue,
                     }
+
+                    // **縁を横切るのではなく、接して触れているだけのことが
+                    // あります。** そこは重根なので、上の解き方では位置が
+                    // $\sqrt{arepsilon}$ でしか決まりません（4-81）。
+                    // 速度がゼロになる点を解くほうは単根で、倍精度まで
+                    // 詰まります。
+                    //
+                    // **採るのは、次の2つを両方満たすときだけです。**
+                    //
+                    // 1. 出てきた点が、その縁の上に乗っている
+                    //    （横切る配置では極値は縁の上に来ないので、ここで落ちます）
+                    // 2. ギャップが、横切るほうの解より小さい
+                    //
+                    // 分類のしきい値を置かずに済むのが利点です。**接しているか
+                    // どうかを当てずに、出てきた答えのほうを測ります。**
+                    // **こちらの着地口には、まだ極値の解を入れていません。**
+                    // 測った配置（球を45度回して切る、4-82）では一度も通らず、
+                    // 効くかどうかを確かめられなかったからです。同じ形の欠陥が
+                    // 出たら、`land_on_crossed_bound` と同じものをここにも
+                    // 入れてください。
                     landed = Some(trial);
                     break;
                 }
