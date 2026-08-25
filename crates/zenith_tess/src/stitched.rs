@@ -246,11 +246,26 @@ fn tessellate_face_stitched(
         }
     };
 
+    let explain = std::env::var_os("ZENITH_TESS_WHY").is_some();
     let Some(rings) = boundary_rings(face, plan) else {
+        if explain {
+            eprintln!("TESSWHY face {}: boundary_rings が None → 共有しない経路", face.id);
+        }
         return crate::surface_tess::tessellate_face(face, params);
     };
     if rings.is_empty() || rings[0].uv.len() < 3 {
+        if explain {
+            eprintln!("TESSWHY face {}: ring が小さすぎる → 共有しない経路", face.id);
+        }
         return crate::surface_tess::tessellate_face(face, params);
+    }
+    if explain {
+        eprintln!(
+            "TESSWHY face {}: ring 点数 {:?}, 稜ごとの刻み {:?}",
+            face.id,
+            rings.iter().map(|r| r.uv.len()).collect::<Vec<_>>(),
+            rings.first().map(|r| r.segments.clone()).unwrap_or_default()
+        );
     }
 
     match &face.geometry {
