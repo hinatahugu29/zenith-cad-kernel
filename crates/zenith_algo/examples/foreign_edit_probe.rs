@@ -124,8 +124,8 @@ fn conical_rim_removed(
             + fillet * fillet * centre_radius * (angle + sine * cosine)
             + fillet.powi(3) * (sine - sine.powi(3) / 3.0)
     };
-    let upper = std::f64::consts::PI
-        * (primitive(std::f64::consts::FRAC_PI_2) - primitive(side_angle));
+    let upper =
+        std::f64::consts::PI * (primitive(std::f64::consts::FRAC_PI_2) - primitive(side_angle));
     let original = std::f64::consts::PI
         * height
         * (opposite_radius * opposite_radius
@@ -159,6 +159,7 @@ fn main() {
         "hollow_box",
         "stepped_shaft",
         "filleted_box",
+        "plate_with_holes",
     ];
 
     println!("他カーネルが書いた立体を編集する");
@@ -186,10 +187,18 @@ fn main() {
 
         // 稜は1本だけ選びます。**上限の 1/4** にしておけば、隣の稜を
         // 食い切る心配はありません。
-        let target = edges
-            .iter()
-            .max_by(|a, b| a.length.partial_cmp(&b.length).unwrap())
-            .expect("non-empty");
+        let target = if name == "plate_with_holes" {
+            edges
+                .iter()
+                .filter(|edge| edge.max_chamfer_distance == 0.0)
+                .max_by(|a, b| a.length.partial_cmp(&b.length).unwrap())
+                .expect("the imported multi-hole plate has circular mouths")
+        } else {
+            edges
+                .iter()
+                .max_by(|a, b| a.length.partial_cmp(&b.length).unwrap())
+                .expect("non-empty")
+        };
 
         for (op, size, expected_removed) in [
             (
@@ -204,10 +213,7 @@ fn main() {
                     let major = 10.0 - fillet;
                     Some(
                         std::f64::consts::PI
-                            * (major
-                                * fillet
-                                * fillet
-                                * (2.0 - std::f64::consts::PI * 0.5)
+                            * (major * fillet * fillet * (2.0 - std::f64::consts::PI * 0.5)
                                 + fillet.powi(3) / 3.0),
                     )
                 } else if name == "cone" || name == "cone_full" {
@@ -218,6 +224,14 @@ fn main() {
                         20.0,
                         fillet,
                     ))
+                } else if name == "plate_with_holes" {
+                    let fillet = target.max_fillet_radius * 0.25;
+                    let hole = target.length / std::f64::consts::TAU;
+                    Some(
+                        std::f64::consts::PI
+                            * (hole * fillet * fillet * (2.0 - std::f64::consts::PI * 0.5)
+                                + fillet.powi(3) * (5.0 / 3.0 - std::f64::consts::PI * 0.5)),
+                    )
                 } else {
                     right_angled_straight(
                         &solid,
@@ -237,12 +251,7 @@ fn main() {
                 target.max_chamfer_distance * 0.25,
                 if name == "cylinder" {
                     let distance = target.max_chamfer_distance * 0.25;
-                    Some(
-                        std::f64::consts::PI
-                            * distance
-                            * distance
-                            * (10.0 - distance / 3.0),
-                    )
+                    Some(std::f64::consts::PI * distance * distance * (10.0 - distance / 3.0))
                 } else {
                     right_angled_straight(
                         &solid,
@@ -250,9 +259,7 @@ fn main() {
                         target.dihedral_angle_deg,
                         target.length,
                     )
-                    .map(|length| {
-                        (target.max_chamfer_distance * 0.25).powi(2) * length * 0.5
-                    })
+                    .map(|length| (target.max_chamfer_distance * 0.25).powi(2) * length * 0.5)
                 },
             ),
         ] {
@@ -346,9 +353,8 @@ fn main() {
             // **z も見ます。** 見ていなかったときは、上蓋の重心が (0,0,30)
             // ——真値 (0,0,40) の 3/4 ——でも通っていました。
             let want_z = if inspection.normal.z > 0.0 { 40.0 } else { 0.0 };
-            let centroid_off = (inspection.centroid
-                - zenith_math::Point3::new(0.0, 0.0, want_z))
-            .norm();
+            let centroid_off =
+                (inspection.centroid - zenith_math::Point3::new(0.0, 0.0, want_z)).norm();
             let normal_off = 1.0 - inspection.normal.z.abs();
             let ok = relative < 1e-9 && centroid_off < 1e-9 && normal_off < 1e-12;
             if !ok {

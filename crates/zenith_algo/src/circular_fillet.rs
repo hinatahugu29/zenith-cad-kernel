@@ -8,6 +8,7 @@
 //! primitives; they must not approximate an unsupported edge with these shapes.
 
 pub(crate) mod cone;
+pub(crate) mod hole_mouth;
 
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, SQRT_2};
 
@@ -259,9 +260,10 @@ impl CircularCylinderRim {
             return None;
         }
         let outward_axis = effective_plane_normal(cap).try_normalize_safe(1e-12)?;
+        let (curve_min, curve_max) = selected.curve.param_range();
         if selected
             .curve
-            .evaluate_derivatives(0.5, 1)
+            .evaluate_derivatives((curve_min + curve_max) * 0.5, 1)
             .get(1)
             .map(|tangent| tangent.dot(&outward_axis).abs() > 1e-7 * tangent.norm().max(1.0))
             .unwrap_or(true)
@@ -372,9 +374,11 @@ fn effective_plane_normal(face: &Face) -> Vec3 {
 }
 
 fn circle_from_edge(edge: &Edge) -> Option<(Point3, f64, Vec3)> {
-    let a = edge.curve.evaluate(0.0);
-    let b = edge.curve.evaluate(1.0 / 3.0);
-    let c = edge.curve.evaluate(2.0 / 3.0);
+    let (t_min, t_max) = edge.curve.param_range();
+    let parameter = |fraction: f64| t_min + (t_max - t_min) * fraction;
+    let a = edge.curve.evaluate(t_min);
+    let b = edge.curve.evaluate(parameter(1.0 / 3.0));
+    let c = edge.curve.evaluate(parameter(2.0 / 3.0));
     let u = b - a;
     let v = c - a;
     let cross = u.cross(&v);
@@ -391,7 +395,7 @@ fn circle_from_edge(edge: &Edge) -> Option<(Point3, f64, Vec3)> {
     let normal = cross.try_normalize_safe(1e-12)?;
     let tolerance = 2e-7 * radius.max(1.0);
     for step in 0..=24 {
-        let point = edge.curve.evaluate(step as f64 / 24.0);
+        let point = edge.curve.evaluate(parameter(step as f64 / 24.0));
         let offset = point - center;
         if (offset.norm() - radius).abs() > tolerance || offset.dot(&normal).abs() > tolerance {
             return None;
@@ -406,13 +410,19 @@ fn same_edge_geometry(a: &Edge, b: &Edge) -> bool {
         .max((b.start_vertex.point - b.end_vertex.point).norm())
         .max(1.0);
     let tolerance = 2e-7 * scale;
+    let (a_min, a_max) = a.curve.param_range();
+    let (b_min, b_max) = b.curve.param_range();
     let direct = (0..=8).all(|step| {
         let t = step as f64 / 8.0;
-        (a.curve.evaluate(t) - b.curve.evaluate(t)).norm() <= tolerance
+        let at = a_min + (a_max - a_min) * t;
+        let bt = b_min + (b_max - b_min) * t;
+        (a.curve.evaluate(at) - b.curve.evaluate(bt)).norm() <= tolerance
     });
     let reversed = (0..=8).all(|step| {
         let t = step as f64 / 8.0;
-        (a.curve.evaluate(t) - b.curve.evaluate(1.0 - t)).norm() <= tolerance
+        let at = a_min + (a_max - a_min) * t;
+        let bt = b_max - (b_max - b_min) * t;
+        (a.curve.evaluate(at) - b.curve.evaluate(bt)).norm() <= tolerance
     });
     direct || reversed
 }

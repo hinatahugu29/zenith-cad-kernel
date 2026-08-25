@@ -275,9 +275,10 @@ impl PureConeRim {
                 return None;
             }
         }
+        let (curve_min, curve_max) = selected.curve.param_range();
         if selected
             .curve
-            .evaluate_derivatives(0.5, 1)
+            .evaluate_derivatives((curve_min + curve_max) * 0.5, 1)
             .get(1)
             .map(|tangent| tangent.dot(&outward_axis).abs() > 1e-7 * tangent.norm().max(1.0))
             .unwrap_or(true)

@@ -52,7 +52,8 @@ fn a_solid_with_nothing_to_merge_comes_back_untouched() {
         let (simplified, report) = FaceMerger::simplify_solid(&solid, &tol).expect("simplify");
 
         assert_eq!(
-            report.faces_before, report.faces_after,
+            report.faces_before,
+            report.faces_after,
             "{}",
             report.summary()
         );
@@ -94,10 +95,7 @@ fn the_split_up_faces_of_a_boolean_result_come_back_as_one_each() {
     );
     assert_eq!(edge_count(&simplified), 18, "{}", report.summary());
     assert!(
-        simplified
-            .outer_shell
-            .validate_closed(&tol)
-            .is_valid(),
+        simplified.outer_shell.validate_closed(&tol).is_valid(),
         "simplifying left an invalid shell"
     );
     assert!(
@@ -145,10 +143,7 @@ fn a_drilled_box_is_filletable_and_simplifies_to_ten_faces() {
         report.summary()
     );
     assert!(
-        simplified
-            .outer_shell
-            .validate_closed(&tol)
-            .is_valid(),
+        simplified.outer_shell.validate_closed(&tol).is_valid(),
         "simplifying left an invalid shell"
     );
     assert!(
@@ -164,29 +159,32 @@ fn a_drilled_box_is_filletable_and_simplifies_to_ten_faces() {
         .iter()
         .filter(|face| !face.inner_wires.is_empty())
         .count();
-    assert_eq!(with_holes, 2, "the two mouths become one face each with a hole");
+    assert_eq!(
+        with_holes, 2,
+        "the two mouths become one face each with a hole"
+    );
 
-    // そして、丸められるようになっている
+    // そして、外周12本に加えて上下の穴口4円弧ずつも丸められる。
     let blendable = EdgeBlender::blendable_edges(&simplified);
     assert_eq!(
         blendable.len(),
-        12,
-        "the twelve outer edges of the block should be blendable now"
+        20,
+        "the twelve outer edges and eight circular mouth arcs should be blendable now"
     );
 
     let radius = 2.0;
-    let filleted = EdgeBlender::fillet_edge(&simplified, blendable[0].edge_id, radius)
+    let outer = blendable
+        .iter()
+        .find(|edge| edge.max_chamfer_distance > 0.0)
+        .expect("one of the twelve straight outer edges");
+    let filleted = EdgeBlender::fillet_edge(&simplified, outer.edge_id, radius)
         .expect("filleting a simplified drilled box");
     assert!(
-        filleted
-            .outer_shell
-            .validate_closed(&tol)
-            .is_valid(),
+        filleted.outer_shell.validate_closed(&tol).is_valid(),
         "the fillet left an invalid shell"
     );
     let removed = before - volume_of(&filleted);
-    let expected =
-        blendable[0].length * radius * radius * (1.0 - std::f64::consts::FRAC_PI_4);
+    let expected = outer.length * radius * radius * (1.0 - std::f64::consts::FRAC_PI_4);
     assert!(
         (removed - expected).abs() / expected < 1e-9,
         "the fillet removed {removed} against {expected}"

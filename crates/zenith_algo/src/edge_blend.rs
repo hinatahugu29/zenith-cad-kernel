@@ -16,8 +16,9 @@
 //! 加えて、純粋な直円柱と純粋な直円錐/円錐台の**平面キャップ × 回転側面の円形稜**を
 //! 扱います。円弧1本を選ぶと滑らかな全周チェーンへ伝播し、フィレットは厳密な
 //! 有理トーラス、円柱面取りは厳密な円錐台パッチで置き換えます。自作4分割円弧、
-//! 外部CADの全周1本円、剛体配置後を同じ経路で認識します。ボス等の複合立体と
-//! 円錐の円周面取りはまだ対象外です。
+//! 外部CADの全周1本円、剛体配置後を同じ経路で認識します。さらに平面板の
+//! 貫通円筒穴口は、選択した穴だけを局所再トリムしてフィレットできます。
+//! ボス根元・段付き軸肩と、円錐/穴口の円周面取りはまだ対象外です。
 //! 満たさない配置は**近い別の形を返さず、理由を返して失敗します**。
 //!
 //! ## 測れること
@@ -34,7 +35,9 @@ use std::collections::BTreeMap;
 
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3};
 use zenith_math::{Point3, Tolerance, Vec3, Vec3Ext};
-use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Vertex, Wire};
+use zenith_topo::{
+    Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Vertex, Wire,
+};
 
 /// 稜に施すブレンドの種類
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -167,7 +170,12 @@ impl EdgeBlender {
                 crate::circular_fillet::circular_cylinder_blendable(solid, id)
             {
                 out.push(edge);
-            } else if let Some(edge) = crate::circular_fillet::cone::conical_rim_blendable(solid, id)
+            } else if let Some(edge) =
+                crate::circular_fillet::hole_mouth::hole_mouth_blendable(solid, id)
+            {
+                out.push(edge);
+            } else if let Some(edge) =
+                crate::circular_fillet::cone::conical_rim_blendable(solid, id)
             {
                 out.push(edge);
             }
@@ -182,6 +190,11 @@ impl EdgeBlender {
         kind: BlendKind,
     ) -> Result<(Solid, EdgeBlendReport), String> {
         if let BlendKind::Fillet { radius } = kind {
+            if let Some(result) =
+                crate::circular_fillet::hole_mouth::try_fillet_hole_mouth(solid, edge_id, radius)?
+            {
+                return Ok(result);
+            }
             if let Some(result) =
                 crate::circular_fillet::try_fillet_cylinder_rim(solid, edge_id, radius)?
             {
@@ -462,8 +475,12 @@ impl BlendSite {
         for (id, (new_start, new_end)) in &trims {
             let original = find_edge(faces, *id)
                 .ok_or_else(|| format!("Neighbouring edge {id} vanished while trimming"))?;
-            let start = new_start.clone().unwrap_or_else(|| original.start_vertex.clone());
-            let end = new_end.clone().unwrap_or_else(|| original.end_vertex.clone());
+            let start = new_start
+                .clone()
+                .unwrap_or_else(|| original.start_vertex.clone());
+            let end = new_end
+                .clone()
+                .unwrap_or_else(|| original.end_vertex.clone());
             if (end.point - start.point).norm() <= 1e-12 {
                 return Err(format!(
                     "Trimming neighbouring edge {id} would collapse it; the blend is too large here"
@@ -488,7 +505,11 @@ impl BlendSite {
             let substitute = |oriented: &OrientedEdge| -> OrientedEdge {
                 if oriented.edge.id == self.edge_id {
                     debug_assert!(index == self.face_a || index == self.face_b);
-                    let replacement = if index == self.face_a { &line_a } else { &line_b };
+                    let replacement = if index == self.face_a {
+                        &line_a
+                    } else {
+                        &line_b
+                    };
                     OrientedEdge::new(replacement.clone(), oriented.orientation)
                 } else if let Some(edge) = trimmed.get(&oriented.edge.id) {
                     OrientedEdge::new(edge.clone(), oriented.orientation)
@@ -731,7 +752,12 @@ fn find_neighbour(
                     edge.id
                 ));
             }
-            let deviation = max_chord_deviation(&edge.curve, edge.start_vertex.point, along * if move_start { 1.0 } else { -1.0 }, available);
+            let deviation = max_chord_deviation(
+                &edge.curve,
+                edge.start_vertex.point,
+                along * if move_start { 1.0 } else { -1.0 },
+                available,
+            );
             if deviation > 1e-9 * available.max(1.0) {
                 return Err(format!(
                     "Neighbouring edge {} is not straight; the blend would need it trimmed as a curve",
@@ -785,9 +811,7 @@ fn close_gap(
             }
         }
 
-        return Err(
-            "A trimmed loop left a gap that neither end of the blend closes".to_string(),
-        );
+        return Err("A trimmed loop left a gap that neither end of the blend closes".to_string());
     }
 
     Ok(Wire::new(edges))

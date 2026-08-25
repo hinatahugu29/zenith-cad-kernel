@@ -7,15 +7,15 @@
 //!
 //! Run with: cargo run -p zenith_algo --example export_validation_suite
 
-use zenith_algo::StepInterop;
 use std::f64::consts::PI;
 use std::fs;
 use std::path::Path;
+use zenith_algo::StepInterop;
 
 use serde_json::{json, Value};
 use zenith_algo::{
-    ChamferBuilder, FilletBuilder, GearBuilder, HelixBuilder, HoleBuilder, MassCalculator,
-    PrimitiveBuilder, SectionSlicer, ShellingBuilder, SweepBuilder,
+    ChamferBuilder, EdgeBlender, FaceMerger, FilletBuilder, GearBuilder, HelixBuilder, HoleBuilder,
+    MassCalculator, PrimitiveBuilder, SectionSlicer, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Vec3};
@@ -119,12 +119,7 @@ fn main() {
     );
 }
 
-fn conical_top_fillet_volume(
-    r_bottom: f64,
-    r_top: f64,
-    height: f64,
-    fillet: f64,
-) -> f64 {
+fn conical_top_fillet_volume(r_bottom: f64, r_top: f64, height: f64, fillet: f64) -> f64 {
     let slope = (r_top - r_bottom) / height;
     let norm = slope.hypot(1.0);
     let centre_radius = r_top - fillet * (norm + slope);
@@ -132,10 +127,9 @@ fn conical_top_fillet_volume(
     let side_radius = centre_radius + fillet / norm;
     let side_z = centre_z - fillet * slope / norm;
     let side_angle = (-slope).atan();
-    let lower = PI
-        * side_z
-        * (r_bottom * r_bottom + r_bottom * side_radius + side_radius * side_radius)
-        / 3.0;
+    let lower =
+        PI * side_z * (r_bottom * r_bottom + r_bottom * side_radius + side_radius * side_radius)
+            / 3.0;
     let primitive = |angle: f64| {
         let sine = angle.sin();
         let cosine = angle.cos();
@@ -242,14 +236,8 @@ fn build_subjects() -> Vec<Subject> {
 
     subjects.push(Subject {
         name: "cone_top_fillet_r1",
-        solid: FilletBuilder::fillet_cone_top_edge(
-            10.0,
-            4.0,
-            20.0,
-            1.0,
-            &Tolerance::default(),
-        )
-        .unwrap(),
+        solid: FilletBuilder::fillet_cone_top_edge(10.0, 4.0, 20.0, 1.0, &Tolerance::default())
+            .unwrap(),
         analytic_volume: Some(conical_top_fillet_volume(10.0, 4.0, 20.0, 1.0)),
         section: Some((
             Point3::new(0.0, 0.0, 5.0),
@@ -260,14 +248,8 @@ fn build_subjects() -> Vec<Subject> {
 
     subjects.push(Subject {
         name: "true_cone_cap_fillet_r1",
-        solid: FilletBuilder::fillet_cone_top_edge(
-            0.0,
-            10.0,
-            20.0,
-            1.0,
-            &Tolerance::default(),
-        )
-        .unwrap(),
+        solid: FilletBuilder::fillet_cone_top_edge(0.0, 10.0, 20.0, 1.0, &Tolerance::default())
+            .unwrap(),
         analytic_volume: Some(conical_top_fillet_volume(0.0, 10.0, 20.0, 1.0)),
         section: Some((
             Point3::new(0.0, 0.0, 5.0),
@@ -287,6 +269,29 @@ fn build_subjects() -> Vec<Subject> {
         name: "drilled_box_30x30x15_r5",
         solid: HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).unwrap(),
         analytic_volume: Some(30.0 * 30.0 * 15.0 - PI * 25.0 * 15.0),
+        section: Some((
+            Point3::new(0.0, 0.0, 7.5),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(900.0 - PI * 25.0),
+        )),
+    });
+
+    let drilled = HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).unwrap();
+    let drilled = FaceMerger::simplify_solid(&drilled, &Tolerance::default())
+        .unwrap()
+        .0;
+    let mouth = EdgeBlender::blendable_edges(&drilled)
+        .into_iter()
+        .find(|edge| edge.max_chamfer_distance == 0.0)
+        .expect("the simplified drilled box has selectable circular mouths");
+    let hole_fillet = 1.0;
+    let hole_removed = PI
+        * (5.0 * hole_fillet * hole_fillet * (2.0 - PI * 0.5)
+            + hole_fillet.powi(3) * (5.0 / 3.0 - PI * 0.5));
+    subjects.push(Subject {
+        name: "drilled_box_mouth_fillet_r1",
+        solid: EdgeBlender::fillet_edge(&drilled, mouth.edge_id, hole_fillet).unwrap(),
+        analytic_volume: Some(30.0 * 30.0 * 15.0 - PI * 25.0 * 15.0 - hole_removed),
         section: Some((
             Point3::new(0.0, 0.0, 7.5),
             Vec3::new(0.0, 0.0, 1.0),
@@ -350,7 +355,8 @@ fn build_subjects() -> Vec<Subject> {
         Point3::new(11.0, 1.0, 0.0),
         Point3::new(9.0, 1.0, 0.0),
     ];
-    let profile_vertices: Vec<Vertex> = profile_points.into_iter().map(Vertex::from_point).collect();
+    let profile_vertices: Vec<Vertex> =
+        profile_points.into_iter().map(Vertex::from_point).collect();
     let profile_edges: Vec<OrientedEdge> = (0..4)
         .filter_map(|index| {
             let edge = Edge::line_between(
@@ -427,7 +433,8 @@ fn build_subjects() -> Vec<Subject> {
         PrimitiveBuilder::make_box(40.0, 40.0, 20.0),
         PrimitiveBuilder::make_cylinder(6.0, 60.0),
     ) {
-        let drill = zenith_algo::BrepTransform::translate_solid(&drill, Vec3::new(20.0, 20.0, -20.0));
+        let drill =
+            zenith_algo::BrepTransform::translate_solid(&drill, Vec3::new(20.0, 20.0, -20.0));
         if let Ok(result) = zenith_algo::BooleanEngine::boolean_solids_exact_result(
             &block,
             &drill,
