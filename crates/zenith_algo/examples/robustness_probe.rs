@@ -458,4 +458,13 @@ fn main() {
     println!();
     println!("clean error is a healthy outcome. What matters is WRONG and PANIC,");
     println!("because a caller cannot tell either of them apart from an answer.");
+
+    // Keep the probe's process status aligned with the verdict it prints.
+    // CI also scans this summary, but local runners such as `fast_test.sh`
+    // intentionally trust each probe's exit status.  Returning success after
+    // reporting a wrong answer or a panic would therefore make the two gates
+    // enforce different contracts.
+    if tally[2] > 0 || tally[3] > 0 {
+        std::process::exit(1);
+    }
 }
