@@ -155,8 +155,34 @@ fn main() {
             (
                 "fillet",
                 target.max_fillet_radius * 0.25,
-                right_angled_straight(&solid, target.edge_id, target.dihedral_angle_deg, target.length)
-                    .map(|length| (1.0 - std::f64::consts::FRAC_PI_4) * (target.max_fillet_radius * 0.25).powi(2) * length),
+                if name == "cylinder" {
+                    // OCC fixture is the independently known r10 × h40
+                    // cylinder. A selected cap arc propagates around the full
+                    // circular rim; the removed ring follows by integrating
+                    // the quarter-circle profile around the axis.
+                    let fillet = target.max_fillet_radius * 0.25;
+                    let major = 10.0 - fillet;
+                    Some(
+                        std::f64::consts::PI
+                            * (major
+                                * fillet
+                                * fillet
+                                * (2.0 - std::f64::consts::PI * 0.5)
+                                + fillet.powi(3) / 3.0),
+                    )
+                } else {
+                    right_angled_straight(
+                        &solid,
+                        target.edge_id,
+                        target.dihedral_angle_deg,
+                        target.length,
+                    )
+                    .map(|length| {
+                        (1.0 - std::f64::consts::FRAC_PI_4)
+                            * (target.max_fillet_radius * 0.25).powi(2)
+                            * length
+                    })
+                },
             ),
             (
                 "chamfer",

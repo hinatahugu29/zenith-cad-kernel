@@ -8,6 +8,7 @@ pub mod brep_transform;
 pub mod cap;
 pub mod chamfer;
 pub mod contact;
+mod circular_fillet;
 mod cylinder_boolean;
 pub mod direct_edit;
 pub mod edge_blend;

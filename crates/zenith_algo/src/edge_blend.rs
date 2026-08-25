@@ -13,6 +13,10 @@
 //! - 稜が凸であること（二面角が 180 度未満）
 //!
 //! この条件は「押し出し・角柱・それらのブーリアン結果の縦稜」をすべて含みます。
+//! 加えてフィレットだけは、**純粋な直円柱の平面キャップ × 円筒側面の円形稜**を
+//! 扱います。円弧1本を選ぶと滑らかな全周チェーンへ伝播し、厳密な有理トーラス
+//! パッチで置き換えます。自作4分割円柱、全周1本で読んだ外部円柱、剛体配置後を
+//! 同じ経路で認識します。円形稜の面取りと、ボス等の複合立体はまだ対象外です。
 //! 満たさない配置は**近い別の形を返さず、理由を返して失敗します**。
 //!
 //! ## 測れること
@@ -147,19 +151,22 @@ impl EdgeBlender {
 
         let mut out = Vec::new();
         for id in ids {
-            let Ok(site) = BlendSite::locate(solid, id) else {
-                continue;
-            };
-            // 後退距離が隣接稜の長さを食い切らない範囲を上限とする
-            let max_setback = site.max_setback * 0.999;
-            let half = site.dihedral * 0.5;
-            out.push(BlendableEdge {
-                edge_id: id,
-                length: site.length,
-                dihedral_angle_deg: site.dihedral.to_degrees(),
-                max_fillet_radius: max_setback * half.tan(),
-                max_chamfer_distance: max_setback,
-            });
+            if let Ok(site) = BlendSite::locate(solid, id) {
+                // 後退距離が隣接稜の長さを食い切らない範囲を上限とする
+                let max_setback = site.max_setback * 0.999;
+                let half = site.dihedral * 0.5;
+                out.push(BlendableEdge {
+                    edge_id: id,
+                    length: site.length,
+                    dihedral_angle_deg: site.dihedral.to_degrees(),
+                    max_fillet_radius: max_setback * half.tan(),
+                    max_chamfer_distance: max_setback,
+                });
+            } else if let Some(edge) =
+                crate::circular_fillet::circular_cylinder_blendable(solid, id)
+            {
+                out.push(edge);
+            }
         }
         out
     }
@@ -170,6 +177,13 @@ impl EdgeBlender {
         edge_id: u64,
         kind: BlendKind,
     ) -> Result<(Solid, EdgeBlendReport), String> {
+        if let BlendKind::Fillet { radius } = kind {
+            if let Some(result) =
+                crate::circular_fillet::try_fillet_cylinder_rim(solid, edge_id, radius)?
+            {
+                return Ok(result);
+            }
+        }
         let site = BlendSite::locate(solid, edge_id)?;
         let setback = kind.setback(site.dihedral);
 

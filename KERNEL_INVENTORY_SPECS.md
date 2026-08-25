@@ -1,5 +1,5 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
-**Document Version:** 1.7.6 (4-91の曲面Boolean配置不変性ゲートを反映)
+**Document Version:** 1.7.7 (4-92の純円柱円周フィレットを反映)
 **Last Updated:** 2026-08-25  
 **Status:** Official Production Specification
 
@@ -12,9 +12,9 @@
 > - **守備範囲の限界**: [`ROADMAP.md`](ROADMAP.md) 冒頭の警告表
 >
 > **ここに機能名が載っていることは、その機能が実務のデータで通ることを
-> 意味しません。** たとえばフィレットは「直線の稜 × 両側が平面」だけで、
-> 他カーネルから読んだ検体14件のうち12件は丸められる稜が 0 本です
-> （HANDOVER 4-72）。テッセレーションの完全閉多様体も、**ブーリアンが
+> 意味しません。** フィレットは直線稜×平面2面に加え、純直円柱の凸キャップ
+> 円周へ広がりましたが、穴・ボス・段付き軸等の複合立体はまだ対象外です
+> （HANDOVER 4-72、4-92）。テッセレーションの完全閉多様体も、**ブーリアンが
 > 曲面を割った結果も、常設7配置・21演算ではB-Rep / mesh異常0です**（修正前は5件・9〜126本。同4-83〜4-89）。これは常設検体の実測範囲です。
 
 ---
@@ -179,14 +179,14 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ## 3. テストスイート検証結果
 
-4-91で曲面Boolean配置不変性probeを追加した後のワークスペース全体を
-Release構成で再実行し、**532/532件の成功**を確認しました（`zenith_py` は環境依存のため除外）。
+4-92で純円柱円周フィレットの回帰11件を追加した後のワークスペース全体を
+Release構成で再実行し、**543/543件の成功**を確認しました（`zenith_py` は環境依存のため除外）。
 `zenith_tess` 3/3、`contact_placement_test` 4/4、主要回帰の `modeling_test`
 148/148、常設テッセレーションprobeも個別に確認済みです。
 
-- **総テスト数:** 532 件（`#[test]` の実測。4-89で接点flapの回帰2件を追加。Release 全件 532/532）
+- **総テスト数:** 543 件（`#[test]` の実測。4-92で円周フィレット回帰11件を追加。Release 全件 543/543）
 - **常設プローブ（診断・ゲート）:** 35 本すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に
-- **4-91後に実行した全テストの失敗:** 0 件（532/532。`cargo test --release --workspace --exclude zenith_py`）
+- **4-92後に実行した全テストの失敗:** 0 件（543/543。`cargo test --release --workspace --exclude zenith_py`）
 - **主な検証項目:**
   - `zenith_math`: Shewchuk 幾何述語の符号厳密性、Bernstein 多項式の単位の分割性。
   - `zenith_geom`: NURBS 微分と中心差分の一致度（誤差 $< 10^{-7}$）、$G^1$ ブレンド曲面の法線連続性、SSI 交差収束精度、de Casteljau 分割後の真円保持性、`Circle3::to_nurbs()` 幾何誤差 $< 10^{-12}$、`NurbsCurve3::make_compatible` 次数・ノット統一化。

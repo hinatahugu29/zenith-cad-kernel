@@ -14,8 +14,8 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 use zenith_algo::{
-    GearBuilder, HelixBuilder, HoleBuilder, MassCalculator, PrimitiveBuilder, SectionSlicer,
-    ShellingBuilder, SweepBuilder,
+    FilletBuilder, GearBuilder, HelixBuilder, HoleBuilder, MassCalculator, PrimitiveBuilder,
+    SectionSlicer, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Vec3};
@@ -148,6 +148,27 @@ fn build_subjects() -> Vec<Subject> {
         name: "cylinder_r10_h40",
         solid: PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
         analytic_volume: Some(PI * 100.0 * 40.0),
+        section: Some((
+            Point3::new(0.0, 0.0, 20.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 100.0),
+        )),
+    });
+
+    let rim_fillet = 2.0;
+    let rim_major = 10.0 - rim_fillet;
+    let rim_removed =
+        PI * (rim_major * rim_fillet * rim_fillet * (2.0 - PI * 0.5) + rim_fillet.powi(3) / 3.0);
+    subjects.push(Subject {
+        name: "cylinder_top_fillet_r2",
+        solid: FilletBuilder::fillet_cylinder_top_edge(
+            10.0,
+            40.0,
+            rim_fillet,
+            &Tolerance::default(),
+        )
+        .unwrap(),
+        analytic_volume: Some(PI * 100.0 * 40.0 - rim_removed),
         section: Some((
             Point3::new(0.0, 0.0, 20.0),
             Vec3::new(0.0, 0.0, 1.0),
