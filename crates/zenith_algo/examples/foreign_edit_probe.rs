@@ -95,6 +95,46 @@ fn right_angled_straight(
     None
 }
 
+/// Removed volume for a fillet on the selected planar cap of a pure cone.
+/// The lower frustum and the circular upper profile are integrated separately;
+/// this does not call the implementation under test.
+fn conical_rim_removed(
+    opposite_radius: f64,
+    selected_radius: f64,
+    height: f64,
+    fillet: f64,
+) -> f64 {
+    let slope = (selected_radius - opposite_radius) / height;
+    let norm = slope.hypot(1.0);
+    let centre_radius = selected_radius - fillet * (norm + slope);
+    let centre_z = height - fillet;
+    let side_radius = centre_radius + fillet / norm;
+    let side_z = centre_z - fillet * slope / norm;
+    let side_angle = (-slope).atan();
+    let lower = std::f64::consts::PI
+        * side_z
+        * (opposite_radius * opposite_radius
+            + opposite_radius * side_radius
+            + side_radius * side_radius)
+        / 3.0;
+    let primitive = |angle: f64| {
+        let sine = angle.sin();
+        let cosine = angle.cos();
+        fillet * centre_radius * centre_radius * sine
+            + fillet * fillet * centre_radius * (angle + sine * cosine)
+            + fillet.powi(3) * (sine - sine.powi(3) / 3.0)
+    };
+    let upper = std::f64::consts::PI
+        * (primitive(std::f64::consts::FRAC_PI_2) - primitive(side_angle));
+    let original = std::f64::consts::PI
+        * height
+        * (opposite_radius * opposite_radius
+            + opposite_radius * selected_radius
+            + selected_radius * selected_radius)
+        / 3.0;
+    original - lower - upper
+}
+
 fn main() {
     let tol = Tolerance::default();
     let mut failures = 0usize;
@@ -170,6 +210,14 @@ fn main() {
                                 * (2.0 - std::f64::consts::PI * 0.5)
                                 + fillet.powi(3) / 3.0),
                     )
+                } else if name == "cone" || name == "cone_full" {
+                    let fillet = target.max_fillet_radius * 0.25;
+                    Some(conical_rim_removed(
+                        if name == "cone" { 4.0 } else { 0.0 },
+                        10.0,
+                        20.0,
+                        fillet,
+                    ))
                 } else {
                     right_angled_straight(
                         &solid,

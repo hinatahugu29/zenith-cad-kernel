@@ -119,6 +119,33 @@ fn main() {
     );
 }
 
+fn conical_top_fillet_volume(
+    r_bottom: f64,
+    r_top: f64,
+    height: f64,
+    fillet: f64,
+) -> f64 {
+    let slope = (r_top - r_bottom) / height;
+    let norm = slope.hypot(1.0);
+    let centre_radius = r_top - fillet * (norm + slope);
+    let centre_z = height - fillet;
+    let side_radius = centre_radius + fillet / norm;
+    let side_z = centre_z - fillet * slope / norm;
+    let side_angle = (-slope).atan();
+    let lower = PI
+        * side_z
+        * (r_bottom * r_bottom + r_bottom * side_radius + side_radius * side_radius)
+        / 3.0;
+    let primitive = |angle: f64| {
+        let sine = angle.sin();
+        let cosine = angle.cos();
+        fillet * centre_radius * centre_radius * sine
+            + fillet * fillet * centre_radius * (angle + sine * cosine)
+            + fillet.powi(3) * (sine - sine.powi(3) / 3.0)
+    };
+    lower + PI * (primitive(PI * 0.5) - primitive(side_angle))
+}
+
 fn build_subjects() -> Vec<Subject> {
     let mut subjects = Vec::new();
 
@@ -211,6 +238,42 @@ fn build_subjects() -> Vec<Subject> {
         solid: PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap(),
         analytic_volume: Some(PI * 20.0 / 3.0 * (100.0 + 40.0 + 16.0)),
         section: None,
+    });
+
+    subjects.push(Subject {
+        name: "cone_top_fillet_r1",
+        solid: FilletBuilder::fillet_cone_top_edge(
+            10.0,
+            4.0,
+            20.0,
+            1.0,
+            &Tolerance::default(),
+        )
+        .unwrap(),
+        analytic_volume: Some(conical_top_fillet_volume(10.0, 4.0, 20.0, 1.0)),
+        section: Some((
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 8.5 * 8.5),
+        )),
+    });
+
+    subjects.push(Subject {
+        name: "true_cone_cap_fillet_r1",
+        solid: FilletBuilder::fillet_cone_top_edge(
+            0.0,
+            10.0,
+            20.0,
+            1.0,
+            &Tolerance::default(),
+        )
+        .unwrap(),
+        analytic_volume: Some(conical_top_fillet_volume(0.0, 10.0, 20.0, 1.0)),
+        section: Some((
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 2.5 * 2.5),
+        )),
     });
 
     subjects.push(Subject {

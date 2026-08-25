@@ -1,12 +1,13 @@
-//! Exact first-stage fillet for the circular rim of a cylinder.
+//! Exact analytic blends for circular rims of pure cylinders and cones.
 //!
 //! This is deliberately narrower than a rolling-ball fillet.  It constructs
-//! the one analytic case whose contact curves and blend surface are known in
-//! closed form: the convex top rim of a right circular cylinder.  The side and
-//! cap are retrimmed and four exact rational torus patches replace the sharp
-//! edge.  General circular-edge recognition and in-place topology editing sit
-//! above this geometric primitive; they must not approximate an unsupported
-//! edge with this shape.
+//! the analytic cases whose contact curves and blend surfaces are known in
+//! closed form. A cylinder rim uses a quarter-torus; a non-right-angle cone
+//! rim uses the corresponding exact torus sector (see `cone`). General
+//! circular-edge recognition and in-place topology editing sit above these
+//! primitives; they must not approximate an unsupported edge with these shapes.
+
+pub(crate) mod cone;
 
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, SQRT_2};
 

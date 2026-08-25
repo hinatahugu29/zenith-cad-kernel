@@ -13,10 +13,11 @@
 //! - 稜が凸であること（二面角が 180 度未満）
 //!
 //! この条件は「押し出し・角柱・それらのブーリアン結果の縦稜」をすべて含みます。
-//! 加えて、**純粋な直円柱の平面キャップ × 円筒側面の円形稜**を扱います。
-//! 円弧1本を選ぶと滑らかな全周チェーンへ伝播し、フィレットは厳密な有理トーラス、
-//! 面取りは厳密な円錐台パッチで置き換えます。自作4分割円柱、全周1本で読んだ
-//! 外部円柱、剛体配置後を同じ経路で認識します。ボス等の複合立体はまだ対象外です。
+//! 加えて、純粋な直円柱と純粋な直円錐/円錐台の**平面キャップ × 回転側面の円形稜**を
+//! 扱います。円弧1本を選ぶと滑らかな全周チェーンへ伝播し、フィレットは厳密な
+//! 有理トーラス、円柱面取りは厳密な円錐台パッチで置き換えます。自作4分割円弧、
+//! 外部CADの全周1本円、剛体配置後を同じ経路で認識します。ボス等の複合立体と
+//! 円錐の円周面取りはまだ対象外です。
 //! 満たさない配置は**近い別の形を返さず、理由を返して失敗します**。
 //!
 //! ## 測れること
@@ -166,6 +167,9 @@ impl EdgeBlender {
                 crate::circular_fillet::circular_cylinder_blendable(solid, id)
             {
                 out.push(edge);
+            } else if let Some(edge) = crate::circular_fillet::cone::conical_rim_blendable(solid, id)
+            {
+                out.push(edge);
             }
         }
         out
@@ -180,6 +184,11 @@ impl EdgeBlender {
         if let BlendKind::Fillet { radius } = kind {
             if let Some(result) =
                 crate::circular_fillet::try_fillet_cylinder_rim(solid, edge_id, radius)?
+            {
+                return Ok(result);
+            }
+            if let Some(result) =
+                crate::circular_fillet::cone::try_fillet_conical_rim(solid, edge_id, radius)?
             {
                 return Ok(result);
             }

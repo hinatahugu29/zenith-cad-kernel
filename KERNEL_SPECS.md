@@ -1,6 +1,6 @@
 # 🚀 Zenith CAD Kernel - スペック総覧（棚卸し）＆ 次なる飛躍への展望
 
-**文書バージョン**: v3.3.6 (4-93の純円柱円周面取りを反映)
+**文書バージョン**: v3.3.7 (4-94の純円錐円周フィレットを反映)
 **最終更新日時**: 2026年8月25日  
 **ステータス**: 完全自前 Rust B-Rep エンジン。**本書の数値はすべて実測値**。
 
@@ -16,7 +16,7 @@
 > - 出力用メッシュの完全閉多様体化。4〜32分割に加え48〜256でも open: 0, non-manifold: 0, degenerate: 0。ブーリアン曲面分割を含む `contact_placement_probe` も7配置・21演算でB-Rep / mesh異常0となり、赤ゲートへ昇格（修正前は5件・9〜126本。HANDOVER 3-N-2b、4-83〜4-89）。**これは常設検体の実測範囲で、任意の全立体の証明ではありません。**
 > - 書き出す STEP が ISO 10303-21 の構文に適合。OpenCASCADE が代表24形状すべてを valid closed solid として読む。
 > - 他カーネルのファイルを読んで書き戻した7形状が、解析解と 1e-11〜1e-13 で一致（OpenCASCADE 自身の NURBS 変換より高精度）。
-> - FreeCAD ヘッドレス相互検証 17/17。
+> - FreeCAD ヘッドレス相互検証 19/19。
 > - 単一の軽量C-Extension（`zenith_cad.pyd` 3.85MB）のみで外部依存ゼロ。
 
 Zenith CAD Kernel は、Rust でフルスクラッチ開発された **次世代型 3次元 B-Rep / 自由曲面 NURBS CAD カーネル** です。  
@@ -90,7 +90,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **工業用穴・ザグリ・皿穴** | `hole` | 貫通丸穴、ザグリ穴（Counterbore）、皿モミ穴（Countersink: 64通り全合格）。 |
 | **厳密 B-Rep ブーリアン** | `boolean` | 直方体・円柱・球・角柱・穴あき立体の差（Difference）、和（Union）、積（Intersection）。検証ゲート `BooleanResultVerifier` による閉性・体積・内外判定保証。**他カーネルが書いた立体**についても、軸に平行な切り手30配置・90演算、**27度傾けた切り手を足した60配置・180演算とも、断るものはありません**（WRONG 0・PANIC 0、恒等式の残差 7.88e-9）。**検証つきの口でも 180/180**（HANDOVER 4-61〜4-68）。自作立体どうしの45ケース表（`boolean_envelope`）は **supported 44 / wrong-result 0 / エラー 1**。**残る1件は直す対象ではありません**——`box × cylinder`（接線）の差で、**答えのほうが非多様体**なので場所を名指しして断ります（HANDOVER 4-74、4-80）。 |
 | **面併合 (FaceMerger)** | `merge_faces` | ブーリアン出口での同一平面パッチ自動併合（`boolean_solids_exact_simplified`）。L字角柱 14面➔8面、穴あき 16面➔10面に最小化。 |
-| **稜フィレット / 面取り** | `edge_blend` | 直線稜×平面2面の有理2次円筒フィレット/平面面取りに加え、**純直円柱の凸キャップ円周**を厳密有理トーラス4枚で丸めるか、厳密円錐台4枚で面取りする。自作4分割円弧、OCC全周1本円、剛体配置後に対応し、1円弧選択を全周へ伝播。閉形式最悪 9.52e-11、STEP外部照合、mesh 4〜32分割異常0。読んだ14検体で対象稜0は **12→11件**。穴・ボス・段付き軸等の複合立体はまだ明示拒否（HANDOVER 4-72、4-92、4-93）。 |
+| **稜フィレット / 面取り** | `edge_blend` | 直線稜×平面2面に加え、純直円柱の凸円周を厳密トーラスで丸めるか円錐台で面取りし、**純円錐/円錐台の凸円周**も実二面角に応じた厳密トーラス扇形で丸める。自作4分割円弧、OCC全周1本円、上下縁、剛体配置、真円錐頂点に対応し、1円弧選択を全周へ伝播。閉形式最悪 9.52e-11、STEP外部照合、mesh 4〜32分割異常0。読んだ14検体で対象稜0は **12→9件**。穴・ボス・段付き軸等の複合立体と円錐円周面取りは明示拒否（HANDOVER 4-72、4-92〜4-94）。 |
 
 ---
 
@@ -136,11 +136,11 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 
 | 何を測ったか | 結果 | 再現コマンド |
 | :--- | :--- | :--- |
-| ワークスペース全テスト | **99 バイナリ（doctest 込み）/ 550 テスト 100% 合格**（0 failed, 0 ignored） | `cargo test --release --workspace --exclude zenith_py` |
+| ワークスペース全テスト | **100 バイナリ（doctest 込み）/ 561 テスト 100% 合格**（0 failed, 0 ignored） | `cargo test --release --workspace --exclude zenith_py` |
 | コンパイラ警告 | **0** | `cargo build --release --workspace --exclude zenith_py` |
 | ビルダー監査 | **24/24 クリーン**（解析解との差は最悪 6.3e-13、歯車 1.99e-9） | `--example builder_audit` |
 | 平面を NURBS で持つ面 | **全23ビルダーで0枚** | `--example planar_face_audit` |
-| FreeCAD ヘッドレス相互検証 | **17/17 完全一致**（ゲート、不一致で非ゼロ終了） | `tools/freecad_cross_validate.py` |
+| FreeCAD ヘッドレス相互検証 | **19/19 完全一致**（ゲート、不一致で非ゼロ終了） | `tools/freecad_cross_validate.py` |
 | OpenCASCADE ショーケース | **24/24 が valid closed solid** | `tools/verify_showcase.py` |
 | 他カーネルからの読み書き一周 | **7/7 が解析解と 1e-11〜1e-13** | `tools/verify_reexport.py` |
 | IGES 相互検証 | **5/5**（曲面枚数一致、境界箱のずれ 0） | `tools/verify_iges.py` |
