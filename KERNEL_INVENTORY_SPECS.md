@@ -1,7 +1,21 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
-**Document Version:** 1.7.0 (Polyline Pipe & Frame Routing Baseline)  
-**Last Updated:** 2026-08-19  
+**Document Version:** 1.7.1 (テスト数と常設プローブ数を実測に合わせた)  
+**Last Updated:** 2026-08-25  
 **Status:** Official Production Specification
+
+> **この文書は「何があるか」の棚卸しです。「どこまで測ったか」「何が
+> 足りないか」は別の場所にあります。**
+>
+> - **実測の一覧と、次に手を付けるもの**: [`HANDOVER.md`](HANDOVER.md)
+>   （第1章に実測表、3-N に次の一手、4章に経緯、5章に踏んだ落とし穴）
+> - **数字を自分で確かめる手順**: [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md)
+> - **守備範囲の限界**: [`ROADMAP.md`](ROADMAP.md) 冒頭の警告表
+>
+> **ここに機能名が載っていることは、その機能が実務のデータで通ることを
+> 意味しません。** たとえばフィレットは「直線の稜 × 両側が平面」だけで、
+> 他カーネルから読んだ検体14件のうち12件は丸められる稜が 0 本です
+> （HANDOVER 4-72）。テッセレーションの完全閉多様体も、**ブーリアンが
+> 曲面を割った結果には非多様体が残ります**（同 4-83〜4-86）。
 
 ---
 
@@ -163,7 +177,8 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ワークスペース全体の全テストスイートを実行し、全テストが 100% 成功（PASS）することを確認済みです。
 
-- **総テスト数:** 501 件（93 テストバイナリ、doctest 込み。2026年8月23日実測）
+- **総テスト数:** 527 件（98 テストバイナリ、doctest 込み。2026年8月25日実測）
+- **常設プローブ（診断・ゲート）:** 34 本すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に
 - **失敗 (Failed):** 0 件
 - **無視 (Ignored):** 0 件
 - **主な検証項目:**
