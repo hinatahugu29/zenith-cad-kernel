@@ -105,6 +105,31 @@ fn a_spun_sphere_cut_through_its_pole_has_a_manifold_mesh() {
     assert!((got - expected).abs() <= expected * 1e-8, "volume {got}");
 }
 
+/// 外周と穴が一点で接する平面capには、重なったflapを残さない。
+///
+/// 円柱の継ぎ目を切断平面から外した配置では、接点の三角形1枚が辺使用数
+/// `[3, 3, 1]` を作り、meshに非多様体辺が3本残っていた（4-88）。
+#[test]
+fn a_turned_tangent_cylinder_union_has_a_manifold_mesh() {
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box");
+    let cylinder = PrimitiveBuilder::make_cylinder(6.0, 40.0).expect("cylinder");
+    let spin = Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), 33f64.to_radians());
+    let turned = BrepTransform::transform_solid(&cylinder, &spin).expect("turn");
+    let placed = BrepTransform::translate_solid(&turned, Vec3::new(6.0, 10.0, -10.0));
+
+    let result = BooleanEngine::boolean_solids_exact_result(
+        &block,
+        &placed,
+        BooleanOpType::Union,
+        &tol,
+    )
+    .expect("the tangent union should be representable");
+
+    assert_eq!(result.solids.len(), 1);
+    assert_eq!(non_manifold_edges(&result.solids[0]), 0);
+}
+
 /// 稜が相手の面の中に乗っている配置は、**3演算とも多様体の立体になります**。
 ///
 /// ここが通らなかった原因は接触の交線ではなく、**面積を囲まない面片**でした。

@@ -683,11 +683,45 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
         }
         indices.push(mapped);
     }
+    remove_redundant_flap_triangles(&mut indices);
 
     mesh.positions = positions;
     mesh.normals = normals;
     mesh.uvs = uvs;
     mesh.indices = indices;
+}
+
+/// 閉じた面に1枚だけ重なって付いたflapを除く。
+///
+/// 外周へ一点で接する穴をearcut用の単一ringへ縫い込むと、接点の直後に
+/// `[3, 3, 1]` の辺使用数を持つ三角形が1枚だけ残ることがある。この1枚を
+/// 外すと、過剰な2辺は3回から2回へ戻り、1回だけの対角線は消える。
+/// それ以外の使用数パターンには触れない。
+fn remove_redundant_flap_triangles(indices: &mut Vec<[u32; 3]>) {
+    loop {
+        let mut edge_uses: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+        for triangle in indices.iter() {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                let key = if a < b { (a, b) } else { (b, a) };
+                *edge_uses.entry(key).or_default() += 1;
+            }
+        }
+        let redundant = indices.iter().position(|triangle| {
+            let mut uses = [0usize; 3];
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                let key = if a < b { (a, b) } else { (b, a) };
+                uses[corner] = edge_uses.get(&key).copied().unwrap_or(0);
+            }
+            uses.sort_unstable();
+            uses == [1, 3, 3]
+        });
+        let Some(index) = redundant else {
+            return;
+        };
+        indices.remove(index);
+    }
 }
 
 /// この立体で許すたわみ。寸法と指定分割数から決める。
@@ -1528,6 +1562,37 @@ mod tests {
             .iter()
             .all(|triangle| area2(*triangle).abs() > 1e-12));
         assert_eq!(boundary_missing(&triangles, &ranges), 0);
+    }
+
+    #[test]
+    fn a_single_flap_with_two_overused_edges_is_removed() {
+        let mut triangles = vec![
+            [0, 1, 3],
+            [1, 0, 4],
+            [1, 2, 5],
+            [2, 1, 6],
+            [0, 1, 2],
+        ];
+
+        remove_redundant_flap_triangles(&mut triangles);
+
+        assert_eq!(triangles.len(), 4);
+        assert!(!triangles.contains(&[0, 1, 2]));
+        let count = |left: u32, right: u32| {
+            triangles
+                .iter()
+                .flat_map(|triangle| {
+                    (0..3).map(move |corner| {
+                        let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                        if a < b { (a, b) } else { (b, a) }
+                    })
+                })
+                .filter(|edge| *edge == (left, right))
+                .count()
+        };
+        assert_eq!(count(0, 1), 2);
+        assert_eq!(count(1, 2), 2);
+        assert_eq!(count(0, 2), 0);
     }
 
     #[test]
