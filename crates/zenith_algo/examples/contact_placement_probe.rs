@@ -57,11 +57,50 @@ struct Case {
     note: [&'static str; 3],
 }
 
+/// **B-Rep** の稜のうち、ちょうど2つの面ループに使われていない本数。
+///
+/// 「非多様体の立体を返した」かどうかは、これで決まります。`Solid` は
+/// B-Rep なので、多様体かどうかは**稜が2枚の面に共有されているか**です。
+///
+/// **最初はメッシュで測っていました。間違いです。** メッシュは派生物で、
+/// そこが壊れていても B-Rep は正しいことがあります。実測（4-83）: 球を
+/// 45度回して切った結果は、B-Rep の稜がすべてちょうど2回使われている
+/// （例外 0）のに、24分割のメッシュには非多様体の稜が 247 本ありました。
+/// **測る対象を取り違えると、ブーリアンの責任でないものをブーリアンの
+/// 赤として数えてしまいます。**
+///
+/// 稜は `id` ではなく**位置**で突き合わせます。同じ弧を共有していても、
+/// 面ごとに別の `Edge` の実体を持つことがあるからです（4-80）。
+fn non_manifold_brep_edges(solid: &Solid) -> usize {
+    let quantise = |p: zenith_math::Point3| {
+        let q = |v: f64| (v * 1e7).round() as i64;
+        (q(p.x), q(p.y), q(p.z))
+    };
+    let mut uses: std::collections::HashMap<
+        ((i64, i64, i64), (i64, i64, i64)),
+        usize,
+    > = std::collections::HashMap::new();
+    for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
+        for face in &shell.faces {
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oriented in &wire.edges {
+                    let a = quantise(oriented.edge.start_vertex.point);
+                    let b = quantise(oriented.edge.end_vertex.point);
+                    let key = if a <= b { (a, b) } else { (b, a) };
+                    *uses.entry(key).or_insert(0) += 1;
+                }
+            }
+        }
+    }
+    uses.values().filter(|count| **count != 2).count()
+}
+
 /// メッシュの稜のうち、ちょうど2枚の三角形に共有されていない本数。
 ///
-/// 0 でなければ多様体ではない。`tessellate_solid` は頂点を束ねてから
-/// 返すので、座標が一致する頂点は同じ添字になっている。
-fn non_manifold_edges(solid: &Solid) -> usize {
+/// **これは報告だけで、赤にはしません。** ブーリアンが返す立体の責任は
+/// B-Rep までで、メッシュ化は別の段だからです。ただし**0 でない立体は
+/// STL に書けません**ので、数は見えるところに置いておきます（4-83）。
+fn non_manifold_mesh_edges(solid: &Solid) -> usize {
     let mesh = zenith_tess::tessellate_solid(
         solid,
         &zenith_tess::TessellationParams {
@@ -154,6 +193,59 @@ fn cases() -> Vec<Case> {
         note: ["上との違いは向きだけ", "同上", "同上"],
     });
 
+    // **直した配置は、回帰として残します**（4-82）。球を自分の軸まわりに
+    // 45 度回して、同じところで切る。継ぎ目は平面から外れますが、**極は
+    // 軸の上なので平面に乗ったまま**です。交線はそこで平面に接するので、
+    // 交点として着地しようとすると重根になり、位置が 2.36e-5 ずれていました。
+    let spin_z = Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), 45f64.to_radians());
+    out.push(Case {
+        name: "box x sphere (spun 45 about z)",
+        why: "継ぎ目は平面から外れるが、極は軸の上なので平面に乗ったまま。交線はそこで接する",
+        a: boxa.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(&sphere, &spin_z).expect("spin"),
+            20.0,
+            10.0,
+            10.0,
+        ),
+        note: [
+            "4-82 で通るようになった",
+            "同上",
+            "同上。半球 2094.3951 に乗る",
+        ],
+    });
+
+    // **ここから下は、まだ測っていなかった置き方です。**
+    // 極を切断平面から**外す**と、接する点そのものが無くなります。
+    let tip = Transform3::from_axis_angle(&Vec3::new(1.0, 1.0, 1.0), 35f64.to_radians());
+    out.push(Case {
+        name: "box x sphere (tipped off axis)",
+        why: "軸以外のまわりに回すので、極が切断平面から外れる（接する点が無くなる）",
+        a: boxa.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(&sphere, &tip).expect("tip"),
+            20.0,
+            10.0,
+            10.0,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+
+    // 円柱の継ぎ目を、平面に重ならない向きへ回す。
+    let spin_cyl = Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), 33f64.to_radians());
+    out.push(Case {
+        name: "box x cylinder (seam turned 33)",
+        why: "円柱の継ぎ目を切断平面から外す。接する線はそのまま残る",
+        a: boxa.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(&cylinder, &spin_cyl).expect("turn"),
+            6.0,
+            10.0,
+            -10.0,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+
     out
 }
 
@@ -162,12 +254,13 @@ fn main() {
     let mut wrong = 0usize;
     let mut returned = 0usize;
     let mut refused = 0usize;
+    let mut mesh_broken = 0usize;
 
     println!("接触している配置（規約: 接触は、それ自体では位相を作らない）");
     println!();
     println!(
         "{:<30} {:<13} {:>9} {:>7} {:>13}  {}",
-        "case", "op", "result", "solids", "non-manifold", "verdict / 実測"
+        "case", "op", "result", "solids", "nm brep/mesh", "verdict / 実測"
     );
     println!("{}", "-".repeat(118));
 
@@ -198,16 +291,25 @@ fn main() {
                     returned += 1;
                     // **返ってきたものを測ります。** 稜がちょうど2枚の三角形に
                     // 共有されていなければ、それは多様体ではありません。
-                    let bad: usize = result.solids.iter().map(non_manifold_edges).sum();
+                    let bad: usize = result.solids.iter().map(non_manifold_brep_edges).sum();
+                    let mesh_bad: usize =
+                        result.solids.iter().map(non_manifold_mesh_edges).sum();
                     if bad > 0 {
                         wrong += 1;
+                    }
+                    if mesh_bad > 0 {
+                        mesh_broken += 1;
                     }
                     (
                         "ok",
                         result.solids.len().to_string(),
-                        bad.to_string(),
+                        format!("{bad} / {mesh_bad}"),
                         if bad > 0 {
                             format!("WRONG: 非多様体を立体として返した（{}）", case.note[index])
+                        } else if mesh_bad > 0 {
+                            format!(
+                                "ok, B-Rep は多様体。**メッシュが非多様体（{mesh_bad} 本）**——4-83"
+                            )
                         } else {
                             format!("ok, 多様体（{}）", case.note[index])
                         },
@@ -230,7 +332,9 @@ fn main() {
     }
 
     println!("{}", "-".repeat(118));
-    println!("{returned} 件が立体を返し、{refused} 件が断られました。**非多様体を返したもの {wrong} 件。**");
+    println!(
+        "{returned} 件が立体を返し、{refused} 件が断られました。**B-Rep が非多様体だったもの {wrong} 件**、メッシュが非多様体だったもの {mesh_broken} 件。"
+    );
     println!();
     println!("**断られること自体は、ここでは赤にしません。** 断り方は2種類あります——");
     println!("答えが本当に非多様体で断るもの（円柱の接線の差。場所を名指しします）と、");
