@@ -1,5 +1,5 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
-**Document Version:** 1.7.2 (4-87のテッセレーション実測、テスト数、Python公開数を反映)
+**Document Version:** 1.7.3 (4-87後の全529テスト完走を反映)
 **Last Updated:** 2026-08-25  
 **Status:** Official Production Specification
 
@@ -179,14 +179,14 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ## 3. テストスイート検証結果
 
-4-87以前のワークスペース全体実測は527/527です。4-87で2件を追加した後は、
-`zenith_tess` 2/2、`modeling_test` 148/148と常設テッセレーションprobeを確認済み
-ですが、**529件の全スイートは再実行していません**。狭い確認から全件成功を
-推論しないでください。
+4-87で2件を追加した後のワークスペース全体を Release 構成で再実行し、
+**529/529件の成功**を確認しました（`zenith_py` は環境依存のため除外）。
+追加した `zenith_tess` 2/2、主要回帰の `modeling_test` 148/148、常設
+テッセレーションprobeも個別に確認済みです。
 
-- **総テスト数:** 529 件（`#[test]` の実測。4-87でテッセレーション単体テスト2件を追加。直近の全件完走は追加前の527/527）
+- **総テスト数:** 529 件（`#[test]` の実測。4-87でテッセレーション単体テスト2件を追加。Release 全件 529/529）
 - **常設プローブ（診断・ゲート）:** 34 本すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に
-- **4-87後に実行した対象テストの失敗:** 0 件（150/150）
+- **4-87後に実行した全テストの失敗:** 0 件（529/529。`cargo test --release --workspace --exclude zenith_py`）
 - **主な検証項目:**
   - `zenith_math`: Shewchuk 幾何述語の符号厳密性、Bernstein 多項式の単位の分割性。
   - `zenith_geom`: NURBS 微分と中心差分の一致度（誤差 $< 10^{-7}$）、$G^1$ ブレンド曲面の法線連続性、SSI 交差収束精度、de Casteljau 分割後の真円保持性、`Circle3::to_nurbs()` 幾何誤差 $< 10^{-12}$、`NurbsCurve3::make_compatible` 次数・ノット統一化。

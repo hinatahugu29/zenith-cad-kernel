@@ -6757,9 +6757,14 @@ B-Repの非多様体は前後とも0です。1ケースだけに絞ると `spun 
 - `cargo check --workspace --exclude zenith_py`: exit 0
 - `cargo test --release -p zenith_tess`: **2/2**（新規）
 - `cargo test --release -p zenith_algo --test modeling_test`: **148/148**
+- `cargo test --release --workspace --exclude zenith_py`: **529/529**
 - `mesh_watertight_probe`: 4〜32分割、全検体 open / non-manifold / degenerate 0
 - `tess_density_probe`: 密度単調性の違反0、同形状の2経路比1.00x
 - `grid_fallback_probe`: 15検体、許容超過0
+
+全件実行で見つかった `step_face_parity_test` の未使用import警告は、挙動変更と
+混ぜず `f4b60ea test: remove stale Surface3 import` で除去し、同テスト3/3を再確認
+しました。
 
 テスト総数は、この2件を足して `#[test]` 実測 **529件**です。既知の3件はまだ
 0ではないので、`contact_placement_probe` のmesh異常は現時点ではexit条件へ入れて
