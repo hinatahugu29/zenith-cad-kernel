@@ -362,6 +362,7 @@ fn patch_mesh(
     let mut hole_indices = Vec::new();
     let mut protected: std::collections::HashSet<(usize, usize)> = Default::default();
 
+    let mut ring_ranges: Vec<std::ops::Range<usize>> = Vec::new();
     for (index, ring) in rings.iter().enumerate() {
         if ring.uv.len() < 3 {
             continue;
@@ -381,6 +382,7 @@ fn patch_mesh(
             let b = first + (offset + 1) % ring.uv.len();
             protected.insert(if a < b { (a, b) } else { (b, a) });
         }
+        ring_ranges.push(first..uvs.len());
     }
 
     let mut triangles: Vec<[usize; 3]> = earcutr::earcut(&flat, &hole_indices, 2)
@@ -393,12 +395,17 @@ fn patch_mesh(
     }
 
     if let Some(surface) = surface {
+        // 境界の点は先頭に固めて入っている。その数を渡して、**境界の点
+        // どうしを結ぶ辺は連続していなくても割らない**ようにする（4-84）。
+        let boundary_vertex_count = uvs.len();
         crate::surface_tess::refine_uv_triangulation_protected(
             surface,
             params,
             &mut uvs,
             &mut triangles,
             &protected,
+            boundary_vertex_count,
+            &ring_ranges,
         );
     }
 

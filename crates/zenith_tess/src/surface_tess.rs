@@ -610,12 +610,15 @@ fn trimmed_uv_triangulation(
              triangulation and their areas are WRONG (measured: 6e-5 relative on a cylinder)"
         );
     } else {
+        // ここは面を1枚で刻む経路（稜を共有しない）。守る境界が無いので 0。
         refine_uv_triangulation_protected(
             surface,
             params,
             &mut uvs,
             &mut triangles,
             &HashSet::new(),
+            0,
+            &[],
         );
     }
     if std::env::var_os("ZENITH_TRIM_WHY").is_some() {
@@ -645,7 +648,67 @@ pub(crate) fn refine_uv_triangulation_protected(
     uvs: &mut Vec<Point2>,
     triangles: &mut Vec<[usize; 3]>,
     protected: &HashSet<(usize, usize)>,
+    boundary_vertex_count: usize,
+    boundary_rings: &[std::ops::Range<usize>],
 ) {
+    // **境界の点どうしを結ぶ辺は、連続していなくても割ってはいけません。**
+    //
+    // `protected` に入っているのはリングの**連続する対**だけです。ところが
+    // earcut は、境界の点を飛ばして結ぶ辺（弦）を作ります。境界が uv で
+    // 直線なら——球のパッチの縁がまさにそうです——その弦は**ぴったり境界の
+    // 上に乗ります**。割ると、境界の上に新しい点ができ、隣の面にはその点が
+    // 無いので、そこでメッシュが開きます。
+    //
+    // 実測（4-84）: 球を45度回して切った結果の大円の上に、リングから来る
+    // 96点のはずが **1203点**ありました。対を持たない稜が 311 本、すべて
+    // 「1回だけ」で、205本は両端の間に別の頂点があります。
+    //
+    // **「両端が境界の点」だけでは守りすぎです。** 面の内側を通る弦まで
+    // 割らなくなり、境界だけで囲まれた曲面（斜めに切った円柱の楕円面など）は
+    // 細分が一度も掛かりません。実測で体積が 4712.39 に対して 3335.78
+    // ——**29% 狂いました**（`modeling_test` が止めました）。
+    //
+    // **「領域の縁に乗っているか」だけでも足りません。** 球を貫く大円は
+    // 経線なので uv では直線ですが、継ぎ目が別の経度にあるので**領域の縁
+    // ではありません**。実測でそこは守られず、247本のまま戻りました。
+    //
+    // 見るのは「**その辺が境界の折れ線の上を走っているか**」です。中点が
+    // 折れ線に乗っていれば走っており、内側を通る弦は乗りません。境界が
+    // uv で曲がっていれば弦の中点は膨らみの分だけ外れるので、そこも
+    // 守りません（4-84）。
+    let mut boundary_span = 0.0f64;
+    for range in boundary_rings {
+        for offset in 0..range.len() {
+            let a = uvs[range.start + offset];
+            let b = uvs[range.start + (offset + 1) % range.len()];
+            boundary_span = boundary_span.max((b - a).norm());
+        }
+    }
+    let on_polyline_eps = boundary_span.max(1e-12) * 1e-6;
+    let runs_along_the_boundary = |a: usize, b: usize, uvs: &[Point2]| {
+        if !(a < boundary_vertex_count && b < boundary_vertex_count) {
+            return false;
+        }
+        let middle = Point2::new((uvs[a].x + uvs[b].x) * 0.5, (uvs[a].y + uvs[b].y) * 0.5);
+        for range in boundary_rings {
+            for offset in 0..range.len() {
+                let p = uvs[range.start + offset];
+                let q = uvs[range.start + (offset + 1) % range.len()];
+                let span = q - p;
+                let length_squared = span.norm_squared();
+                let t = if length_squared <= f64::EPSILON {
+                    0.0
+                } else {
+                    ((middle - p).dot(&span) / length_squared).clamp(0.0, 1.0)
+                };
+                if ((p + span * t) - middle).norm() <= on_polyline_eps {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
     let cell_u = (u_max - u_min) / params.u_divisions.max(2) as f64;
     let cell_v = (v_max - v_min) / params.v_divisions.max(2) as f64;
@@ -681,10 +744,8 @@ pub(crate) fn refine_uv_triangulation_protected(
             }
             let longest = (0..3)
                 .filter(|corner| {
-                    !protected.contains(&edge_key(
-                        triangle[*corner],
-                        triangle[(*corner + 1) % 3],
-                    ))
+                    let (a, b) = (triangle[*corner], triangle[(*corner + 1) % 3]);
+                    !protected.contains(&edge_key(a, b)) && !runs_along_the_boundary(a, b, uvs)
                 })
                 .max_by(|left, right| {
                     scaled_edge_length(uvs, triangle, *left, cell_u, cell_v)
