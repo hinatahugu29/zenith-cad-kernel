@@ -13,10 +13,10 @@
 //! - 稜が凸であること（二面角が 180 度未満）
 //!
 //! この条件は「押し出し・角柱・それらのブーリアン結果の縦稜」をすべて含みます。
-//! 加えてフィレットだけは、**純粋な直円柱の平面キャップ × 円筒側面の円形稜**を
-//! 扱います。円弧1本を選ぶと滑らかな全周チェーンへ伝播し、厳密な有理トーラス
-//! パッチで置き換えます。自作4分割円柱、全周1本で読んだ外部円柱、剛体配置後を
-//! 同じ経路で認識します。円形稜の面取りと、ボス等の複合立体はまだ対象外です。
+//! 加えて、**純粋な直円柱の平面キャップ × 円筒側面の円形稜**を扱います。
+//! 円弧1本を選ぶと滑らかな全周チェーンへ伝播し、フィレットは厳密な有理トーラス、
+//! 面取りは厳密な円錐台パッチで置き換えます。自作4分割円柱、全周1本で読んだ
+//! 外部円柱、剛体配置後を同じ経路で認識します。ボス等の複合立体はまだ対象外です。
 //! 満たさない配置は**近い別の形を返さず、理由を返して失敗します**。
 //!
 //! ## 測れること
@@ -180,6 +180,13 @@ impl EdgeBlender {
         if let BlendKind::Fillet { radius } = kind {
             if let Some(result) =
                 crate::circular_fillet::try_fillet_cylinder_rim(solid, edge_id, radius)?
+            {
+                return Ok(result);
+            }
+        }
+        if let BlendKind::Chamfer { distance } = kind {
+            if let Some(result) =
+                crate::circular_fillet::try_chamfer_cylinder_rim(solid, edge_id, distance)?
             {
                 return Ok(result);
             }

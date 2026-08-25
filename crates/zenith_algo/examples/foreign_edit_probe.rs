@@ -187,8 +187,25 @@ fn main() {
             (
                 "chamfer",
                 target.max_chamfer_distance * 0.25,
-                right_angled_straight(&solid, target.edge_id, target.dihedral_angle_deg, target.length)
-                    .map(|length| (target.max_chamfer_distance * 0.25).powi(2) * length * 0.5),
+                if name == "cylinder" {
+                    let distance = target.max_chamfer_distance * 0.25;
+                    Some(
+                        std::f64::consts::PI
+                            * distance
+                            * distance
+                            * (10.0 - distance / 3.0),
+                    )
+                } else {
+                    right_angled_straight(
+                        &solid,
+                        target.edge_id,
+                        target.dihedral_angle_deg,
+                        target.length,
+                    )
+                    .map(|length| {
+                        (target.max_chamfer_distance * 0.25).powi(2) * length * 0.5
+                    })
+                },
             ),
         ] {
             if !(size > 1e-9) {

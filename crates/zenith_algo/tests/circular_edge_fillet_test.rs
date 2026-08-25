@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 
 use zenith_algo::{
-    BrepTransform, EdgeBlender, FilletBuilder, HoleBuilder, MassCalculator, PrimitiveBuilder,
+    BrepTransform, ChamferBuilder, EdgeBlender, FilletBuilder, HoleBuilder, MassCalculator,
+    PrimitiveBuilder,
 };
 use zenith_io::{StepExporter, StepImporter};
 use zenith_math::{Tolerance, Transform3, Vec3};
@@ -28,6 +29,18 @@ fn expected_area(radius: f64, height: f64, fillet: f64) -> f64 {
         + PI * major * major
         + PI * PI * major * fillet
         + 2.0 * PI * fillet * fillet
+}
+
+fn expected_chamfer_removed_volume(radius: f64, distance: f64) -> f64 {
+    PI * distance * distance * (radius - distance / 3.0)
+}
+
+fn expected_chamfer_area(radius: f64, height: f64, distance: f64) -> f64 {
+    let top_radius = radius - distance;
+    PI * radius * radius
+        + 2.0 * PI * radius * (height - distance)
+        + PI * top_radius * top_radius
+        + PI * (radius + top_radius) * distance * 2.0_f64.sqrt()
 }
 
 fn close(actual: f64, expected: f64, relative: f64) {
@@ -341,5 +354,186 @@ fn a_circular_hole_edge_is_not_misread_as_a_pure_cylinder_rim() {
             EdgeBlender::fillet_edge(&drilled, edge_id, 1.0).is_err(),
             "unsupported boss/bore topology must be refused, not rebuilt as a cylinder"
         );
+        assert!(
+            EdgeBlender::chamfer_edge(&drilled, edge_id, 1.0).is_err(),
+            "unsupported boss/bore topology must not be rebuilt by circular chamfering"
+        );
     }
+}
+
+#[test]
+fn the_cylinder_top_chamfer_matches_closed_volume_and_area() {
+    let tol = Tolerance::default();
+    for (radius, height, distance) in [(10.0, 40.0, 2.0), (7.5, 12.0, 0.5), (20.0, 8.0, 3.0)] {
+        let solid = ChamferBuilder::chamfer_cylinder_top_edge(radius, height, distance, &tol)
+            .unwrap_or_else(|error| panic!("r={radius}, h={height}, c={distance}: {error}"));
+        let report = solid.outer_shell.validate_closed(&tol);
+        assert!(report.is_valid(), "{:#?}", report.errors);
+        assert_eq!(solid.outer_shell.faces.len(), 10);
+
+        let measured = MassCalculator::compute_from_brep(&solid, &params());
+        close(
+            measured.volume,
+            PI * radius * radius * height - expected_chamfer_removed_volume(radius, distance),
+            2e-11,
+        );
+        close(
+            measured.surface_area,
+            expected_chamfer_area(radius, height, distance),
+            2e-11,
+        );
+    }
+}
+
+#[test]
+fn the_circular_chamfer_reference_case_agrees_with_opencascade() {
+    let solid = ChamferBuilder::chamfer_cylinder_top_edge(10.0, 40.0, 2.0, &Tolerance::default())
+        .expect("the documented reference case");
+    let measured = MassCalculator::compute_from_brep(&solid, &params());
+
+    // FreeCAD 1.1.1 / OpenCASCADE, Part.makeCylinder(10, 40), circular cap
+    // edge, makeChamfer(2): valid closed solid, four faces and five edges.
+    close(measured.volume, 12449.084488625153, 2e-11);
+    close(measured.surface_area, 3062.7753976906697, 2e-11);
+}
+
+#[test]
+fn selecting_one_arc_chamfers_the_complete_circular_rim() {
+    let cylinder = PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap();
+    let top = cap_edge_ids(&cylinder, Vec3::new(0.0, 0.0, 1.0));
+    let listed = EdgeBlender::blendable_edges(&cylinder);
+    for edge_id in &top {
+        let candidate = listed
+            .iter()
+            .find(|edge| edge.edge_id == *edge_id)
+            .expect("every exact cap arc should be advertised");
+        assert!(candidate.max_chamfer_distance > 9.9);
+    }
+
+    let (chamfered, report) = EdgeBlender::blend_edge(
+        &cylinder,
+        top[1],
+        zenith_algo::BlendKind::Chamfer { distance: 2.0 },
+    )
+    .expect("one selected arc should chamfer its complete smooth chain");
+    close(report.edge_length, 2.0 * PI * 10.0, 1e-13);
+    close(
+        report.predicted_removed_volume,
+        expected_chamfer_removed_volume(10.0, 2.0),
+        1e-13,
+    );
+    close(
+        MassCalculator::compute_from_brep(&chamfered, &params()).volume,
+        PI * 100.0 * 40.0 - report.predicted_removed_volume,
+        2e-11,
+    );
+}
+
+#[test]
+fn circular_chamfer_handles_either_cap_and_rigid_placement() {
+    let cylinder = PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap();
+    let turn = Transform3::from_axis_angle(&Vec3::new(-1.0, 0.5, 2.0), 37f64.to_radians());
+    let moved = BrepTransform::translate_solid(
+        &BrepTransform::transform_solid(&cylinder, &turn).unwrap(),
+        Vec3::new(-23.0, 14.0, 31.0),
+    );
+    let axis = turn.transform_vector(&Vec3::new(0.0, 0.0, 1.0));
+    let expected = PI * 100.0 * 40.0 - expected_chamfer_removed_volume(10.0, 2.0);
+
+    for direction in [axis, -axis] {
+        let ids = cap_edge_ids(&moved, direction);
+        assert_eq!(ids.len(), 4);
+        let chamfered = EdgeBlender::chamfer_edge(&moved, ids[2], 2.0)
+            .expect("either placed convex cap should use the exact circular path");
+        close(
+            MassCalculator::compute_from_brep(&chamfered, &params()).volume,
+            expected,
+            2e-11,
+        );
+    }
+}
+
+#[test]
+fn an_opencascade_full_circle_can_be_chamfered() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/occ_reference_cylinder.step"
+    );
+    let cylinder = StepImporter::import_solids_from_file(path)
+        .expect("read OCC cylinder")
+        .into_iter()
+        .next()
+        .expect("one cylinder");
+    let listed = EdgeBlender::blendable_edges(&cylinder);
+    assert_eq!(listed.len(), 2);
+    assert!(listed.iter().all(|edge| edge.max_chamfer_distance > 9.9));
+
+    let chamfered = EdgeBlender::chamfer_edge(&cylinder, listed[1].edge_id, 2.0)
+        .expect("the imported full-circle rim should be selectable");
+    let before = MassCalculator::compute_from_brep(&cylinder, &params()).volume;
+    let after = MassCalculator::compute_from_brep(&chamfered, &params()).volume;
+    close(
+        before - after,
+        expected_chamfer_removed_volume(10.0, 2.0),
+        3e-10,
+    );
+}
+
+#[test]
+fn circular_chamfer_survives_step_and_mesh_generation() {
+    let chamfered =
+        ChamferBuilder::chamfer_cylinder_top_edge(10.0, 40.0, 2.0, &Tolerance::default())
+            .expect("chamfered cylinder");
+    let step = StepExporter::export_solid_to_string(&chamfered, "CIRCULAR_EDGE_CHAMFER");
+    let reread = StepImporter::import_solids_from_str(&step)
+        .expect("read our STEP back")
+        .into_iter()
+        .next()
+        .expect("one chamfered cylinder");
+    assert!(reread
+        .outer_shell
+        .validate_closed(&Tolerance::default())
+        .is_valid());
+
+    for divisions in [4, 8, 16, 32] {
+        let mesh = tessellate_solid(
+            &reread,
+            &TessellationParams {
+                u_divisions: divisions,
+                v_divisions: divisions,
+            },
+        );
+        let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+        let mut degenerate = 0usize;
+        for triangle in &mesh.indices {
+            let a = mesh.positions[triangle[0] as usize];
+            let b = mesh.positions[triangle[1] as usize];
+            let c = mesh.positions[triangle[2] as usize];
+            if (b - a).cross(&(c - a)).norm() <= 1e-12 {
+                degenerate += 1;
+            }
+            for step in 0..3 {
+                let (a, b) = (triangle[step], triangle[(step + 1) % 3]);
+                let key = if a < b { (a, b) } else { (b, a) };
+                *uses.entry(key).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(
+            uses.values().filter(|count| **count != 2).count(),
+            0,
+            "{divisions} divisions left non-manifold mesh edges"
+        );
+        assert_eq!(
+            degenerate, 0,
+            "{divisions} divisions made zero-area triangles"
+        );
+    }
+}
+
+#[test]
+fn unusable_circular_chamfer_distances_are_refused() {
+    let tol = Tolerance::default();
+    assert!(ChamferBuilder::chamfer_cylinder_top_edge(10.0, 40.0, -1.0, &tol).is_err());
+    assert!(ChamferBuilder::chamfer_cylinder_top_edge(10.0, 40.0, 10.0, &tol).is_err());
+    assert!(ChamferBuilder::chamfer_cylinder_top_edge(10.0, 2.0, 2.0, &tol).is_err());
 }

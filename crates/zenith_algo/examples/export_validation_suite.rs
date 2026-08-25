@@ -14,8 +14,8 @@ use std::path::Path;
 
 use serde_json::{json, Value};
 use zenith_algo::{
-    FilletBuilder, GearBuilder, HelixBuilder, HoleBuilder, MassCalculator, PrimitiveBuilder,
-    SectionSlicer, ShellingBuilder, SweepBuilder,
+    ChamferBuilder, FilletBuilder, GearBuilder, HelixBuilder, HoleBuilder, MassCalculator,
+    PrimitiveBuilder, SectionSlicer, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Vec3};
@@ -169,6 +169,25 @@ fn build_subjects() -> Vec<Subject> {
         )
         .unwrap(),
         analytic_volume: Some(PI * 100.0 * 40.0 - rim_removed),
+        section: Some((
+            Point3::new(0.0, 0.0, 20.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 100.0),
+        )),
+    });
+
+    let rim_chamfer = 2.0;
+    let chamfer_removed = PI * rim_chamfer * rim_chamfer * (10.0 - rim_chamfer / 3.0);
+    subjects.push(Subject {
+        name: "cylinder_top_chamfer_c2",
+        solid: ChamferBuilder::chamfer_cylinder_top_edge(
+            10.0,
+            40.0,
+            rim_chamfer,
+            &Tolerance::default(),
+        )
+        .unwrap(),
+        analytic_volume: Some(PI * 100.0 * 40.0 - chamfer_removed),
         section: Some((
             Point3::new(0.0, 0.0, 20.0),
             Vec3::new(0.0, 0.0, 1.0),

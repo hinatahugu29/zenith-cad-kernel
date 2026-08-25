@@ -90,7 +90,7 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 
 | 指標 | 値 |
 | :--- | :--- |
-| テストバイナリ | **99（doctest 込み）すべてグリーン（543テスト 100%合格、0 failed、0 ignored）**。`tools/fast_test.sh` の言う「166 バイナリ」には**プローブ（examples、73本）が含まれます**——`cargo test` は examples もビルドするので、あの数え方だと一緒に拾って走ります。テストは 0 件ですが、**非ゼロ終了すれば落ちます**（そのぶん時間もかかります） |
+| テストバイナリ | **99（doctest 込み）すべてグリーン（550テスト 100%合格、0 failed、0 ignored）**。`tools/fast_test.sh` の言う「166 バイナリ」には**プローブ（examples、73本）が含まれます**——`cargo test` は examples もビルドするので、あの数え方だと一緒に拾って走ります。テストは 0 件ですが、**非ゼロ終了すれば落ちます**（そのぶん時間もかかります） |
 | 診断プローブ | **常設35本**すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と `VERIFICATION_PLAYBOOK.md` の道具表にあります。**ここに名前を並べると必ず古くなる**ので、数だけ書いています |
 | **自作立体どうしのブーリアン（45ケース表）** | `boolean_envelope` で **supported 44 / wrong-result 0 / エラー 1**（8月24日は 39 / 0 / 6）。仕事量は曲面評価 **56,340,279 回**（4-77 で 114,842,103 から半分以下に。4-82後の現値）。**残る1件は直す対象ではありません**——`box × cylinder` 接線の差で、**答えのほうが非多様体**なので場所を名指しして断ります（4-74）。**ここが `ok` に変わったら誤答です。** ただし**45ケースに無い置き方には、まだ欠陥があります**（3-N-2） |
 | **他カーネルの立体のブーリアン** | 軸に平行な30配置・90演算で**断るものは無し**、WRONG 0・PANIC 0、恒等式の残差 4.04e-9。**検証つきの公開 API でも 90/90**。**切り手を 27 度傾けても断るものは無し**（180演算、`ZENITH_TILTED=1`、恒等式の残差 7.88e-9、**検証つきの口で 180/180**、4-67、4-68） |
@@ -106,13 +106,13 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 | **自由曲面交差 (SSI)** | 4式4未知数ニュートン追跡 ➔ B-splineフィッティング ➔ FaceSplitter面分割（`ssi_probe` 3/3、`face_split_probe` 面積残差 1.46e-13）。フィットした交線が**両方の曲面に 1e-6 以内で乗る**ことを 65 点で検査し、**交線が両パッチを境界から境界へ横断する配置では両方の面を割れる**ことも検査（球 r12 と同軸円柱 r8、交線は解析解 z=8.944 と 1e-6 で一致。`ssi_boolean_surface_test`）。組み立ては面積の和で見ている |
 | **4辺グレゴリーパッチ & N辺コーナーブレンド** | `GregoryPatch4::with_ribbons` が4辺のクロス接線を受け取り、内部4点を双子で持って有理的に混ぜる。**4辺すべてで指定した接線に一致**（境界 2.3e-16、接線の残差は差分の刻みに比例して落ちる）。`CornerBlendN` は N = 3, 4, 5 で N 枚を返し、隣り合うセルはリブの上で隙間 0.000e0・法線の食い違い 0.0000 rad（4-37 で0枚問題を解消、4-41 で $G^1$ を実装） |
 | **複数面シート厚み付け** | `ThickenBuilder::thicken_shell`。各面を個別に厚み付けして Union するだけで、テストは**同一平面の長方形2枚**（＝箱2つの和）のみ。非平面の隣接シートでの保証はない |
-| **ダイレクトモデリング** | `DirectModeling::fillet_solid_edge` などは `EdgeBlender` の別名。直線稜×平面2面に加え、**純粋な直円柱の凸キャップ円周**を選択稜から丸められる。自作4分割円弧・OCC全周1本円・剛体配置後を同じ経路で認識し、円弧1本の選択を全周へ伝播する。トーラス面は厳密有理2次、閉形式最悪 9.52e-11、mesh 4〜32分割で異常0。**穴・ボス・段付き軸など複合立体の円周はまだ断る**（4-92） |
+| **ダイレクトモデリング** | `DirectModeling::fillet_solid_edge` などは `EdgeBlender` の別名。直線稜×平面2面に加え、**純粋な直円柱の凸キャップ円周**をフィレット/等距離面取りできる。自作4分割円弧・OCC全周1本円・剛体配置後を同じ経路で認識し、円弧1本の選択を全周へ伝播する。フィレットは厳密有理トーラス、面取りは厳密円錐台。閉形式最悪 9.52e-11、mesh 4〜32分割で異常0。**穴・ボス・段付き軸など複合立体の円周はまだ断る**（4-92、4-93） |
 | **歯元トロコイド** | `make_spur_gear_with_root_fillet` はホブ歯先丸みの**包絡線**として歯元を削る。食い込み 0（厳密）、フィレット上の点はすべて工具円に乗る（5.08e-7、θの刻み幅由来）。外端はインボリュートの開始点と 1e-6 rad 以内で一致（`gear_trochoid_test`、4-40） |
 | **非STEP/CAD入出力** | バイナリSTL、OBJ、glTF 2.0、**IGES 5.3（Entity 128、OpenCASCADE が5検体すべてを読み枚数・境界箱とも一致。トリムは未出力）**、AutoCAD DXF（レイヤーは4種定義するが自動割り当ては OUTLINE / HOLE のみ） |
 | **Pythonバインディング** | `zenith_cad.pyd`（**わずか 3.85 MB 単一DLL**）による完全インメモリ In-Process 連携 |
 | コンパイラ警告 | **0** |
 | ビルダー監査 | **24/24 すべてクリーン** |
-| FreeCAD 相互検証 | **16/16 完全一致** |
+| FreeCAD 相互検証 | **17/17 完全一致** |
 
 ---
 
@@ -787,10 +787,10 @@ union が通るのは、和では両側の面片をそのまま採るので重�
 
 ### 3-4b. フィレットを「平面 × 円筒面の円い縁」へ広げる（第1段階完了）
 
-**第1段階の純粋な直円柱の凸キャップ円周は完了しました**（4-92）。読んだ
+**第1段階の純粋な直円柱の凸キャップ円周は完了しました**（4-92、4-93）。読んだ
 円柱の全周1本円、自作円柱の4分割円弧、剛体配置後の円柱を同じ選択稜APIで
-丸めます。円弧1本を選ぶと滑らかな全周へ伝播し、4枚の厳密有理トーラス
-パッチを挿入します。
+フィレット/面取りできます。円弧1本を選ぶと滑らかな全周へ伝播し、フィレットは
+4枚の厳密有理トーラス、面取りは4枚の厳密円錐台パッチを挿入します。
 
 **ただし一般の「平面×円筒面」は未完成です。** 穴・ボス・段付き軸のように
 周囲へ別の面が続く複合立体は、純円柱へ作り替えず明示的に断ります。次の実用上の
@@ -841,7 +841,7 @@ union が通るのは、和では両側の面片をそのまま採るので重�
 | 全周の正規化での移動 | 刻んでも体積は動かないのが期待で、実測も 1e-10 台。ただし `occ_reference_cylinder_nurbs` だけ 4.1e-6 動く（上のトリム B-spline 残差と同じ面。動く向きは解析解に**近づく**側） |
 | 読んだ `sphere_capped` のテッセレーション | 境界が6辺で、格子は**原理的に張れない**（箱で切られた球はパラメータ矩形ではない）。32分割で 72,104 三角形。形は正しいが重い。重さは適応細分のほうの問題（4-71） |
 | 読んだ `cylinder_nurbs` の蓋 | 円形トリムを持つ NURBS 面なので格子に乗らない。**平面として持ち直せば**（`as_plane`）平面の経路に乗るはずだが、試していない（4-71） |
-| フィレット・面取りの守備範囲 | 直線稜×平面2面に加え、**純直円柱の凸キャップ円周**をフィレット可能。読んだ検体14件で丸められる稜0は **12→11件**。円柱は2円周を列挙し閉じた式と 9.52e-11、複合立体の穴・ボス・段付き軸、円形面取りはまだ対象外（4-72、4-92） |
+| フィレット・面取りの守備範囲 | 直線稜×平面2面に加え、**純直円柱の凸キャップ円周**をフィレット/面取り可能。読んだ検体14件で対象稜0は **12→11件**。円柱は2円周を列挙し、フィレット/面取りとも閉じた式と 9.52e-11 以内。複合立体の穴・ボス・段付き軸はまだ対象外（4-72、4-92、4-93） |
 
 ---
 
@@ -6973,6 +6973,32 @@ CIの常設プローブ一覧にも追加済みです。
 rolling-ball filletです。今回の純円柱用再構築を、そのまま複合位相へ適用しては
 いけません。
 
+### 4-93. 同じ限定認識へ純直円柱の円周面取りを追加した（2026/08/25）
+
+4-92で安全側に0としていた円周の`max_chamfer_distance`を、同じ**純粋な直円柱**
+だけに限って実装しました。フィレットの認識範囲は広げていません。自作4分割円弧、
+OCC全周1本円、任意の剛体配置、上下どちらの凸キャップという条件をそのまま共有し、
+穴・ボス・段付き軸はフィレット同様に断ります。
+
+- 両面から等距離 `c` 後退し、円柱4面＋厳密有理円錐台4面＋平面キャップ2面へ
+  再構築。面取り面を三角形列や近似曲面にはしていない
+- 除去体積は **`πc²(R-c/3)`**。表面積は
+  `πR² + 2πR(H-c) + π(R-c)² + π(2R-c)√2c` と独立に採点
+- `R=10, H=40, c=2` のOCC基準は体積 **12449.084488625153**、
+  面積 **3062.7753976906697**。自前の外部円柱編集は閉形式と **3.78e-11**
+- 3寸法、OCC基準、1円弧から全周への伝播、上下＋剛体配置、OCC全周円、STEP往復、
+  4/8/16/32分割mesh、無効距離、穴口の誤認拒否を回帰7件で追加
+
+常設測定では`foreign_edit_probe`が **10操作適用・閉形式12件・WRONG 0**。
+外部検証へ`cylinder_top_chamfer_c2`を追加し、FreeCAD / OpenCASCADE相互検証は
+**17/17**（新検体は体積差 **9.16e-12**、面積差 **9.23e-12**、中間断面差
+**1.59e-7**）。ワークスペース全体は **550/550**、警告をエラー扱いした新旧
+ブレンド回帰は **27/27**。`tools/fast_test.sh`も
+**166バイナリ / 550合格 / 0不合格 / 非ゼロ終了0**です。
+
+次は当初の順序どおり円錐基部、または複合位相を保つ再トリムです。段付き軸の
+凹肩は体積を足す別規約なので、凸円柱の再構築を流用してはいけません。
+
 ---
 
 ## 5. 踏んだ落とし穴（繰り返さないために）
@@ -7959,7 +7985,7 @@ Blender アドオン本体（`__init__.py`・オペレータ・パネル）は�
 
 ```bash
 cargo run --release -p zenith_algo --example export_showcase          # target/showcase   24形状
-cargo run --release -p zenith_algo --example export_validation_suite  # target/validation 16形状
+cargo run --release -p zenith_algo --example export_validation_suite  # target/validation 17形状
 cargo run --release -p zenith_algo --example foreign_reexport         # target/reexport    7形状
 cargo run --release -p zenith_algo --example export_iges_suite        # target/iges        5形状
 ```
@@ -7967,7 +7993,7 @@ cargo run --release -p zenith_algo --example export_iges_suite        # target/i
 | 置き場所 | 中身 | 突き合わせ |
 | :--- | :--- | :--- |
 | `target/showcase/` | 代表24形状。解析解を持つものは表に相対誤差が出る | `tools/verify_showcase.py`（24/24） |
-| `target/validation/` | 相互検証用16形状＋OpenCASCADE が書いた参照ファイル | `tools/freecad_cross_validate.py`（16/16、不一致で非ゼロ終了） |
+| `target/validation/` | 相互検証用17形状＋OpenCASCADE が書いた参照ファイル | `tools/freecad_cross_validate.py`（17/17、不一致で非ゼロ終了） |
 | `target/reexport/` | 他カーネルのファイルを読んで書き戻したもの7形状 | `tools/verify_reexport.py`（**ゲート**。解析解と 1e-8 以内、不一致で非ゼロ終了） |
 | `target/iges/` | IGES 5.3 の検体5形状＋`manifest.json` | `tools/verify_iges.py`（**ゲート**。曲面の枚数と境界箱、不一致で非ゼロ終了） |
 
@@ -7999,7 +8025,7 @@ cargo run --release -p zenith_algo --example export_iges_suite        # target/i
 どれか1つでも赤なら、`main` に持っていくものではありません。
 
 ```bash
-cargo test --release --workspace --exclude zenith_py     # 99 バイナリ / 543 テスト（約13分）
+cargo test --release --workspace --exclude zenith_py     # 99 バイナリ / 550 テスト（約13分）
 
 # 同じもの＋プローブ73本を並列で回す。**速くはなりません**（実測 13分36秒、
 # `cargo test` の約13分とほぼ同じ。4-73）。被覆が広いぶん時間もそこに行きます。
@@ -8007,7 +8033,7 @@ bash tools/fast_test.sh
 cargo build --release --workspace --exclude zenith_py    # 警告 0
 
 cargo run --release -p zenith_algo --example export_validation_suite
-& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/freecad_cross_validate.py   # 16/16
+& "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/freecad_cross_validate.py   # 17/17
 
 cargo run --release -p zenith_algo --example export_showcase
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_showcase.py          # 24/24
@@ -8037,7 +8063,7 @@ cargo run --release -p zenith_algo --example grid_fallback_probe
 # 15 fixture(s), 0 over the allowance。格子から落ちた面が増えていないか（4-71）
 
 cargo run --release -p zenith_algo --example foreign_edit_probe
-# 9 applied / 11 closed-form / 0 WRONG。読んだ立体の編集と面の計測が閉じた式に乗るか（4-72、4-92）
+# 10 applied / 12 closed-form / 0 WRONG。読んだ立体の編集と面の計測が閉じた式に乗るか（4-72、4-92、4-93）
 
 cargo run --release -p zenith_algo --example foreign_inertia_probe
 # 32 check(s), 0 miss(es)。読んだ立体の重心と慣性が閉じた式に乗るか（4-73）
@@ -8081,7 +8107,7 @@ py tools/verify_solid_api.py
 | 項目 | 実測 | どこにあるか |
 | :--- | :--- | :--- |
 | **性能** | 45ケース全体の曲面評価 **56,340,279 回**（4-77 で 114,842,103 から半分以下に。4-82後の現値）。それでも対話的モデリングの 0.1 秒級には遠い。**壁時計はこの環境で 47% 揺れる**ので、数え上げで見ます（3-1b） | `boolean_envelope` |
-| **フィレット** | 読んだ検体14件のうち、丸められる稜が0本は **12→11件**。直線稜×平面2面と純直円柱の凸キャップ円周までは対応したが、穴・ボス・段付き軸等の複合位相は未対応 | `foreign_edit_probe`、4-72、4-92 |
+| **フィレット / 面取り** | 読んだ検体14件のうち、対象稜が0本は **12→11件**。直線稜×平面2面と純直円柱の凸キャップ円周までは両操作に対応したが、穴・ボス・段付き軸等の複合位相は未対応 | `foreign_edit_probe`、4-72、4-92、4-93 |
 | **2Dスケッチ** | ソルバーは動くが**円弧が無い**。閉領域の抽出・ワークプレーンの写像・スケッチからの押し出しは**いずれも未着手** | 3-0-0 |
 | **検体の数** | ブーリアンは 45 ＋ 180配置。**新しい物差しを8本足したら11件出た**（2026/08/24） | 4-68 〜 4-73 |
 

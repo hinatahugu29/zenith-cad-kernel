@@ -16,7 +16,7 @@ use zenith_topo::{
     Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Vertex, Wire,
 };
 
-use crate::{BlendableEdge, BrepTransform, EdgeBlendReport, FilletBuilder};
+use crate::{BlendableEdge, BrepTransform, ChamferBuilder, EdgeBlendReport, FilletBuilder};
 
 impl FilletBuilder {
     /// Builds a right circular cylinder whose convex top rim has an exact
@@ -56,6 +56,42 @@ impl FilletBuilder {
         }
 
         build_top_rounded_cylinder(radius, height, fillet_radius)
+    }
+}
+
+impl ChamferBuilder {
+    /// Builds a right circular cylinder whose convex top rim has an exact
+    /// equal-distance chamfer.
+    ///
+    /// `distance` is the setback measured on both the cylindrical side and
+    /// the planar cap.  The replacement is an exact conical frustum split
+    /// into four rational quadratic angular patches.
+    pub fn chamfer_cylinder_top_edge(
+        radius: f64,
+        height: f64,
+        distance: f64,
+        _tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if radius <= 1e-6 || height <= 1e-6 {
+            return Err(format!(
+                "Cylinder radius and height must be positive, got radius={radius}, height={height}"
+            ));
+        }
+        if distance < 0.0 {
+            return Err(format!(
+                "Chamfer distance must not be negative, got {distance}"
+            ));
+        }
+        if distance <= 1e-6 {
+            return crate::PrimitiveBuilder::make_cylinder(radius, height);
+        }
+        if distance >= radius || distance >= height {
+            return Err(format!(
+                "Top-rim chamfer distance {distance} must be smaller than both cylinder radius {radius} and height {height}"
+            ));
+        }
+
+        build_top_chamfered_cylinder(radius, height, distance)
     }
 }
 
@@ -100,6 +136,40 @@ pub(crate) fn try_fillet_cylinder_rim(
     )))
 }
 
+pub(crate) fn try_chamfer_cylinder_rim(
+    solid: &Solid,
+    edge_id: u64,
+    distance: f64,
+) -> Result<Option<(Solid, EdgeBlendReport)>, String> {
+    let Some(site) = CircularCylinderRim::recognize(solid, edge_id) else {
+        return Ok(None);
+    };
+    if distance >= site.radius || distance >= site.height {
+        return Err(format!(
+            "Circular cylinder rim chamfer distance {distance} must be smaller than both cylinder radius {:.6} and height {:.6}",
+            site.radius, site.height
+        ));
+    }
+
+    let canonical = ChamferBuilder::chamfer_cylinder_top_edge(
+        site.radius,
+        site.height,
+        distance,
+        &Tolerance::default(),
+    )?;
+    let result = BrepTransform::transform_solid(&canonical, &site.canonical_to_world())?;
+    let removed = chamfer_removed_volume(site.radius, distance);
+    Ok(Some((
+        result,
+        EdgeBlendReport {
+            dihedral_angle_deg: 90.0,
+            edge_length: std::f64::consts::TAU * site.radius,
+            setback: distance,
+            predicted_removed_volume: removed,
+        },
+    )))
+}
+
 pub(crate) fn circular_cylinder_blendable(solid: &Solid, edge_id: u64) -> Option<BlendableEdge> {
     let site = CircularCylinderRim::recognize(solid, edge_id)?;
     let max = site.radius.min(site.height) * 0.999;
@@ -108,9 +178,7 @@ pub(crate) fn circular_cylinder_blendable(solid: &Solid, edge_id: u64) -> Option
         length: std::f64::consts::TAU * site.radius,
         dihedral_angle_deg: 90.0,
         max_fillet_radius: max,
-        // Circular chamfers are not implemented.  Keep zero rather than
-        // advertising a distance that chamfer_edge cannot honour.
-        max_chamfer_distance: 0.0,
+        max_chamfer_distance: max,
     })
 }
 
@@ -118,6 +186,10 @@ fn removed_volume(radius: f64, fillet: f64) -> f64 {
     let major = radius - fillet;
     std::f64::consts::PI
         * (major * fillet * fillet * (2.0 - std::f64::consts::PI * 0.5) + fillet.powi(3) / 3.0)
+}
+
+fn chamfer_removed_volume(radius: f64, distance: f64) -> f64 {
+    std::f64::consts::PI * distance * distance * (radius - distance / 3.0)
 }
 
 struct CircularCylinderRim {
@@ -344,9 +416,36 @@ fn same_edge_geometry(a: &Edge, b: &Edge) -> bool {
     direct || reversed
 }
 
+#[derive(Clone, Copy)]
+enum CircularTopBlend {
+    Fillet(f64),
+    Chamfer(f64),
+}
+
+impl CircularTopBlend {
+    fn setback(self) -> f64 {
+        match self {
+            Self::Fillet(value) | Self::Chamfer(value) => value,
+        }
+    }
+}
+
 fn build_top_rounded_cylinder(radius: f64, height: f64, fillet: f64) -> Result<Solid, String> {
-    let join_z = height - fillet;
-    let top_radius = radius - fillet;
+    build_top_blended_cylinder(radius, height, CircularTopBlend::Fillet(fillet))
+}
+
+fn build_top_chamfered_cylinder(radius: f64, height: f64, distance: f64) -> Result<Solid, String> {
+    build_top_blended_cylinder(radius, height, CircularTopBlend::Chamfer(distance))
+}
+
+fn build_top_blended_cylinder(
+    radius: f64,
+    height: f64,
+    blend: CircularTopBlend,
+) -> Result<Solid, String> {
+    let setback = blend.setback();
+    let join_z = height - setback;
+    let top_radius = radius - setback;
     let theta = |index: usize| FRAC_PI_2 * (index % 4) as f64;
     let point = |radial: f64, z: f64, angle: f64| {
         Point3::new(radial * angle.cos(), radial * angle.sin(), z)
@@ -417,17 +516,22 @@ fn build_top_rounded_cylinder(radius: f64, height: f64, fillet: f64) -> Result<S
         )?);
         vertical_edges.push(Edge::line_between(bottom[i].clone(), join[i].clone())?);
 
-        // The two tangents of the quarter-circle profile meet at (R, H).
-        let profile = NurbsCurve3::new(
-            2,
-            vec![
-                ControlPoint3::unweighted(join[i].point),
-                ControlPoint3::new(point(radius, height, theta(i)), FRAC_1_SQRT_2),
-                ControlPoint3::unweighted(top[i].point),
-            ],
-            KnotVector::clamped_uniform(3, 2),
-        )?;
-        profile_edges.push(Edge::new(profile, join[i].clone(), top[i].clone(), 1e-6));
+        profile_edges.push(match blend {
+            CircularTopBlend::Fillet(_) => {
+                // The two tangents of the quarter-circle profile meet at (R, H).
+                let profile = NurbsCurve3::new(
+                    2,
+                    vec![
+                        ControlPoint3::unweighted(join[i].point),
+                        ControlPoint3::new(point(radius, height, theta(i)), FRAC_1_SQRT_2),
+                        ControlPoint3::unweighted(top[i].point),
+                    ],
+                    KnotVector::clamped_uniform(3, 2),
+                )?;
+                Edge::new(profile, join[i].clone(), top[i].clone(), 1e-6)
+            }
+            CircularTopBlend::Chamfer(_) => Edge::line_between(join[i].clone(), top[i].clone())?,
+        });
     }
 
     let mut faces = Vec::with_capacity(10);
@@ -472,15 +576,25 @@ fn build_top_rounded_cylinder(radius: f64, height: f64, fillet: f64) -> Result<S
         ));
     }
 
-    // Four exact rational torus patches.  The profile rows are reversed for
-    // an outward du x dv normal, as in PrimitiveBuilder::make_torus_patches.
+    // Four exact rational patches. The profile rows are reversed for an
+    // outward du x dv normal. A quadratic circular profile gives a torus;
+    // a linear profile gives a conical frustum.
     for i in 0..4 {
-        let mut rows = Vec::with_capacity(3);
-        for (radial, z, profile_weight) in [
-            (radius, join_z, 1.0),
-            (radius, height, FRAC_1_SQRT_2),
-            (top_radius, height, 1.0),
-        ] {
+        let (profile_degree, profile) = match blend {
+            CircularTopBlend::Fillet(_) => (
+                2,
+                vec![
+                    (radius, join_z, 1.0),
+                    (radius, height, FRAC_1_SQRT_2),
+                    (top_radius, height, 1.0),
+                ],
+            ),
+            CircularTopBlend::Chamfer(_) => {
+                (1, vec![(radius, join_z, 1.0), (top_radius, height, 1.0)])
+            }
+        };
+        let mut rows = Vec::with_capacity(profile.len());
+        for (radial, z, profile_weight) in profile {
             rows.push(vec![
                 ControlPoint3::new(point(radial, z, theta(i)), profile_weight),
                 ControlPoint3::new(
@@ -492,10 +606,10 @@ fn build_top_rounded_cylinder(radius: f64, height: f64, fillet: f64) -> Result<S
         }
         rows.reverse();
         let surface = NurbsSurface3::new(
-            2,
+            profile_degree,
             2,
             rows,
-            KnotVector::clamped_uniform(3, 2),
+            KnotVector::clamped_uniform(profile_degree + 1, profile_degree),
             KnotVector::clamped_uniform(3, 2),
         )?;
         faces.push(Face::simple(
