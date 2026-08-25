@@ -40,6 +40,8 @@
 //! ```bash
 //! cargo run --release -p zenith_algo --example contact_placement_probe
 //! ZENITH_SPLIT_WHY=1 cargo run --release -p zenith_algo --example contact_placement_probe
+//! ZENITH_CONTACT_FILTER="spun 45" ZENITH_CONTACT_OP=intersection \
+//!   cargo run --release -p zenith_algo --example contact_placement_probe
 //! ```
 
 use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, PrimitiveBuilder};
@@ -76,10 +78,8 @@ fn non_manifold_brep_edges(solid: &Solid) -> usize {
         let q = |v: f64| (v * 1e7).round() as i64;
         (q(p.x), q(p.y), q(p.z))
     };
-    let mut uses: std::collections::HashMap<
-        ((i64, i64, i64), (i64, i64, i64)),
-        usize,
-    > = std::collections::HashMap::new();
+    let mut uses: std::collections::HashMap<((i64, i64, i64), (i64, i64, i64)), usize> =
+        std::collections::HashMap::new();
     for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
         for face in &shell.faces {
             for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
@@ -119,7 +119,43 @@ fn non_manifold_mesh_edges(solid: &Solid) -> usize {
             *uses.entry(key).or_insert(0) += 1;
         }
     }
-    uses.values().filter(|count| **count != 2).count()
+    let bad = uses
+        .iter()
+        .filter(|(_, count)| **count != 2)
+        .collect::<Vec<_>>();
+    if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+        for ((a, b), count) in bad.iter().take(32) {
+            let pa = mesh.positions[*a as usize];
+            let pb = mesh.positions[*b as usize];
+            eprintln!(
+                "TESSWHY mesh non-manifold edge uses {count}: ({:.9},{:.9},{:.9}) -> ({:.9},{:.9},{:.9}), length {:.3e}",
+                pa.x,
+                pa.y,
+                pa.z,
+                pb.x,
+                pb.y,
+                pb.z,
+                (pb - pa).norm()
+            );
+            for (triangle_index, triangle) in mesh.indices.iter().enumerate() {
+                if !triangle.contains(a) || !triangle.contains(b) {
+                    continue;
+                }
+                let third = triangle
+                    .iter()
+                    .find(|vertex| **vertex != *a && **vertex != *b)
+                    .copied()
+                    .unwrap_or(*a);
+                let pc = mesh.positions[third as usize];
+                let area = (pb - pa).cross(&(pc - pa)).norm() * 0.5;
+                eprintln!(
+                    "TESSWHY   triangle {triangle_index}, third ({:.9},{:.9},{:.9}), area {:.6e}",
+                    pc.x, pc.y, pc.z, area
+                );
+            }
+        }
+    }
+    bad.len()
 }
 
 fn shifted(solid: &Solid, x: f64, y: f64, z: f64) -> Solid {
@@ -251,6 +287,8 @@ fn cases() -> Vec<Case> {
 
 fn main() {
     let tol = Tolerance::default();
+    let case_filter = std::env::var("ZENITH_CONTACT_FILTER").ok();
+    let op_filter = std::env::var("ZENITH_CONTACT_OP").ok();
     let mut wrong = 0usize;
     let mut returned = 0usize;
     let mut refused = 0usize;
@@ -264,7 +302,12 @@ fn main() {
     );
     println!("{}", "-".repeat(118));
 
-    for case in cases() {
+    for case in cases().into_iter().filter(|case| {
+        case_filter
+            .as_deref()
+            .map(|needle| case.name.contains(needle))
+            .unwrap_or(true)
+    }) {
         for (index, (label, op)) in [
             ("union", BooleanOpType::Union),
             ("difference", BooleanOpType::Difference),
@@ -272,7 +315,12 @@ fn main() {
         ]
         .into_iter()
         .enumerate()
-        {
+        .filter(|(_, (label, _))| {
+            op_filter
+                .as_deref()
+                .map(|needle| label.contains(needle))
+                .unwrap_or(true)
+        }) {
             let outcome = BooleanEngine::boolean_solids_exact_result(&case.a, &case.b, op, &tol);
 
             let (result, solids, bad_edges, verdict) = match &outcome {
@@ -292,8 +340,7 @@ fn main() {
                     // **返ってきたものを測ります。** 稜がちょうど2枚の三角形に
                     // 共有されていなければ、それは多様体ではありません。
                     let bad: usize = result.solids.iter().map(non_manifold_brep_edges).sum();
-                    let mesh_bad: usize =
-                        result.solids.iter().map(non_manifold_mesh_edges).sum();
+                    let mesh_bad: usize = result.solids.iter().map(non_manifold_mesh_edges).sum();
                     if bad > 0 {
                         wrong += 1;
                     }

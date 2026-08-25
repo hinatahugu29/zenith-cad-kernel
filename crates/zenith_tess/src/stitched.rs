@@ -37,7 +37,6 @@
 
 use std::collections::BTreeMap;
 
-
 use zenith_math::{Point2, Point3, Tolerance, Vec3};
 use zenith_topo::{Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Wire};
 
@@ -249,13 +248,19 @@ fn tessellate_face_stitched(
     let explain = std::env::var_os("ZENITH_TESS_WHY").is_some();
     let Some(rings) = boundary_rings(face, plan) else {
         if explain {
-            eprintln!("TESSWHY face {}: boundary_rings が None → 共有しない経路", face.id);
+            eprintln!(
+                "TESSWHY face {}: boundary_rings が None → 共有しない経路",
+                face.id
+            );
         }
         return crate::surface_tess::tessellate_face(face, params);
     };
     if rings.is_empty() || rings[0].uv.len() < 3 {
         if explain {
-            eprintln!("TESSWHY face {}: ring が小さすぎる → 共有しない経路", face.id);
+            eprintln!(
+                "TESSWHY face {}: ring が小さすぎる → 共有しない経路",
+                face.id
+            );
         }
         return crate::surface_tess::tessellate_face(face, params);
     }
@@ -264,15 +269,38 @@ fn tessellate_face_stitched(
             "TESSWHY face {}: ring 点数 {:?}, 稜ごとの刻み {:?}",
             face.id,
             rings.iter().map(|r| r.uv.len()).collect::<Vec<_>>(),
-            rings.first().map(|r| r.segments.clone()).unwrap_or_default()
+            rings
+                .first()
+                .map(|r| r.segments.clone())
+                .unwrap_or_default()
         );
+        for (index, ring) in rings.iter().enumerate() {
+            let signed_area = (0..ring.uv.len())
+                .map(|offset| {
+                    let a = ring.uv[offset];
+                    let b = ring.uv[(offset + 1) % ring.uv.len()];
+                    a.x * b.y - a.y * b.x
+                })
+                .sum::<f64>()
+                * 0.5;
+            let (mut u_min, mut u_max) = (f64::INFINITY, f64::NEG_INFINITY);
+            let (mut v_min, mut v_max) = (f64::INFINITY, f64::NEG_INFINITY);
+            for uv in &ring.uv {
+                u_min = u_min.min(uv.x);
+                u_max = u_max.max(uv.x);
+                v_min = v_min.min(uv.y);
+                v_max = v_max.max(uv.y);
+            }
+            eprintln!(
+                "TESSWHY   ring {index}: signed area {signed_area:.9}, bbox ({u_min:.9},{v_min:.9})-({u_max:.9},{v_max:.9}), segments {:?}",
+                ring.segments
+            );
+        }
     }
 
     match &face.geometry {
         FaceGeometry::Plane(_) => patch_mesh(&rings, None, face.orientation, params),
-        FaceGeometry::Nurbs(surface) => {
-            patch_mesh(&rings, Some(surface), face.orientation, params)
-        }
+        FaceGeometry::Nurbs(surface) => patch_mesh(&rings, Some(surface), face.orientation, params),
         _ => crate::surface_tess::tessellate_face(face, params),
     }
 }
@@ -385,14 +413,28 @@ fn patch_mesh(
         ring_ranges.push(first..uvs.len());
     }
 
-    let mut triangles: Vec<[usize; 3]> = earcutr::earcut(&flat, &hole_indices, 2)
-        .unwrap_or_default()
-        .chunks_exact(3)
-        .map(|chunk| [chunk[0], chunk[1], chunk[2]])
-        .collect();
+    let mut triangles = earcut_boundary_rings(&uvs, &ring_ranges, &flat, &hole_indices);
     if triangles.is_empty() {
         return TriangleMesh::new();
     }
+
+    let explain_flat = |stage: &str, triangles: &[[usize; 3]], uvs: &[Point2]| {
+        if std::env::var_os("ZENITH_TESS_WHY").is_none() {
+            return;
+        }
+        let flat = triangles
+            .iter()
+            .filter(|triangle| {
+                let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+                ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() <= 2e-14
+            })
+            .count();
+        eprintln!(
+            "TESSWHY   {stage}: 三角形 {}、uv 極小 {flat}",
+            triangles.len()
+        );
+    };
+    explain_flat("earcut 直後", &triangles, &uvs);
 
     // **earcut は、一直線に並んだ境界の点を自分で落とします。**
     // `filterPoints` が共線・重複の点を除くためで、そのぶん三角形は綺麗に
@@ -406,6 +448,16 @@ fn patch_mesh(
     // 戻します。** 判定を二重に持つと、earcut の基準と食い違ったときに
     // また壊れます（4-85 で1度やって悪化しました）。
     reinsert_dropped_boundary_points(&uvs, &ring_ranges, &mut triangles);
+    explain_flat("境界点挿し戻し後", &triangles, &uvs);
+    repair_boundary_ears(
+        &uvs,
+        rings,
+        &ring_ranges,
+        surface.is_some(),
+        &protected,
+        &mut triangles,
+    );
+    explain_flat("極小 ear 修復後", &triangles, &uvs);
 
     if let Some(surface) = surface {
         // 境界の点は先頭に固めて入っている。その数を渡して、**境界の点
@@ -420,6 +472,7 @@ fn patch_mesh(
             boundary_vertex_count,
             &ring_ranges,
         );
+        explain_flat("適応細分後", &triangles, &uvs);
     }
 
     // **前提を測ります**（4-85 で推論のまま2回外したので）。uv では面積 0 なのに
@@ -500,6 +553,35 @@ fn patch_mesh(
             forward,
         );
     }
+    if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+        let mut emitted_edges: std::collections::HashSet<(usize, usize)> = Default::default();
+        for triangle in &mesh.indices {
+            for corner in 0..3 {
+                let (a, b) = (
+                    triangle[corner] as usize,
+                    triangle[(corner + 1) % 3] as usize,
+                );
+                emitted_edges.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+        let mut missing_after_emit = 0usize;
+        let mut boundary_pairs = 0usize;
+        for range in &ring_ranges {
+            for offset in 0..range.len() {
+                let a = range.start + offset;
+                let b = range.start + (offset + 1) % range.len();
+                boundary_pairs += 1;
+                let key = if a < b { (a, b) } else { (b, a) };
+                if !emitted_edges.contains(&key) {
+                    missing_after_emit += 1;
+                }
+            }
+        }
+        eprintln!(
+            "TESSWHY   mesh emit 後: 三角形 {}、境界の連続対 {boundary_pairs} のうち辺になっていないもの {missing_after_emit}",
+            mesh.indices.len()
+        );
+    }
     mesh
 }
 
@@ -531,7 +613,6 @@ fn push_with_uv_winding(
         mesh.indices.push([triangle[0], triangle[2], triangle[1]]);
     }
 }
-
 
 fn oriented_normal(
     surface: &zenith_geom::NurbsSurface3,
@@ -810,8 +891,9 @@ fn reinsert_dropped_boundary_points(
                 else {
                     continue;
                 };
-                let forward = (0..3)
-                    .any(|corner| triangle[corner] == before && triangle[(corner + 1) % 3] == after);
+                let forward = (0..3).any(|corner| {
+                    triangle[corner] == before && triangle[(corner + 1) % 3] == after
+                });
 
                 let mut chain = Vec::with_capacity(run.len() + 2);
                 chain.push(before);
@@ -830,6 +912,313 @@ fn reinsert_dropped_boundary_points(
         }
         if !repaired {
             return;
+        }
+    }
+}
+
+/// earcutへ渡す境界を作る。外周に接する穴は、接点で外周へ縫い込んだ単一ring
+/// として試し、通常のhole入力より境界辺を多く保てた場合だけ採用する。
+fn earcut_boundary_rings(
+    uvs: &[Point2],
+    ring_ranges: &[std::ops::Range<usize>],
+    flat: &[f64],
+    hole_indices: &[usize],
+) -> Vec<[usize; 3]> {
+    let decode = |indices: Vec<usize>, mapping: &[usize]| {
+        indices
+            .chunks_exact(3)
+            .map(|chunk| [mapping[chunk[0]], mapping[chunk[1]], mapping[chunk[2]]])
+            .collect::<Vec<_>>()
+    };
+    let identity = (0..uvs.len()).collect::<Vec<_>>();
+    let mut best = decode(
+        earcutr::earcut(flat, hole_indices, 2).unwrap_or_default(),
+        &identity,
+    );
+    if ring_ranges.len() != 2 {
+        return best;
+    }
+
+    let outer = &ring_ranges[0];
+    let hole = &ring_ranges[1];
+    if outer.is_empty() || hole.is_empty() {
+        return best;
+    }
+    let mut span = 0.0f64;
+    for range in ring_ranges {
+        for index in range.clone() {
+            let next = if index + 1 == range.end {
+                range.start
+            } else {
+                index + 1
+            };
+            span = span.max((uvs[next] - uvs[index]).norm());
+        }
+    }
+    let touch_eps = span.max(1.0) * 1e-9;
+    let touching = outer.clone().find_map(|outer_index| {
+        hole.clone()
+            .find(|hole_index| (uvs[outer_index] - uvs[*hole_index]).norm() <= touch_eps)
+            .map(|hole_index| (outer_index, hole_index))
+    });
+    let Some((outer_touch, hole_touch)) = touching else {
+        return best;
+    };
+
+    let mut mapping = Vec::with_capacity(outer.len() + hole.len() + 1);
+    mapping.extend(outer.start..=outer_touch);
+    for step in 1..=hole.len() {
+        mapping.push(hole.start + ((hole_touch - hole.start + step) % hole.len()));
+    }
+    mapping.extend((outer_touch + 1)..outer.end);
+
+    let mut merged_flat = Vec::with_capacity(mapping.len() * 2);
+    for index in &mapping {
+        merged_flat.push(uvs[*index].x);
+        merged_flat.push(uvs[*index].y);
+    }
+    let candidate = decode(
+        earcutr::earcut(&merged_flat, &[], 2).unwrap_or_default(),
+        &mapping,
+    );
+
+    let missing_boundary_edges = |triangles: &[[usize; 3]]| {
+        let mut edges: std::collections::HashSet<(usize, usize)> = Default::default();
+        for triangle in triangles {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                edges.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+        ring_ranges
+            .iter()
+            .map(|range| {
+                (0..range.len())
+                    .filter(|offset| {
+                        let a = range.start + *offset;
+                        let b = range.start + (*offset + 1) % range.len();
+                        let key = if a < b { (a, b) } else { (b, a) };
+                        !edges.contains(&key)
+                    })
+                    .count()
+            })
+            .sum::<usize>()
+    };
+    if !candidate.is_empty() && missing_boundary_edges(&candidate) < missing_boundary_edges(&best) {
+        best = candidate;
+    }
+    best
+}
+
+/// earcut が境界上に残した、uv 面積がほぼ 0 の ear を内部 edge flip で直す。
+///
+/// 球を大円で切った面では、earcut が大円上の3点だけからなる細長い三角形を
+/// 返すことがある。uv ではほぼ潰れていても、3Dでは3点が円板を張るため、隣の
+/// 平面 cap と重なって同じ mesh edge が4回使われる。
+///
+/// 三角形を捨てると共有境界が開き、境界を細分すると隣の面に無い頂点が増える。
+/// そこで外周の頂点・辺には触れず、隣接する正常な三角形との共有対角線だけを
+/// flipする。新旧のuv面積が一致し、2枚とも十分な面積を持ち、新しい対角線が
+/// 既存辺と重複しない場合だけ採用する。
+fn repair_boundary_ears(
+    uvs: &[Point2],
+    rings: &[BoundaryRing],
+    ring_ranges: &[std::ops::Range<usize>],
+    curved_surface: bool,
+    protected: &std::collections::HashSet<(usize, usize)>,
+    triangles: &mut Vec<[usize; 3]>,
+) {
+    if triangles.len() < 2 || uvs.len() < 4 {
+        return;
+    }
+
+    let mut u_min = f64::INFINITY;
+    let mut u_max = f64::NEG_INFINITY;
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    for uv in uvs {
+        u_min = u_min.min(uv.x);
+        u_max = u_max.max(uv.x);
+        v_min = v_min.min(uv.y);
+        v_max = v_max.max(uv.y);
+    }
+    let span = (u_max - u_min).abs().max((v_max - v_min).abs()).max(1.0);
+    let flat_eps = span * span * 2e-14;
+
+    let area2 = |triangle: [usize; 3]| {
+        let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    };
+    let orient = |mut triangle: [usize; 3], sign: f64| {
+        if area2(triangle).signum() != sign.signum() {
+            triangle.swap(1, 2);
+        }
+        triangle
+    };
+    let lies_on_one_boundary_edge = |triangle: [usize; 3]| {
+        for (ring, range) in rings.iter().zip(ring_ranges) {
+            if !triangle.iter().all(|vertex| range.contains(vertex)) {
+                continue;
+            }
+            let n = range.len();
+            if n == 0 || ring.segments.iter().sum::<usize>() != n {
+                continue;
+            }
+            let offsets = triangle.map(|vertex| vertex - range.start);
+            let mut start = 0usize;
+            for segments in &ring.segments {
+                let end = start + *segments;
+                let on_edge = |offset: usize| {
+                    if end < n {
+                        offset >= start && offset <= end
+                    } else {
+                        offset >= start || offset <= end - n
+                    }
+                };
+                if offsets.iter().copied().all(on_edge) {
+                    return true;
+                }
+                start = end;
+            }
+        }
+        false
+    };
+    let needs_repair = |triangle: [usize; 3]| {
+        area2(triangle).abs() <= flat_eps || (curved_surface && lies_on_one_boundary_edge(triangle))
+    };
+
+    let mut skipped: std::collections::HashSet<usize> = Default::default();
+    for _round in 0..triangles.len() * 4 {
+        let Some(flat_index) = triangles
+            .iter()
+            .enumerate()
+            .find(|(index, triangle)| !skipped.contains(index) && needs_repair(**triangle))
+            .map(|(index, _)| index)
+        else {
+            break;
+        };
+
+        let mut edge_uses: std::collections::HashMap<(usize, usize), Vec<usize>> =
+            Default::default();
+        for (index, triangle) in triangles.iter().enumerate() {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                let key = if a < b { (a, b) } else { (b, a) };
+                edge_uses.entry(key).or_default().push(index);
+            }
+        }
+
+        let flat = triangles[flat_index];
+        let mut repaired = false;
+        for corner in 0..3 {
+            let (u, v) = (flat[corner], flat[(corner + 1) % 3]);
+            let shared = if u < v { (u, v) } else { (v, u) };
+            if protected.contains(&shared) {
+                continue;
+            }
+            let Some(uses) = edge_uses.get(&shared) else {
+                continue;
+            };
+            if uses.len() != 2 {
+                continue;
+            }
+            let neighbour_index = if uses[0] == flat_index {
+                uses[1]
+            } else if uses[1] == flat_index {
+                uses[0]
+            } else {
+                continue;
+            };
+            let neighbour = triangles[neighbour_index];
+            let Some(a) = flat
+                .iter()
+                .find(|vertex| **vertex != u && **vertex != v)
+                .copied()
+            else {
+                continue;
+            };
+            let Some(d) = neighbour
+                .iter()
+                .find(|vertex| **vertex != u && **vertex != v)
+                .copied()
+            else {
+                continue;
+            };
+            if a == d {
+                continue;
+            }
+            let diagonal = if a < d { (a, d) } else { (d, a) };
+            if edge_uses.contains_key(&diagonal) {
+                continue;
+            }
+
+            let sign = area2(neighbour);
+            if sign.abs() <= flat_eps {
+                continue;
+            }
+            let first = orient([a, u, d], sign);
+            let second = orient([a, d, v], sign);
+            let first_area = area2(first).abs();
+            let second_area = area2(second).abs();
+            if first_area <= flat_eps || second_area <= flat_eps {
+                continue;
+            }
+            let old_area = area2(flat).abs() + area2(neighbour).abs();
+            let new_area = first_area + second_area;
+            let area_tolerance = flat_eps * 16.0 + old_area * 1e-9;
+            if (new_area - old_area).abs() > area_tolerance {
+                continue;
+            }
+
+            triangles[flat_index] = first;
+            triangles[neighbour_index] = second;
+            skipped.clear();
+            repaired = true;
+            break;
+        }
+
+        if !repaired {
+            skipped.insert(flat_index);
+        }
+    }
+
+    if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+        let mut edge_uses: std::collections::HashMap<(usize, usize), usize> = Default::default();
+        for triangle in triangles.iter() {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                let key = if a < b { (a, b) } else { (b, a) };
+                *edge_uses.entry(key).or_default() += 1;
+            }
+        }
+        for (index, triangle) in triangles.iter().enumerate() {
+            if !needs_repair(*triangle) {
+                continue;
+            }
+            let edge_state = (0..3)
+                .map(|corner| {
+                    let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                    let key = if a < b { (a, b) } else { (b, a) };
+                    format!(
+                        "{}-{}:uses{}{}",
+                        a,
+                        b,
+                        edge_uses.get(&key).copied().unwrap_or(0),
+                        if protected.contains(&key) {
+                            ":protected"
+                        } else {
+                            ""
+                        }
+                    )
+                })
+                .collect::<Vec<_>>();
+            eprintln!(
+                "TESSWHY   BOUNDARYEAR unresolved triangle {index} {:?}, area2 {:.3e}, same edge {}, edges {:?}",
+                triangle,
+                area2(*triangle),
+                lies_on_one_boundary_edge(*triangle),
+                edge_state
+            );
         }
     }
 }
@@ -999,7 +1388,13 @@ fn grid_patch(
         }
 
         return Some(build_grid_mesh(
-            surface, orientation, params, uvs, fixed, rows, columns,
+            surface,
+            orientation,
+            params,
+            uvs,
+            fixed,
+            rows,
+            columns,
         ));
     }
     if std::env::var("ZENITH_GRID_WHY").is_ok() {
@@ -1018,7 +1413,6 @@ fn build_grid_mesh(
     rows: usize,
     columns: usize,
 ) -> TriangleMesh {
-
     let mut triangles = Vec::with_capacity((rows - 1) * (columns - 1) * 2);
     let mut protected: std::collections::HashSet<(usize, usize)> = Default::default();
     let mark = |a: usize, b: usize, set: &mut std::collections::HashSet<(usize, usize)>| {
@@ -1053,11 +1447,13 @@ fn build_grid_mesh(
 
     let mut mesh = TriangleMesh::new();
     for (index, uv) in uvs.iter().enumerate() {
-        mesh.positions.push(match fixed.get(index).copied().flatten() {
-            Some(point) => point,
-            None => surface.evaluate(uv.x, uv.y),
-        });
-        mesh.normals.push(oriented_normal(surface, *uv, orientation));
+        mesh.positions
+            .push(match fixed.get(index).copied().flatten() {
+                Some(point) => point,
+                None => surface.evaluate(uv.x, uv.y),
+            });
+        mesh.normals
+            .push(oriented_normal(surface, *uv, orientation));
         mesh.uvs.push(uv.coords);
     }
     let forward = orientation.is_forward();
@@ -1070,4 +1466,94 @@ fn build_grid_mesh(
         );
     }
     mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn boundary_missing(triangles: &[[usize; 3]], ranges: &[std::ops::Range<usize>]) -> usize {
+        let mut edges: std::collections::HashSet<(usize, usize)> = Default::default();
+        for triangle in triangles {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                edges.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+        ranges
+            .iter()
+            .map(|range| {
+                (0..range.len())
+                    .filter(|offset| {
+                        let a = range.start + *offset;
+                        let b = range.start + (*offset + 1) % range.len();
+                        let key = if a < b { (a, b) } else { (b, a) };
+                        !edges.contains(&key)
+                    })
+                    .count()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn flat_boundary_ear_is_flipped_without_losing_the_boundary() {
+        let uvs = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(0.5, 0.0),
+            Point2::new(1.0, 0.0),
+            Point2::new(0.5, 1.0),
+        ];
+        let rings = vec![BoundaryRing {
+            uv: uvs.clone(),
+            points: vec![Point3::origin(); 4],
+            segments: vec![1, 1, 1, 1],
+        }];
+        let ranges = vec![0..4];
+        let protected = [(0, 1), (1, 2), (2, 3), (0, 3)].into_iter().collect();
+        let mut triangles = vec![[0, 1, 2], [0, 2, 3]];
+
+        repair_boundary_ears(&uvs, &rings, &ranges, false, &protected, &mut triangles);
+
+        let area2 = |triangle: [usize; 3]| {
+            let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+            (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+        };
+        assert!(triangles
+            .iter()
+            .all(|triangle| area2(*triangle).abs() > 1e-12));
+        assert_eq!(boundary_missing(&triangles, &ranges), 0);
+    }
+
+    #[test]
+    fn a_hole_touching_the_outer_ring_is_bridged_into_the_earcut_input() {
+        let uvs = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(4.0, 0.0),
+            Point2::new(4.0, 4.0),
+            Point2::new(0.0, 4.0),
+            Point2::new(0.0, 2.0),
+            Point2::new(0.0, 2.0),
+            Point2::new(1.0, 3.0),
+            Point2::new(2.0, 2.0),
+            Point2::new(1.0, 1.0),
+        ];
+        let ranges = vec![0..5, 5..9];
+        let flat = uvs.iter().flat_map(|uv| [uv.x, uv.y]).collect::<Vec<_>>();
+
+        let mut triangles = earcut_boundary_rings(&uvs, &ranges, &flat, &[5]);
+        reinsert_dropped_boundary_points(&uvs, &ranges, &mut triangles);
+
+        assert!(!triangles.is_empty());
+        // 接点は外周側と穴側で別indexのままなので、weld前は接点の両隣2辺だけ
+        // canonical indexが一致しない。座標は同じで、最終weldで1頂点になる。
+        assert!(boundary_missing(&triangles, &ranges) <= 2);
+        let area = triangles
+            .iter()
+            .map(|triangle| {
+                let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+                ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5
+            })
+            .sum::<f64>();
+        assert!((area - 14.0).abs() < 1e-12, "area was {area}");
+    }
 }
