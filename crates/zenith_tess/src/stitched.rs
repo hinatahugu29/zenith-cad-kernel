@@ -394,6 +394,19 @@ fn patch_mesh(
         return TriangleMesh::new();
     }
 
+    // **earcut は、一直線に並んだ境界の点を自分で落とします。**
+    // `filterPoints` が共線・重複の点を除くためで、そのぶん三角形は綺麗に
+    // なりますが、**落とされた点は隣の面では使われている**ので、そこは
+    // 相手のいない稜になります。
+    //
+    // 実測（4-86）: 箱の面が境界 125 点を持つのに三角形が 2 枚だけになり、
+    // 125 の連続対のうち **122 が辺になっていません**でした。
+    //
+    // **自分で共線を判定して外すのではなく、落とされたものを測って挿し
+    // 戻します。** 判定を二重に持つと、earcut の基準と食い違ったときに
+    // また壊れます（4-85 で1度やって悪化しました）。
+    reinsert_dropped_boundary_points(&uvs, &ring_ranges, &mut triangles);
+
     if let Some(surface) = surface {
         // 境界の点は先頭に固めて入っている。その数を渡して、**境界の点
         // どうしを結ぶ辺は連続していなくても割らない**ようにする（4-84）。
@@ -433,8 +446,30 @@ fn patch_mesh(
                 }
             }
         }
+        // **境界の連続する対が、すべて三角形の辺になっているか。** なって
+        // いなければ、そこは相手のいない稜になります（4-86）。
+        let mut edges: std::collections::HashSet<(usize, usize)> = Default::default();
+        for triangle in &triangles {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                edges.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+        let mut missing = 0usize;
+        let mut boundary_pairs = 0usize;
+        for range in &ring_ranges {
+            let n = range.len();
+            for offset in 0..n {
+                let a = range.start + offset;
+                let b = range.start + (offset + 1) % n;
+                boundary_pairs += 1;
+                if !edges.contains(&if a < b { (a, b) } else { (b, a) }) {
+                    missing += 1;
+                }
+            }
+        }
         eprintln!(
-            "TESSWHY   三角形 {}、uv で面積 0 のもの {flat_in_uv} 枚（その 3D 面積の和 {area_in_3d:.6}）、uv 面積の和 {total_uv:.9}",
+            "TESSWHY   三角形 {}、uv で面積 0 のもの {flat_in_uv} 枚（3D 面積 {area_in_3d:.6}）、uv 面積 {total_uv:.6}、境界の連続対 {boundary_pairs} のうち辺になっていないもの {missing}",
             triangles.len()
         );
     }
@@ -691,6 +726,112 @@ fn degenerate_side_counts(counts: &[usize]) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+/// earcut が落とした境界の点を、三角形の辺に挿し戻す。
+///
+/// 使われなかった境界の点の連なりを見つけ、その両端を結ぶ辺を持つ三角形を
+/// 扇状に割り直します。**共有する点を1つも失いません。**
+///
+/// 自分で「共線かどうか」を判定しないのが要点です。earcut が何を落とすかは
+/// earcut の基準で決まるので、こちらで別の基準を持つと食い違います
+/// （4-85 で1度やって悪化しました）。**落ちた結果のほうを見ます。**
+fn reinsert_dropped_boundary_points(
+    uvs: &[Point2],
+    ring_ranges: &[std::ops::Range<usize>],
+    triangles: &mut Vec<[usize; 3]>,
+) {
+    let _ = uvs;
+    // 1回の走査で1つ直して数え直します。**上限は多めに**——8 回では足りず、
+    // 125 点の境界で 120 対が残りました（実測）。
+    for _round in 0..4096 {
+        let mut used: std::collections::HashSet<usize> = Default::default();
+        let mut edges: std::collections::HashSet<(usize, usize)> = Default::default();
+        for triangle in triangles.iter() {
+            for corner in 0..3 {
+                used.insert(triangle[corner]);
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                edges.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+
+        let mut repaired = false;
+        for range in ring_ranges {
+            let n = range.len();
+            if n < 3 {
+                continue;
+            }
+            let mut offset = 0usize;
+            while offset < n {
+                let index = range.start + offset;
+                if used.contains(&index) {
+                    offset += 1;
+                    continue;
+                }
+                // 使われていない点の連なり。両側の、使われている点を探す。
+                let mut run = vec![index];
+                let mut ahead = offset + 1;
+                while ahead < offset + n {
+                    let next = range.start + (ahead % n);
+                    if used.contains(&next) {
+                        break;
+                    }
+                    run.push(next);
+                    ahead += 1;
+                }
+                let before = range.start + (offset + n - 1) % n;
+                let after = range.start + (ahead % n);
+                offset = ahead + 1;
+
+                if !used.contains(&before) || !used.contains(&after) {
+                    continue;
+                }
+                let key = if before < after {
+                    (before, after)
+                } else {
+                    (after, before)
+                };
+                if !edges.contains(&key) {
+                    continue;
+                }
+                let Some(position) = triangles.iter().position(|t| {
+                    (0..3).any(|corner| {
+                        let (a, b) = (t[corner], t[(corner + 1) % 3]);
+                        (a == before && b == after) || (a == after && b == before)
+                    })
+                }) else {
+                    continue;
+                };
+                let triangle = triangles.swap_remove(position);
+                let Some(apex) = triangle
+                    .iter()
+                    .find(|v| **v != before && **v != after)
+                    .copied()
+                else {
+                    continue;
+                };
+                let forward = (0..3)
+                    .any(|corner| triangle[corner] == before && triangle[(corner + 1) % 3] == after);
+
+                let mut chain = Vec::with_capacity(run.len() + 2);
+                chain.push(before);
+                chain.extend(run.iter().copied());
+                chain.push(after);
+                for pair in chain.windows(2) {
+                    let (a, b) = (pair[0], pair[1]);
+                    triangles.push(if forward { [a, b, apex] } else { [b, a, apex] });
+                }
+                repaired = true;
+                break;
+            }
+            if repaired {
+                break;
+            }
+        }
+        if !repaired {
+            return;
+        }
+    }
 }
 
 /// パラメータ矩形の縁が境界になっているパッチを、構造格子で張る。
