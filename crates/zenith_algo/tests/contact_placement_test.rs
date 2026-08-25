@@ -76,6 +76,35 @@ fn rotated_overlap_volume() -> f64 {
     reach * reach / 2.0 * 20.0
 }
 
+/// 球の継ぎ目を回しても、極を通る切断面は半球を作る。
+///
+/// この球面片の境界は、同じ大円上に複数のトポロジー稜を持つ。earcut が
+/// 同じ稜の点だけからなるearを連続して作ったとき、1枚ずつのedge flipでは
+/// 塊の入口で止まり、平面capと重なるメッシュ稜が6本残っていた（4-87）。
+#[test]
+fn a_spun_sphere_cut_through_its_pole_has_a_manifold_mesh() {
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box");
+    let sphere = PrimitiveBuilder::make_sphere(10.0).expect("sphere");
+    let spin = Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), 45f64.to_radians());
+    let spun = BrepTransform::transform_solid(&sphere, &spin).expect("spin");
+    let placed = BrepTransform::translate_solid(&spun, Vec3::new(20.0, 10.0, 10.0));
+
+    let result = BooleanEngine::boolean_solids_exact_result(
+        &block,
+        &placed,
+        BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("the half sphere should be representable");
+
+    assert_eq!(result.solids.len(), 1);
+    assert_eq!(non_manifold_edges(&result.solids[0]), 0);
+    let expected = 2.0 * std::f64::consts::PI * 10.0_f64.powi(3) / 3.0;
+    let got = volume(&result.solids);
+    assert!((got - expected).abs() <= expected * 1e-8, "volume {got}");
+}
+
 /// 稜が相手の面の中に乗っている配置は、**3演算とも多様体の立体になります**。
 ///
 /// ここが通らなかった原因は接触の交線ではなく、**面積を囲まない面片**でした。

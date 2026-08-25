@@ -1160,7 +1160,13 @@ fn repair_boundary_ears(
             let second = orient([a, d, v], sign);
             let first_area = area2(first).abs();
             let second_area = area2(second).abs();
-            if first_area <= flat_eps || second_area <= flat_eps {
+            // 極小earが数枚連なっていると、隣も同じく極小なため「2枚とも
+            // 一度で正常になる」条件では入口で止まる。悪い三角形の枚数が
+            // 必ず減るflipなら1枚を残して先へ進め、次のroundでその1枚を
+            // 直す。単なる横移動（1 -> 1）は許さないので循環しない。
+            let old_bad = usize::from(needs_repair(flat)) + usize::from(needs_repair(neighbour));
+            let new_bad = usize::from(needs_repair(first)) + usize::from(needs_repair(second));
+            if new_bad >= old_bad {
                 continue;
             }
             let old_area = area2(flat).abs() + area2(neighbour).abs();
