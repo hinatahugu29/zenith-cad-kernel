@@ -733,8 +733,8 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 すべて `cargo run --release -p zenith_algo --example <名前>` で実行します。
 
 **常設のプローブが何本あるかは、この表ではなく CI が決めます。**
-`.github/workflows/gates.yml` の一覧が権威で、いまは 27 本です。
-`crates/zenith_algo/examples/` には 65 本の実行ファイルがあり、**CI に
+`.github/workflows/gates.yml` の一覧が権威で、2026年8月25日時点では 34 本です。
+`crates/zenith_algo/examples/` には 72 本の実行ファイルがあり、**CI に
 入っていないものはゲートではありません**（1回きりの調査に使った残りが
 混ざっています。説明の無いものは `dbg_bool` と `dbg_manifold`）。
 上の表は、**追いかけるときに手が届くと助かるもの**を選んで並べたものです。
