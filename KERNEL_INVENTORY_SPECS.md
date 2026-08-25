@@ -1,5 +1,5 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
-**Document Version:** 1.7.1 (テスト数と常設プローブ数を実測に合わせた)  
+**Document Version:** 1.7.2 (4-87のテッセレーション実測、テスト数、Python公開数を反映)
 **Last Updated:** 2026-08-25  
 **Status:** Official Production Specification
 
@@ -15,7 +15,7 @@
 > 意味しません。** たとえばフィレットは「直線の稜 × 両側が平面」だけで、
 > 他カーネルから読んだ検体14件のうち12件は丸められる稜が 0 本です
 > （HANDOVER 4-72）。テッセレーションの完全閉多様体も、**ブーリアンが
-> 曲面を割った結果には非多様体が残ります**（同 4-83〜4-86）。
+> 曲面を割った結果には非多様体が残ります**（2026年8月25日の全配置実測で3件。修正前は5件。同 4-83〜4-87）。
 
 ---
 
@@ -50,7 +50,7 @@ graph TD
 | **`zenith_algo`** | プリミティブ生成、押し出し（直進・ドラフト・中空）、回転体閉ソリッド（360度・部分角度）、配列複写（直線・円形）、ミラー反転複写、3D螺旋（ヘリカル）スイープ、**3Dポリライン配管・角丸めフレーム**、ガイドレール付きロフト、両端開口角パイプシェル化、フィレット・面取り、穴あけ、ダイレクトモデリング、ブーリアン、スケッチ拘束ソルバー、フィーチャーツリー、物性値計算 | `zenith_math`, `zenith_geom`, `zenith_topo`, `zenith_tess` |
 | **`zenith_tess`** | earcutr によるトリム穴あき多角形三角化、Rayonマルチコア超並列テッセレーション、メッシュ生成 | `zenith_math`, `zenith_geom`, `zenith_topo`, `rayon`, `earcutr` |
 | **`zenith_io`** | STEP (ISO 10303-21) 双方向インポーター/エクスポーター（円柱・円錐・球面・トーラス解析曲面パース対応）、STL、OBJ、glTF 2.0、IGES 5.3 | `zenith_math`, `zenith_geom`, `zenith_topo`, `zenith_tess` |
-| **`zenith_py`** | PyO3 による Python C拡張（`zenith_cad.pyd`）。Blender アドオン等からのゼロコピー呼出（全39関数） | `zenith_algo`, `zenith_geom`, `zenith_topo`, `zenith_tess`, `zenith_io`, `pyo3` |
+| **`zenith_py`** | PyO3 による Python C拡張（`zenith_cad.pyd`）。Blender アドオン等からのゼロコピー呼出（実装・登録とも58関数） | `zenith_algo`, `zenith_geom`, `zenith_topo`, `zenith_tess`, `zenith_io`, `pyo3` |
 | **`zenith_server`** | TCPソケット通信による軽量バイナリIPCサーバー（Blender/外部プロセスとの連携） | `zenith_algo`, `zenith_topo`, `zenith_tess`, `zenith_io`, `serde_json` |
 
 
@@ -131,7 +131,11 @@ CAD の主要モデリング機能群。
 
 PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直接インポートして使用。
 
-#### 公開 Python 関数一覧（全36関数）
+#### 公開 Python 関数の代表一覧
+
+実装上は `#[pyfunction]` 58件、モジュール登録も58件です。以下の表は古くからある
+代表36関数の説明であり、全量一覧ではありません。完全な公開面は
+`crates/zenith_py/src/lib.rs` の登録箇所を正とします。
 
 | 分類 | 関数名 | 引数・機能概要 |
 | :--- | :--- | :--- |
@@ -175,12 +179,14 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ## 3. テストスイート検証結果
 
-ワークスペース全体の全テストスイートを実行し、全テストが 100% 成功（PASS）することを確認済みです。
+4-87以前のワークスペース全体実測は527/527です。4-87で2件を追加した後は、
+`zenith_tess` 2/2、`modeling_test` 148/148と常設テッセレーションprobeを確認済み
+ですが、**529件の全スイートは再実行していません**。狭い確認から全件成功を
+推論しないでください。
 
-- **総テスト数:** 527 件（98 テストバイナリ、doctest 込み。2026年8月25日実測）
+- **総テスト数:** 529 件（`#[test]` の実測。4-87でテッセレーション単体テスト2件を追加。直近の全件完走は追加前の527/527）
 - **常設プローブ（診断・ゲート）:** 34 本すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に
-- **失敗 (Failed):** 0 件
-- **無視 (Ignored):** 0 件
+- **4-87後に実行した対象テストの失敗:** 0 件（150/150）
 - **主な検証項目:**
   - `zenith_math`: Shewchuk 幾何述語の符号厳密性、Bernstein 多項式の単位の分割性。
   - `zenith_geom`: NURBS 微分と中心差分の一致度（誤差 $< 10^{-7}$）、$G^1$ ブレンド曲面の法線連続性、SSI 交差収束精度、de Casteljau 分割後の真円保持性、`Circle3::to_nurbs()` 幾何誤差 $< 10^{-12}$、`NurbsCurve3::make_compatible` 次数・ノット統一化。
@@ -194,4 +200,4 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 Zenith CAD Kernel は、基礎となる幾何数学・NURBS 曲面演算・B-Rep トポロジー・STEP 双方向データ交換・テッセレーションにおいて、極めて高い完成度と数学的厳密性を達成しています。
 
-本更新を通じて、**「ガイドレール付きロフト完全閉ソリッド」「両端開口角パイプ中空シェル化」「フィーチャーツリー拡張」「Python/Blender連携API拡充（全36関数）」** が実用レベルで完全実装され、全194件以上のテストスイートによって品質が担保されています。
+本更新を通じて、**「ガイドレール付きロフト完全閉ソリッド」「両端開口角パイプ中空シェル化」「フィーチャーツリー拡張」「Python/Blender連携API拡充（登録58関数）」** が実装されています。検証範囲と未解決事項は、テスト総数だけで判断せず `HANDOVER.md` と `VERIFICATION_PLAYBOOK.md` を併読してください。
