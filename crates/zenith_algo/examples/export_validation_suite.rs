@@ -15,7 +15,7 @@ use zenith_algo::StepInterop;
 use serde_json::{json, Value};
 use zenith_algo::{
     ChamferBuilder, EdgeBlender, FaceMerger, FilletBuilder, GearBuilder, HelixBuilder, HoleBuilder,
-    MassCalculator, PrimitiveBuilder, SectionSlicer, ShellingBuilder, SweepBuilder,
+    MassCalculator, PrimitiveBuilder, SectionSlicer, ShaftBuilder, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Vec3};
@@ -308,6 +308,26 @@ fn build_subjects() -> Vec<Subject> {
             Point3::new(0.0, 0.0, 7.5),
             Vec3::new(0.0, 0.0, 1.0),
             Some(900.0 - PI * 25.0),
+        )),
+    });
+
+    let stepped = ShaftBuilder::make_stepped_shaft(&[(10.0, 12.0), (7.0, 10.0)]).unwrap();
+    let root = EdgeBlender::blendable_edges(&stepped)
+        .into_iter()
+        .find(|edge| (edge.length - std::f64::consts::TAU * 7.0).abs() < 1e-6)
+        .expect("the stepped shaft has a selectable concave root");
+    let root_fillet = 1.25;
+    let root_added = PI
+        * (7.0 * root_fillet * root_fillet * (2.0 - PI * 0.5)
+            + root_fillet.powi(3) * (5.0 / 3.0 - PI * 0.5));
+    subjects.push(Subject {
+        name: "stepped_shaft_root_fillet_r1_25",
+        solid: EdgeBlender::fillet_edge(&stepped, root.edge_id, root_fillet).unwrap(),
+        analytic_volume: Some(PI * (10.0f64.powi(2) * 12.0 + 7.0f64.powi(2) * 10.0) + root_added),
+        section: Some((
+            Point3::new(0.0, 0.0, 6.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 100.0),
         )),
     });
 

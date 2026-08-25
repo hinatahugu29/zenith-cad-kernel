@@ -4,14 +4,14 @@
 //! Run with: cargo run --release -p zenith_algo --example export_showcase
 //! Output:   target/showcase/
 
-use zenith_algo::StepInterop;
 use std::f64::consts::PI;
 use std::fs;
 use std::path::Path;
+use zenith_algo::StepInterop;
 
 use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, GearBuilder, HelixBuilder, MassCalculator,
-    PrimitiveBuilder, SweepBuilder,
+    BooleanEngine, BooleanOpType, BrepTransform, EdgeBlender, GearBuilder, HelixBuilder,
+    MassCalculator, PrimitiveBuilder, ShaftBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -154,7 +154,8 @@ fn main() {
         analytic_volume: Some(80.0 * 60.0 * 20.0 - PI * 144.0 * 12.0),
     });
 
-    let rotation = Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), std::f64::consts::FRAC_PI_2);
+    let rotation =
+        Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), std::f64::consts::FRAC_PI_2);
     let sideways = BrepTransform::translate_solid(
         &BrepTransform::transform_solid(
             &PrimitiveBuilder::make_cylinder(8.0, 120.0).unwrap(),
@@ -337,9 +338,8 @@ fn main() {
         &PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box"),
         Vec3::new(-10.0, -10.0, 10.0),
     );
-    let frustum = |r0: f64, r1: f64, h: f64| {
-        std::f64::consts::PI * h / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1)
-    };
+    let frustum =
+        |r0: f64, r1: f64, h: f64| std::f64::consts::PI * h / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1);
 
     items.push(Item {
         name: "17_cone_union_box",
@@ -393,8 +393,7 @@ fn main() {
         Vec3::new(-30.0, -30.0, -2.0),
     );
     let torus_below = {
-        let antiderivative =
-            |z: f64| 0.5 * z * (16.0 - z * z).sqrt() + 8.0 * (z / 4.0).asin();
+        let antiderivative = |z: f64| 0.5 * z * (16.0 - z * z).sqrt() + 8.0 * (z / 4.0).asin();
         4.0 * std::f64::consts::PI * 12.0 * (antiderivative(-2.0) - antiderivative(-4.0))
     };
     let torus_whole = 2.0 * std::f64::consts::PI * std::f64::consts::PI * 12.0 * 16.0;
@@ -499,6 +498,26 @@ fn main() {
         note: "five holes cut one after another, each into the result of the last",
         solid: drilled,
         analytic_volume: Some(60.0 * 40.0 * 12.0 - bolt_holes - centre_hole),
+    });
+
+    // 段付き軸の凹円周を、立体全体を作り直さず厳密トーラスで丸める。
+    let stepped = ShaftBuilder::make_stepped_shaft(&[(10.0, 12.0), (7.0, 10.0)])
+        .expect("showcase stepped shaft");
+    let root = EdgeBlender::blendable_edges(&stepped)
+        .into_iter()
+        .find(|edge| (edge.length - 2.0 * PI * 7.0).abs() < 1e-6)
+        .expect("showcase shoulder root");
+    let root_fillet = 1.25;
+    let rounded_shaft = EdgeBlender::fillet_edge(&stepped, root.edge_id, root_fillet)
+        .expect("showcase shoulder-root fillet");
+    let root_added = PI
+        * (7.0 * root_fillet * root_fillet * (2.0 - PI * 0.5)
+            + root_fillet.powi(3) * (5.0 / 3.0 - PI * 0.5));
+    items.push(Item {
+        name: "25_stepped_shaft_root_fillet",
+        note: "a local concave circular fillet; exact torus patches add material at the shoulder",
+        solid: rounded_shaft,
+        analytic_volume: Some(PI * (10.0f64.powi(2) * 12.0 + 7.0f64.powi(2) * 10.0) + root_added),
     });
 
     // --- 出力 ---

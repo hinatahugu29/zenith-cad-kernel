@@ -240,6 +240,14 @@ fn main() {
                             * (hole * fillet * fillet * (2.0 - std::f64::consts::PI * 0.5)
                                 + fillet.powi(3) * (5.0 / 3.0 - std::f64::consts::PI * 0.5)),
                     )
+                } else if name == "stepped_shaft" {
+                    let fillet = target.max_fillet_radius * 0.25;
+                    let shaft = target.length / std::f64::consts::TAU;
+                    Some(
+                        -std::f64::consts::PI
+                            * (shaft * fillet * fillet * (2.0 - std::f64::consts::PI * 0.5)
+                                + fillet.powi(3) * (5.0 / 3.0 - std::f64::consts::PI * 0.5)),
+                    )
                 } else {
                     right_angled_straight(
                         &solid,
@@ -304,12 +312,12 @@ fn main() {
             if !still_closed {
                 verdict.push_str("WRONG: 閉じていない立体を返した");
                 bad = true;
-            } else if removed <= 0.0 {
+            } else if expected_removed.is_none() && removed <= 0.0 {
                 verdict.push_str("WRONG: 体積が減っていない");
                 bad = true;
             } else if let Some(want) = expected_removed {
                 exact_checks += 1;
-                let relative = (removed - want).abs() / want;
+                let relative = (removed - want).abs() / want.abs();
                 worst = worst.max(relative);
                 // 体積はメッシュ積分なので、曲面を含む立体では刻みぶんが乗る。
                 if relative < 1e-3 {

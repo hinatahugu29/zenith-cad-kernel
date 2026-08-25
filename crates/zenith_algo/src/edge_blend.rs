@@ -18,7 +18,8 @@
 //! 有理トーラス、円柱面取りは厳密な円錐台パッチで置き換えます。自作4分割円弧、
 //! 外部CADの全周1本円、剛体配置後を同じ経路で認識します。さらに平面板の
 //! 貫通円筒穴口は、選択した穴だけを局所再トリムしてフィレット/面取りできます。
-//! ボス根元・段付き軸肩と、円錐円周の面取りはまだ対象外です。
+//! 円筒ボス根元と段付き軸の小径側肩も、90度の凹円周に限って局所フィレット
+//! できます。非円形・非直角の根元、根元面取り、円錐円周の面取りはまだ対象外です。
 //! 満たさない配置は**近い別の形を返さず、理由を返して失敗します**。
 //!
 //! ## 測れること
@@ -79,7 +80,7 @@ pub struct EdgeBlendReport {
     pub edge_length: f64,
     /// 各面に沿った後退距離
     pub setback: f64,
-    /// 閉じた式が予告する削れ体積
+    /// 閉じた式が予告する符号付き除去体積（正は除去、負は材料追加）
     pub predicted_removed_volume: f64,
 }
 
@@ -175,6 +176,10 @@ impl EdgeBlender {
             {
                 out.push(edge);
             } else if let Some(edge) =
+                crate::circular_fillet::shoulder_root::shoulder_root_blendable(solid, id)
+            {
+                out.push(edge);
+            } else if let Some(edge) =
                 crate::circular_fillet::cone::conical_rim_blendable(solid, id)
             {
                 out.push(edge);
@@ -193,6 +198,11 @@ impl EdgeBlender {
             if let Some(result) =
                 crate::circular_fillet::hole_mouth::try_fillet_hole_mouth(solid, edge_id, radius)?
             {
+                return Ok(result);
+            }
+            if let Some(result) = crate::circular_fillet::shoulder_root::try_fillet_shoulder_root(
+                solid, edge_id, radius,
+            )? {
                 return Ok(result);
             }
             if let Some(result) =
