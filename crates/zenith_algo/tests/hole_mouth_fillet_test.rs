@@ -66,6 +66,38 @@ fn expected_area(width: f64, depth: f64, height: f64, hole: f64, fillet: f64) ->
     outer_sides + bottom + top + bore + torus
 }
 
+fn chamfer_removed_volume(hole: f64, distance: f64) -> f64 {
+    PI * distance * distance * (hole + distance / 3.0)
+}
+
+fn expected_chamfer_area(width: f64, depth: f64, height: f64, hole: f64, distance: f64) -> f64 {
+    let outer_sides = 2.0 * (width + depth) * height;
+    let bottom = width * depth - PI * hole * hole;
+    let top = width * depth - PI * (hole + distance).powi(2);
+    let bore = 2.0 * PI * hole * (height - distance);
+    let chamfer = PI * (2.0 * hole + distance) * 2.0_f64.sqrt() * distance;
+    outer_sides + bottom + top + bore + chamfer
+}
+
+fn edge_is_curved(solid: &Solid, edge_id: u64) -> bool {
+    for face in &solid.outer_shell.faces {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                if oriented.edge.id != edge_id {
+                    continue;
+                }
+                let edge = &oriented.edge;
+                let (t_min, t_max) = edge.curve.param_range();
+                let middle = edge.curve.evaluate((t_min + t_max) * 0.5);
+                let chord_middle =
+                    (edge.start_vertex.point.coords + edge.end_vertex.point.coords) * 0.5;
+                return (middle.coords - chord_middle).norm() > 1e-6;
+            }
+        }
+    }
+    false
+}
+
 #[test]
 fn one_hole_arc_locally_fillets_the_complete_top_mouth() {
     let drilled = prepared_box();
@@ -80,7 +112,7 @@ fn one_hole_arc_locally_fillets_the_complete_top_mouth() {
             .find(|candidate| candidate.edge_id == *id)
             .expect("every smooth arc of the mouth must select the same fillet");
         close(candidate.length, 2.0 * PI * 8.0, 1e-13);
-        assert_eq!(candidate.max_chamfer_distance, 0.0);
+        close(candidate.max_chamfer_distance, 12.0 * 0.999, 1e-12);
     }
 
     let before = MassCalculator::compute_from_brep(&drilled, &params());
@@ -157,7 +189,7 @@ fn sectorised_and_stepped_holes_are_not_silently_approximated() {
         .expect("counterbore fixture");
     let curved_candidates = EdgeBlender::blendable_edges(&counterbore)
         .into_iter()
-        .filter(|edge| edge.max_chamfer_distance == 0.0)
+        .filter(|edge| edge_is_curved(&counterbore, edge.edge_id))
         .count();
     assert_eq!(
         curved_candidates, 0,
@@ -210,6 +242,84 @@ fn impossible_hole_mouth_radius_is_refused_without_partial_output() {
     // The hole centre is 20 mm from each side and its radius is 8 mm.
     assert!(EdgeBlender::fillet_edge(&drilled, top[0], 12.0).is_err());
     assert!(EdgeBlender::fillet_edge(&drilled, top[0], 20.0).is_err());
+    assert!(EdgeBlender::chamfer_edge(&drilled, top[0], 12.0).is_err());
+}
+
+#[test]
+fn one_hole_arc_locally_chamfers_the_complete_mouth() {
+    let drilled = prepared_box();
+    let top = mouth_ids(&drilled, Vec3::new(0.0, 0.0, 1.0));
+    let before = MassCalculator::compute_from_brep(&drilled, &params());
+    let distance = 1.5;
+    let (chamfered, report) =
+        EdgeBlender::blend_edge(&drilled, top[2], BlendKind::Chamfer { distance })
+            .expect("local through-hole mouth chamfer");
+    assert!(chamfered
+        .outer_shell
+        .validate_closed(&Tolerance::default())
+        .is_valid());
+    assert_eq!(chamfered.outer_shell.faces.len(), 14);
+    let after = MassCalculator::compute_from_brep(&chamfered, &params());
+    let removed = chamfer_removed_volume(8.0, distance);
+    close(before.volume - after.volume, removed, 3e-10);
+    close(report.predicted_removed_volume, removed, 1e-13);
+    close(report.edge_length, 2.0 * PI * 8.0, 1e-13);
+    close(
+        after.surface_area,
+        expected_chamfer_area(40.0, 40.0, 20.0, 8.0, distance),
+        3e-10,
+    );
+}
+
+#[test]
+fn external_full_circle_hole_chamfer_survives_rigid_placement() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/representation/drilled_analytic.step"
+    );
+    let imported = StepImporter::import_solids_from_file(path)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let turn = Transform3::from_axis_angle(&Vec3::new(-1.0, 0.5, 2.0), 31f64.to_radians());
+    let moved = BrepTransform::translate_solid(
+        &BrepTransform::transform_solid(&imported, &turn).unwrap(),
+        Vec3::new(-13.0, 8.0, 21.0),
+    );
+    let axis = turn.transform_vector(&Vec3::new(0.0, 0.0, 1.0));
+    let top = mouth_ids(&moved, axis);
+    assert_eq!(top.len(), 1);
+    let chamfered = EdgeBlender::chamfer_edge(&moved, top[0], 1.0).unwrap();
+    let expected = 30.0 * 30.0 * 15.0 - PI * 5.0 * 5.0 * 15.0 - chamfer_removed_volume(5.0, 1.0);
+    close(
+        MassCalculator::compute_from_brep(&chamfered, &params()).volume,
+        expected,
+        3e-10,
+    );
+}
+
+#[test]
+fn local_hole_chamfer_survives_step_round_trip() {
+    let drilled = prepared_box();
+    let top = mouth_ids(&drilled, Vec3::new(0.0, 0.0, 1.0));
+    let chamfered = EdgeBlender::chamfer_edge(&drilled, top[0], 1.25).unwrap();
+    let step = StepExporter::export_solid_to_string(&chamfered, "LOCAL_HOLE_MOUTH_CHAMFER");
+    let reread = StepImporter::import_solids_from_str(&step)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(reread
+        .outer_shell
+        .validate_closed(&Tolerance::default())
+        .is_valid());
+    let expected = 40.0 * 40.0 * 20.0 - PI * 8.0 * 8.0 * 20.0 - chamfer_removed_volume(8.0, 1.25);
+    close(
+        MassCalculator::compute_from_brep(&reread, &params()).volume,
+        expected,
+        5e-10,
+    );
 }
 
 #[test]

@@ -187,10 +187,18 @@ fn main() {
 
         // 稜は1本だけ選びます。**上限の 1/4** にしておけば、隣の稜を
         // 食い切る心配はありません。
-        let target = if name == "plate_with_holes" {
+        let target = if name == "plate_with_holes" || name == "revolved_ring" {
             edges
                 .iter()
-                .filter(|edge| edge.max_chamfer_distance == 0.0)
+                .filter(|edge| {
+                    right_angled_straight(
+                        &solid,
+                        edge.edge_id,
+                        edge.dihedral_angle_deg,
+                        edge.length,
+                    )
+                    .is_none()
+                })
                 .max_by(|a, b| a.length.partial_cmp(&b.length).unwrap())
                 .expect("the imported multi-hole plate has circular mouths")
         } else {
@@ -224,7 +232,7 @@ fn main() {
                         20.0,
                         fillet,
                     ))
-                } else if name == "plate_with_holes" {
+                } else if name == "plate_with_holes" || name == "revolved_ring" {
                     let fillet = target.max_fillet_radius * 0.25;
                     let hole = target.length / std::f64::consts::TAU;
                     Some(
@@ -252,6 +260,10 @@ fn main() {
                 if name == "cylinder" {
                     let distance = target.max_chamfer_distance * 0.25;
                     Some(std::f64::consts::PI * distance * distance * (10.0 - distance / 3.0))
+                } else if name == "plate_with_holes" || name == "revolved_ring" {
+                    let distance = target.max_chamfer_distance * 0.25;
+                    let hole = target.length / std::f64::consts::TAU;
+                    Some(std::f64::consts::PI * distance * distance * (hole + distance / 3.0))
                 } else {
                     right_angled_straight(
                         &solid,

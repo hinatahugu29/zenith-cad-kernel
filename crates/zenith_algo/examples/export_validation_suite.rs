@@ -282,7 +282,7 @@ fn build_subjects() -> Vec<Subject> {
         .0;
     let mouth = EdgeBlender::blendable_edges(&drilled)
         .into_iter()
-        .find(|edge| edge.max_chamfer_distance == 0.0)
+        .find(|edge| (edge.length - std::f64::consts::TAU * 5.0).abs() < 1e-6)
         .expect("the simplified drilled box has selectable circular mouths");
     let hole_fillet = 1.0;
     let hole_removed = PI
@@ -292,6 +292,18 @@ fn build_subjects() -> Vec<Subject> {
         name: "drilled_box_mouth_fillet_r1",
         solid: EdgeBlender::fillet_edge(&drilled, mouth.edge_id, hole_fillet).unwrap(),
         analytic_volume: Some(30.0 * 30.0 * 15.0 - PI * 25.0 * 15.0 - hole_removed),
+        section: Some((
+            Point3::new(0.0, 0.0, 7.5),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(900.0 - PI * 25.0),
+        )),
+    });
+    let hole_chamfer = 1.0;
+    let hole_chamfer_removed = PI * hole_chamfer * hole_chamfer * (5.0 + hole_chamfer / 3.0);
+    subjects.push(Subject {
+        name: "drilled_box_mouth_chamfer_c1",
+        solid: EdgeBlender::chamfer_edge(&drilled, mouth.edge_id, hole_chamfer).unwrap(),
+        analytic_volume: Some(30.0 * 30.0 * 15.0 - PI * 25.0 * 15.0 - hole_chamfer_removed),
         section: Some((
             Point3::new(0.0, 0.0, 7.5),
             Vec3::new(0.0, 0.0, 1.0),

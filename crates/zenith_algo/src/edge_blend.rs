@@ -17,8 +17,8 @@
 //! 扱います。円弧1本を選ぶと滑らかな全周チェーンへ伝播し、フィレットは厳密な
 //! 有理トーラス、円柱面取りは厳密な円錐台パッチで置き換えます。自作4分割円弧、
 //! 外部CADの全周1本円、剛体配置後を同じ経路で認識します。さらに平面板の
-//! 貫通円筒穴口は、選択した穴だけを局所再トリムしてフィレットできます。
-//! ボス根元・段付き軸肩と、円錐/穴口の円周面取りはまだ対象外です。
+//! 貫通円筒穴口は、選択した穴だけを局所再トリムしてフィレット/面取りできます。
+//! ボス根元・段付き軸肩と、円錐円周の面取りはまだ対象外です。
 //! 満たさない配置は**近い別の形を返さず、理由を返して失敗します**。
 //!
 //! ## 測れること
@@ -207,6 +207,11 @@ impl EdgeBlender {
             }
         }
         if let BlendKind::Chamfer { distance } = kind {
+            if let Some(result) = crate::circular_fillet::hole_mouth::try_chamfer_hole_mouth(
+                solid, edge_id, distance,
+            )? {
+                return Ok(result);
+            }
             if let Some(result) =
                 crate::circular_fillet::try_chamfer_cylinder_rim(solid, edge_id, distance)?
             {

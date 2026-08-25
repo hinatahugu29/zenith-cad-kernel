@@ -145,6 +145,7 @@ cargo run --release -p zenith_algo --example export_validation_suite
 | トーラス R12 r4 | Solid / valid / closed | 1.9e-11 | 1.9e-11 | — |
 | 穴あきボックス | Solid / valid / closed | 1.5e-11 | 1.6e-11 | 2.4e-06 |
 | 穴口局所フィレット r1 | Solid / valid / closed | 2.61e-12 | 4.51e-13 | 2.63e-09 |
+| 穴口局所面取り c1 | Solid / valid / closed | 9.30e-13 | 5.51e-13 | 2.63e-09 |
 | 薄肉ボックス | Solid / valid / closed | 1.3e-16 | 0.0 | — |
 | 直線経路スイープ | Solid / valid / closed | 1.1e-05 | 4.9e-06 | — |
 | 曲線経路スイープ | Solid / valid / closed | 5.1e-06 | 1.4e-06 | — |
@@ -152,8 +153,8 @@ cargo run --release -p zenith_algo --example export_validation_suite
 | 平歯車（この行は歯形が多角形だった当時の測定。現在はインボリュート） | Solid / valid / closed | 1.9e-12 | 2.2e-12 | — |
 
 この表のあと、ブーリアンで生成した穴あきブロック・止まり穴、中空押し出し、円柱/円錐の
-円周ブレンド、および穴口局所フィレットを対象に追加し、現在は **20 / 20 の対象で両カーネルが
-一致**しています。穴口局所フィレットは体積 2.61e-12、表面積 4.51e-13、中央断面
+円周ブレンド、および穴口局所フィレット/面取りを対象に追加し、現在は **21 / 21 の対象で両カーネルが
+一致**しています。穴口局所面取りは体積 9.30e-13、表面積 5.51e-13、中央断面
 2.63e-09で一致します。
 
 **当初の 12 / 12 の内訳（プリミティブと掃引系）:**
@@ -209,7 +210,7 @@ cargo run --release -p zenith_algo --example step_import_audit
 
 ## 7. 🎯 まとめと到達水準
 
-STEP 経由の相互運用について、**20 対象すべてが OpenCASCADE で Solid・`isValid`・`isClosed` として読まれ、
+STEP 経由の相互運用について、**21 対象すべてが OpenCASCADE で Solid・`isValid`・`isClosed` として読まれ、
 体積・表面積・断面積が両カーネルで一致**します。代表16形状のショーケースも全数が Solid として読めます。
 解析解を持つケースでは本カーネルが 1e-12 以下で一致し、多スパンB-スプライン曲面の体積積分では
 本カーネルの方が高精度です（直線掃引の円柱で 3.5e-14 対 1.1e-05）。

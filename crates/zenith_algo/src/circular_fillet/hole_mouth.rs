@@ -1,8 +1,8 @@
-//! Exact local filleting of a circular through-hole mouth.
+//! Exact local blending of a circular through-hole mouth.
 //!
 //! Unlike the pure-cylinder path, this operation keeps every unrelated face.
 //! It retrims one planar inner wire, shortens only the four bore patches, and
-//! inserts four exact rational quarter-torus patches.  Recognition is kept
+//! inserts four exact rational quarter-torus or conical patches. Recognition is kept
 //! deliberately strict: this first form accepts an unbroken cylindrical
 //! through hole between two planar inner wires, represented either by four
 //! quadrant arcs or by one imported full-circle edge. Raw sectorised builder
@@ -32,7 +32,7 @@ pub(crate) fn try_fillet_hole_mouth(
             site.max_radius
         ));
     }
-    let result = site.apply(solid, radius)?;
+    let result = site.apply(solid, HoleMouthBlend::Fillet(radius))?;
     Ok(Some((
         result,
         EdgeBlendReport {
@@ -44,6 +44,33 @@ pub(crate) fn try_fillet_hole_mouth(
     )))
 }
 
+pub(crate) fn try_chamfer_hole_mouth(
+    solid: &Solid,
+    edge_id: u64,
+    distance: f64,
+) -> Result<Option<(Solid, EdgeBlendReport)>, String> {
+    let Some(site) = HoleMouth::recognize(solid, edge_id) else {
+        return Ok(None);
+    };
+    let limit_margin = 1e-6 * site.max_radius.max(site.hole_radius).max(1.0);
+    if distance >= site.max_radius - limit_margin {
+        return Err(format!(
+            "Hole-mouth chamfer distance {distance} must be smaller than the available setback {:.6}",
+            site.max_radius
+        ));
+    }
+    let result = site.apply(solid, HoleMouthBlend::Chamfer(distance))?;
+    Ok(Some((
+        result,
+        EdgeBlendReport {
+            dihedral_angle_deg: 90.0,
+            edge_length: TAU * site.hole_radius,
+            setback: distance,
+            predicted_removed_volume: chamfer_removed_volume(site.hole_radius, distance),
+        },
+    )))
+}
+
 pub(crate) fn hole_mouth_blendable(solid: &Solid, edge_id: u64) -> Option<BlendableEdge> {
     let site = HoleMouth::recognize(solid, edge_id)?;
     Some(BlendableEdge {
@@ -51,9 +78,26 @@ pub(crate) fn hole_mouth_blendable(solid: &Solid, edge_id: u64) -> Option<Blenda
         length: TAU * site.hole_radius,
         dihedral_angle_deg: 90.0,
         max_fillet_radius: site.max_radius * 0.999,
-        // The local chamfer counterpart has not yet been implemented.
-        max_chamfer_distance: 0.0,
+        max_chamfer_distance: site.max_radius * 0.999,
     })
+}
+
+fn chamfer_removed_volume(hole_radius: f64, distance: f64) -> f64 {
+    PI * distance * distance * (hole_radius + distance / 3.0)
+}
+
+#[derive(Clone, Copy)]
+enum HoleMouthBlend {
+    Fillet(f64),
+    Chamfer(f64),
+}
+
+impl HoleMouthBlend {
+    fn setback(self) -> f64 {
+        match self {
+            Self::Fillet(value) | Self::Chamfer(value) => value,
+        }
+    }
 }
 
 fn removed_volume(hole_radius: f64, fillet: f64) -> f64 {
@@ -254,7 +298,7 @@ impl HoleMouth {
         })
     }
 
-    fn apply(&self, solid: &Solid, fillet: f64) -> Result<Solid, String> {
+    fn apply(&self, solid: &Solid, blend: HoleMouthBlend) -> Result<Solid, String> {
         let axis = self.outward_axis;
         let inward = -axis;
         let x = (self.x_axis - axis * self.x_axis.dot(&axis))
@@ -270,8 +314,9 @@ impl HoleMouth {
             point(SQRT_2 * radial, depth, middle)
         };
 
-        let mouth_radius = self.hole_radius + fillet;
-        let join_depth = fillet;
+        let setback = blend.setback();
+        let mouth_radius = self.hole_radius + setback;
+        let join_depth = setback;
         let mouth: Vec<Vertex> = (0..4)
             .map(|i| Vertex::from_point(point(mouth_radius, 0.0, theta(i))))
             .collect();
@@ -329,16 +374,26 @@ impl HoleMouth {
                 bottom[next].clone(),
             )?);
             vertical.push(Edge::line_between(bottom[i].clone(), join[i].clone())?);
-            let curve = NurbsCurve3::new(
-                2,
-                vec![
-                    ControlPoint3::unweighted(join[i].point),
-                    ControlPoint3::new(point(self.hole_radius, 0.0, theta(i)), FRAC_1_SQRT_2),
-                    ControlPoint3::unweighted(mouth[i].point),
-                ],
-                KnotVector::clamped_uniform(3, 2),
-            )?;
-            profiles.push(Edge::new(curve, join[i].clone(), mouth[i].clone(), 1e-6));
+            profiles.push(match blend {
+                HoleMouthBlend::Fillet(_) => {
+                    let curve = NurbsCurve3::new(
+                        2,
+                        vec![
+                            ControlPoint3::unweighted(join[i].point),
+                            ControlPoint3::new(
+                                point(self.hole_radius, 0.0, theta(i)),
+                                FRAC_1_SQRT_2,
+                            ),
+                            ControlPoint3::unweighted(mouth[i].point),
+                        ],
+                        KnotVector::clamped_uniform(3, 2),
+                    )?;
+                    Edge::new(curve, join[i].clone(), mouth[i].clone(), 1e-6)
+                }
+                HoleMouthBlend::Chamfer(_) => {
+                    Edge::line_between(join[i].clone(), mouth[i].clone())?
+                }
+            });
         }
 
         let mut replacement = Vec::with_capacity(8);
@@ -376,11 +431,23 @@ impl HoleMouth {
         }
         for i in 0..4 {
             let next = (i + 1) % 4;
-            let profile = [
-                (self.hole_radius, join_depth, 1.0),
-                (self.hole_radius, 0.0, FRAC_1_SQRT_2),
-                (mouth_radius, 0.0, 1.0),
-            ];
+            let (profile_degree, profile) = match blend {
+                HoleMouthBlend::Fillet(_) => (
+                    2,
+                    vec![
+                        (self.hole_radius, join_depth, 1.0),
+                        (self.hole_radius, 0.0, FRAC_1_SQRT_2),
+                        (mouth_radius, 0.0, 1.0),
+                    ],
+                ),
+                HoleMouthBlend::Chamfer(_) => (
+                    1,
+                    vec![
+                        (self.hole_radius, join_depth, 1.0),
+                        (mouth_radius, 0.0, 1.0),
+                    ],
+                ),
+            };
             let rows = profile
                 .into_iter()
                 .map(|(radial, depth, weight)| {
@@ -392,10 +459,10 @@ impl HoleMouth {
                 })
                 .collect();
             let surface = NurbsSurface3::new(
-                2,
+                profile_degree,
                 2,
                 rows,
-                KnotVector::clamped_uniform(3, 2),
+                KnotVector::clamped_uniform(profile_degree + 1, profile_degree),
                 KnotVector::clamped_uniform(3, 2),
             )?;
             replacement.push(Face::simple(
@@ -448,7 +515,7 @@ impl HoleMouth {
             solid.inner_shells.clone(),
             &Tolerance::default(),
         )
-        .map_err(|error| format!("Local hole-mouth fillet produced an invalid solid: {error}"))
+        .map_err(|error| format!("Local hole-mouth blend produced an invalid solid: {error}"))
     }
 }
 
@@ -487,8 +554,10 @@ fn radial_clearance(
             .map(|(_, wire)| wire),
     ) {
         for edge in &wire.edges {
+            let (t_min, t_max) = edge.edge.curve.param_range();
             for step in 0..=64 {
-                let point = edge.edge.curve.evaluate(step as f64 / 64.0);
+                let t = t_min + (t_max - t_min) * step as f64 / 64.0;
+                let point = edge.edge.curve.evaluate(t);
                 let offset = point - center;
                 let radial = (offset - normal * offset.dot(&normal)).norm();
                 nearest = nearest.min(radial);
