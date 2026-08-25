@@ -9,7 +9,7 @@
 //! 面の枚数は外から数えられる量なので、ここで押さえる。
 
 use zenith_algo::ThickenBuilder;
-use zenith_geom::{ControlPoint3, CoonsPatch3, KnotVector, NurbsCurve3, NurbsSurface3, Surface3};
+use zenith_geom::{ControlPoint3, CoonsPatch3, KnotVector, NurbsCurve3, NurbsSurface3};
 use zenith_io::StepExporter;
 use zenith_math::{Point3, Tolerance};
 use zenith_topo::{Face, FaceGeometry, Solid, Wire};
