@@ -3283,7 +3283,28 @@ fn diagnose_selected_face_stitching(
             .collect();
 
         match mates.len() {
-            0 => unmatched_edge_use_count += 1,
+            0 => {
+                unmatched_edge_use_count += 1;
+                // **どの稜が余ったのかを出す口。** 数だけでは、面片が
+                // 足りないのか、突き合わせ方が違うのかが分かりません。
+                // `ZENITH_SPLIT_WHY` と同じ流儀です。
+                if std::env::var_os("ZENITH_STITCH_WHY").is_some() {
+                    let use_ = &edge_uses[i];
+                    eprintln!(
+                        "STITCHWHY unmatched ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9}) len {:.9}",
+                        use_.start.x,
+                        use_.start.y,
+                        use_.start.z,
+                        use_.end.x,
+                        use_.end.y,
+                        use_.end.z,
+                        use_.middle.x,
+                        use_.middle.y,
+                        use_.middle.z,
+                        (use_.end - use_.start).norm()
+                    );
+                }
+            }
             1 => {
                 let mate = mates[0];
                 if i < mate {
