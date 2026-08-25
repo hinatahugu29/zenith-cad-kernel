@@ -8116,7 +8116,7 @@ any wire of the face」は、どの端かを言いません。名指しするよ
 | `crates/zenith_py` | PyO3 バインディング（`#[pyfunction]` 58個 ＋ `#[pymethods]` 2ブロック） |
 | `crates/zenith_server` | Seamless プロトコルの TCP 骨組み。`create_stack` / `delete_stack` 以外の**中身は未実装**で、操作名を含む明示エラーを返す。カーネルは呼んでいない |
 | `crates/zenith_algo/examples/` | **測定・診断ツール**（73個） |
-| `crates/zenith_algo/tests/fixtures/` | OpenCASCADE が書いた STEP 10本。`include_str!` で読むので `target/` を消しても検査は走る |
+| `crates/zenith_algo/tests/fixtures/` | ルート直下にOpenCASCADE が書いた STEP 20本。`include_str!` で読むので `target/` を消しても検査は走る |
 | `tools/*.py` | FreeCAD ヘッドレス検証（`verify_*` はゲート、`occ_*` は診断・検体生成用） |
 | `target/showcase/` | 代表25形状の STEP。作り方は 7 章 |
 | `target/iges/` | IGES 5.3 の検体5形状。突き合わせは `tools/verify_iges.py` |
