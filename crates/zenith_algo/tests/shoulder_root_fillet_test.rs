@@ -22,6 +22,10 @@ fn added_volume(shaft_radius: f64, fillet: f64) -> f64 {
         + fillet.powi(3) * (5.0 / 3.0 - PI * 0.5))
 }
 
+fn chamfer_added_volume(shaft_radius: f64, distance: f64) -> f64 {
+    PI * distance * distance * (shaft_radius + distance / 3.0)
+}
+
 fn expected_area(
     base_radius: f64,
     base_height: f64,
@@ -36,6 +40,22 @@ fn expected_area(
     let top = PI * shaft_radius * shaft_radius;
     let torus = PI * PI * fillet * (shaft_radius + fillet) - 2.0 * PI * fillet * fillet;
     bottom + base_side + shoulder + shaft_side + top + torus
+}
+
+fn expected_chamfer_area(
+    base_radius: f64,
+    base_height: f64,
+    shaft_radius: f64,
+    shaft_height: f64,
+    distance: f64,
+) -> f64 {
+    let bottom = PI * base_radius * base_radius;
+    let base_side = 2.0 * PI * base_radius * base_height;
+    let shoulder = PI * (base_radius * base_radius - (shaft_radius + distance).powi(2));
+    let shaft_side = 2.0 * PI * shaft_radius * (shaft_height - distance);
+    let top = PI * shaft_radius * shaft_radius;
+    let chamfer = PI * (2.0 * shaft_radius + distance) * distance * 2.0_f64.sqrt();
+    bottom + base_side + shoulder + shaft_side + top + chamfer
 }
 
 fn close(actual: f64, expected: f64, relative: f64) {
@@ -66,7 +86,7 @@ fn one_root_arc_locally_fillets_the_complete_stepped_shaft_shoulder() {
     for candidate in &candidates {
         close(candidate.dihedral_angle_deg, 270.0, 1e-13);
         close(candidate.max_fillet_radius, 3.0 * 0.999, 1e-12);
-        assert_eq!(candidate.max_chamfer_distance, 0.0);
+        close(candidate.max_chamfer_distance, 3.0 * 0.999, 1e-12);
     }
 
     let before = MassCalculator::compute_from_brep(&shaft, &params());
@@ -100,6 +120,56 @@ fn one_root_arc_locally_fillets_the_complete_stepped_shaft_shoulder() {
     close(
         after.surface_area,
         expected_area(10.0, 12.0, 7.0, 10.0, fillet),
+        4e-10,
+    );
+}
+
+#[test]
+fn one_root_arc_locally_chamfers_the_complete_stepped_shaft_shoulder() {
+    let shaft =
+        ShaftBuilder::make_stepped_shaft(&[(10.0, 12.0), (7.0, 10.0)]).expect("two-step shaft");
+    let candidates: Vec<_> = EdgeBlender::blendable_edges(&shaft)
+        .into_iter()
+        .filter(|edge| (edge.length - 2.0 * PI * 7.0).abs() < 1e-6)
+        .collect();
+    assert_eq!(candidates.len(), 4);
+
+    let before = MassCalculator::compute_from_brep(&shaft, &params());
+    let old_ids: Vec<u64> = shaft.outer_shell.faces.iter().map(|face| face.id).collect();
+    let distance = 1.25;
+    let (chamfered, report) = EdgeBlender::blend_edge(
+        &shaft,
+        candidates[1].edge_id,
+        zenith_algo::BlendKind::Chamfer { distance },
+    )
+    .expect("local shoulder-root chamfer");
+    assert!(chamfered
+        .outer_shell
+        .validate_closed(&Tolerance::default())
+        .is_valid());
+    assert_eq!(chamfered.outer_shell.faces.len(), 15);
+    assert_eq!(
+        old_ids
+            .iter()
+            .filter(|id| chamfered
+                .outer_shell
+                .faces
+                .iter()
+                .any(|face| face.id == **id))
+            .count(),
+        7,
+        "only the four shortened shaft-side patches may lose their Face IDs"
+    );
+    let after = MassCalculator::compute_from_brep(&chamfered, &params());
+    let added = chamfer_added_volume(7.0, distance);
+    close(after.volume - before.volume, added, 3e-10);
+    close(report.predicted_removed_volume, -added, 1e-13);
+    close(report.setback, distance, 1e-13);
+    close(report.edge_length, 2.0 * PI * 7.0, 1e-13);
+    close(report.dihedral_angle_deg, 270.0, 1e-13);
+    close(
+        after.surface_area,
+        expected_chamfer_area(10.0, 12.0, 7.0, 10.0, distance),
         4e-10,
     );
 }
@@ -190,6 +260,54 @@ fn impossible_shoulder_radius_is_refused_without_partial_output() {
 }
 
 #[test]
+fn impossible_shoulder_chamfer_distance_is_refused_without_partial_output() {
+    let shaft = ShaftBuilder::make_stepped_shaft(&[(10.0, 12.0), (7.0, 10.0)]).unwrap();
+    let candidate = EdgeBlender::blendable_edges(&shaft)
+        .into_iter()
+        .find(|edge| (edge.length - 2.0 * PI * 7.0).abs() < 1e-6)
+        .unwrap();
+    assert!(EdgeBlender::chamfer_edge(&shaft, candidate.edge_id, 0.0).is_err());
+    assert!(EdgeBlender::chamfer_edge(&shaft, candidate.edge_id, -1.0).is_err());
+    assert!(EdgeBlender::chamfer_edge(&shaft, candidate.edge_id, f64::NAN).is_err());
+    assert!(EdgeBlender::chamfer_edge(&shaft, candidate.edge_id, 3.0).is_err());
+    assert!(EdgeBlender::chamfer_edge(&shaft, candidate.edge_id, 5.0).is_err());
+}
+
+#[test]
+fn external_three_step_shaft_chamfers_twice_after_rigid_placement() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/occ_reference_stepped_shaft.step"
+    );
+    let imported = StepImporter::import_solids_from_file(path)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    let turn = Transform3::from_axis_angle(&Vec3::new(1.0, -2.0, 0.75), 29f64.to_radians());
+    let moved = BrepTransform::translate_solid(
+        &BrepTransform::transform_solid(&imported, &turn).unwrap(),
+        Vec3::new(17.0, -11.0, 8.0),
+    );
+    let before = MassCalculator::compute_from_brep(&moved, &params()).volume;
+    let first = EdgeBlender::blendable_edges(&moved)
+        .into_iter()
+        .find(|edge| (edge.length - 2.0 * PI * 6.5).abs() < 1e-6)
+        .expect("the first OCC full-circle shoulder root");
+    let once = EdgeBlender::chamfer_edge(&moved, first.edge_id, 1.0).unwrap();
+    let second = EdgeBlender::blendable_edges(&once)
+        .into_iter()
+        .find(|edge| (edge.length - 2.0 * PI * 4.0).abs() < 1e-6)
+        .expect("the unselected second shoulder root must remain selectable");
+    let twice = EdgeBlender::chamfer_edge(&once, second.edge_id, 0.75).unwrap();
+    close(
+        MassCalculator::compute_from_brep(&twice, &params()).volume - before,
+        chamfer_added_volume(6.5, 1.0) + chamfer_added_volume(4.0, 0.75),
+        6e-10,
+    );
+}
+
+#[test]
 fn boolean_boss_root_is_locally_filleted_without_rebuilding_the_block() {
     let tol = Tolerance::default();
     let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
@@ -236,6 +354,47 @@ fn boolean_boss_root_is_locally_filleted_without_rebuilding_the_block() {
 }
 
 #[test]
+fn boolean_boss_root_is_locally_chamfered_without_rebuilding_the_block() {
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    let boss = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(6.0, 30.0).unwrap(),
+        Vec3::new(20.0, 20.0, 20.0),
+    );
+    let joined = BooleanEngine::boolean_solids_exact(&block, &boss, BooleanOpType::Union, &tol)
+        .expect("block union cylindrical boss");
+    let candidate = EdgeBlender::blendable_edges(&joined)
+        .into_iter()
+        .find(|edge| {
+            (edge.length - 2.0 * PI * 6.0).abs() < 1e-6
+                && (edge.dihedral_angle_deg - 270.0).abs() < 1e-10
+        })
+        .expect("boss-root chamfer candidate");
+    let old_block_faces: Vec<u64> = joined
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| matches!(face.geometry, FaceGeometry::Plane(_)))
+        .map(|face| face.id)
+        .collect();
+    let before = MassCalculator::compute_from_brep(&joined, &params());
+    let distance = 2.0;
+    let chamfered = EdgeBlender::chamfer_edge(&joined, candidate.edge_id, distance).unwrap();
+    let after = MassCalculator::compute_from_brep(&chamfered, &params());
+    close(
+        after.volume - before.volume,
+        chamfer_added_volume(6.0, distance),
+        1e-9,
+    );
+    assert!(chamfered.outer_shell.validate_closed(&tol).is_valid());
+    assert!(old_block_faces.iter().all(|id| chamfered
+        .outer_shell
+        .faces
+        .iter()
+        .any(|face| face.id == *id)));
+}
+
+#[test]
 fn local_shoulder_fillet_survives_step_and_coarse_to_fine_meshes() {
     let shaft = ShaftBuilder::make_stepped_shaft(&[(10.0, 12.0), (7.0, 10.0)]).unwrap();
     let candidate = EdgeBlender::blendable_edges(&shaft)
@@ -257,6 +416,66 @@ fn local_shoulder_fillet_survives_step_and_coarse_to_fine_meshes() {
     close(
         MassCalculator::compute_from_brep(&reread, &params()).volume - before,
         added_volume(7.0, 1.5),
+        6e-10,
+    );
+
+    for divisions in [4, 6, 8, 12, 16, 24, 32] {
+        let mesh = tessellate_solid(
+            &reread,
+            &TessellationParams {
+                u_divisions: divisions,
+                v_divisions: divisions,
+            },
+        );
+        let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+        let mut degenerate = 0usize;
+        for triangle in &mesh.indices {
+            let a = mesh.positions[triangle[0] as usize];
+            let b = mesh.positions[triangle[1] as usize];
+            let c = mesh.positions[triangle[2] as usize];
+            if (b - a).cross(&(c - a)).norm() <= 1e-12 {
+                degenerate += 1;
+            }
+            for step in 0..3 {
+                let (a, b) = (triangle[step], triangle[(step + 1) % 3]);
+                let key = if a < b { (a, b) } else { (b, a) };
+                *uses.entry(key).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(
+            uses.values().filter(|count| **count != 2).count(),
+            0,
+            "{divisions} divisions left non-manifold mesh edges"
+        );
+        assert_eq!(
+            degenerate, 0,
+            "{divisions} divisions made zero-area triangles"
+        );
+    }
+}
+
+#[test]
+fn local_shoulder_chamfer_survives_step_and_coarse_to_fine_meshes() {
+    let shaft = ShaftBuilder::make_stepped_shaft(&[(10.0, 12.0), (7.0, 10.0)]).unwrap();
+    let candidate = EdgeBlender::blendable_edges(&shaft)
+        .into_iter()
+        .find(|edge| (edge.length - 2.0 * PI * 7.0).abs() < 1e-6)
+        .unwrap();
+    let before = MassCalculator::compute_from_brep(&shaft, &params()).volume;
+    let chamfered = EdgeBlender::chamfer_edge(&shaft, candidate.edge_id, 1.5).unwrap();
+    let step = StepExporter::export_solid_to_string(&chamfered, "LOCAL_SHOULDER_ROOT_CHAMFER");
+    let reread = StepImporter::import_solids_from_str(&step)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(reread
+        .outer_shell
+        .validate_closed(&Tolerance::default())
+        .is_valid());
+    close(
+        MassCalculator::compute_from_brep(&reread, &params()).volume - before,
+        chamfer_added_volume(7.0, 1.5),
         6e-10,
     );
 

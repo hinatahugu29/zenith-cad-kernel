@@ -1,11 +1,11 @@
-//! Exact local filleting of a circular boss or stepped-shaft root.
+//! Exact local blending of a circular boss or stepped-shaft root.
 //!
 //! The supported site is deliberately strict: an annular planar shoulder has
 //! a circular inner wire, an unbroken right-cylindrical side runs outward from
 //! that wire, and the side ends at another parallel planar face. The operation
 //! keeps every unrelated face, shortens only that cylindrical side, enlarges
 //! only the selected shoulder inner wire, and inserts four exact rational
-//! quarter-torus patches.
+//! quarter-torus or conical patches.
 
 use std::collections::BTreeSet;
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, PI, SQRT_2, TAU};
@@ -36,7 +36,7 @@ pub(crate) fn try_fillet_shoulder_root(
             site.max_radius
         ));
     }
-    let result = site.apply(solid, radius)?;
+    let result = site.apply(solid, ShoulderRootBlend::Fillet(radius))?;
     Ok(Some((
         result,
         EdgeBlendReport {
@@ -49,6 +49,39 @@ pub(crate) fn try_fillet_shoulder_root(
     )))
 }
 
+pub(crate) fn try_chamfer_shoulder_root(
+    solid: &Solid,
+    edge_id: u64,
+    distance: f64,
+) -> Result<Option<(Solid, EdgeBlendReport)>, String> {
+    let Some(site) = ShoulderRoot::recognize(solid, edge_id) else {
+        return Ok(None);
+    };
+    if !(distance > 1e-6) || !distance.is_finite() {
+        return Err(format!(
+            "Shoulder-root chamfer distance must be finite and larger than 1e-6, got {distance}"
+        ));
+    }
+    let margin = 1e-6 * site.max_radius.max(site.shaft_radius).max(1.0);
+    if distance >= site.max_radius - margin {
+        return Err(format!(
+            "Shoulder-root chamfer distance {distance} must be smaller than the available setback {:.6}",
+            site.max_radius
+        ));
+    }
+    let result = site.apply(solid, ShoulderRootBlend::Chamfer(distance))?;
+    Ok(Some((
+        result,
+        EdgeBlendReport {
+            dihedral_angle_deg: 270.0,
+            edge_length: TAU * site.shaft_radius,
+            setback: distance,
+            // This concave chamfer adds material; removed volume is signed.
+            predicted_removed_volume: -chamfer_added_volume(site.shaft_radius, distance),
+        },
+    )))
+}
+
 pub(crate) fn shoulder_root_blendable(solid: &Solid, edge_id: u64) -> Option<BlendableEdge> {
     let site = ShoulderRoot::recognize(solid, edge_id)?;
     Some(BlendableEdge {
@@ -56,13 +89,31 @@ pub(crate) fn shoulder_root_blendable(solid: &Solid, edge_id: u64) -> Option<Ble
         length: TAU * site.shaft_radius,
         dihedral_angle_deg: 270.0,
         max_fillet_radius: site.max_radius * 0.999,
-        max_chamfer_distance: 0.0,
+        max_chamfer_distance: site.max_radius * 0.999,
     })
 }
 
 fn added_volume(shaft_radius: f64, fillet: f64) -> f64 {
     PI * (shaft_radius * fillet * fillet * (2.0 - PI * 0.5)
         + fillet.powi(3) * (5.0 / 3.0 - PI * 0.5))
+}
+
+fn chamfer_added_volume(shaft_radius: f64, distance: f64) -> f64 {
+    PI * distance * distance * (shaft_radius + distance / 3.0)
+}
+
+#[derive(Clone, Copy)]
+enum ShoulderRootBlend {
+    Fillet(f64),
+    Chamfer(f64),
+}
+
+impl ShoulderRootBlend {
+    fn setback(self) -> f64 {
+        match self {
+            Self::Fillet(value) | Self::Chamfer(value) => value,
+        }
+    }
 }
 
 struct ShoulderRoot {
@@ -262,7 +313,7 @@ impl ShoulderRoot {
         })
     }
 
-    fn apply(&self, solid: &Solid, fillet: f64) -> Result<Solid, String> {
+    fn apply(&self, solid: &Solid, blend: ShoulderRootBlend) -> Result<Solid, String> {
         let axis = self.outward_axis;
         let x = (self.x_axis - axis * self.x_axis.dot(&axis))
             .try_normalize_safe(1e-12)
@@ -277,12 +328,13 @@ impl ShoulderRoot {
             point(SQRT_2 * radial, height, middle)
         };
 
-        let base_radius = self.shaft_radius + fillet;
+        let setback = blend.setback();
+        let base_radius = self.shaft_radius + setback;
         let base: Vec<Vertex> = (0..4)
             .map(|i| Vertex::from_point(point(base_radius, 0.0, theta(i))))
             .collect();
         let join: Vec<Vertex> = (0..4)
-            .map(|i| Vertex::from_point(point(self.shaft_radius, fillet, theta(i))))
+            .map(|i| Vertex::from_point(point(self.shaft_radius, setback, theta(i))))
             .collect();
         let top: Vec<Vertex> = (0..4)
             .map(|i| Vertex::from_point(point(self.shaft_radius, self.height, theta(i))))
@@ -322,7 +374,7 @@ impl ShoulderRoot {
             )?);
             join_arcs.push(arc(
                 self.shaft_radius,
-                fillet,
+                setback,
                 i,
                 join[i].clone(),
                 join[next].clone(),
@@ -335,16 +387,26 @@ impl ShoulderRoot {
                 top[next].clone(),
             )?);
             vertical.push(Edge::line_between(join[i].clone(), top[i].clone())?);
-            let profile = NurbsCurve3::new(
-                2,
-                vec![
-                    ControlPoint3::unweighted(join[i].point),
-                    ControlPoint3::new(point(self.shaft_radius, 0.0, theta(i)), FRAC_1_SQRT_2),
-                    ControlPoint3::unweighted(base[i].point),
-                ],
-                KnotVector::clamped_uniform(3, 2),
-            )?;
-            profiles.push(Edge::new(profile, join[i].clone(), base[i].clone(), 1e-6));
+            profiles.push(match blend {
+                ShoulderRootBlend::Fillet(_) => {
+                    let profile = NurbsCurve3::new(
+                        2,
+                        vec![
+                            ControlPoint3::unweighted(join[i].point),
+                            ControlPoint3::new(
+                                point(self.shaft_radius, 0.0, theta(i)),
+                                FRAC_1_SQRT_2,
+                            ),
+                            ControlPoint3::unweighted(base[i].point),
+                        ],
+                        KnotVector::clamped_uniform(3, 2),
+                    )?;
+                    Edge::new(profile, join[i].clone(), base[i].clone(), 1e-6)
+                }
+                ShoulderRootBlend::Chamfer(_) => {
+                    Edge::line_between(join[i].clone(), base[i].clone())?
+                }
+            });
         }
 
         let mut replacement = Vec::with_capacity(8);
@@ -359,7 +421,7 @@ impl ShoulderRoot {
                         ControlPoint3::unweighted(top[i].point),
                     ],
                     vec![
-                        ControlPoint3::new(tangent(self.shaft_radius, fillet, i), FRAC_1_SQRT_2),
+                        ControlPoint3::new(tangent(self.shaft_radius, setback, i), FRAC_1_SQRT_2),
                         ControlPoint3::new(
                             tangent(self.shaft_radius, self.height, i),
                             FRAC_1_SQRT_2,
@@ -385,11 +447,20 @@ impl ShoulderRoot {
         }
         for i in 0..4 {
             let next = (i + 1) % 4;
-            let profile = [
-                (self.shaft_radius, fillet, 1.0),
-                (self.shaft_radius, 0.0, FRAC_1_SQRT_2),
-                (base_radius, 0.0, 1.0),
-            ];
+            let (profile_degree, profile) = match blend {
+                ShoulderRootBlend::Fillet(_) => (
+                    2,
+                    vec![
+                        (self.shaft_radius, setback, 1.0),
+                        (self.shaft_radius, 0.0, FRAC_1_SQRT_2),
+                        (base_radius, 0.0, 1.0),
+                    ],
+                ),
+                ShoulderRootBlend::Chamfer(_) => (
+                    1,
+                    vec![(self.shaft_radius, setback, 1.0), (base_radius, 0.0, 1.0)],
+                ),
+            };
             let rows = profile
                 .into_iter()
                 .map(|(radial, height, weight)| {
@@ -401,10 +472,10 @@ impl ShoulderRoot {
                 })
                 .collect();
             let surface = NurbsSurface3::new(
-                2,
+                profile_degree,
                 2,
                 rows,
-                KnotVector::clamped_uniform(3, 2),
+                KnotVector::clamped_uniform(profile_degree + 1, profile_degree),
                 KnotVector::clamped_uniform(3, 2),
             )?;
             replacement.push(Face::simple(
@@ -453,7 +524,7 @@ impl ShoulderRoot {
             solid.inner_shells.clone(),
             &Tolerance::default(),
         )
-        .map_err(|error| format!("Local shoulder-root fillet produced an invalid solid: {error}"))
+        .map_err(|error| format!("Local shoulder-root blend produced an invalid solid: {error}"))
     }
 }
 

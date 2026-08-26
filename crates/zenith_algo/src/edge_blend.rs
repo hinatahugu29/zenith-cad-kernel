@@ -222,6 +222,11 @@ impl EdgeBlender {
             )? {
                 return Ok(result);
             }
+            if let Some(result) = crate::circular_fillet::shoulder_root::try_chamfer_shoulder_root(
+                solid, edge_id, distance,
+            )? {
+                return Ok(result);
+            }
             if let Some(result) =
                 crate::circular_fillet::try_chamfer_cylinder_rim(solid, edge_id, distance)?
             {

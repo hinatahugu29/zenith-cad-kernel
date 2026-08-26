@@ -337,7 +337,7 @@ fn stepped_shaft_roots_are_not_misrecognized_as_one_pure_cone() {
     assert!(candidates.iter().all(|edge| {
         (edge.dihedral_angle_deg - 270.0).abs() < 1e-12
             && edge.max_fillet_radius > 0.0
-            && edge.max_chamfer_distance == 0.0
+            && edge.max_chamfer_distance > 0.0
     }));
 }
 
