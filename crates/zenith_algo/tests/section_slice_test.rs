@@ -7,7 +7,7 @@
 //! behaviour to closed-form answers.
 
 use std::f64::consts::PI;
-use zenith_algo::{HoleBuilder, PrimitiveBuilder, SectionSlicer};
+use zenith_algo::{HoleBuilder, LoftBuilder, PrimitiveBuilder, ProfileBuilder, SectionSlicer};
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 
@@ -380,5 +380,141 @@ fn test_section_error_falls_with_the_fourth_power_of_the_division_count() {
         (8.0..40.0).contains(&ratio),
         "doubling the divisions should divide the error by about 16, got {ratio:.1} \
          (coarse {coarse:.3e}, fine {fine:.3e})"
+    );
+}
+
+/// 面の**すぐ手前**を切ったとき、**近い別の答えを返さない**。
+///
+/// 距離は公差内で 0 に丸めてから符号で分類する。丸めの境目に面が来ると、同じ
+/// 平面に乗っているはずの頂点が丸め誤差だけで「平面上」と「正側」に割れ、その
+/// 辺が面の**内部で**輪郭の断片として出てくる。実測（円 → 長方形 → 楕円の
+/// 多断面ロフト、天面の 1e-6 下、32分割）で、**閉じたループを16本・面積 38.03**
+/// を返していた。正しい楕円は 1413.72 で、これは誤答だった。しかも128分割では
+/// 「輪郭が閉じない」と断っていて、刻みで答えが変わっていた。
+///
+/// 面の**上**（距離ちょうど 0）は今までどおり切れる。そこは分類が割れない。
+#[test]
+fn a_plane_grazing_a_face_is_refused_by_name() {
+    let tol = Tolerance::default();
+    let solid = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).expect("box");
+    let params = TessellationParams {
+        u_divisions: 16,
+        v_divisions: 16,
+    };
+    let slice_at = |z: f64| {
+        SectionSlicer::slice_solid_with_tessellation(
+            &solid,
+            Point3::new(0.0, 0.0, z),
+            Vec3::new(0.0, 0.0, 1.0),
+            &tol,
+            &params,
+        )
+    };
+
+    // 面の**上**（距離ちょうど 0）は今までどおり通る。ただし**上下で答えが
+    // 違う**。1辺が平面に乗った三角形は「正側の三角形からだけ」輪郭を出す
+    // 規約なので、
+    //
+    // | 平面 | 返るもの |
+    // | :--- | :--- |
+    // | 底面ちょうど（z = 0） | 面そのもの（600） |
+    // | 天面ちょうど（z = 40） | **空の断面**（正側に三角形が無い） |
+    //
+    // 半開区間の切り方で、二重に数えないための規約から来ている。**呼ぶ側から
+    // 見ると罠**なので、ここに書き留めておく。天面の断面が要るなら、面から
+    // 4·公差 より離して切ること。
+    let bottom = slice_at(0.0).expect("a plane exactly on the bottom cap still has a section");
+    assert!(
+        (bottom.total_area - 600.0).abs() < 1e-9,
+        "bottom cap: got {}",
+        bottom.total_area
+    );
+
+    let top = slice_at(40.0).expect("a plane exactly on the top cap is not an error");
+    assert!(
+        top.section_wires.is_empty() && top.total_area == 0.0,
+        "the top cap comes back empty under the half-open rule, got {} loop(s) and area {}",
+        top.section_wires.len(),
+        top.total_area
+    );
+
+    // 直方体の座標には丸め誤差が無いので、公差ぶん手前で切っても分類は
+    // 割れない。**ここが断られたら、締めすぎ。**
+    let just_above = slice_at(tol.linear)
+        .expect("exact coordinates do not split, so this is still answerable");
+    assert!(
+        (just_above.total_area - 600.0).abs() < 1e-9,
+        "got {}",
+        just_above.total_area
+    );
+
+    // 割れるのは、面の座標そのものに丸め誤差が乗っているとき。円 → 長方形 →
+    // 楕円の多断面ロフトの天面がそれで、その 1e-6 下を切ると 32分割で
+    // **閉じたループ16本・面積 38.03** が返っていた（正しい楕円は 1413.72）。
+    let circle = ProfileBuilder::make_circle(
+        20.0,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .expect("circle");
+    let rectangle = ProfileBuilder::make_rectangle(
+        36.0,
+        24.0,
+        Point3::new(0.0, 0.0, 30.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .expect("rectangle");
+    let ellipse = ProfileBuilder::make_ellipse(
+        30.0,
+        15.0,
+        Point3::new(0.0, 0.0, 60.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .expect("ellipse");
+    let duct = LoftBuilder::loft_solid(&[circle, rectangle, ellipse], 2, &tol).expect("loft");
+
+    let params32 = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let error = SectionSlicer::slice_solid_with_tessellation(
+        &duct,
+        Point3::new(0.0, 0.0, 60.0 - tol.linear),
+        Vec3::new(0.0, 0.0, 1.0),
+        &tol,
+        &params32,
+    )
+    .err()
+    .expect("a plane one tolerance under the loft's top cap must be refused, not answered");
+    assert!(
+        error.contains("grazes the boundary"),
+        "the refusal should name the reason, got: {error}"
+    );
+
+    // 少し離せば、楕円の断面がそのまま返る。
+    let clear = SectionSlicer::slice_solid_with_tessellation(
+        &duct,
+        Point3::new(0.0, 0.0, 60.0 - 1e-4),
+        Vec3::new(0.0, 0.0, 1.0),
+        &tol,
+        &params32,
+    )
+    .expect("away from the cap the section is answerable");
+    let ellipse_area = PI * 30.0 * 15.0;
+    assert!(
+        relative_error(clear.total_area, ellipse_area) < 2e-4,
+        "the section just under the cap should be the ellipse {ellipse_area}, got {}",
+        clear.total_area
+    );
+
+    // 離れていれば、これまでどおり答える。
+    let inside = slice_at(20.0).expect("a plane through the middle still slices");
+    assert!(
+        (inside.total_area - 600.0).abs() < 1e-9,
+        "got {}",
+        inside.total_area
     );
 }

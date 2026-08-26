@@ -82,6 +82,53 @@ impl SectionSlicer {
             return Err("Section slicing requires a tessellatable solid".to_string());
         }
 
+        // 0. 面と平面の距離が、ちょうど公差のあたりに来ていないか。
+        //
+        // 距離は公差内なら 0 に丸めてから符号で分類する。**丸めの境目に面が
+        // 来ると、同じ平面に乗っているはずの頂点が、丸め誤差だけで「平面上」と
+        // 「正側」に割れる。** 割れた三角形は「1辺が平面に乗っている」と見なされ、
+        // その辺が輪郭の断片として出てくる——面の内部にである。
+        //
+        // 実測（円 → 長方形 → 楕円の多断面ロフト、天面の 1e-6 下、32分割）で、
+        // **閉じたループを16本・面積 38.03** を返していた。正しい楕円は
+        // 1413.72 で、これは断りでも近似でもなく**誤答**だった。しかも128分割
+        // では「輪郭が閉じない」と断っていて、刻みで答えが変わっていた。
+        //
+        // 面の**上**（距離がちょうど 0）は今までどおり扱える。三角形が丸ごと
+        // 平面に乗れば輪郭を出さず、側面が1辺を乗せているところだけが輪郭に
+        // なる。壊れるのは「乗っているようで乗っていない」距離だけなので、
+        // そこだけを名指しで断る。
+        let unstable = mesh
+            .indices
+            .iter()
+            .filter(|triangle| {
+                let distances: Vec<f64> = triangle
+                    .iter()
+                    .map(|index| {
+                        (mesh.positions[*index as usize] - plane_origin)
+                            .dot(&normal)
+                            .abs()
+                    })
+                    .collect();
+                // 丸められた頂点と、丸められていないが公差と同じ桁の頂点が
+                // 同じ三角形に混じっている。
+                distances.iter().any(|d| *d <= tol.linear)
+                    && distances
+                        .iter()
+                        .any(|d| *d > tol.linear && *d <= tol.linear * 4.0)
+            })
+            .count();
+        if unstable > 0 {
+            return Err(format!(
+                "The section plane grazes the boundary of the solid: {unstable} triangle(s) have \
+                 corners within {} of it on both sides of the rounding threshold, so which corners \
+                 count as lying on the plane is decided by rounding. Move the plane at least {} \
+                 off the face.",
+                tol.linear * 4.0,
+                tol.linear * 4.0
+            ));
+        }
+
         // 1. 三角形ごとに平面との交線を求め、向き付き線分として集める。
         //    向きは plane_normal x triangle_normal に揃えるので、外殻の外向き
         //    法線からは反時計回りの外周ループが、穴や空洞からは時計回りの
