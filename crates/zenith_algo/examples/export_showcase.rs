@@ -597,6 +597,76 @@ fn main() {
         analytic_volume: None,
     });
 
+    // --- 新機能: スロット貫通穴口ブレンド（面取り・フィレット） ---
+    let plate_w = 80.0;
+    let plate_d = 60.0;
+    let plate_h = 20.0;
+    let plate = PrimitiveBuilder::make_box(plate_w, plate_d, plate_h).expect("slotted plate box");
+    let slot_tool = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_slot_prism(20.0, 8.0, plate_h + 20.0).expect("slot tool"),
+        Vec3::new(plate_w * 0.5, plate_d * 0.5, -10.0),
+    );
+    let slotted = BooleanEngine::boolean_solids_exact_result(
+        &plate,
+        &slot_tool,
+        BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("slotted plate difference")
+    .solids
+    .remove(0);
+
+    let top_face = slotted
+        .outer_shell
+        .faces
+        .iter()
+        .find(|face| {
+            if let zenith_topo::FaceGeometry::Plane(p) = &face.geometry {
+                (p.origin.z - plate_h).abs() < 1e-6 && !face.inner_wires.is_empty()
+            } else {
+                false
+            }
+        })
+        .expect("slotted plate top face");
+    let mouth_edge_id = top_face.inner_wires[0].edges[0].edge.id;
+
+    let base_plate_vol = plate_w * plate_d * plate_h;
+    let slot_hole_vol = (2.0 * 20.0 * 8.0 + PI * 8.0 * 8.0) * plate_h;
+    let slotted_net_vol = base_plate_vol - slot_hole_vol;
+
+    // 30_slot_hole_chamfer
+    let chamfer_d = 2.0;
+    let (slot_hole_chamfered, _) = EdgeBlender::blend_edge(
+        &slotted,
+        mouth_edge_id,
+        zenith_algo::BlendKind::Chamfer { distance: chamfer_d },
+    )
+    .expect("slot hole chamfer");
+    let hole_chamfer_removed = 20.0 * chamfer_d * chamfer_d + PI * chamfer_d * chamfer_d * (8.0 + chamfer_d / 3.0);
+    items.push(Item {
+        name: "30_slot_hole_chamfer",
+        note: "through-slot hole mouth chamfered with exact planar and conical bevel patches",
+        solid: slot_hole_chamfered,
+        analytic_volume: Some(slotted_net_vol - hole_chamfer_removed),
+    });
+
+    // 31_slot_hole_fillet
+    let fillet_r = 2.5;
+    let (slot_hole_filleted, _) = EdgeBlender::blend_edge(
+        &slotted,
+        mouth_edge_id,
+        zenith_algo::BlendKind::Fillet { radius: fillet_r },
+    )
+    .expect("slot hole fillet");
+    let hole_fillet_removed = 2.0 * 20.0 * fillet_r * fillet_r * (1.0 - PI * 0.25)
+        + PI * ((8.0 + fillet_r) * fillet_r * fillet_r * (2.0 - PI * 0.5) - fillet_r.powi(3) / 3.0);
+    items.push(Item {
+        name: "31_slot_hole_fillet",
+        note: "through-slot hole mouth rounded with exact quarter-cylinder and quarter-torus patches",
+        solid: slot_hole_filleted,
+        analytic_volume: Some(slotted_net_vol - hole_fillet_removed),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

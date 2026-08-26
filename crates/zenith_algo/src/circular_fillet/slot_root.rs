@@ -205,8 +205,19 @@ impl SlotRoot {
         let axis_y = axis_z.cross(&axis_x).normalize();
         let center = (straights[0].1 + straights[1].1.coords) * 0.5;
 
-        // 高さの取得
+        // 高さの取得およびボス側面法線判定（中心から外向き (P - center) . N > 0）
         let side0 = &faces[side_indices[0]];
+        let normal_side = face_sample_normal(side0);
+        let pt_sample = match &side0.geometry {
+            FaceGeometry::Plane(p) => p.origin,
+            FaceGeometry::Nurbs(n) => n.control_points[0][0].point,
+            _ => center,
+        };
+        let outward_from_center = (pt_sample - center).dot(&normal_side);
+        if outward_from_center <= 1e-4 {
+            return None;
+        }
+
         let height = match &side0.geometry {
             FaceGeometry::Plane(p) => p.v_axis.norm(),
             FaceGeometry::Nurbs(n) => (n.control_points[0][1].point - n.control_points[0][0].point).norm(),
@@ -642,4 +653,28 @@ impl SlotRoot {
 
 fn all_wires(face: &Face) -> impl Iterator<Item = &Wire> {
     std::iter::once(&face.outer_wire).chain(face.inner_wires.iter())
+}
+
+fn face_sample_normal(face: &Face) -> Vec3 {
+    match &face.geometry {
+        FaceGeometry::Plane(p) => {
+            if face.orientation == zenith_topo::Orientation::Forward {
+                p.normal
+            } else {
+                -p.normal
+            }
+        }
+        FaceGeometry::Nurbs(n) => {
+            let ((u0, u1), (v0, v1)) = n.param_range();
+            let u = (u0 + u1) * 0.5;
+            let v = (v0 + v1) * 0.5;
+            let n_vec = n.normal(u, v).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+            if face.orientation == zenith_topo::Orientation::Forward {
+                n_vec
+            } else {
+                -n_vec
+            }
+        }
+        _ => Vec3::new(0.0, 0.0, 1.0),
+    }
 }

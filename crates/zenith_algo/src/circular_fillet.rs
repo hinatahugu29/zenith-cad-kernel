@@ -10,6 +10,7 @@
 pub(crate) mod cone;
 pub(crate) mod hole_mouth;
 pub(crate) mod shoulder_root;
+pub(crate) mod slot_hole_mouth;
 pub(crate) mod slot_rim;
 pub(crate) mod slot_root;
 
