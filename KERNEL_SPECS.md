@@ -90,7 +90,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **工業用穴・ザグリ・皿穴・長穴** | `hole` | 貫通丸穴、ザグリ穴（Counterbore）、皿モミ穴（Countersink: 64通り全合格）、座ぐり長穴（Counterbored Stadium Slot: 19面閉多様体）。 |
 | **金型抜き勾配 (Draft)** | `draft` | 基準底面から指定角度 $\theta$ で均等テーパー傾斜させた角錐台ソリッド（`make_drafted_block`、非相似角錐台体積誤差 $3.06 \times 10^{-16}$）。 |
 | **剛性補強リブ (Rib)** | `rib` | 直角三角形断面を持つ5面構成のガセットリブソリッド（`make_triangular_rib`、解析解体積誤差 $0.00$ 完全一致）。 |
-| **機械締結ファスナー (Fastener)** | `fastener` | JIS/ISO規格準拠の正六角柱（ボルト頭: 誤差 $5.70 \times 10^{-16}$）、六角ナット（誤差 $2.70 \times 10^{-13}$）、六角穴付きボルト（Cap Screw: 誤差 $1.01 \times 10^{-13}$）、平座金（Plain Washer: 誤差 $1.56 \times 10^{-13}$）。 |
+| **機械締結ファスナー (Fastener)** | `fastener` | JIS/ISO規格準拠の正六角柱（ボルト頭: 誤差 $5.70 \times 10^{-16}$）、六角ナット（誤差 $2.70 \times 10^{-13}$）、六角穴付きボルト（Cap Screw: 誤差 $1.01 \times 10^{-13}$）、平座金（Plain Washer: 誤差 $1.56 \times 10^{-13}$）、フランジ付き六角ボルト（Flanged Hex Bolt: 誤差 $2.06 \times 10^{-13}$）、スプリングワッシャー（Spring Lock Washer: 6面矩形線材ヘリカルスプリットリング）。 |
 | **動力伝達軸・キー溝 (Shaft)** | `shaft` | 任意段数の多段円柱結合（`make_stepped_shaft`）、JIS B 1301 準拠の平行キー溝切削（`make_shaft_with_keyway`）、止め輪・Oリング用環状溝（`make_shaft_with_annular_groove`）。 |
 | **厳密 B-Rep ブーリアン** | `boolean` | 直方体・円柱・球・角柱・穴あき立体の差（Difference）、和（Union）、積（Intersection）。検証ゲート `BooleanResultVerifier` による閉性・体積・内外判定保証。**他カーネルが書いた立体**についても、軸に平行な切り手30配置・90演算、**27度傾けた切り手を足した60配置・180演算とも、断るものはありません**（WRONG 0・PANIC 0、恒等式の残差 7.88e-9）。**検証つきの口でも 180/180**（HANDOVER 4-61〜4-68）。自作立体どうしの45ケース表（`boolean_envelope`）は **supported 44 / wrong-result 0 / エラー 1**。**残る1件は直す対象ではありません**——`box × cylinder`（接線）の差で、**答えのほうが非多様体**なので場所を名指しして断ります（HANDOVER 4-74、4-80）。 |
 | **面併合 (FaceMerger)** | `merge_faces` | ブーリアン出口での同一平面パッチ自動併合（`boolean_solids_exact_simplified`）。L字角柱 14面➔8面、穴あき 16面➔10面に最小化。 |
@@ -145,7 +145,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | ビルダー監査 | **24/24 クリーン**（解析解との差は最悪 6.3e-13、歯車 1.99e-9） | `--example builder_audit` |
 | 平面を NURBS で持つ面 | **全23ビルダーで0枚** | `--example planar_face_audit` |
 | FreeCAD ヘッドレス相互検証 | **27/27 完全一致**（ゲート、不一致で非ゼロ終了） | `tools/freecad_cross_validate.py` |
-| OpenCASCADE ショーケース | **46/46 が valid closed solid（100% 合格）** | `py tools/verify_showcase.py` |
+| OpenCASCADE ショーケース | **48/48 が valid closed solid（100% 合格）** | `py tools/verify_showcase.py` |
 | 他カーネルからの読み書き一周 | **7/7 が解析解と 1e-11〜1e-13** | `tools/verify_reexport.py` |
 | IGES 相互検証 | **5/5**（曲面枚数一致、境界箱のずれ 0） | `tools/verify_iges.py` |
 | 常設プローブ | **35/35 が exit 0** | 上記手順書の一覧 |

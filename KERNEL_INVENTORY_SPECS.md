@@ -114,6 +114,8 @@ CAD の主要モデリング機能群。
   - `make_hex_nut_blank`: 正六角柱の中心にボルト貫通下穴を持つ12面構成の六角ナットブランクソリッド（体積誤差 $2.70 \times 10^{-13}$）。
   - `make_socket_head_cap_screw`: JIS/ISO規格準拠の円柱頭部＋円柱軸部＋内六角穴を持つ18面構成の六角穴付きボルトソリッド（体積誤差 $1.01 \times 10^{-13}$）。
   - `make_plain_washer`: JIS B 1256 準拠の円環平座金ソリッド（体積誤差 $1.56 \times 10^{-13}$）。
+  - `make_flanged_hex_bolt`: JIS B 1180 / ISO 4162 準拠の円柱座面フランジ付き正六角ボルトソリッド（体積誤差 $2.06 \times 10^{-13}$）。
+  - `make_spring_washer`: JIS B 1251 準拠の矩形線材ヘリカルスプリットリングばね座金ソリッド（6面構成完全閉多様体）。
 - **`shaft.rs` (`ShaftBuilder`)**:
   - `make_stepped_shaft`: 任意段数の円柱を安定結合した段付き軸ソリッド。
   - `make_shaft_with_keyway`: JIS B 1301 準拠の平行キー溝（長円ポケット）を差分切削した動力伝達軸ソリッド。
@@ -137,7 +139,7 @@ CAD の主要モデリング機能群。
 - 2D点、線分、円の多変数ニュートン・ラフソン法による 12 種の幾何拘束充足。
 
 #### 6. パラメトリック・フィーチャーツリー (`feature_tree.rs`)
-- 対応オペレーション: `CreateBox`, `CreateCylinder`, `CreateCone`, `CreateTorus`, `FilletEdge`, `ChamferEdge`, `HollowBox`, **`HollowThroughBox`**, `ExtrudeHollow`, `ExtrudeDraft`, `RevolveSolid`, `RevolvePartialSolid`, `LoftSolid`, `SweepWire`, `SweepHelix`, `MirrorSolid`, `PushPullFace`, `ThickenFace`。
+- 対応オペレーション: `CreateBox`, `CreateCylinder`, `CreateCone`, `CreateTorus`, `FilletEdge`, `ChamferEdge`, `HollowBox`, **`HollowThroughBox`**, `ExtrudeHollow`, `ExtrudeDraft`, `RevolveSolid`, `RevolvePartialSolid`, `LoftSolid`, `SweepWire`, `SweepHelix`, `MirrorSolid`, `PushPullFace`, `ThickenFace`, `DraftBlock`, `TriangularRib`, `HexPrism`, `HexNut`, `SocketHeadCapScrew`, `PlainWasher`, `FlangedHexBolt`, `CountersinkHole`, `CounterboredSlot`。
 
 #### 7. 物性値計算 (`mass_properties.rs`)
 - ガウスの発散定理に基づく表面積分により、厳密な **体積（Volume）**、**表面積（Surface Area）**、**重心（Center of Mass）**、**慣性モーメントテンソル（Inertia Tensor）** を算出。
