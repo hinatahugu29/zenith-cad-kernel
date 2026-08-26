@@ -101,7 +101,22 @@ CAD の主要モデリング機能群。
   - `sweep_wire_along_curve`: 任意の 2D 多角形・スプライン閉断面ワイヤを 3D NURBS パスに沿って最小回転標架（RMF）で掃引した完全閉 B-Rep ソリッドを構築。
 - **`fillet.rs` (`FilletBuilder::fillet_box_z_edges`)**: 直方体のZ軸方向4角に半径 $R$ の有理NURBS円筒面を挿入したソリッド化（全10面）。
 - **`chamfer.rs` (`ChamferBuilder::chamfer_box_z_edges`)**: 直方体のZ軸方向4角に面取り距離 $C$ の平面を挿入したソリッド化（全10面）。
-- **`hole.rs` (`HoleBuilder::make_drilled_box`)**: 直方体に貫通円形穴を開け、天面・底面の `inner_wires`（穴ループ）と円筒内壁4パッチを縫合したマニホールドソリッドを生成。
+- **`hole.rs` (`HoleBuilder`)**:
+  - `make_drilled_box`: 直方体に貫通円形穴を開け、天面・底面の `inner_wires`（穴ループ）と円筒内壁4パッチを縫合したマニホールドソリッドを生成。
+  - `make_countersink_hole_box`: 皿ビス締結用 $90^\circ$ 皿モミ部（円錐台）＋ストレート下穴（円柱）の複合加工ソリッド生成。
+  - `make_counterbored_slot_box`: 直方体に下部貫通スロット＋上部座ぐりスロットを開けた長穴座ぐり加工ソリッド（19面構成）を生成。
+- **`draft.rs` (`DraftBuilder::make_drafted_block`)**:
+  - 射出成形・鍛造金型用の指定抜き勾配角度 $\theta$ で均等テーパー傾斜させた完全閉多様体B-Repソリッド（非相似角錐台の解析解体積誤差 $3.06 \times 10^{-16}$）。
+- **`rib.rs` (`RibBuilder::make_triangular_rib`)**:
+  - 直角三角形断面を持つ5面構成の剛性補強ガセットリブソリッド（解析解体積誤差 $0.00$ 完全一致）。
+- **`fastener.rs` (`FastenerBuilder`)**:
+  - `make_hex_prism`: JIS/ISO規格準拠の二面幅 $S$ を持つ正六角柱ソリッド（体積誤差 $5.70 \times 10^{-16}$）。
+  - `make_hex_nut_blank`: 正六角柱の中心にボルト貫通下穴を持つ12面構成の六角ナットブランクソリッド（体積誤差 $2.70 \times 10^{-13}$）。
+  - `make_socket_head_cap_screw`: JIS/ISO規格準拠の円柱頭部＋円柱軸部＋内六角穴を持つ18面構成の六角穴付きボルトソリッド（体積誤差 $1.01 \times 10^{-13}$）。
+  - `make_plain_washer`: JIS B 1256 準拠の円環平座金ソリッド（体積誤差 $1.56 \times 10^{-13}$）。
+- **`shaft.rs` (`ShaftBuilder`)**:
+  - `make_stepped_shaft`: 任意段数の円柱を安定結合した段付き軸ソリッド。
+  - `make_shaft_with_keyway`: JIS B 1301 準拠の平行キー溝（長円ポケット）を差分切削した動力伝達軸ソリッド。
 - **`shell.rs` (`ShellBuilder`)**:
   - `make_hollow_box`: 直方体を指定面（天面/底面）開口し、肉厚 $t$ で中空容器化（外側5面＋内側5面＋リム4面＝全14面）。
   - **`make_through_hollow_box`**: 直方体の両端面（底面 $Z=0$ および 天面 $Z=dz$）を開口した角パイプ中空ソリッドの生成（外壁4面＋内壁4面＋上下リム8面＝全16面完全閉ソリッド）。
