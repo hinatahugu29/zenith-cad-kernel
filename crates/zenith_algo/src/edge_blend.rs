@@ -130,6 +130,9 @@ impl EdgeBlender {
                             )
                         })
                         .or_else(|| {
+                            crate::circular_fillet::slot_root::slot_root_blendable(solid, edge_id)
+                        })
+                        .or_else(|| {
                             crate::circular_fillet::cone::conical_rim_blendable(solid, edge_id)
                         })
                 {
@@ -220,6 +223,11 @@ impl EdgeBlender {
                 return Ok(result);
             }
             if let Some(result) =
+                crate::circular_fillet::slot_root::try_fillet_slot_root(solid, edge_id, radius)?
+            {
+                return Ok(result);
+            }
+            if let Some(result) =
                 crate::circular_fillet::try_fillet_cylinder_rim(solid, edge_id, radius)?
             {
                 return Ok(result);
@@ -239,6 +247,11 @@ impl EdgeBlender {
             if let Some(result) = crate::circular_fillet::shoulder_root::try_chamfer_shoulder_root(
                 solid, edge_id, distance,
             )? {
+                return Ok(result);
+            }
+            if let Some(result) =
+                crate::circular_fillet::slot_root::try_chamfer_slot_root(solid, edge_id, distance)?
+            {
                 return Ok(result);
             }
             if let Some(result) =

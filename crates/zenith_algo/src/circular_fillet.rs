@@ -10,6 +10,7 @@
 pub(crate) mod cone;
 pub(crate) mod hole_mouth;
 pub(crate) mod shoulder_root;
+pub(crate) mod slot_root;
 
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, SQRT_2};
 

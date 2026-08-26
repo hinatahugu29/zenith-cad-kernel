@@ -1028,4 +1028,187 @@ impl PrimitiveBuilder {
 
         crate::validated_solid(Shell::closed(faces))
     }
+
+    /// スロット柱（長円柱 / Slot Prism）の生成（直線部2面 + 90度有理円筒パッチ4面 + 上下端面）
+    pub fn make_slot_prism(length: f64, radius: f64, height: f64) -> Result<Solid, String> {
+        if length <= 1e-6 || radius <= 1e-6 || height <= 1e-6 {
+            return Err(format!(
+                "Slot prism dimensions must be positive, got length={length}, radius={radius}, height={height}"
+            ));
+        }
+
+        let l_half = length * 0.5;
+        let r = radius;
+        let h = height;
+        let weight = std::f64::consts::FRAC_1_SQRT_2;
+
+        // 6個の底面頂点座標
+        let pb = [
+            Point3::new(-l_half, -r, 0.0),      // 0
+            Point3::new(l_half, -r, 0.0),       // 1
+            Point3::new(l_half + r, 0.0, 0.0),  // 2
+            Point3::new(l_half, r, 0.0),        // 3
+            Point3::new(-l_half, r, 0.0),       // 4
+            Point3::new(-l_half - r, 0.0, 0.0), // 5
+        ];
+
+        // 6個の天面頂点座標
+        let pt = [
+            Point3::new(-l_half, -r, h),
+            Point3::new(l_half, -r, h),
+            Point3::new(l_half + r, 0.0, h),
+            Point3::new(l_half, r, h),
+            Point3::new(-l_half, r, h),
+            Point3::new(-l_half - r, 0.0, h),
+        ];
+
+        let vb: Vec<Vertex> = pb.iter().map(|p| Vertex::from_point(*p)).collect();
+        let vt: Vec<Vertex> = pt.iter().map(|p| Vertex::from_point(*p)).collect();
+
+        // 6本の縦直線エッジ
+        let mut ev = Vec::with_capacity(6);
+        for i in 0..6 {
+            ev.push(Edge::line_between(vb[i].clone(), vt[i].clone())?);
+        }
+
+        // 6本の底面エッジ & 天面エッジ
+        let mut eb = Vec::with_capacity(6);
+        let mut et = Vec::with_capacity(6);
+        let mut faces = Vec::with_capacity(8);
+
+        for i in 0..6 {
+            let next = (i + 1) % 6;
+            let (is_arc, corner_b, corner_t) = match i {
+                0 => (false, Point3::origin(), Point3::origin()), // 直線 -Y
+                1 => (
+                    true,
+                    Point3::new(l_half + r, -r, 0.0),
+                    Point3::new(l_half + r, -r, h),
+                ), // 円弧 4象限
+                2 => (
+                    true,
+                    Point3::new(l_half + r, r, 0.0),
+                    Point3::new(l_half + r, r, h),
+                ), // 円弧 1象限
+                3 => (false, Point3::origin(), Point3::origin()), // 直線 +Y
+                4 => (
+                    true,
+                    Point3::new(-l_half - r, r, 0.0),
+                    Point3::new(-l_half - r, r, h),
+                ), // 円弧 2象限
+                5 => (
+                    true,
+                    Point3::new(-l_half - r, -r, 0.0),
+                    Point3::new(-l_half - r, -r, h),
+                ), // 円弧 3象限
+                _ => unreachable!(),
+            };
+
+            let (edge_b, edge_t, face_geom) = if !is_arc {
+                let edge_b = Edge::line_between(vb[i].clone(), vb[next].clone())?;
+                let edge_t = Edge::line_between(vt[i].clone(), vt[next].clone())?;
+                let u_axis = pb[next] - pb[i];
+                let v_axis = Vec3::new(0.0, 0.0, h);
+                let plane = PlaneSurface3::new(pb[i], u_axis, v_axis)
+                    .ok_or("Failed to create side plane")?;
+                (edge_b, edge_t, FaceGeometry::Plane(plane))
+            } else {
+                let arc_b = Edge::new(
+                    NurbsCurve3::new(
+                        2,
+                        vec![
+                            ControlPoint3::unweighted(pb[i]),
+                            ControlPoint3::new(corner_b, weight),
+                            ControlPoint3::unweighted(pb[next]),
+                        ],
+                        KnotVector::clamped_uniform(3, 2),
+                    )?,
+                    vb[i].clone(),
+                    vb[next].clone(),
+                    1e-6,
+                );
+                let arc_t = Edge::new(
+                    NurbsCurve3::new(
+                        2,
+                        vec![
+                            ControlPoint3::unweighted(pt[i]),
+                            ControlPoint3::new(corner_t, weight),
+                            ControlPoint3::unweighted(pt[next]),
+                        ],
+                        KnotVector::clamped_uniform(3, 2),
+                    )?,
+                    vt[i].clone(),
+                    vt[next].clone(),
+                    1e-6,
+                );
+                let row0 = vec![
+                    ControlPoint3::unweighted(pb[i]),
+                    ControlPoint3::unweighted(pt[i]),
+                ];
+                let row1 = vec![
+                    ControlPoint3::new(corner_b, weight),
+                    ControlPoint3::new(corner_t, weight),
+                ];
+                let row2 = vec![
+                    ControlPoint3::unweighted(pb[next]),
+                    ControlPoint3::unweighted(pt[next]),
+                ];
+                let surf = NurbsSurface3::new(
+                    2,
+                    1,
+                    vec![row0, row1, row2],
+                    KnotVector::clamped_uniform(3, 2),
+                    KnotVector::clamped_uniform(2, 1),
+                )?;
+                (arc_b, arc_t, FaceGeometry::Nurbs(surf))
+            };
+
+            eb.push(edge_b.clone());
+            et.push(edge_t.clone());
+
+            let wire = Wire::new(vec![
+                OrientedEdge::forward(edge_b),
+                OrientedEdge::forward(ev[next].clone()),
+                OrientedEdge::reversed(edge_t),
+                OrientedEdge::reversed(ev[i].clone()),
+            ]);
+            faces.push(Face::simple(face_geom, wire));
+        }
+
+        // 底面 (-Z 法線: 逆順 5..0)
+        let plane_b = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+        )
+        .ok_or("Failed to create bottom plane")?;
+        let wire_b = Wire::new(vec![
+            OrientedEdge::reversed(eb[5].clone()),
+            OrientedEdge::reversed(eb[4].clone()),
+            OrientedEdge::reversed(eb[3].clone()),
+            OrientedEdge::reversed(eb[2].clone()),
+            OrientedEdge::reversed(eb[1].clone()),
+            OrientedEdge::reversed(eb[0].clone()),
+        ]);
+        faces.push(Face::simple(FaceGeometry::Plane(plane_b), wire_b));
+
+        // 天面 (+Z 法線: 正順 0..5)
+        let plane_t = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, h),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .ok_or("Failed to create top plane")?;
+        let wire_t = Wire::new(vec![
+            OrientedEdge::forward(et[0].clone()),
+            OrientedEdge::forward(et[1].clone()),
+            OrientedEdge::forward(et[2].clone()),
+            OrientedEdge::forward(et[3].clone()),
+            OrientedEdge::forward(et[4].clone()),
+            OrientedEdge::forward(et[5].clone()),
+        ]);
+        faces.push(Face::simple(FaceGeometry::Plane(plane_t), wire_t));
+
+        crate::validated_solid(Shell::closed(faces))
+    }
 }
