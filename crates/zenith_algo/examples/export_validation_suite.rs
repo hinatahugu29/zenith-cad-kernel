@@ -14,8 +14,9 @@ use zenith_algo::StepInterop;
 
 use serde_json::{json, Value};
 use zenith_algo::{
-    ChamferBuilder, EdgeBlender, FaceMerger, FilletBuilder, GearBuilder, HelixBuilder, HoleBuilder,
-    MassCalculator, PrimitiveBuilder, SectionSlicer, ShaftBuilder, ShellingBuilder, SweepBuilder,
+    BooleanEngine, BooleanOpType, BrepTransform, ChamferBuilder, EdgeBlender, FaceMerger,
+    FilletBuilder, GearBuilder, HelixBuilder, HoleBuilder, MassCalculator, PrimitiveBuilder,
+    SectionSlicer, ShaftBuilder, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Vec3};
@@ -343,6 +344,57 @@ fn build_subjects() -> Vec<Subject> {
             Point3::new(0.0, 0.0, 6.0),
             Vec3::new(0.0, 0.0, 1.0),
             Some(PI * 100.0),
+        )),
+    });
+
+    let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    let cone = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cone(8.0, 5.0, 12.0).unwrap(),
+        Vec3::new(20.0, 20.0, 20.0),
+    );
+    let conical_boss = BooleanEngine::boolean_solids_exact(
+        &block,
+        &cone,
+        BooleanOpType::Union,
+        &Tolerance::default(),
+    )
+    .unwrap();
+    let conical_root = EdgeBlender::blendable_edges(&conical_boss)
+        .into_iter()
+        .find(|edge| (edge.length - std::f64::consts::TAU * 8.0).abs() < 1e-6)
+        .expect("the conical boss has a selectable concave root");
+    let conical_fillet = 2.0;
+    let slope = -0.25_f64;
+    let norm = slope.hypot(1.0);
+    let centre_radius = 8.0 + conical_fillet * (norm + slope);
+    let contact_z = conical_fillet * (1.0 + slope / norm);
+    let arc_primitive = |z: f64| {
+        let shifted = z - conical_fillet;
+        let root = (conical_fillet * conical_fillet - shifted * shifted)
+            .max(0.0)
+            .sqrt();
+        let integral_root = 0.5
+            * (shifted * root
+                + conical_fillet.powi(2) * (shifted / conical_fillet).clamp(-1.0, 1.0).asin());
+        centre_radius * centre_radius * z - 2.0 * centre_radius * integral_root
+            + conical_fillet.powi(2) * z
+            - shifted.powi(3) / 3.0
+    };
+    let cone_primitive =
+        |z: f64| 8.0f64.powi(2) * z + 8.0 * slope * z * z + slope.powi(2) * z.powi(3) / 3.0;
+    let conical_root_added = PI
+        * ((arc_primitive(contact_z) - arc_primitive(0.0))
+            - (cone_primitive(contact_z) - cone_primitive(0.0)));
+    let frustum_volume = PI * 12.0 * (8.0f64.powi(2) + 8.0 * 5.0 + 5.0f64.powi(2)) / 3.0;
+    subjects.push(Subject {
+        name: "conical_boss_root_fillet_r2",
+        solid: EdgeBlender::fillet_edge(&conical_boss, conical_root.edge_id, conical_fillet)
+            .unwrap(),
+        analytic_volume: Some(40.0 * 40.0 * 20.0 + frustum_volume + conical_root_added),
+        section: Some((
+            Point3::new(0.0, 0.0, 10.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(40.0 * 40.0),
         )),
     });
 
