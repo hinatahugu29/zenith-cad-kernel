@@ -8764,4 +8764,20 @@ py tools/verify_solid_api.py
 - **全51ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（51 of 51 read back as valid closed solids）**。
 - `51_weld_neck_pipe_flange.step`（誤差 $2.56 \times 10^{-13}$）が完全ソリッドとして実証。
 
+## 26. 六角穴付き管用テーパプラグ（Hexagon Socket Taper Pipe Plug）および外部CAD 52/52 実証
+
+### 26-1. 六角穴付き管用テーパプラグ（Taper Pipe Plug）の構築
+油圧・空圧機器や流体ブロックの封止に用いられるPT/NPT管用テーパプラグを構築する `FastenerBuilder::make_taper_pipe_plug`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **テーパ円錐台＋天面六角穴の複合差分ブーリアン（13面構成）**:
+  - テーパ円錐台本体（小径 $r_{\text{small}}$, 大径 $r_{\text{large}}$, 高さ $h$）
+  - 天面六角穴（二面幅 $S$, 深さ $d_{\text{socket}}$）
+  - 解析解体積:
+    $V = \frac{\pi}{3} h (r_{\text{small}}^2 + r_{\text{small}} r_{\text{large}} + r_{\text{large}}^2) - \frac{\sqrt{3}}{2} S^2 d_{\text{socket}}$
+    により、計算体積と解析解体積が誤差 $3.33 \times 10^{-15}$（機械精度限界）で一致。
+
+### 26-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 52/52 完全達成）
+`target/showcase/` に全52個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全52ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（52 of 52 read back as valid closed solids）**。
+- `52_taper_pipe_plug.step`（誤差 $3.33 \times 10^{-15}$）が完全ソリッドとして実証。
+
 

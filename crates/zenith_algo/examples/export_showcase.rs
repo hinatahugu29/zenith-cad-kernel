@@ -1124,6 +1124,30 @@ fn main() {
         analytic_volume: Some(fl_vol),
     });
 
+    // 52_taper_pipe_plug
+    let tp_r_small = 6.0; // PT 1/4
+    let tp_r_large = 6.6;
+    let tp_h = 10.0;
+    let tp_socket_s = 6.0;
+    let tp_socket_d = 5.0;
+    let tp_plug = FastenerBuilder::make_taper_pipe_plug(
+        tp_r_small,
+        tp_r_large,
+        tp_h,
+        tp_socket_s,
+        tp_socket_d,
+        &tol,
+    ).expect("taper pipe plug");
+    let tp_cone_vol = (PI / 3.0) * tp_h * (tp_r_small * tp_r_small + tp_r_small * tp_r_large + tp_r_large * tp_r_large);
+    let tp_socket_vol = (3.0_f64.sqrt() * 0.5) * tp_socket_s * tp_socket_s * tp_socket_d;
+    let tp_vol = tp_cone_vol - tp_socket_vol;
+    items.push(Item {
+        name: "52_taper_pipe_plug",
+        note: "JIS/ANSI hexagon socket taper pipe plug (PT/NPT thread blank) with tapered conical body",
+        solid: tp_plug,
+        analytic_volume: Some(tp_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

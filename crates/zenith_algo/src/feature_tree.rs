@@ -243,6 +243,14 @@ pub enum FeatureOp {
         bolt_hole_radius: f64,
         num_bolt_holes: usize,
     },
+    /// 六角穴付き管用テーパプラグ
+    TaperPipePlug {
+        small_radius: f64,
+        large_radius: f64,
+        height: f64,
+        socket_across_flats: f64,
+        socket_depth: f64,
+    },
 }
 
 /// 履歴に書けるブーリアン種別（`BooleanOpType` の直列化可能版）
@@ -774,6 +782,22 @@ impl FeatureTree {
                         *pcd_radius,
                         *bolt_hole_radius,
                         *num_bolt_holes,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::TaperPipePlug {
+                    small_radius,
+                    large_radius,
+                    height,
+                    socket_across_flats,
+                    socket_depth,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_taper_pipe_plug(
+                        *small_radius,
+                        *large_radius,
+                        *height,
+                        *socket_across_flats,
+                        *socket_depth,
                         &tol,
                     )?);
                 }

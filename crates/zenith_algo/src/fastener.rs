@@ -538,4 +538,48 @@ impl FastenerBuilder {
 
         Ok(solid)
     }
+
+    /// JIS B 0203 / ANSI B16.14 規格準拠の六角穴付き管用テーパプラグ（Hexagon Socket Taper Pipe Plug）ソリッドを構築
+    ///
+    /// `small_radius`: テーパ先端小径半径 (例: PT 1/4 なら 6.0)
+    /// `large_radius`: テーパ後端大径半径 (例: PT 1/4 なら 6.6)
+    /// `height`: プラグ全長 (例: 10.0)
+    /// `socket_across_flats`: 内六角二面幅 (例: 6.0)
+    /// `socket_depth`: 六角穴深さ (例: 5.0)
+    pub fn make_taper_pipe_plug(
+        small_radius: f64,
+        large_radius: f64,
+        height: f64,
+        socket_across_flats: f64,
+        socket_depth: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if small_radius >= large_radius || small_radius <= 1e-6 || height <= 1e-6 {
+            return Err("Invalid taper plug dimensions: large > small > 0 required".to_string());
+        }
+        if socket_depth >= height {
+            return Err("Socket depth must be less than plug height".to_string());
+        }
+        let r_socket_outer = socket_across_flats / 3.0_f64.sqrt();
+        if r_socket_outer >= large_radius {
+            return Err("Socket size must fit inside plug large end".to_string());
+        }
+
+        // 1. テーパ円錐台
+        let cone_blank = crate::PrimitiveBuilder::make_cone(small_radius, large_radius, height)?;
+
+        // 2. 六角穴カッター
+        let socket_cutter = Self::make_hex_prism(socket_across_flats, socket_depth + 1.0, tol)?;
+        let positioned_socket = crate::BrepTransform::translate_solid(
+            &socket_cutter,
+            Vec3::new(0.0, 0.0, height - socket_depth),
+        );
+
+        crate::boolean::BooleanEngine::boolean_solids_exact(
+            &cone_blank,
+            &positioned_socket,
+            crate::boolean::BooleanOpType::Difference,
+            tol,
+        )
+    }
 }

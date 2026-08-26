@@ -130,8 +130,20 @@ fn test_feature_tree_extended_features() {
     let solid_flange = tree_fl.recompute().expect("evaluate flange tree");
     assert!(solid_flange.outer_shell.validate_closed(&tol).is_valid());
 
-    // 10. JSON シリアライズ / デシリアライズ検証
-    let json = serde_json::to_string(&tree_fl).expect("serialize tree");
+    // 10. 六角穴付き管用テーパプラグ
+    let mut tree_tp = FeatureTree::new();
+    tree_tp.add_feature("pipe_plug", FeatureOp::TaperPipePlug {
+        small_radius: 6.0,
+        large_radius: 6.6,
+        height: 10.0,
+        socket_across_flats: 6.0,
+        socket_depth: 5.0,
+    });
+    let solid_plug = tree_tp.recompute().expect("evaluate pipe plug tree");
+    assert!(solid_plug.outer_shell.validate_closed(&tol).is_valid());
+
+    // 11. JSON シリアライズ / デシリアライズ検証
+    let json = serde_json::to_string(&tree_tp).expect("serialize tree");
     let deserialized_tree: FeatureTree = serde_json::from_str(&json).expect("deserialize tree");
     let solid_recomputed = deserialized_tree.recompute().expect("recompute from json tree");
     assert!(solid_recomputed.outer_shell.validate_closed(&tol).is_valid());
