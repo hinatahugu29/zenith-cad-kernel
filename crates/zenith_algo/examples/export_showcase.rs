@@ -1148,6 +1148,33 @@ fn main() {
         analytic_volume: Some(tp_vol),
     });
 
+    // 53_hex_center_stud_bolt
+    let sb_bot_r = 4.0; // M8
+    let sb_bot_l = 15.0;
+    let sb_hex_s = 13.0;
+    let sb_hex_h = 6.0;
+    let sb_top_r = 4.0;
+    let sb_top_l = 20.0;
+    let sb_bolt = FastenerBuilder::make_stud_bolt(
+        sb_bot_r,
+        sb_bot_l,
+        sb_hex_s,
+        sb_hex_h,
+        sb_top_r,
+        sb_top_l,
+        &tol,
+    ).expect("stud bolt");
+    let sb_bot_vol = PI * sb_bot_r * sb_bot_r * sb_bot_l;
+    let sb_hex_vol = (3.0_f64.sqrt() * 0.5) * sb_hex_s * sb_hex_s * sb_hex_h;
+    let sb_top_vol = PI * sb_top_r * sb_top_r * sb_top_l;
+    let sb_vol = sb_bot_vol + sb_hex_vol + sb_top_vol;
+    items.push(Item {
+        name: "53_hex_center_stud_bolt",
+        note: "JIS/DIN hex center stud bolt with dual threaded shanks and central hexagonal driving collar",
+        solid: sb_bolt,
+        analytic_volume: Some(sb_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

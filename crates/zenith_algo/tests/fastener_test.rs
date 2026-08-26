@@ -509,3 +509,59 @@ fn test_taper_pipe_plug() {
         "Reimported taper pipe plug must be valid closed"
     );
 }
+
+#[test]
+fn test_stud_bolt() {
+    let tol = Tolerance::default();
+    let bot_r = 4.0; // M8
+    let bot_l = 15.0;
+    let hex_s = 13.0;
+    let hex_h = 6.0;
+    let top_r = 4.0;
+    let top_l = 20.0;
+
+    let solid = FastenerBuilder::make_stud_bolt(
+        bot_r,
+        bot_l,
+        hex_s,
+        hex_h,
+        top_r,
+        top_l,
+        &tol,
+    )
+    .expect("stud bolt");
+
+    // 1. B-Rep 閉多様体検証
+    assert!(
+        solid.outer_shell.validate_closed(&tol).is_valid(),
+        "Stud bolt must be valid closed manifold"
+    );
+
+    // 2. 閉形式体積一致検証
+    let pi = std::f64::consts::PI;
+    let bot_vol = pi * bot_r * bot_r * bot_l;
+    let hex_vol = (3.0_f64.sqrt() * 0.5) * hex_s * hex_s * hex_h;
+    let top_vol = pi * top_r * top_r * top_l;
+    let expected_vol = bot_vol + hex_vol + top_vol;
+
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = MassCalculator::compute_from_brep(&solid, &params);
+    let vol_diff = (mass.volume - expected_vol).abs() / expected_vol;
+    assert!(
+        vol_diff < 1e-4,
+        "Volume mismatch: computed={}, expected={}, diff={vol_diff}",
+        mass.volume,
+        expected_vol
+    );
+
+    // 3. STEP 往復検証
+    let step_str = StepExporter::export_solid_to_string(&solid, "StudBolt");
+    let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
+    assert!(
+        reimported.outer_shell.validate_closed(&tol).is_valid(),
+        "Reimported stud bolt must be valid closed"
+    );
+}

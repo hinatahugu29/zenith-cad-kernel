@@ -142,8 +142,21 @@ fn test_feature_tree_extended_features() {
     let solid_plug = tree_tp.recompute().expect("evaluate pipe plug tree");
     assert!(solid_plug.outer_shell.validate_closed(&tol).is_valid());
 
-    // 11. JSON シリアライズ / デシリアライズ検証
-    let json = serde_json::to_string(&tree_tp).expect("serialize tree");
+    // 11. 六角胴スタッドボルト
+    let mut tree_sb = FeatureTree::new();
+    tree_sb.add_feature("stud_bolt", FeatureOp::StudBolt {
+        bottom_shank_radius: 4.0,
+        bottom_shank_length: 15.0,
+        hex_across_flats: 13.0,
+        hex_height: 6.0,
+        top_shank_radius: 4.0,
+        top_shank_length: 20.0,
+    });
+    let solid_sb = tree_sb.recompute().expect("evaluate stud bolt tree");
+    assert!(solid_sb.outer_shell.validate_closed(&tol).is_valid());
+
+    // 12. JSON シリアライズ / デシリアライズ検証
+    let json = serde_json::to_string(&tree_sb).expect("serialize tree");
     let deserialized_tree: FeatureTree = serde_json::from_str(&json).expect("deserialize tree");
     let solid_recomputed = deserialized_tree.recompute().expect("recompute from json tree");
     assert!(solid_recomputed.outer_shell.validate_closed(&tol).is_valid());

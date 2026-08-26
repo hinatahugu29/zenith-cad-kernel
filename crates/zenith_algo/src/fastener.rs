@@ -582,4 +582,67 @@ impl FastenerBuilder {
             tol,
         )
     }
+
+    /// JIS B 1173 / DIN 938 規格準拠の中央六角胴スタッドボルト（Hex Center Stud Bolt）ソリッドを構築
+    ///
+    /// `bottom_shank_radius`: 下部ねじ軸半径 (例: M8 なら 4.0)
+    /// `bottom_shank_length`: 下部ねじ軸長さ (例: 15.0)
+    /// `hex_across_flats`: 中央六角胴部二面幅 (例: 13.0)
+    /// `hex_height`: 中央六角胴部高さ (例: 6.0)
+    /// `top_shank_radius`: 上部ねじ軸半径 (例: M8 なら 4.0)
+    /// `top_shank_length`: 上部ねじ軸長さ (例: 20.0)
+    pub fn make_stud_bolt(
+        bottom_shank_radius: f64,
+        bottom_shank_length: f64,
+        hex_across_flats: f64,
+        hex_height: f64,
+        top_shank_radius: f64,
+        top_shank_length: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if bottom_shank_radius <= 1e-6 || top_shank_radius <= 1e-6 || hex_height <= 1e-6 {
+            return Err("Stud bolt shank radii and hex height must be positive".to_string());
+        }
+        let r_hex_inner = hex_across_flats * 0.5;
+        if bottom_shank_radius >= r_hex_inner || top_shank_radius >= r_hex_inner {
+            return Err("Hex collar across flats must be larger than shank diameters".to_string());
+        }
+
+        // 1. 中央六角胴部
+        let hex_body = Self::make_hex_prism(hex_across_flats, hex_height, tol)?;
+        let hex_body = crate::BrepTransform::translate_solid(
+            &hex_body,
+            Vec3::new(0.0, 0.0, bottom_shank_length),
+        );
+
+        // 2. 下部ねじ軸（六角胴内へわずかに 0.1 食い込ませる）
+        let bot_shank = crate::PrimitiveBuilder::make_cylinder(
+            bottom_shank_radius,
+            bottom_shank_length + 0.1,
+        )?;
+
+        let solid_part = crate::boolean::BooleanEngine::boolean_solids_exact(
+            &hex_body,
+            &bot_shank,
+            crate::boolean::BooleanOpType::Union,
+            tol,
+        )?;
+
+        // 3. 上部ねじ軸（六角胴内へわずかに 0.1 食い込ませる）
+        let top_shank = crate::PrimitiveBuilder::make_cylinder(
+            top_shank_radius,
+            top_shank_length + 0.1,
+        )?;
+        let top_shank = crate::BrepTransform::translate_solid(
+            &top_shank,
+            Vec3::new(0.0, 0.0, bottom_shank_length + hex_height - 0.1),
+        );
+
+        crate::boolean::BooleanEngine::boolean_solids_exact(
+            &solid_part,
+            &top_shank,
+            crate::boolean::BooleanOpType::Union,
+            tol,
+        )
+    }
 }

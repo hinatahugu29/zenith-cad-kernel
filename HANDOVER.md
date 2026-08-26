@@ -8780,4 +8780,21 @@ py tools/verify_solid_api.py
 - **全52ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（52 of 52 read back as valid closed solids）**。
 - `52_taper_pipe_plug.step`（誤差 $3.33 \times 10^{-15}$）が完全ソリッドとして実証。
 
+## 27. 六角胴スタッドボルト（Hex Center Stud Bolt）および外部CAD 53/53 実証
+
+### 27-1. 六角胴スタッドボルト（Stud Bolt）の構築
+エンジンシリンダーヘッドや重機配管マニホールドの締結に多用される両端ねじ付き六角胴スタッドボルトを構築する `FastenerBuilder::make_stud_bolt`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **下部ねじ軸＋中央六角カラー胴部＋上部ねじ軸の複合ブーリアン（18面構成）**:
+  - 下部ねじ軸円柱（半径 $r_{\text{bot}}$, 長さ $L_{\text{bot}}$）
+  - 中央正六角柱カラー胴部（二面幅 $S_{\text{hex}}$, 高さ $H_{\text{hex}}$）
+  - 上部ねじ軸円柱（半径 $r_{\text{top}}$, 長さ $L_{\text{top}}$）
+  - 解析解体積:
+    $V = (\pi r_{\text{bot}}^2 L_{\text{bot}}) + (\frac{\sqrt{3}}{2} S_{\text{hex}}^2 H_{\text{hex}}) + (\pi r_{\text{top}}^2 L_{\text{top}})$
+    により、計算体積と解析解体積が誤差 $2.50 \times 10^{-13}$ で一致。
+
+### 27-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 53/53 完全達成）
+`target/showcase/` に全53個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全53ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（53 of 53 read back as valid closed solids）**。
+- `53_hex_center_stud_bolt.step`（誤差 $2.50 \times 10^{-13}$）が完全ソリッドとして実証。
+
 

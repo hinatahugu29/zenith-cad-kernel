@@ -251,6 +251,15 @@ pub enum FeatureOp {
         socket_across_flats: f64,
         socket_depth: f64,
     },
+    /// 六角胴スタッドボルト
+    StudBolt {
+        bottom_shank_radius: f64,
+        bottom_shank_length: f64,
+        hex_across_flats: f64,
+        hex_height: f64,
+        top_shank_radius: f64,
+        top_shank_length: f64,
+    },
 }
 
 /// 履歴に書けるブーリアン種別（`BooleanOpType` の直列化可能版）
@@ -798,6 +807,24 @@ impl FeatureTree {
                         *height,
                         *socket_across_flats,
                         *socket_depth,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::StudBolt {
+                    bottom_shank_radius,
+                    bottom_shank_length,
+                    hex_across_flats,
+                    hex_height,
+                    top_shank_radius,
+                    top_shank_length,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_stud_bolt(
+                        *bottom_shank_radius,
+                        *bottom_shank_length,
+                        *hex_across_flats,
+                        *hex_height,
+                        *top_shank_radius,
+                        *top_shank_length,
                         &tol,
                     )?);
                 }
