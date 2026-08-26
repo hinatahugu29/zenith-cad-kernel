@@ -1,7 +1,7 @@
 use crate::shell::{Shell, ShellValidationReport};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use zenith_math::Tolerance;
+use zenith_math::{BoundingBox3, Tolerance};
 
 static SOLID_ID_GEN: AtomicU64 = AtomicU64::new(1);
 
@@ -58,6 +58,11 @@ impl Solid {
     /// 中空なしの単純ソリッド
     pub fn simple(outer_shell: Shell) -> Self {
         Self::new(outer_shell, Vec::new())
+    }
+
+    /// ソリッドの外側境界の軸平行バウンディングボックス (AABB) を計算
+    pub fn bounding_box(&self) -> BoundingBox3 {
+        self.outer_shell.bounding_box()
     }
 
     /// 検証付きでSolidを作成する。

@@ -2,7 +2,7 @@ use crate::bspline_basis::KnotVector;
 use crate::nurbs_curve::ControlPoint3;
 use crate::surface::{PlaneSurface3, Surface3};
 use serde::{Deserialize, Serialize};
-use zenith_math::{Point3, Vec3, Vec3Ext};
+use zenith_math::{BoundingBox3, Point3, Vec3, Vec3Ext};
 
 /// 3次元 NURBS / B-Spline 曲面
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -16,6 +16,17 @@ pub struct NurbsSurface3 {
 }
 
 impl NurbsSurface3 {
+    /// 曲面の全制御点から軸平行バウンディングボックス (AABB) を計算
+    pub fn bounding_box(&self) -> BoundingBox3 {
+        let mut bbox = BoundingBox3::empty();
+        for row in &self.control_points {
+            for cp in row {
+                bbox.extend_point(cp.point);
+            }
+        }
+        bbox
+    }
+
     /// この曲面が平面そのものなら、その平面を返す。
     ///
     /// **当てるのではなく、決まります。** B-spline 曲面は制御点の凸包に

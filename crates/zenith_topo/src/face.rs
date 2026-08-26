@@ -6,7 +6,7 @@ use zenith_geom::{
     ControlPoint2, CoonsPatch3, ExtremumEngine, GordonSurface3, KnotVector, NurbsCurve2,
     NurbsSurface3, PlaneSurface3, Surface3, TriangularPatch3,
 };
-use zenith_math::{Point2, Point3, Tolerance, Vec3};
+use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec3};
 
 static FACE_ID_GEN: AtomicU64 = AtomicU64::new(1);
 
@@ -147,6 +147,38 @@ impl Face {
         })
     }
 
+    /// 面の軸平行バウンディングボックス (AABB) を計算
+    pub fn bounding_box(&self) -> BoundingBox3 {
+        let mut bbox = self.outer_wire.bounding_box();
+        match &self.geometry {
+            FaceGeometry::Plane(_) => {}
+            FaceGeometry::Nurbs(nurbs) => {
+                bbox.extend_bbox(&nurbs.bounding_box());
+            }
+            FaceGeometry::Coons(coons) => {
+                bbox.extend_bbox(&coons.c0.bounding_box());
+                bbox.extend_bbox(&coons.c1.bounding_box());
+                bbox.extend_bbox(&coons.d0.bounding_box());
+                bbox.extend_bbox(&coons.d1.bounding_box());
+            }
+            FaceGeometry::Gordon(gordon) => {
+                for curve in &gordon.u_curves {
+                    bbox.extend_bbox(&curve.bounding_box());
+                }
+                for curve in &gordon.v_curves {
+                    bbox.extend_bbox(&curve.bounding_box());
+                }
+            }
+            FaceGeometry::Triangular(tri) => {
+                bbox.extend_bbox(&tri.c0.bounding_box());
+                bbox.extend_bbox(&tri.c1.bounding_box());
+                bbox.extend_bbox(&tri.c2.bounding_box());
+            }
+        }
+        bbox
+    }
+
+    /// 外側境界ワイヤのみを持つ単純フェイス
     pub fn simple(geometry: FaceGeometry, outer_wire: Wire) -> Self {
         Self::new(geometry, outer_wire, Vec::new(), Orientation::Forward, 1e-6)
     }

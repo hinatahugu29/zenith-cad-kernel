@@ -1,7 +1,7 @@
 use crate::face::{Face, FaceGeometry};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use zenith_math::{Point2, Point3, Tolerance};
+use zenith_math::{BoundingBox3, Point2, Point3, Tolerance};
 
 static SHELL_ID_GEN: AtomicU64 = AtomicU64::new(1);
 
@@ -95,6 +95,15 @@ impl Shell {
     /// 閉じたシェル（ソリッドの境界）
     pub fn closed(faces: Vec<Face>) -> Self {
         Self::new(faces, true)
+    }
+
+    /// シェルを構成する全面の軸平行バウンディングボックス (AABB) を計算
+    pub fn bounding_box(&self) -> BoundingBox3 {
+        let mut bbox = BoundingBox3::empty();
+        for face in &self.faces {
+            bbox.extend_bbox(&face.bounding_box());
+        }
+        bbox
     }
 
     /// 閉シェルとして最低限の位相条件を検証する。

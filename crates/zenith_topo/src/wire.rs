@@ -2,7 +2,7 @@ use crate::edge::OrientedEdge;
 use crate::vertex::Vertex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
-use zenith_math::{Point3, Tolerance};
+use zenith_math::{BoundingBox3, Point3, Tolerance};
 
 static WIRE_ID_GEN: AtomicU64 = AtomicU64::new(1);
 
@@ -19,6 +19,15 @@ impl Wire {
             id: WIRE_ID_GEN.fetch_add(1, Ordering::Relaxed),
             edges,
         }
+    }
+
+    /// ワイヤを構成する全エッジの軸平行バウンディングボックス (AABB) を計算
+    pub fn bounding_box(&self) -> BoundingBox3 {
+        let mut bbox = BoundingBox3::empty();
+        for edge in &self.edges {
+            bbox.extend_bbox(&edge.bounding_box());
+        }
+        bbox
     }
 
     /// ワイヤが閉じているか検証（各エッジの終点が次のエッジの始点と一致し、最後の終点が最初の始点と一致するか）

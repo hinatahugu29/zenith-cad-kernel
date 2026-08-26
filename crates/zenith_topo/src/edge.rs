@@ -2,7 +2,7 @@ use crate::vertex::Vertex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use zenith_geom::NurbsCurve3;
-use zenith_math::Point3;
+use zenith_math::{BoundingBox3, Point3};
 
 static EDGE_ID_GEN: AtomicU64 = AtomicU64::new(1);
 
@@ -63,6 +63,16 @@ impl Edge {
     pub fn evaluate(&self, t: f64) -> Point3 {
         self.curve.evaluate(t)
     }
+
+    /// エッジの軸平行バウンディングボックス (AABB) を計算
+    pub fn bounding_box(&self) -> BoundingBox3 {
+        let mut bbox = BoundingBox3::from_point(self.start_vertex.point);
+        bbox.extend_point(self.end_vertex.point);
+        for cp in &self.curve.control_points {
+            bbox.extend_point(cp.point);
+        }
+        bbox
+    }
 }
 
 /// 向き情報付きエッジ参照
@@ -83,6 +93,11 @@ impl OrientedEdge {
 
     pub fn reversed(edge: Edge) -> Self {
         Self::new(edge, Orientation::Reversed)
+    }
+
+    /// バウンディングボックス（向きによらずエッジ自体のAABB）
+    pub fn bounding_box(&self) -> BoundingBox3 {
+        self.edge.bounding_box()
     }
 
     /// 向きを考慮した始点頂点

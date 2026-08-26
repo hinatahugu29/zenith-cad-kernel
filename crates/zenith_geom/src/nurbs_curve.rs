@@ -1,6 +1,6 @@
 use crate::bspline_basis::KnotVector;
 use serde::{Deserialize, Serialize};
-use zenith_math::{Point3, Vec3, Vec3Ext};
+use zenith_math::{BoundingBox3, Point3, Vec3, Vec3Ext};
 
 /// 制御点（座標 + 重み）
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -82,6 +82,15 @@ impl NurbsCurve3 {
             control_points,
             knots,
         })
+    }
+
+    /// 曲線の全制御点から軸平行バウンディングボックス (AABB) を計算
+    pub fn bounding_box(&self) -> BoundingBox3 {
+        let mut bbox = BoundingBox3::empty();
+        for cp in &self.control_points {
+            bbox.extend_point(cp.point);
+        }
+        bbox
     }
 
     /// 非有理（全重み1.0）のB-Spline曲線を制御点から簡易作成（クランプ均等結び目）
