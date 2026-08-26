@@ -472,4 +472,66 @@ impl HoleBuilder {
             &tol,
         )
     }
+
+    /// 直方体に座ぐり長穴（Counterbored Slot Hole）を開けたソリッドを生成
+    ///
+    /// `box_w`, `box_d`, `box_h`: 直方体ベースプレート寸法
+    /// `slot_length`: 貫通スロットの直線部長さ
+    /// `slot_radius`: 貫通スロットの半円半径
+    /// `cb_length`: 座ぐりスロットの直線部長さ (cb_length >= slot_length)
+    /// `cb_radius`: 座ぐりスロットの半円半径 (cb_radius > slot_radius)
+    /// `cb_depth`: 座ぐり深さ (cb_depth < box_h)
+    /// `center_x`, `center_y`: スロット中心位置
+    pub fn make_counterbored_slot_box(
+        box_w: f64,
+        box_d: f64,
+        box_h: f64,
+        slot_length: f64,
+        slot_radius: f64,
+        cb_length: f64,
+        cb_radius: f64,
+        cb_depth: f64,
+        center_x: f64,
+        center_y: f64,
+    ) -> Result<Solid, String> {
+        if slot_length <= 1e-6
+            || slot_radius <= 1e-6
+            || cb_radius <= slot_radius
+            || cb_depth <= 1e-6
+            || cb_depth >= box_h
+        {
+            return Err("Invalid counterbored slot dimensions".to_string());
+        }
+
+        let tol = zenith_math::Tolerance::default();
+        let base_box = crate::PrimitiveBuilder::make_box(box_w, box_d, box_h)?;
+
+        // 1. 貫通スロットカッター
+        let thru_slot = crate::PrimitiveBuilder::make_slot_prism(slot_length, slot_radius, box_h + 2.0)?;
+        let thru_slot = crate::BrepTransform::translate_solid(
+            &thru_slot,
+            zenith_math::Vec3::new(center_x, center_y, -1.0),
+        );
+
+        let drilled = crate::BooleanEngine::boolean_solids_exact(
+            &base_box,
+            &thru_slot,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )?;
+
+        // 2. 座ぐりスロットカッター
+        let cb_slot = crate::PrimitiveBuilder::make_slot_prism(cb_length, cb_radius, cb_depth + 1.0)?;
+        let cb_slot = crate::BrepTransform::translate_solid(
+            &cb_slot,
+            zenith_math::Vec3::new(center_x, center_y, box_h - cb_depth),
+        );
+
+        crate::BooleanEngine::boolean_solids_exact(
+            &drilled,
+            &cb_slot,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )
+    }
 }

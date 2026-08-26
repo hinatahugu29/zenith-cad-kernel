@@ -8661,4 +8661,21 @@ py tools/verify_solid_api.py
 - **全45ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（45 of 45 read back as valid closed solids）**。
 - `45_plain_washer.step`（誤差 $1.56 \times 10^{-13}$）が完全ソリッドとして実証。
 
+## 20. 座ぐり長穴（Counterbored Slot Hole）ベースプレートの外部CAD 46/46 実証
+
+### 20-1. 座ぐり長穴（Counterbored Stadium Slot Hole）の構築
+機械構造物（調整ブラケット、スライドベース、テンショナー）の位置決め・遊び調整に多用される座ぐり長穴を構築する `HoleBuilder::make_counterbored_slot_box`（`crates/zenith_algo/src/hole.rs`）を新設しました。
+- **貫通スロット＋上部座ぐりスロットの複合ブーリアン（19面構成）**:
+  - 下部貫通スロット（幅 $2 r_{\text{slot}}$, 長さ $L_{\text{slot}}$）
+  - 上部座ぐりスロット（幅 $2 r_{\text{cb}}$, 長さ $L_{\text{cb}}$, 深さ $d_{\text{cb}}$）
+  - 天面・底面・段差リム・外枠を含む19面構成の完全閉多様体B-Repソリッド（`46_counterbored_slot_hole`）。
+  - 解析解体積:
+    $V = (W \cdot D \cdot H) - S_{\text{thru}} (H - d_{\text{cb}}) - S_{\text{cb}} d_{\text{cb}}$
+    により、計算体積と解析解体積が誤差 $1.40 \times 10^{-13}$ で一致。
+
+### 20-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 46/46 合格）
+`target/showcase/` に全46個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全46ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（46 of 46 read back as valid closed solids）**。
+- `46_counterbored_slot_hole.step`（誤差 $1.40 \times 10^{-13}$）が完全ソリッドとして実証。
+
 

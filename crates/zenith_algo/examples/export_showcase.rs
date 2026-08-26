@@ -966,6 +966,39 @@ fn main() {
         analytic_volume: Some(washer_vol),
     });
 
+    // 46_counterbored_slot_hole
+    let cb_slot_box_w = 80.0;
+    let cb_slot_box_d = 60.0;
+    let cb_slot_box_h = 20.0;
+    let cb_slot_l = 20.0;
+    let cb_slot_r = 5.0;
+    let cb_slot_cb_l = 20.0;
+    let cb_slot_cb_r = 8.0;
+    let cb_slot_cb_d = 6.0;
+    let cb_slot_cx = 40.0;
+    let cb_slot_cy = 30.0;
+    let cb_slot_solid = HoleBuilder::make_counterbored_slot_box(
+        cb_slot_box_w,
+        cb_slot_box_d,
+        cb_slot_box_h,
+        cb_slot_l,
+        cb_slot_r,
+        cb_slot_cb_l,
+        cb_slot_cb_r,
+        cb_slot_cb_d,
+        cb_slot_cx,
+        cb_slot_cy,
+    ).expect("counterbored slot box");
+    let s_thru = cb_slot_l * (2.0 * cb_slot_r) + PI * cb_slot_r * cb_slot_r;
+    let s_cb = cb_slot_cb_l * (2.0 * cb_slot_cb_r) + PI * cb_slot_cb_r * cb_slot_cb_r;
+    let cb_slot_vol = (cb_slot_box_w * cb_slot_box_d * cb_slot_box_h) - s_thru * (cb_slot_box_h - cb_slot_cb_d) - s_cb * cb_slot_cb_d;
+    items.push(Item {
+        name: "46_counterbored_slot_hole",
+        note: "mounting base plate with stepped counterbored stadium slot hole for position adjustment",
+        solid: cb_slot_solid,
+        analytic_volume: Some(cb_slot_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,
