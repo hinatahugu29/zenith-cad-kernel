@@ -136,6 +136,37 @@ fn conical_rim_removed(
     original - lower - upper
 }
 
+fn conical_rim_chamfer_removed(
+    opposite_radius: f64,
+    selected_radius: f64,
+    height: f64,
+    distance: f64,
+) -> f64 {
+    let slope = (selected_radius - opposite_radius) / height;
+    let norm = slope.hypot(1.0);
+    let side_z = height - distance / norm;
+    let side_radius = selected_radius - slope * distance / norm;
+    let cap_radius = selected_radius - distance;
+    let upper_height = height - side_z;
+    let lower = std::f64::consts::PI
+        * side_z
+        * (opposite_radius * opposite_radius
+            + opposite_radius * side_radius
+            + side_radius * side_radius)
+        / 3.0;
+    let upper = std::f64::consts::PI
+        * upper_height
+        * (side_radius * side_radius + side_radius * cap_radius + cap_radius * cap_radius)
+        / 3.0;
+    let original = std::f64::consts::PI
+        * height
+        * (opposite_radius * opposite_radius
+            + opposite_radius * selected_radius
+            + selected_radius * selected_radius)
+        / 3.0;
+    original - lower - upper
+}
+
 fn main() {
     let tol = Tolerance::default();
     let mut failures = 0usize;
@@ -269,6 +300,14 @@ fn main() {
                 if name == "cylinder" {
                     let distance = target.max_chamfer_distance * 0.25;
                     Some(std::f64::consts::PI * distance * distance * (10.0 - distance / 3.0))
+                } else if name == "cone" || name == "cone_full" {
+                    let distance = target.max_chamfer_distance * 0.25;
+                    Some(conical_rim_chamfer_removed(
+                        if name == "cone" { 4.0 } else { 0.0 },
+                        10.0,
+                        20.0,
+                        distance,
+                    ))
                 } else if name == "plate_with_holes" || name == "revolved_ring" {
                     let distance = target.max_chamfer_distance * 0.25;
                     let hole = target.length / std::f64::consts::TAU;

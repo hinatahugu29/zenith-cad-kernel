@@ -141,6 +141,19 @@ fn conical_top_fillet_volume(r_bottom: f64, r_top: f64, height: f64, fillet: f64
     lower + PI * (primitive(PI * 0.5) - primitive(side_angle))
 }
 
+fn conical_top_chamfer_volume(r_bottom: f64, r_top: f64, height: f64, distance: f64) -> f64 {
+    let slope = (r_top - r_bottom) / height;
+    let norm = slope.hypot(1.0);
+    let side_z = height - distance / norm;
+    let side_radius = r_top - slope * distance / norm;
+    let cap_radius = r_top - distance;
+    let upper_height = height - side_z;
+    PI * side_z * (r_bottom * r_bottom + r_bottom * side_radius + side_radius * side_radius) / 3.0
+        + PI * upper_height
+            * (side_radius * side_radius + side_radius * cap_radius + cap_radius * cap_radius)
+            / 3.0
+}
+
 fn build_subjects() -> Vec<Subject> {
     let mut subjects = Vec::new();
 
@@ -252,6 +265,30 @@ fn build_subjects() -> Vec<Subject> {
         solid: FilletBuilder::fillet_cone_top_edge(0.0, 10.0, 20.0, 1.0, &Tolerance::default())
             .unwrap(),
         analytic_volume: Some(conical_top_fillet_volume(0.0, 10.0, 20.0, 1.0)),
+        section: Some((
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 2.5 * 2.5),
+        )),
+    });
+
+    subjects.push(Subject {
+        name: "cone_top_chamfer_c1",
+        solid: ChamferBuilder::chamfer_cone_top_edge(10.0, 4.0, 20.0, 1.0, &Tolerance::default())
+            .unwrap(),
+        analytic_volume: Some(conical_top_chamfer_volume(10.0, 4.0, 20.0, 1.0)),
+        section: Some((
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 8.5 * 8.5),
+        )),
+    });
+
+    subjects.push(Subject {
+        name: "true_cone_cap_chamfer_c1",
+        solid: ChamferBuilder::chamfer_cone_top_edge(0.0, 10.0, 20.0, 1.0, &Tolerance::default())
+            .unwrap(),
+        analytic_volume: Some(conical_top_chamfer_volume(0.0, 10.0, 20.0, 1.0)),
         section: Some((
             Point3::new(0.0, 0.0, 5.0),
             Vec3::new(0.0, 0.0, 1.0),
