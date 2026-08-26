@@ -12,7 +12,9 @@ use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSu
 use zenith_math::{Point3, Tolerance, Transform3, Vec3, Vec3Ext};
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Shell, Solid, Vertex, Wire};
 
-use crate::{BlendableEdge, BrepTransform, EdgeBlendReport, FilletBuilder, PrimitiveBuilder};
+use crate::{
+    BlendableEdge, BrepTransform, ChamferBuilder, EdgeBlendReport, FilletBuilder, PrimitiveBuilder,
+};
 
 use super::{circle_from_edge, effective_plane_normal, same_edge_geometry};
 
@@ -54,6 +56,44 @@ impl FilletBuilder {
     }
 }
 
+impl ChamferBuilder {
+    /// Builds a pure right cone/frustum whose top planar rim has an exact
+    /// equal-distance chamfer.
+    ///
+    /// `distance` is measured on the planar cap and along the conical
+    /// generator. The cone is aligned with +Z and the selected cap is at
+    /// `z = height`.
+    pub fn chamfer_cone_top_edge(
+        r_bottom: f64,
+        r_top: f64,
+        height: f64,
+        distance: f64,
+        _tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if r_bottom < 0.0 || r_top <= 1e-6 || height <= 1e-6 {
+            return Err(format!(
+                "Cone radii and height are invalid: bottom={r_bottom}, top={r_top}, height={height}"
+            ));
+        }
+        if (r_bottom - r_top).abs() <= 1e-7 * r_bottom.max(r_top).max(1.0) {
+            return Err(
+                "Equal cone radii describe a cylinder; use the cylinder rim builder".into(),
+            );
+        }
+        if distance < 0.0 || !distance.is_finite() {
+            return Err(format!(
+                "Chamfer distance must be finite and not negative, got {distance}"
+            ));
+        }
+        if distance <= 1e-6 {
+            return unfilleted_cone_with_top_cap(r_bottom, r_top, height);
+        }
+
+        let geometry = ConeChamferGeometry::new(r_bottom, r_top, height, distance)?;
+        build_top_chamfered_cone(geometry)
+    }
+}
+
 pub(crate) fn try_fillet_conical_rim(
     solid: &Solid,
     edge_id: u64,
@@ -82,6 +122,34 @@ pub(crate) fn try_fillet_conical_rim(
     )))
 }
 
+pub(crate) fn try_chamfer_conical_rim(
+    solid: &Solid,
+    edge_id: u64,
+    distance: f64,
+) -> Result<Option<(Solid, EdgeBlendReport)>, String> {
+    let Some(site) = PureConeRim::recognize(solid, edge_id) else {
+        return Ok(None);
+    };
+    let geometry = ConeChamferGeometry::new(
+        site.opposite_radius,
+        site.selected_radius,
+        site.height,
+        distance,
+    )?;
+    let canonical = build_top_chamfered_cone(geometry)?;
+    let result = BrepTransform::transform_solid(&canonical, &site.canonical_to_world())?;
+
+    Ok(Some((
+        result,
+        EdgeBlendReport {
+            dihedral_angle_deg: geometry.dihedral().to_degrees(),
+            edge_length: std::f64::consts::TAU * site.selected_radius,
+            setback: distance,
+            predicted_removed_volume: geometry.removed_volume(),
+        },
+    )))
+}
+
 pub(crate) fn conical_rim_blendable(solid: &Solid, edge_id: u64) -> Option<BlendableEdge> {
     let site = PureConeRim::recognize(solid, edge_id)?;
     let unit =
@@ -97,9 +165,78 @@ pub(crate) fn conical_rim_blendable(solid: &Solid, edge_id: u64) -> Option<Blend
         length: std::f64::consts::TAU * site.selected_radius,
         dihedral_angle_deg: (FRAC_PI_2 - unit.1.atan()).to_degrees(),
         max_fillet_radius: max,
-        // The non-right-angle equal-distance chamfer is a separate contract.
-        max_chamfer_distance: 0.0,
+        max_chamfer_distance: site.selected_radius.min(site.height * unit.0) * 0.999,
     })
+}
+
+#[derive(Clone, Copy)]
+struct ConeChamferGeometry {
+    r_bottom: f64,
+    r_top: f64,
+    height: f64,
+    distance: f64,
+    slope: f64,
+    side_radius: f64,
+    side_z: f64,
+    cap_radius: f64,
+}
+
+impl ConeChamferGeometry {
+    fn new(r_bottom: f64, r_top: f64, height: f64, distance: f64) -> Result<Self, String> {
+        if !(distance > 0.0 && distance.is_finite()) {
+            return Err(format!(
+                "Cone rim chamfer distance must be positive, got {distance}"
+            ));
+        }
+        let slope = (r_top - r_bottom) / height;
+        let norm = slope.hypot(1.0);
+        let side_z = height - distance / norm;
+        let side_radius = r_top - slope * distance / norm;
+        let cap_radius = r_top - distance;
+        let scale = r_bottom.max(r_top).max(height).max(1.0);
+        let margin = 1e-8 * scale;
+        if cap_radius <= margin {
+            return Err(format!(
+                "Cone rim chamfer distance {distance} collapses the remaining cap (radius {cap_radius:.6})"
+            ));
+        }
+        if side_z <= margin || side_z >= height - margin {
+            return Err(format!(
+                "Cone rim chamfer distance {distance} reaches the opposite cap or misses the side (contact z {side_z:.6})"
+            ));
+        }
+        if side_radius <= margin {
+            return Err(format!(
+                "Cone rim chamfer distance {distance} collapses the side contact (radius {side_radius:.6})"
+            ));
+        }
+        Ok(Self {
+            r_bottom,
+            r_top,
+            height,
+            distance,
+            slope,
+            side_radius,
+            side_z,
+            cap_radius,
+        })
+    }
+
+    fn dihedral(self) -> f64 {
+        FRAC_PI_2 - self.slope.atan()
+    }
+
+    fn removed_volume(self) -> f64 {
+        let norm = self.slope.hypot(1.0);
+        let limit = self.distance / norm;
+        let chamfer_slope = norm - self.slope;
+        let primitive = |intercept: f64, slope: f64, t: f64| {
+            intercept * intercept * t + intercept * slope * t * t + slope * slope * t.powi(3) / 3.0
+        };
+        std::f64::consts::PI
+            * (primitive(self.r_top, -self.slope, limit)
+                - primitive(self.cap_radius, chamfer_slope, limit))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -606,6 +743,229 @@ fn build_top_filleted_cone(geometry: ConeFilletGeometry) -> Result<Solid, String
         )?;
         faces.push(Face::simple(
             FaceGeometry::Nurbs(torus),
+            Wire::new(vec![
+                OrientedEdge::forward(join_arcs[i].clone()),
+                OrientedEdge::forward(profile_edges[(i + 1) % 4].clone()),
+                OrientedEdge::reversed(top_arcs[i].clone()),
+                OrientedEdge::reversed(profile_edges[i].clone()),
+            ]),
+        ));
+    }
+
+    if rb > 1e-8 {
+        let bottom_plane = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .ok_or("Bottom cap plane is degenerate")?;
+        faces.push(Face::simple(
+            FaceGeometry::Plane(bottom_plane),
+            Wire::new(vec![
+                OrientedEdge::reversed(bottom_arcs[3].clone()),
+                OrientedEdge::reversed(bottom_arcs[2].clone()),
+                OrientedEdge::reversed(bottom_arcs[1].clone()),
+                OrientedEdge::reversed(bottom_arcs[0].clone()),
+            ]),
+        ));
+    }
+
+    let top_plane = PlaneSurface3::new(
+        Point3::new(0.0, 0.0, h),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .ok_or("Top cap plane is degenerate")?;
+    faces.push(Face::simple(
+        FaceGeometry::Plane(top_plane),
+        Wire::new(vec![
+            OrientedEdge::forward(top_arcs[0].clone()),
+            OrientedEdge::forward(top_arcs[1].clone()),
+            OrientedEdge::forward(top_arcs[2].clone()),
+            OrientedEdge::forward(top_arcs[3].clone()),
+        ]),
+    ));
+
+    crate::validated_solid(Shell::closed(faces))
+}
+
+fn build_top_chamfered_cone(geometry: ConeChamferGeometry) -> Result<Solid, String> {
+    let rb = geometry.r_bottom;
+    let h = geometry.height;
+    let theta = |index: usize| FRAC_PI_2 * (index % 4) as f64;
+    let point = |radial: f64, z: f64, angle: f64| {
+        Point3::new(radial * angle.cos(), radial * angle.sin(), z)
+    };
+    let angular_control = |radial: f64, z: f64, angle: f64| {
+        let middle = angle + FRAC_PI_2 * 0.5;
+        Point3::new(
+            SQRT_2 * radial * middle.cos(),
+            SQRT_2 * radial * middle.sin(),
+            z,
+        )
+    };
+    let circular_arc =
+        |radial: f64, z: f64, index: usize, start: Vertex, end: Vertex| -> Result<Edge, String> {
+            Ok(Edge::new(
+                NurbsCurve3::new(
+                    2,
+                    vec![
+                        ControlPoint3::unweighted(start.point),
+                        ControlPoint3::new(angular_control(radial, z, theta(index)), FRAC_1_SQRT_2),
+                        ControlPoint3::unweighted(end.point),
+                    ],
+                    KnotVector::clamped_uniform(3, 2),
+                )?,
+                start,
+                end,
+                1e-6,
+            ))
+        };
+
+    let join: Vec<Vertex> = (0..4)
+        .map(|i| Vertex::from_point(point(geometry.side_radius, geometry.side_z, theta(i))))
+        .collect();
+    let top: Vec<Vertex> = (0..4)
+        .map(|i| Vertex::from_point(point(geometry.cap_radius, h, theta(i))))
+        .collect();
+    let bottom: Vec<Vertex> = if rb > 1e-8 {
+        (0..4)
+            .map(|i| Vertex::from_point(point(rb, 0.0, theta(i))))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let apex = (rb <= 1e-8).then(|| Vertex::from_point(Point3::new(0.0, 0.0, 0.0)));
+
+    let mut bottom_arcs = Vec::new();
+    let mut join_arcs = Vec::with_capacity(4);
+    let mut top_arcs = Vec::with_capacity(4);
+    let mut side_edges = Vec::with_capacity(4);
+    let mut profile_edges = Vec::with_capacity(4);
+    for i in 0..4 {
+        let next = (i + 1) % 4;
+        if rb > 1e-8 {
+            bottom_arcs.push(circular_arc(
+                rb,
+                0.0,
+                i,
+                bottom[i].clone(),
+                bottom[next].clone(),
+            )?);
+            side_edges.push(Edge::line_between(bottom[i].clone(), join[i].clone())?);
+        } else {
+            side_edges.push(Edge::line_between(apex.clone().unwrap(), join[i].clone())?);
+        }
+        join_arcs.push(circular_arc(
+            geometry.side_radius,
+            geometry.side_z,
+            i,
+            join[i].clone(),
+            join[next].clone(),
+        )?);
+        top_arcs.push(circular_arc(
+            geometry.cap_radius,
+            h,
+            i,
+            top[i].clone(),
+            top[next].clone(),
+        )?);
+        profile_edges.push(Edge::line_between(join[i].clone(), top[i].clone())?);
+    }
+
+    let mut faces = Vec::with_capacity(if rb > 1e-8 { 10 } else { 9 });
+    for i in 0..4 {
+        let next = (i + 1) % 4;
+        let side_rows = if rb > 1e-8 {
+            vec![
+                vec![
+                    ControlPoint3::unweighted(bottom[i].point),
+                    ControlPoint3::unweighted(join[i].point),
+                ],
+                vec![
+                    ControlPoint3::new(angular_control(rb, 0.0, theta(i)), FRAC_1_SQRT_2),
+                    ControlPoint3::new(
+                        angular_control(geometry.side_radius, geometry.side_z, theta(i)),
+                        FRAC_1_SQRT_2,
+                    ),
+                ],
+                vec![
+                    ControlPoint3::unweighted(bottom[next].point),
+                    ControlPoint3::unweighted(join[next].point),
+                ],
+            ]
+        } else {
+            let apex_point = apex.as_ref().unwrap().point;
+            vec![
+                vec![
+                    ControlPoint3::unweighted(apex_point),
+                    ControlPoint3::unweighted(join[i].point),
+                ],
+                vec![
+                    ControlPoint3::new(apex_point, FRAC_1_SQRT_2),
+                    ControlPoint3::new(
+                        angular_control(geometry.side_radius, geometry.side_z, theta(i)),
+                        FRAC_1_SQRT_2,
+                    ),
+                ],
+                vec![
+                    ControlPoint3::unweighted(apex_point),
+                    ControlPoint3::unweighted(join[next].point),
+                ],
+            ]
+        };
+        let side_surface = NurbsSurface3::new(
+            2,
+            1,
+            side_rows,
+            KnotVector::clamped_uniform(3, 2),
+            KnotVector::clamped_uniform(2, 1),
+        )?;
+        let side_wire = if rb > 1e-8 {
+            Wire::new(vec![
+                OrientedEdge::forward(bottom_arcs[i].clone()),
+                OrientedEdge::forward(side_edges[next].clone()),
+                OrientedEdge::reversed(join_arcs[i].clone()),
+                OrientedEdge::reversed(side_edges[i].clone()),
+            ])
+        } else {
+            Wire::new(vec![
+                OrientedEdge::forward(side_edges[next].clone()),
+                OrientedEdge::reversed(join_arcs[i].clone()),
+                OrientedEdge::reversed(side_edges[i].clone()),
+            ])
+        };
+        faces.push(Face::simple(FaceGeometry::Nurbs(side_surface), side_wire));
+    }
+
+    for i in 0..4 {
+        let rows = vec![
+            vec![
+                ControlPoint3::unweighted(top[i].point),
+                ControlPoint3::new(
+                    angular_control(geometry.cap_radius, h, theta(i)),
+                    FRAC_1_SQRT_2,
+                ),
+                ControlPoint3::unweighted(top[(i + 1) % 4].point),
+            ],
+            vec![
+                ControlPoint3::unweighted(join[i].point),
+                ControlPoint3::new(
+                    angular_control(geometry.side_radius, geometry.side_z, theta(i)),
+                    FRAC_1_SQRT_2,
+                ),
+                ControlPoint3::unweighted(join[(i + 1) % 4].point),
+            ],
+        ];
+        let chamfer = NurbsSurface3::new(
+            1,
+            2,
+            rows,
+            KnotVector::clamped_uniform(2, 1),
+            KnotVector::clamped_uniform(3, 2),
+        )?;
+        faces.push(Face::simple(
+            FaceGeometry::Nurbs(chamfer),
             Wire::new(vec![
                 OrientedEdge::forward(join_arcs[i].clone()),
                 OrientedEdge::forward(profile_edges[(i + 1) % 4].clone()),

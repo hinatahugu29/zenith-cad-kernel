@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use zenith_algo::{BrepTransform, EdgeBlender, FilletBuilder, MassCalculator, PrimitiveBuilder};
+use zenith_algo::{
+    BrepTransform, ChamferBuilder, EdgeBlender, FilletBuilder, MassCalculator, PrimitiveBuilder,
+};
 use zenith_io::{StepExporter, StepImporter};
 use zenith_math::{Tolerance, Transform3, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams};
@@ -73,6 +75,36 @@ fn expected(r_bottom: f64, r_top: f64, height: f64, fillet: f64) -> Expected {
     }
 }
 
+fn expected_chamfer(r_bottom: f64, r_top: f64, height: f64, distance: f64) -> Expected {
+    let slope = (r_top - r_bottom) / height;
+    let norm = slope.hypot(1.0);
+    let side_z = height - distance / norm;
+    let side_radius = r_top - slope * distance / norm;
+    let cap_radius = r_top - distance;
+    let upper_height = height - side_z;
+    let lower_volume =
+        PI * side_z * (r_bottom * r_bottom + r_bottom * side_radius + side_radius * side_radius)
+            / 3.0;
+    let upper_volume = PI
+        * upper_height
+        * (side_radius * side_radius + side_radius * cap_radius + cap_radius * cap_radius)
+        / 3.0;
+    let original = PI * height * (r_bottom * r_bottom + r_bottom * r_top + r_top * r_top) / 3.0;
+    let side_slant = (side_z * side_z + (side_radius - r_bottom).powi(2)).sqrt();
+    let chamfer_slant = (upper_height * upper_height + (side_radius - cap_radius).powi(2)).sqrt();
+    let area = PI * r_bottom * r_bottom
+        + PI * (r_bottom + side_radius) * side_slant
+        + PI * (side_radius + cap_radius) * chamfer_slant
+        + PI * cap_radius * cap_radius;
+    Expected {
+        volume: lower_volume + upper_volume,
+        area,
+        removed: original - lower_volume - upper_volume,
+        dihedral: FRAC_PI_2 - slope.atan(),
+        setback: distance,
+    }
+}
+
 fn cap_edge_ids(solid: &Solid, direction: Vec3) -> Vec<u64> {
     let mut ids = Vec::new();
     for face in &solid.outer_shell.faces {
@@ -119,6 +151,28 @@ fn exact_conical_rim_matches_independent_meridian_integrals() {
 }
 
 #[test]
+fn exact_conical_chamfer_matches_independent_meridian_integrals() {
+    let tol = Tolerance::default();
+    for (bottom, top, height, distance) in [
+        (10.0, 4.0, 20.0, 1.0),
+        (4.0, 10.0, 20.0, 1.0),
+        (0.0, 10.0, 20.0, 1.0),
+        (12.0, 7.0, 8.0, 0.5),
+    ] {
+        let solid = ChamferBuilder::chamfer_cone_top_edge(bottom, top, height, distance, &tol)
+            .unwrap_or_else(|error| {
+                panic!("bottom={bottom}, top={top}, h={height}, c={distance}: {error}")
+            });
+        let report = solid.outer_shell.validate_closed(&tol);
+        assert!(report.is_valid(), "{:#?}", report.errors);
+        let measured = MassCalculator::compute_from_brep(&solid, &params());
+        let expected = expected_chamfer(bottom, top, height, distance);
+        close(measured.volume, expected.volume, 3e-11);
+        close(measured.surface_area, expected.area, 3e-11);
+    }
+}
+
+#[test]
 fn both_frustum_rims_match_opencascade_reference_values() {
     let cone = PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap();
     let top = cap_edge_ids(&cone, Vec3::new(0.0, 0.0, 1.0));
@@ -135,6 +189,16 @@ fn both_frustum_rims_match_opencascade_reference_values() {
     let bottom_props = MassCalculator::compute_from_brep(&rounded_bottom, &params());
     close(bottom_props.volume, 3242.364474159573, 3e-11);
     close(bottom_props.surface_area, 1230.5830568214212, 3e-11);
+
+    for (edge, want) in [
+        (top[1], expected_chamfer(10.0, 4.0, 20.0, 1.0)),
+        (bottom[1], expected_chamfer(4.0, 10.0, 20.0, 1.0)),
+    ] {
+        let chamfered = EdgeBlender::chamfer_edge(&cone, edge, 1.0).unwrap();
+        let measured = MassCalculator::compute_from_brep(&chamfered, &params());
+        close(measured.volume, want.volume, 3e-11);
+        close(measured.surface_area, want.area, 3e-11);
+    }
 }
 
 #[test]
@@ -153,7 +217,7 @@ fn one_selected_arc_propagates_around_the_non_right_angle_rim() {
         expected.dihedral,
         1e-13,
     );
-    assert_eq!(candidate.max_chamfer_distance, 0.0);
+    assert!(candidate.max_chamfer_distance > 3.0);
 
     let (_, report) = EdgeBlender::blend_edge(
         &cone,
@@ -163,6 +227,17 @@ fn one_selected_arc_propagates_around_the_non_right_angle_rim() {
     .unwrap();
     close(report.edge_length, 2.0 * PI * 4.0, 1e-13);
     close(report.setback, expected.setback, 1e-13);
+    close(report.predicted_removed_volume, expected.removed, 3e-13);
+
+    let (_, report) = EdgeBlender::blend_edge(
+        &cone,
+        top[1],
+        zenith_algo::BlendKind::Chamfer { distance: 1.0 },
+    )
+    .unwrap();
+    let expected = expected_chamfer(10.0, 4.0, 20.0, 1.0);
+    close(report.edge_length, 2.0 * PI * 4.0, 1e-13);
+    close(report.setback, 1.0, 1e-13);
     close(report.predicted_removed_volume, expected.removed, 3e-13);
 }
 
@@ -190,6 +265,21 @@ fn a_true_cone_base_rim_is_supported_without_an_artificial_apex_cap() {
     let want = expected(0.0, 10.0, 20.0, 1.0);
     close(measured.volume, want.volume, 3e-11);
     close(measured.surface_area, want.area, 3e-11);
+
+    let chamfered = EdgeBlender::chamfer_edge(&cone, base[2], 1.0).unwrap();
+    assert_eq!(
+        chamfered
+            .outer_shell
+            .faces
+            .iter()
+            .filter(|face| matches!(face.geometry, FaceGeometry::Plane(_)))
+            .count(),
+        1
+    );
+    let measured = MassCalculator::compute_from_brep(&chamfered, &params());
+    let want = expected_chamfer(0.0, 10.0, 20.0, 1.0);
+    close(measured.volume, want.volume, 3e-11);
+    close(measured.surface_area, want.area, 3e-11);
 }
 
 #[test]
@@ -213,6 +303,11 @@ fn an_occ_full_circle_cone_rim_is_selectable() {
     let measured = MassCalculator::compute_from_brep(&rounded, &params());
     close(measured.volume, 3264.7082284293483, 3e-10);
     close(measured.surface_area, 1277.2926805751288, 3e-10);
+    let chamfered = EdgeBlender::chamfer_edge(&cone, small.edge_id, 1.0).unwrap();
+    let measured = MassCalculator::compute_from_brep(&chamfered, &params());
+    let want = expected_chamfer(10.0, 4.0, 20.0, 1.0);
+    close(measured.volume, want.volume, 3e-10);
+    close(measured.surface_area, want.area, 3e-10);
 }
 
 #[test]
@@ -242,6 +337,20 @@ fn an_occ_true_cone_full_circle_keeps_its_real_apex() {
     let want = expected(0.0, 10.0, 20.0, 1.0);
     close(measured.volume, want.volume, 3e-10);
     close(measured.surface_area, want.area, 3e-10);
+    let chamfered = EdgeBlender::chamfer_edge(&cone, candidates[0].edge_id, 1.0).unwrap();
+    assert_eq!(
+        chamfered
+            .outer_shell
+            .faces
+            .iter()
+            .filter(|face| matches!(face.geometry, FaceGeometry::Plane(_)))
+            .count(),
+        1
+    );
+    let measured = MassCalculator::compute_from_brep(&chamfered, &params());
+    let want = expected_chamfer(0.0, 10.0, 20.0, 1.0);
+    close(measured.volume, want.volume, 3e-10);
+    close(measured.surface_area, want.area, 3e-10);
 }
 
 #[test]
@@ -259,6 +368,12 @@ fn conical_rim_recognition_is_invariant_under_rigid_placement() {
     close(
         MassCalculator::compute_from_brep(&rounded, &params()).volume,
         expected(10.0, 4.0, 20.0, 1.0).volume,
+        3e-11,
+    );
+    let chamfered = EdgeBlender::chamfer_edge(&moved, top[2], 1.0).unwrap();
+    close(
+        MassCalculator::compute_from_brep(&chamfered, &params()).volume,
+        expected_chamfer(10.0, 4.0, 20.0, 1.0).volume,
         3e-11,
     );
 }
@@ -282,45 +397,52 @@ fn torus_patch_is_tangent_to_the_cap_and_conical_side() {
 }
 
 #[test]
-fn conical_fillet_survives_step_and_coarse_to_fine_meshes() {
-    let rounded =
-        FilletBuilder::fillet_cone_top_edge(10.0, 4.0, 20.0, 1.0, &Tolerance::default()).unwrap();
-    let step = StepExporter::export_solid_to_string(&rounded, "CONICAL_EDGE_FILLET");
-    let reread = StepImporter::import_solids_from_str(&step)
-        .unwrap()
-        .into_iter()
-        .next()
-        .unwrap();
-    assert!(reread
-        .outer_shell
-        .validate_closed(&Tolerance::default())
-        .is_valid());
+fn conical_blends_survive_step_and_coarse_to_fine_meshes() {
+    let tol = Tolerance::default();
+    for (name, blended) in [
+        (
+            "CONICAL_EDGE_FILLET",
+            FilletBuilder::fillet_cone_top_edge(10.0, 4.0, 20.0, 1.0, &tol).unwrap(),
+        ),
+        (
+            "CONICAL_EDGE_CHAMFER",
+            ChamferBuilder::chamfer_cone_top_edge(10.0, 4.0, 20.0, 1.0, &tol).unwrap(),
+        ),
+    ] {
+        let step = StepExporter::export_solid_to_string(&blended, name);
+        let reread = StepImporter::import_solids_from_str(&step)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        assert!(reread.outer_shell.validate_closed(&tol).is_valid());
 
-    for divisions in [4, 6, 8, 12, 16, 24, 32] {
-        let mesh = tessellate_solid(
-            &reread,
-            &TessellationParams {
-                u_divisions: divisions,
-                v_divisions: divisions,
-            },
-        );
-        let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
-        let mut degenerate = 0usize;
-        for triangle in &mesh.indices {
-            let a = mesh.positions[triangle[0] as usize];
-            let b = mesh.positions[triangle[1] as usize];
-            let c = mesh.positions[triangle[2] as usize];
-            if (b - a).cross(&(c - a)).norm() <= 1e-12 {
-                degenerate += 1;
+        for divisions in [4, 6, 8, 12, 16, 24, 32] {
+            let mesh = tessellate_solid(
+                &reread,
+                &TessellationParams {
+                    u_divisions: divisions,
+                    v_divisions: divisions,
+                },
+            );
+            let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+            let mut degenerate = 0usize;
+            for triangle in &mesh.indices {
+                let a = mesh.positions[triangle[0] as usize];
+                let b = mesh.positions[triangle[1] as usize];
+                let c = mesh.positions[triangle[2] as usize];
+                if (b - a).cross(&(c - a)).norm() <= 1e-12 {
+                    degenerate += 1;
+                }
+                for step in 0..3 {
+                    let (a, b) = (triangle[step], triangle[(step + 1) % 3]);
+                    let key = if a < b { (a, b) } else { (b, a) };
+                    *uses.entry(key).or_insert(0) += 1;
+                }
             }
-            for step in 0..3 {
-                let (a, b) = (triangle[step], triangle[(step + 1) % 3]);
-                let key = if a < b { (a, b) } else { (b, a) };
-                *uses.entry(key).or_insert(0) += 1;
-            }
+            assert_eq!(uses.values().filter(|count| **count != 2).count(), 0);
+            assert_eq!(degenerate, 0);
         }
-        assert_eq!(uses.values().filter(|count| **count != 2).count(), 0);
-        assert_eq!(degenerate, 0);
     }
 }
 
@@ -347,4 +469,7 @@ fn impossible_conical_fillet_radii_are_refused() {
     assert!(FilletBuilder::fillet_cone_top_edge(10.0, 4.0, 20.0, -1.0, &tol).is_err());
     assert!(FilletBuilder::fillet_cone_top_edge(10.0, 4.0, 20.0, 6.0, &tol).is_err());
     assert!(FilletBuilder::fillet_cone_top_edge(10.0, 10.0, 20.0, 1.0, &tol).is_err());
+    assert!(ChamferBuilder::chamfer_cone_top_edge(10.0, 4.0, 20.0, -1.0, &tol).is_err());
+    assert!(ChamferBuilder::chamfer_cone_top_edge(10.0, 4.0, 20.0, 4.0, &tol).is_err());
+    assert!(ChamferBuilder::chamfer_cone_top_edge(10.0, 10.0, 20.0, 1.0, &tol).is_err());
 }

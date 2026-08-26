@@ -232,6 +232,11 @@ impl EdgeBlender {
             {
                 return Ok(result);
             }
+            if let Some(result) =
+                crate::circular_fillet::cone::try_chamfer_conical_rim(solid, edge_id, distance)?
+            {
+                return Ok(result);
+            }
         }
         let site = BlendSite::locate(solid, edge_id)?;
         let setback = kind.setback(site.dihedral);
