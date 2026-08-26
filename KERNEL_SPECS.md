@@ -145,7 +145,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | ビルダー監査 | **24/24 クリーン**（解析解との差は最悪 6.3e-13、歯車 1.99e-9） | `--example builder_audit` |
 | 平面を NURBS で持つ面 | **全23ビルダーで0枚** | `--example planar_face_audit` |
 | FreeCAD ヘッドレス相互検証 | **27/27 完全一致**（ゲート、不一致で非ゼロ終了） | `tools/freecad_cross_validate.py` |
-| OpenCASCADE ショーケース | **53/53 が valid closed solid（100% 合格）** | `py tools/verify_showcase.py` |
+| OpenCASCADE ショーケース | **54/54 が valid closed solid（100% 合格）** | `py tools/verify_showcase.py` |
 | 他カーネルからの読み書き一周 | **7/7 が解析解と 1e-11〜1e-13** | `tools/verify_reexport.py` |
 | IGES 相互検証 | **5/5**（曲面枚数一致、境界箱のずれ 0） | `tools/verify_iges.py` |
 | 常設プローブ | **35/35 が exit 0** | 上記手順書の一覧 |
