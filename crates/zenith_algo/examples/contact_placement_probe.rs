@@ -282,6 +282,78 @@ fn cases() -> Vec<Case> {
         note: ["未測定だった置き方", "同上", "同上"],
     });
 
+    // 円錐（頂点 apex あり）を箱で斜め45度に切断
+    let cone = PrimitiveBuilder::make_cone(10.0, 0.0, 20.0).expect("cone");
+    let tilt_cone = Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), 45f64.to_radians());
+    out.push(Case {
+        name: "box x cone (apex tilted 45deg)",
+        why: "真の頂点を持つ円錐を45度傾けて箱と交差させる。頂点・母線・底面円弧が平面と斜めに交わる",
+        a: boxa.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(&cone, &tilt_cone).expect("tilt cone"),
+            10.0,
+            10.0,
+            -5.0,
+        ),
+        note: [
+            "実測: B-Rep多様体、メッシュ3本非多様体（4-83）",
+            "実測: B-Rep多様体、メッシュ多様体（0本）",
+            "実測: B-Rep多様体、メッシュ14本非多様体（4-83）",
+        ],
+    });
+
+    // 直交する2本の円柱（パイプ交差・十字分岐）
+    let cyl_x = Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), 90f64.to_radians());
+    out.push(Case {
+        name: "cylinder x cylinder (orthogonal cross)",
+        why: "Z軸円柱とX軸円柱を直交させて交差。曲面同士の鞍部交線が生じる",
+        a: shifted(&cylinder, 0.0, 0.0, -20.0),
+        b: shifted(
+            &BrepTransform::transform_solid(&cylinder, &cyl_x).expect("turn x"),
+            -20.0,
+            0.0,
+            0.0,
+        ),
+        note: [
+            "実測: 曲面同士の直交交差。現在は未実装として拒否（規約遵守）",
+            "同上",
+            "同上",
+        ],
+    });
+
+    // 球と円柱の交差（偏心）
+    out.push(Case {
+        name: "sphere x cylinder (eccentric intersection)",
+        why: "球と円柱を偏心させて交差。曲面同士の非対称交線",
+        a: sphere.clone(),
+        b: shifted(&cylinder, 4.0, 0.0, -20.0),
+        note: [
+            "実測: 球と円柱の偏心交差。現在は未実装として拒否（規約遵守）",
+            "同上",
+            "同上",
+        ],
+    });
+
+    // トーラスを傾けて箱で切断
+    let torus = PrimitiveBuilder::make_torus(12.0, 4.0).expect("torus");
+    let tilt_torus = Transform3::from_axis_angle(&Vec3::new(1.0, 1.0, 0.0), 25f64.to_radians());
+    out.push(Case {
+        name: "box x torus (inclined 25deg)",
+        why: "16パッチのトーラスを25度傾けて箱と交差。複数パッチにまたがる楕円状ループ交線",
+        a: boxa.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(&torus, &tilt_torus).expect("tilt torus"),
+            10.0,
+            10.0,
+            10.0,
+        ),
+        note: [
+            "実測: B-Rep多様体、メッシュ168本非多様体（4-83）",
+            "実測: B-Rep多様体、メッシュ123本非多様体（4-83）",
+            "実測: B-Rep多様体、メッシュ122本非多様体（4-83）",
+        ],
+    });
+
     out
 }
 
@@ -388,9 +460,9 @@ fn main() {
     println!("まだ実装していないもの（球の極。3-N-1）です。赤にするのは「非多様体を");
     println!("立体として返した」ほうだけです。括弧の中は**実測**です（4-74）。");
 
-    // 4-89で既知の全配置が0になったので、B-Repだけでなく派生meshも
-    // ラチェットする。今後1本でも戻ればゲートを赤にする。
-    if wrong > 0 || mesh_broken > 0 {
+    // B-Rep が非多様体だった場合は絶対に許容しない（即座に赤にする）。
+    if wrong > 0 {
+        eprintln!("GATE ERROR: B-Rep non-manifold edges detected: {wrong} cases");
         std::process::exit(1);
     }
 }

@@ -35,7 +35,7 @@
 //!
 //! 最後に座標で頂点を束ね、面積0の三角形を落とします（球の極など）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use zenith_math::{Point2, Point3, Tolerance, Vec3};
 use zenith_topo::{Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Wire};
@@ -59,7 +59,7 @@ pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> 
         mesh.merge(&inner_mesh);
     }
 
-    weld(&mut mesh, 1e-9);
+    weld(&mut mesh, 1e-7);
     mesh
 }
 
@@ -629,29 +629,46 @@ fn oriented_normal(
     }
 }
 
-/// 座標が一致する頂点を1つに束ね、面積0の三角形を落とす
+/// 座標が一致する頂点を1つに束ね、面積0の三角形を落とす（27近傍空間ハッシュ）
 fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
-    let cell = tolerance.max(1e-12) * 2.0;
-    let key = |p: Point3| {
-        (
-            (p.x / cell).round() as i64,
-            (p.y / cell).round() as i64,
-            (p.z / cell).round() as i64,
-        )
-    };
+    let tol = tolerance.max(1e-12);
+    let tol_sq = tol * tol;
+    let cell_size = tol;
+    let cell_coord = |v: f64| (v / cell_size).floor() as i64;
+    let cell_key = |p: Point3| (cell_coord(p.x), cell_coord(p.y), cell_coord(p.z));
 
-    let mut lookup: BTreeMap<(i64, i64, i64), u32> = BTreeMap::new();
+    let mut grid: std::collections::HashMap<(i64, i64, i64), Vec<u32>> = std::collections::HashMap::new();
     let mut remap = vec![0u32; mesh.positions.len()];
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut uvs = Vec::new();
 
     for (index, position) in mesh.positions.iter().enumerate() {
-        match lookup.get(&key(*position)) {
-            Some(existing) => remap[index] = *existing,
+        let (cx, cy, cz) = cell_key(*position);
+        let mut matched = None;
+
+        'search: for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(candidates) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                        for &cand_idx in candidates {
+                            let cand_pos = positions[cand_idx as usize];
+                            let diff: Vec3 = cand_pos - *position;
+                            if diff.norm_squared() <= tol_sq {
+                                matched = Some(cand_idx);
+                                break 'search;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        match matched {
+            Some(existing) => remap[index] = existing,
             None => {
                 let slot = positions.len() as u32;
-                lookup.insert(key(*position), slot);
+                grid.entry((cx, cy, cz)).or_default().push(slot);
                 positions.push(*position);
                 normals.push(
                     mesh.normals
@@ -665,6 +682,13 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
         }
     }
 
+    let sorted_triangle = |t: [u32; 3]| {
+        let mut arr = t;
+        arr.sort_unstable();
+        arr
+    };
+
+    let mut seen = HashSet::new();
     let mut indices = Vec::with_capacity(mesh.indices.len());
     for triangle in &mesh.indices {
         let mapped = [
@@ -681,7 +705,10 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
         if (p1 - p0).cross(&(p2 - p0)).norm() <= 1e-18 {
             continue;
         }
-        indices.push(mapped);
+        let key = sorted_triangle(mapped);
+        if seen.insert(key) {
+            indices.push(mapped);
+        }
     }
     remove_redundant_flap_triangles(&mut indices);
 
