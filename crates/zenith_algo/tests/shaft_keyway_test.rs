@@ -28,13 +28,38 @@ fn test_stepped_shaft_with_keyway() {
         "Shaft with keyway must be valid closed manifold"
     );
 
-    // 2. テッセレーション＆体積検証
+    // 2. 閉形式体積一致検証
+    //
+    // **以前ここは `volume > 0` だけだった。** それでは溝が丸ごと切れていなく
+    // ても、深さが倍でも通る。キー溝は「半径 R の円柱から、幅 w・深さ d の
+    // 角溝を長さ L だけ抜いた」形なので、断面は円弧と弦で囲まれた領域になり、
+    // 閉じた式で書ける。
+    //
+    //   除去断面 = ∫_{-w/2}^{w/2} ( sqrt(R^2 - x^2) - (R - d) ) dx
+    //            = [ x/2 * sqrt(R^2-x^2) + (R^2/2) * asin(x/R) ]_{-w/2}^{w/2} - w(R-d)
     let params = TessellationParams {
         u_divisions: 32,
         v_divisions: 32,
     };
     let mass = MassCalculator::compute_from_brep(&shaft_with_key, &params);
-    assert!(mass.volume > 0.0, "Volume must be positive, got {}", mass.volume);
+
+    let pi = std::f64::consts::PI;
+    let shaft_volume = pi * 15.0 * 15.0 * 40.0 + pi * 10.0 * 10.0 * 30.0;
+
+    let r = 10.0_f64;
+    let half = 4.0 / 2.0;
+    let flat = r - 2.5;
+    let antiderivative =
+        |x: f64| x * 0.5 * (r * r - x * x).sqrt() + (r * r * 0.5) * (x / r).asin();
+    let removed_section = (antiderivative(half) - antiderivative(-half)) - 2.0 * half * flat;
+    let expected = shaft_volume - removed_section * 20.0;
+
+    let error = (mass.volume - expected).abs() / expected;
+    assert!(
+        error < 1e-6,
+        "Keyway shaft volume {} does not match the closed form {expected} (relative {error:.3e})",
+        mass.volume
+    );
 
     // 3. STEP 往復検証
     let step_str = StepExporter::export_solid_to_string(&shaft_with_key, "KeywayShaft");

@@ -102,7 +102,20 @@ fn test_loft_solid_rectangular_pyramid_frustum() {
     assert!(!mesh.indices.is_empty());
 
     let mass = MassCalculator::compute_from_mesh(&mesh);
-    assert!(mass.volume > 0.0, "Loft solid volume must be positive: got {}", mass.volume);
+    // 閉形式体積一致検証。断面は正方形 20 → 14 → 6 で、あいだは直線で結ばれる
+    // ので、**角錐台2つの積み重ね**になる。すべて平面なので刻みによらず厳密。
+    //
+    //   V = (h/3)·(A1 + sqrt(A1·A2) + A2)
+    //
+    // **以前ここは `volume > 0` と `surface_area > 0` だけだった。**
+    let frustum = |a: f64, b: f64, h: f64| h / 3.0 * (a + (a * b).sqrt() + b);
+    let expected = frustum(400.0, 196.0, 15.0) + frustum(196.0, 36.0, 15.0);
+    let error = (mass.volume - expected).abs() / expected;
+    assert!(
+        error < 1e-12,
+        "Rectangular loft volume {} is not the stacked frusta {expected} (relative {error:.3e})",
+        mass.volume
+    );
     assert!(mass.surface_area > 0.0, "Surface area must be positive: got {}", mass.surface_area);
 
     // STEP ラウンドトリップ検証
@@ -175,10 +188,43 @@ fn test_loft_solid_circular_cone_frustum() {
         report.errors
     );
 
-    // テッセレーションと物性値
+    // 閉形式体積一致検証
+    //
+    // 断面のあいだは直線で結ばれる（区間ごとに1枚の面。上の面数がそう数えて
+    // いる）ので、半径 15 → 11 → 6 の円断面3枚は**円錐台2つの積み重ね**に
+    // なる。
+    //
+    //   V = (pi/3)·h·(R² + R·r + r²)
+    //
+    // **以前ここは `volume > 0` だけだった。** 中間断面を無視して 15 → 6 の
+    // 1段の円錐台を作っても通る書き方で、その差は 8.5% ある。
+    let cone_volume =
+        |r0: f64, r1: f64, h: f64| std::f64::consts::PI / 3.0 * h * (r0 * r0 + r0 * r1 + r1 * r1);
+    let expected = cone_volume(15.0, 11.0, 15.0) + cone_volume(11.0, 6.0, 15.0);
+
+    let brep = MassCalculator::compute_from_brep(
+        &loft_cone,
+        &TessellationParams {
+            u_divisions: 96,
+            v_divisions: 96,
+        },
+    );
+    let error = (brep.volume - expected).abs() / expected;
+    assert!(
+        error < 1e-5,
+        "Circular loft volume {} is not the stacked frusta {expected} (relative {error:.3e})",
+        brep.volume
+    );
+
+    // 表示用メッシュは内接するので少しだけ小さい。**下からも締める。**
     let mesh = tessellate_solid(&loft_cone, &TessellationParams::default());
     let mass = MassCalculator::compute_from_mesh(&mesh);
-    assert!(mass.volume > 0.0, "Volume must be positive: got {}", mass.volume);
+    let mesh_error = (mass.volume - expected) / expected;
+    assert!(
+        (-2.0e-3..=0.0).contains(&mesh_error),
+        "Circular loft mesh volume {} against the closed form {expected} (relative {mesh_error:.3e})",
+        mass.volume
+    );
 
     // STEP ラウンドトリップ
     let step_str = StepExporter::export_solid_to_string(&loft_cone, "ZENITH_CIRCULAR_LOFT");

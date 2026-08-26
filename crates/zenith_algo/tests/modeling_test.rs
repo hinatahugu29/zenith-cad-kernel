@@ -4591,7 +4591,14 @@ fn test_sweep_pipe_solid() {
     );
     assert_eq!(pipe_solid.outer_shell.faces.len(), 12);
 
-    // 断面が半径3.5の真円なので、体積は「経路長 x 断面積」を大きく外さない。
+    // 断面が半径 r の真円で、法平面に立っている管の体積は**厳密に** pi r^2 L
+    // （L は経路長）。空間曲線の管では曲率の効く項が消えるので、曲がった経路
+    // でも成り立つ。
+    //
+    // **ここは以前 `volume > 0` だけで、上のコメントだけが「大きく外さない」と
+    // 言っていた。** 断面が半分でも通る書き方だった。実測では 16 区間で
+    // 相対 7.03e-6、32 で 1.52e-7、64 で 1.67e-8、128 で 1.02e-9 と、
+    // 区間を細かくするほど閉じた式に寄る。
     let volume = zenith_algo::MassCalculator::compute_from_brep(
         &pipe_solid,
         &TessellationParams {
@@ -4600,9 +4607,20 @@ fn test_sweep_pipe_solid() {
         },
     )
     .volume;
+
+    let samples = 200_000;
+    let mut path_length = 0.0;
+    let mut previous = path.evaluate(0.0);
+    for index in 1..=samples {
+        let current = path.evaluate(index as f64 / samples as f64);
+        path_length += (current - previous).norm();
+        previous = current;
+    }
+    let tube = std::f64::consts::PI * 3.5 * 3.5 * path_length;
+    let error = (volume - tube).abs() / tube;
     assert!(
-        volume > 0.0,
-        "Sweep pipe volume must be positive, got {volume}"
+        error < 2e-5,
+        "Swept pipe volume {volume} is not the tube volume {tube} (relative {error:.3e})"
     );
 
 
