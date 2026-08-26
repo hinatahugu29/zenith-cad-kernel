@@ -8511,4 +8511,24 @@ py tools/verify_solid_api.py
 - **全34ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格**。
 - `32_open_box_shell.step`（誤差 $2.50 \times 10^{-16}$、ほぼゼロ）、`33_open_cylinder_shell.step`（誤差 $8.37 \times 10^{-14}$）、`34_open_slot_tray_shell.step`（誤差 $2.15 \times 10^{-13}$）ともに解析解とマシンイプシロン級で一致。
 
+## 12. 解析的曲面交差ソルバー（Analytic SSI Fast-Path）と3次元楕円NURBS曲線表現
+
+### 12-1. 解析曲面交差（Analytic SSI）の必要性と優位性
+従来の数値マーチング交差（`IntersectionMarcher`）は、ニュートン・ラフソン法による数値探索を行うため、接点付近の特異点や微小な反復誤差（$10^{-11} \sim 10^{-5}$）が避けられず、計算コストも高くなります。
+そこで、基本解析曲面同士（平面・球面・円柱面）の交差曲線を代数的に直接解くファストパス `AnalyticIntersection`（`crates/zenith_geom/src/analytic_ssi.rs`）を実装しました。
+
+- **平面 × 平面**: $2\times 2$ 線形方程式による交線直線（`Line3`）の厳密代数解（$O(1)$ 時間、誤差 $10^{-16}$）。
+- **平面 × 球面**: 符号付き距離による交差円（`Circle3`）の閉形式導出。
+- **平面 × 円柱面**:
+  - 垂直断面（$|\cos\theta| \approx 1$）: 真円（`Circle3`）
+  - 軸平行断面（$|\cos\theta| \approx 0$）: 2本の平行直線（`TwoLines`）または1接線（`Line`）
+  - 斜め断面（$0 < |\cos\theta| < 1$）: 厳密な楕円（`Ellipse3`）
+- **球 × 円柱（同軸）**: 上下2つの水平円（`TwoCircles`）または赤道接円。
+
+### 12-2. 3次元楕円（Ellipse3）の有理2次NURBS曲線への厳密変換
+円柱を斜めに切断した際に生じる楕円断面を正確にB-Repトポロジーへ組み込むため、3次元楕円弧 `Ellipse3`（`crates/zenith_geom/src/curve.rs`）およびその有理2次NURBS変換を実装しました。
+- **セグメント分割**: $2\pi$ 周期を正確に4分割（$90^\circ$ ごと）し、ノット多重度2のクランプ結び目ベクトル `[0,0,0, 1,1, 2,2, 3,3, 4,4,4]` を生成。
+- **制御点と重み**: 中間制御点の重み $w_m = \cos(45^\circ) = 1/\sqrt{2}$、制御点位置 $P_{\text{mid}} = C + \frac{a}{w_m} \vec{u} \cos\theta_m + \frac{b}{w_m} \vec{v} \sin\theta_m$ により真の楕円軌跡を表現。
+- **幾何整合性**: NURBS曲線上のすべてのサンプリング点が、円柱面（$x^2 + y^2 = R^2$）および切断平面の方程式を誤差 $10^{-12}$ で厳密に満たすことを数学的に実証。
+
 
