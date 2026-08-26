@@ -398,6 +398,29 @@ fn build_subjects() -> Vec<Subject> {
         )),
     });
 
+    let conical_chamfer = 2.0;
+    let chamfer_contact_z = conical_chamfer / norm;
+    let chamfer_slope = slope - norm;
+    let line_primitive = |intercept: f64, line_slope: f64, z: f64| {
+        intercept * intercept * z
+            + intercept * line_slope * z * z
+            + line_slope * line_slope * z.powi(3) / 3.0
+    };
+    let conical_chamfer_added = PI
+        * (line_primitive(8.0 + conical_chamfer, chamfer_slope, chamfer_contact_z)
+            - line_primitive(8.0, slope, chamfer_contact_z));
+    subjects.push(Subject {
+        name: "conical_boss_root_chamfer_c2",
+        solid: EdgeBlender::chamfer_edge(&conical_boss, conical_root.edge_id, conical_chamfer)
+            .unwrap(),
+        analytic_volume: Some(40.0 * 40.0 * 20.0 + frustum_volume + conical_chamfer_added),
+        section: Some((
+            Point3::new(0.0, 0.0, 10.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(40.0 * 40.0),
+        )),
+    });
+
     if let Ok(solid) = ShellingBuilder::make_open_box(40.0, 30.0, 20.0, 2.0) {
         subjects.push(Subject {
             name: "shelled_open_box",
