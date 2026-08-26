@@ -8592,4 +8592,21 @@ py tools/verify_solid_api.py
 - **全39ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格**。
 - `39_triangular_prism_rib.step`（体積 $4800.0000$、誤差 $0.00$）が完全ソリッドとして実証。
 
+## 16. 皿モミ穴（Countersink Hole）フィーチャーと外部CAD 40/40 ソリッド完全実証
+
+### 16-1. 皿ビス用皿モミ穴（Countersink Hole）の構築
+機械締結（皿頭ボルト、フラットヘッドスクリュー）の埋め込み座ぐり加工を行う `HoleBuilder::make_countersink_hole_box`（`crates/zenith_algo/src/hole.rs`）を検証・統合しました。
+- **貫通下穴＋円錐台モミ部の複合ブーリアン**:
+  - 下部ストレート穴: 半径 $r_{\text{hole}}$ の円柱面（4パッチ）
+  - 上部皿モミ部: 半径 $r_{\text{sink}} \to r_{\text{hole}}$、深さ $d_{\text{sink}} = (r_{\text{sink}} - r_{\text{hole}}) / \tan(\theta/2)$ の円錐面（4パッチ）
+  - 天面・底面キャップと外枠を含む14面構成の閉多様体B-Repソリッド。
+- **解析解体積一致**:
+  $V = (W \cdot D \cdot H) - \pi r_{\text{hole}}^2 (H - d_{\text{sink}}) - \frac{\pi d_{\text{sink}}}{3} (r_{\text{sink}}^2 + r_{\text{sink}} r_{\text{hole}} + r_{\text{hole}}^2)$
+  により、計算体積と解析解体積が誤差 $1.95 \times 10^{-11}$ で一致。
+
+### 16-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 40/40 合格）
+`target/showcase/` に大台となる全40個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全40ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（40 of 40 read back as valid closed solids）**。
+- `40_boolean_countersink_hole.step`（誤差 $1.95 \times 10^{-11}$）が完全ソリッドとして実証。
+
 

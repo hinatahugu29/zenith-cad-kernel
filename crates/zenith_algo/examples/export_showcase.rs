@@ -11,8 +11,8 @@ use zenith_algo::StepInterop;
 
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, DraftBuilder, EdgeBlender, ExtrudeBuilder,
-    GearBuilder, HelixBuilder, LoftBuilder, MassCalculator, PrimitiveBuilder, ProfileBuilder,
-    RevolveBuilder, RibBuilder, ShaftBuilder, ShellingBuilder, SweepBuilder,
+    GearBuilder, HelixBuilder, HoleBuilder, LoftBuilder, MassCalculator, PrimitiveBuilder,
+    ProfileBuilder, RevolveBuilder, RibBuilder, ShaftBuilder, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -842,6 +842,37 @@ fn main() {
         note: "triangular gusset prism rib for mechanical bracket stiffening",
         solid: rib_solid,
         analytic_volume: Some(rib_vol),
+    });
+
+    // 40_boolean_countersink_hole
+    let cs_box_w = 60.0;
+    let cs_box_d = 50.0;
+    let cs_box_h = 20.0;
+    let cs_hole_r = 5.0;
+    let cs_sink_r = 9.0;
+    let cs_angle_deg = 90.0;
+    let cs_cx = 30.0;
+    let cs_cy = 25.0;
+    let cs_solid = HoleBuilder::make_countersink_hole_box(
+        cs_box_w,
+        cs_box_d,
+        cs_box_h,
+        cs_hole_r,
+        cs_sink_r,
+        cs_angle_deg,
+        cs_cx,
+        cs_cy,
+    ).expect("countersink hole box");
+    let cs_half_rad: f64 = (cs_angle_deg * 0.5).to_radians();
+    let cs_depth = (cs_sink_r - cs_hole_r) / cs_half_rad.tan();
+    let cs_v_box = cs_box_w * cs_box_d * cs_box_h;
+    let cs_v_drill = PI * cs_hole_r * cs_hole_r * (cs_box_h - cs_depth);
+    let cs_v_cone = (PI * cs_depth / 3.0) * (cs_sink_r * cs_sink_r + cs_sink_r * cs_hole_r + cs_hole_r * cs_hole_r);
+    items.push(Item {
+        name: "40_boolean_countersink_hole",
+        note: "countersunk screw through-hole block combining cylindrical drill and conical bevel cavity",
+        solid: cs_solid,
+        analytic_volume: Some(cs_v_box - cs_v_drill - cs_v_cone),
     });
 
     // --- 出力 ---
