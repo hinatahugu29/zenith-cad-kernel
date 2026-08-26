@@ -948,6 +948,24 @@ fn main() {
         analytic_volume: Some(cap_vol),
     });
 
+    // 45_plain_washer
+    let washer_inner_r = 4.25; // M8 用平座金
+    let washer_outer_r = 8.0;
+    let washer_t = 1.6;
+    let washer_solid = FastenerBuilder::make_plain_washer(
+        washer_inner_r,
+        washer_outer_r,
+        washer_t,
+        &tol,
+    ).expect("plain washer");
+    let washer_vol = PI * (washer_outer_r * washer_outer_r - washer_inner_r * washer_inner_r) * washer_t;
+    items.push(Item {
+        name: "45_plain_washer",
+        note: "JIS/ISO standard plain flat washer ring solid with annular planar caps",
+        solid: washer_solid,
+        analytic_volume: Some(washer_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

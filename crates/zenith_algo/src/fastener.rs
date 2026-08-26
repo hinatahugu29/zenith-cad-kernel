@@ -174,4 +174,29 @@ impl FastenerBuilder {
             tol,
         )
     }
+
+    /// JIS/ISO規格準拠の平座金（Plain Washer）ソリッドを構築
+    pub fn make_plain_washer(
+        inner_radius: f64,
+        outer_radius: f64,
+        thickness: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if inner_radius >= outer_radius || inner_radius <= 1e-6 || thickness <= 1e-6 {
+            return Err(format!(
+                "Invalid plain washer dimensions: inner={inner_radius}, outer={outer_radius}, thickness={thickness}"
+            ));
+        }
+
+        let outer = crate::PrimitiveBuilder::make_cylinder(outer_radius, thickness)?;
+        let inner = crate::PrimitiveBuilder::make_cylinder(inner_radius, thickness + 2.0)?;
+        let inner = crate::BrepTransform::translate_solid(&inner, Vec3::new(0.0, 0.0, -1.0));
+
+        crate::boolean::BooleanEngine::boolean_solids_exact(
+            &outer,
+            &inner,
+            crate::boolean::BooleanOpType::Difference,
+            tol,
+        )
+    }
 }

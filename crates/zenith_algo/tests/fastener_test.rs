@@ -138,3 +138,45 @@ fn test_socket_head_cap_screw() {
         "Reimported cap screw must be valid closed"
     );
 }
+
+#[test]
+fn test_plain_washer() {
+    let tol = Tolerance::default();
+    let inner_r = 4.25; // M8用平座金 (内径8.5mm相当)
+    let outer_r = 8.0;  // 外径16mm相当
+    let thickness = 1.6;
+
+    let solid = FastenerBuilder::make_plain_washer(inner_r, outer_r, thickness, &tol)
+        .expect("plain washer");
+
+    // 1. B-Rep 閉多様体検証
+    assert!(
+        solid.outer_shell.validate_closed(&tol).is_valid(),
+        "Washer must be valid closed manifold"
+    );
+
+    // 2. 閉形式体積一致検証
+    let pi = std::f64::consts::PI;
+    let expected_vol = pi * (outer_r * outer_r - inner_r * inner_r) * thickness;
+
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = MassCalculator::compute_from_brep(&solid, &params);
+    let vol_diff = (mass.volume - expected_vol).abs() / expected_vol;
+    assert!(
+        vol_diff < 1e-6,
+        "Volume mismatch: computed={}, expected={}, diff={vol_diff}",
+        mass.volume,
+        expected_vol
+    );
+
+    // 3. STEP 往復検証
+    let step_str = StepExporter::export_solid_to_string(&solid, "PlainWasher");
+    let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
+    assert!(
+        reimported.outer_shell.validate_closed(&tol).is_valid(),
+        "Reimported washer must be valid closed"
+    );
+}

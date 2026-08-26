@@ -8646,4 +8646,19 @@ py tools/verify_solid_api.py
 - **全44ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（44 of 44 read back as valid closed solids）**。
 - `43_stepped_shaft_with_keyway.step`、`44_socket_head_cap_screw.step`（誤差 $1.01 \times 10^{-13}$）ともに完全ソリッドとして実証。
 
+## 19. 平座金（Plain Washer）の統合と外部CAD 45/45 ソリッド完全実証
+
+### 19-1. 平座金（Plain Flat Washer）の構築
+ボルト・ナット締結における座面圧力均一化と緩み止めに用いられる平座金を構築する `FastenerBuilder::make_plain_washer`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **内径穴付き円環厚板ソリッド（10面構成）**:
+  - 外周円柱面（4パッチ）、内周円柱面（4パッチ）、天面および底面のアニュラス（円環）平面キャップからなる完全閉多様体B-Repソリッド（`45_plain_washer`）。
+  - 解析解体積:
+    $V = \pi (R_{\text{outer}}^2 - r_{\text{inner}}^2) T$
+    により、計算体積と解析解体積が誤差 $1.56 \times 10^{-13}$ で一致。
+
+### 19-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 45/45 合格）
+`target/showcase/` に全45個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全45ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（45 of 45 read back as valid closed solids）**。
+- `45_plain_washer.step`（誤差 $1.56 \times 10^{-13}$）が完全ソリッドとして実証。
+
 
