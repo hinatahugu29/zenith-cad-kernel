@@ -86,6 +86,16 @@ jobs:
           done
           exit $fail
 
+      # STL / OBJ / glTF / DXF は、書いたファイルを外から解いて検算します。
+      # 外部カーネルが要らないので、ここに入れられます。見るのは
+      # 「メッシュが閉じているか」「体積が B-Rep と合うか」「3形式が同じ
+      # ものを書いたか」「図面の層が向きと合っているか」。
+      - name: the mesh and drawing exports must survive being read back
+        run: |
+          set -euo pipefail
+          cargo run --release -p zenith_algo --example export_mesh_suite
+          python3 tools/verify_mesh_exports.py
+
       - name: keep the probe output for reading
         if: always()
         uses: actions/upload-artifact@v4
