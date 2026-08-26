@@ -33,6 +33,7 @@ pub mod patch_builder;
 pub mod pattern;
 pub mod polyline;
 pub mod primitive;
+pub mod profile;
 pub mod regularize;
 pub mod shaft;
 
@@ -92,6 +93,7 @@ pub use patch_builder::CurvePatchBuilder;
 pub use pattern::PatternBuilder;
 pub use polyline::{PathSegment, PolylineBuilder};
 pub use primitive::PrimitiveBuilder;
+pub use profile::ProfileBuilder;
 pub use shaft::ShaftBuilder;
 
 

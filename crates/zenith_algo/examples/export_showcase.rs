@@ -10,8 +10,9 @@ use std::path::Path;
 use zenith_algo::StepInterop;
 
 use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, EdgeBlender, GearBuilder, HelixBuilder,
-    MassCalculator, PrimitiveBuilder, ShaftBuilder, ShellingBuilder, SweepBuilder,
+    BooleanEngine, BooleanOpType, BrepTransform, EdgeBlender, ExtrudeBuilder, GearBuilder,
+    HelixBuilder, MassCalculator, PrimitiveBuilder, ProfileBuilder, RevolveBuilder,
+    ShaftBuilder, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -708,6 +709,73 @@ fn main() {
         note: "thin-wall hollow stadium slot tray with open rim and exact rational NURBS cavity",
         solid: open_tray,
         analytic_volume: Some(v_tray_out - v_tray_in),
+    });
+
+    // --- 新機能: 2D スケッチプロファイル押出・回転（ProfileBuilder） ---
+    // 35_extruded_rounded_rect_with_hole
+    let ext_w = 60.0;
+    let ext_h = 40.0;
+    let ext_cr = 6.0;
+    let ext_hr = 10.0;
+    let ext_dz = 20.0;
+    let ext_outer = ProfileBuilder::make_rounded_rectangle(
+        ext_w,
+        ext_h,
+        ext_cr,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    ).expect("ext outer wire");
+    let ext_hole = ProfileBuilder::make_circle(
+        ext_hr,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    ).expect("ext hole wire");
+    let ext_solid = ExtrudeBuilder::extrude_face_with_holes(
+        &ext_outer,
+        &[ext_hole],
+        Vec3::new(0.0, 0.0, ext_dz),
+        &tol,
+    ).expect("extrude rounded rect with hole");
+    let ext_area = (ext_w * ext_h) - 4.0 * ext_cr * ext_cr + PI * ext_cr * ext_cr - PI * ext_hr * ext_hr;
+    items.push(Item {
+        name: "35_extruded_rounded_rect_with_hole",
+        note: "extruded rounded rectangle with center circular through-hole from exact 2D profile",
+        solid: ext_solid,
+        analytic_volume: Some(ext_area * ext_dz),
+    });
+
+    // 36_revolved_flanged_cup
+    let rev_pts = [
+        Point3::new(12.0, 0.0, 0.0),
+        Point3::new(28.0, 0.0, 0.0),
+        Point3::new(28.0, 0.0, 6.0),
+        Point3::new(18.0, 0.0, 6.0),
+        Point3::new(18.0, 0.0, 35.0),
+        Point3::new(12.0, 0.0, 35.0),
+    ];
+    let rev_verts: Vec<Vertex> = rev_pts.iter().map(|&p| Vertex::from_point(p)).collect();
+    let mut rev_edges = Vec::with_capacity(6);
+    for i in 0..6 {
+        let next = (i + 1) % 6;
+        let line = Edge::line_between(rev_verts[i].clone(), rev_verts[next].clone()).expect("line");
+        rev_edges.push(OrientedEdge::forward(line));
+    }
+    let rev_wire = Wire::new(rev_edges);
+    let rev_solid = RevolveBuilder::revolve_wire_solid(
+        &rev_wire,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        &tol,
+    ).expect("revolve flanged cup");
+    let rev_flange_vol = PI * (28.0 * 28.0 - 12.0 * 12.0) * 6.0;
+    let rev_neck_vol = PI * (18.0 * 18.0 - 12.0 * 12.0) * (35.0 - 6.0);
+    items.push(Item {
+        name: "36_revolved_flanged_cup",
+        note: "revolved flanged collar cup solid produced by full 360-deg rational NURBS sweep",
+        solid: rev_solid,
+        analytic_volume: Some(rev_flange_vol + rev_neck_vol),
     });
 
     // --- 出力 ---

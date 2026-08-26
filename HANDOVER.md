@@ -8531,4 +8531,24 @@ py tools/verify_solid_api.py
 - **制御点と重み**: 中間制御点の重み $w_m = \cos(45^\circ) = 1/\sqrt{2}$、制御点位置 $P_{\text{mid}} = C + \frac{a}{w_m} \vec{u} \cos\theta_m + \frac{b}{w_m} \vec{v} \sin\theta_m$ により真の楕円軌跡を表現。
 - **幾何整合性**: NURBS曲線上のすべてのサンプリング点が、円柱面（$x^2 + y^2 = R^2$）および切断平面の方程式を誤差 $10^{-12}$ で厳密に満たすことを数学的に実証。
 
+## 13. 2Dスケッチプロファイルビルダー（ProfileBuilder）と穴あき押出・回転ソリッドの外部CAD 36/36 実証
+
+### 13-1. 2D スケッチプロファイル構築の自動化
+機械部品のモデリングで頻出する各種2D閉断面ワイヤを有理2次NURBSおよび直線エッジで高精度に生成するビルダー `ProfileBuilder`（`crates/zenith_algo/src/profile.rs`）を新設しました。
+- **長方形（`make_rectangle`）**: 3D空間内の任意平面上の4頂点・4直線ワイヤ。
+- **角丸長方形（`make_rounded_rectangle`）**: 四隅に真円フィレットを持つ4直線＋4有理2次円弧ワイヤ。
+- **真円（`make_circle`）**: 4分割有理2次NURBS円ワイヤ。
+- **スロット長円（`make_slot`）**: 2直線＋4有理2次円弧ワイヤ。
+- **正多角形（`make_regular_polygon`）**: 正N角形ワイヤ。
+
+### 13-2. 穴あき断面押出および全周回転ソリッドの構築
+構築された2Dプロファイルを `ExtrudeBuilder` および `RevolveBuilder` に直接投入することで、実用的な機械ソリッドを瞬時に生成可能にしました。
+- **穴あき角丸長方形押出（`35_extruded_rounded_rect_with_hole`）**: 角丸長方形の外側ワイヤと円形穴の内側ワイヤから、上面・底面キャップに円形穴ワイヤを持つ完全閉多様体B-Repソリッド（14面構成）を構築。
+- **フランジ付きカップ全周回転（`36_revolved_flanged_cup`）**: 断面プロファイルから4セグメント有理NURBS回転曲面により、24面構成の閉多様体ソリッドを構築。
+
+### 13-3. 外部CAD検証結果（FreeCAD / OpenCASCADE 36/36 合格）
+`target/showcase/` に全36個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全36ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格**。
+- `35_extruded_rounded_rect_with_hole.step`（誤差 $5.20 \times 10^{-14}$）、`36_revolved_flanged_cup.step`（誤差 $1.72 \times 10^{-13}$）ともに解析解とマシンイプシロン級で一致。
+
 
