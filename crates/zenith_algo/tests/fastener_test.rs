@@ -180,3 +180,59 @@ fn test_plain_washer() {
         "Reimported washer must be valid closed"
     );
 }
+
+#[test]
+fn test_flanged_hex_bolt() {
+    let tol = Tolerance::default();
+    let shank_r = 4.0; // M8
+    let shank_l = 25.0;
+    let flange_r = 8.5;
+    let flange_h = 2.0;
+    let hex_s = 12.0;
+    let hex_h = 6.0;
+
+    let solid = FastenerBuilder::make_flanged_hex_bolt(
+        shank_r,
+        shank_l,
+        flange_r,
+        flange_h,
+        hex_s,
+        hex_h,
+        &tol,
+    )
+    .expect("flanged hex bolt");
+
+    // 1. B-Rep 閉多様体検証
+    assert!(
+        solid.outer_shell.validate_closed(&tol).is_valid(),
+        "Flanged bolt must be valid closed manifold"
+    );
+
+    // 2. 閉形式体積一致検証
+    let pi = std::f64::consts::PI;
+    let shank_vol = pi * shank_r * shank_r * shank_l;
+    let flange_vol = pi * flange_r * flange_r * flange_h;
+    let hex_vol = (3.0_f64.sqrt() * 0.5) * hex_s * hex_s * hex_h;
+    let expected_vol = shank_vol + flange_vol + hex_vol;
+
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = MassCalculator::compute_from_brep(&solid, &params);
+    let vol_diff = (mass.volume - expected_vol).abs() / expected_vol;
+    assert!(
+        vol_diff < 1e-4,
+        "Volume mismatch: computed={}, expected={}, diff={vol_diff}",
+        mass.volume,
+        expected_vol
+    );
+
+    // 3. STEP 往復検証
+    let step_str = StepExporter::export_solid_to_string(&solid, "FlangedHexBolt");
+    let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
+    assert!(
+        reimported.outer_shell.validate_closed(&tol).is_valid(),
+        "Reimported flanged bolt must be valid closed"
+    );
+}

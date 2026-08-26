@@ -999,6 +999,32 @@ fn main() {
         analytic_volume: Some(cb_slot_vol),
     });
 
+    // 47_flanged_hex_bolt
+    let fl_shank_r = 4.0; // M8
+    let fl_shank_l = 25.0;
+    let fl_flange_r = 8.5;
+    let fl_flange_h = 2.0;
+    let fl_hex_s = 12.0;
+    let fl_hex_h = 6.0;
+    let fl_bolt = FastenerBuilder::make_flanged_hex_bolt(
+        fl_shank_r,
+        fl_shank_l,
+        fl_flange_r,
+        fl_flange_h,
+        fl_hex_s,
+        fl_hex_h,
+        &tol,
+    ).expect("flanged hex bolt");
+    let fl_bolt_vol = PI * fl_shank_r * fl_shank_r * fl_shank_l
+        + PI * fl_flange_r * fl_flange_r * fl_flange_h
+        + (3.0_f64.sqrt() * 0.5) * fl_hex_s * fl_hex_s * fl_hex_h;
+    items.push(Item {
+        name: "47_flanged_hex_bolt",
+        note: "JIS/ISO flanged hexagonal head bolt with cylindrical washer flange and threaded stud",
+        solid: fl_bolt,
+        analytic_volume: Some(fl_bolt_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

@@ -199,4 +199,51 @@ impl FastenerBuilder {
             tol,
         )
     }
+
+    /// JIS/ISO規格準拠のフランジ付き六角ボルト（Flanged Hex Bolt）ソリッドを構築
+    ///
+    /// `shank_radius`: ボルト軸部半径 (M8なら 4.0)
+    /// `shank_length`: 軸部長 (30.0)
+    /// `flange_radius`: フランジ円盤半径 (8.5)
+    /// `flange_height`: フランジ厚み (2.0)
+    /// `hex_across_flats`: 六角頭二面幅 S (12.0)
+    /// `hex_head_height`: 六角頭高さ (6.0)
+    pub fn make_flanged_hex_bolt(
+        shank_radius: f64,
+        shank_length: f64,
+        flange_radius: f64,
+        flange_height: f64,
+        hex_across_flats: f64,
+        hex_head_height: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        let r_hex_outer = hex_across_flats / 3.0_f64.sqrt();
+        if flange_radius < r_hex_outer || shank_radius >= flange_radius {
+            return Err(
+                "Flange radius must enclose hex head outer radius and exceed shank radius"
+                    .to_string(),
+            );
+        }
+
+        // 1. 下部段付き円柱（軸部 ＋ フランジ部）
+        let base_body = crate::ShaftBuilder::make_stepped_shaft(&[
+            (shank_radius, shank_length),
+            (flange_radius, flange_height),
+        ])?;
+
+        // 2. 上部正六角柱
+        // わずかにフランジ部へ食い込ませることで境界面接触を排除して真の交差として安定結合
+        let hex_body = Self::make_hex_prism(hex_across_flats, hex_head_height + 0.1, tol)?;
+        let hex_body = crate::BrepTransform::translate_solid(
+            &hex_body,
+            Vec3::new(0.0, 0.0, shank_length + flange_height - 0.1),
+        );
+
+        crate::boolean::BooleanEngine::boolean_solids_exact(
+            &base_body,
+            &hex_body,
+            crate::boolean::BooleanOpType::Union,
+            tol,
+        )
+    }
 }

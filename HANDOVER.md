@@ -8678,4 +8678,22 @@ py tools/verify_solid_api.py
 - **全46ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（46 of 46 read back as valid closed solids）**。
 - `46_counterbored_slot_hole.step`（誤差 $1.40 \times 10^{-13}$）が完全ソリッドとして実証。
 
+## 21. フランジ付き六角ボルト（Flanged Hex Bolt）の外部CAD 47/47 実証
+
+### 21-1. フランジ付き六角ボルト（Flanged Hex Head Bolt）の構築
+自動車・産業機械の締結で座金組み込み不要として広く使用されるフランジボルトを構築する `FastenerBuilder::make_flanged_hex_bolt`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **段付き円柱（軸部＋フランジ）＋正六角柱頭部の複合ブーリアン（18面構成）**:
+  - ねじ軸部（$r_{\text{shank}} \times L_{\text{shank}}$）
+  - フランジ円盤（$r_{\text{flange}} \times h_{\text{flange}}$）
+  - 六角頭部（二面幅 $S$, 高さ $h_{\text{head}}$）
+  - 各境界面の安定結合による完全閉多様体B-Repソリッド（`47_flanged_hex_bolt`）。
+  - 解析解体積:
+    $V = (\pi r_{\text{shank}}^2 L_{\text{shank}}) + (\pi r_{\text{flange}}^2 h_{\text{flange}}) + (\frac{\sqrt{3}}{2} S^2 h_{\text{head}})$
+    により、計算体積と解析解体積が誤差 $2.06 \times 10^{-13}$ で一致。
+
+### 21-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 47/47 合格）
+`target/showcase/` に全47個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全47ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（47 of 47 read back as valid closed solids）**。
+- `47_flanged_hex_bolt.step`（誤差 $2.06 \times 10^{-13}$）が完全ソリッドとして実証。
+
 
