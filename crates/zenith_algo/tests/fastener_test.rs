@@ -291,3 +291,52 @@ fn test_spring_washer() {
         "Reimported spring washer must be valid closed"
     );
 }
+
+#[test]
+fn test_retaining_ring() {
+    let tol = Tolerance::default();
+    let inner_r = 4.8; // M10 軸用
+    let outer_r = 6.2;
+    let t = 1.0;
+    let gap_deg = 45.0;
+
+    let solid = FastenerBuilder::make_retaining_ring(
+        inner_r,
+        outer_r,
+        t,
+        gap_deg,
+        &tol,
+    )
+    .expect("retaining ring");
+
+    // 1. B-Rep 閉多様体検証
+    assert!(
+        solid.outer_shell.validate_closed(&tol).is_valid(),
+        "Retaining ring must be valid closed manifold"
+    );
+
+    // 2. 閉形式体積一致検証
+    let sweep_fraction = (360.0 - gap_deg) / 360.0;
+    let expected_vol = std::f64::consts::PI * (outer_r * outer_r - inner_r * inner_r) * t * sweep_fraction;
+
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = MassCalculator::compute_from_brep(&solid, &params);
+    let vol_diff = (mass.volume - expected_vol).abs() / expected_vol;
+    assert!(
+        vol_diff < 1e-4,
+        "Volume mismatch: computed={}, expected={}, diff={vol_diff}",
+        mass.volume,
+        expected_vol
+    );
+
+    // 3. STEP 往復検証
+    let step_str = StepExporter::export_solid_to_string(&solid, "RetainingRing");
+    let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
+    assert!(
+        reimported.outer_shell.validate_closed(&tol).is_valid(),
+        "Reimported retaining ring must be valid closed"
+    );
+}

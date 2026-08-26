@@ -8713,4 +8713,20 @@ py tools/verify_solid_api.py
 - **全48ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（48 of 48 read back as valid closed solids）**。
 - `48_spring_lock_washer.step` が完全ソリッドとして実証。
 
+## 23. C形止め輪（Retaining Ring / Circlip）の外部CAD 49/49 実証
+
+### 23-1. C形止め輪（External Retaining Ring / Circlip）の構築
+機械軸のベアリング・ギア抜け止めに多用されるC形止め輪を構築する `FastenerBuilder::make_retaining_ring`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **有理2次NURBS円弧＋直線エッジによる閉ループ押し出し（12面構成）**:
+  - 内径 $r_{\text{inner}}$、外径 $R_{\text{outer}}$、板厚 $T$、切欠き開口角度 $\theta_{\text{gap}}$
+  - 外周4分割有理円弧 ＋ 終端直線 ＋ 内周4分割有理円弧 ＋ 始端直線の10エッジ閉ループワイヤから押し出した完全閉多様体B-Repソリッド（`49_retaining_circlip`）。
+  - 解析解体積:
+    $V = \pi (R_{\text{outer}}^2 - r_{\text{inner}}^2) \times \frac{360^\circ - \theta_{\text{gap}}}{360^\circ} \times T$
+    により、計算体積と解析解体積が誤差 $2.35 \times 10^{-13}$ で一致。
+
+### 23-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 49/49 合格）
+`target/showcase/` に全49個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全49ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（49 of 49 read back as valid closed solids）**。
+- `49_retaining_circlip.step`（誤差 $2.35 \times 10^{-13}$）が完全ソリッドとして実証。
+
 

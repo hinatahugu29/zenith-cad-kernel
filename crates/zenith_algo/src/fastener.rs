@@ -293,4 +293,118 @@ impl FastenerBuilder {
             tol,
         )
     }
+
+    /// JIS B 2804 規格準拠のC形止め輪（サークリップ / Retaining Ring / Circlip）ソリッドを構築
+    ///
+    /// `inner_radius`: 内径半径 (例: 軸用 M10 なら 4.8)
+    /// `outer_radius`: 外径半径 (例: 6.2)
+    /// `thickness`: 板厚 (例: 1.0)
+    /// `gap_angle_deg`: 切欠き開口角度 (例: 45.0 度)
+    pub fn make_retaining_ring(
+        inner_radius: f64,
+        outer_radius: f64,
+        thickness: f64,
+        gap_angle_deg: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if inner_radius >= outer_radius || thickness <= 1e-6 {
+            return Err("Invalid retaining ring dimensions: outer must exceed inner, thickness must be positive".to_string());
+        }
+        if gap_angle_deg <= 0.0 || gap_angle_deg >= 180.0 {
+            return Err("Gap angle must be between 0 and 180 degrees".to_string());
+        }
+
+        let start_angle = (gap_angle_deg * 0.5).to_radians();
+        let end_angle = (360.0 - gap_angle_deg * 0.5).to_radians();
+        let num_arc_segs = 4;
+        let d_theta = (end_angle - start_angle) / num_arc_segs as f64;
+        let wm = (d_theta * 0.5).cos();
+
+        let mut edges: Vec<zenith_topo::OrientedEdge> = Vec::with_capacity(num_arc_segs * 2 + 2);
+
+        // 1. 外周有理円弧 4 セグメント (start_angle -> end_angle, CCW)
+        let mut outer_v = Vec::with_capacity(num_arc_segs + 1);
+        for i in 0..=num_arc_segs {
+            let theta = start_angle + i as f64 * d_theta;
+            let pt = Point3::new(outer_radius * theta.cos(), outer_radius * theta.sin(), 0.0);
+            outer_v.push(zenith_topo::Vertex::from_point(pt));
+        }
+
+        for i in 0..num_arc_segs {
+            let th_a = start_angle + i as f64 * d_theta;
+            let th_b = start_angle + (i + 1) as f64 * d_theta;
+            let th_m = (th_a + th_b) * 0.5;
+
+            let p0 = outer_v[i].point;
+            let p1 = outer_v[i + 1].point;
+            let p_mid = Point3::new(
+                (outer_radius / wm) * th_m.cos(),
+                (outer_radius / wm) * th_m.sin(),
+                0.0,
+            );
+
+            let arc_curve = zenith_geom::NurbsCurve3::new(
+                2,
+                vec![
+                    zenith_geom::ControlPoint3::unweighted(p0),
+                    zenith_geom::ControlPoint3::new(p_mid, wm),
+                    zenith_geom::ControlPoint3::unweighted(p1),
+                ],
+                zenith_geom::KnotVector::clamped_uniform(3, 2),
+            )?;
+            let edge = zenith_topo::Edge::new(arc_curve, outer_v[i].clone(), outer_v[i + 1].clone(), tol.linear);
+            edges.push(zenith_topo::OrientedEdge::forward(edge));
+        }
+
+        // 2. 終端直線エッジ (外径 end_angle -> 内径 end_angle)
+        let mut inner_v = Vec::with_capacity(num_arc_segs + 1);
+        for i in 0..=num_arc_segs {
+            let theta = start_angle + i as f64 * d_theta;
+            let pt = Point3::new(inner_radius * theta.cos(), inner_radius * theta.sin(), 0.0);
+            inner_v.push(zenith_topo::Vertex::from_point(pt));
+        }
+
+        let end_line = zenith_topo::Edge::line_between(
+            outer_v[num_arc_segs].clone(),
+            inner_v[num_arc_segs].clone(),
+        )?;
+        edges.push(zenith_topo::OrientedEdge::forward(end_line));
+
+        // 3. 内周有理円弧 4 セグメント (end_angle -> start_angle, 逆順 CW)
+        for i in (0..num_arc_segs).rev() {
+            let th_a = start_angle + (i + 1) as f64 * d_theta;
+            let th_b = start_angle + i as f64 * d_theta;
+            let th_m = (th_a + th_b) * 0.5;
+
+            let p0 = inner_v[i + 1].point;
+            let p1 = inner_v[i].point;
+            let p_mid = Point3::new(
+                (inner_radius / wm) * th_m.cos(),
+                (inner_radius / wm) * th_m.sin(),
+                0.0,
+            );
+
+            let arc_curve = zenith_geom::NurbsCurve3::new(
+                2,
+                vec![
+                    zenith_geom::ControlPoint3::unweighted(p0),
+                    zenith_geom::ControlPoint3::new(p_mid, wm),
+                    zenith_geom::ControlPoint3::unweighted(p1),
+                ],
+                zenith_geom::KnotVector::clamped_uniform(3, 2),
+            )?;
+            let edge = zenith_topo::Edge::new(arc_curve, inner_v[i + 1].clone(), inner_v[i].clone(), tol.linear);
+            edges.push(zenith_topo::OrientedEdge::forward(edge));
+        }
+
+        // 4. 始端直線エッジ (内径 start_angle -> 外径 start_angle)
+        let start_line = zenith_topo::Edge::line_between(
+            inner_v[0].clone(),
+            outer_v[0].clone(),
+        )?;
+        edges.push(zenith_topo::OrientedEdge::forward(start_line));
+
+        let bottom_wire = zenith_topo::Wire::new(edges);
+        crate::ExtrudeBuilder::extrude_wire(&bottom_wire, Vec3::new(0.0, 0.0, thickness), tol)
+    }
 }

@@ -208,6 +208,21 @@ pub enum FeatureOp {
         center_x: f64,
         center_y: f64,
     },
+    /// スプリングワッシャー（ばね座金）
+    SpringWasher {
+        inner_radius: f64,
+        outer_radius: f64,
+        thickness: f64,
+        free_height: f64,
+        gap_deg: f64,
+    },
+    /// C形止め輪（サークリップ）
+    RetainingRing {
+        inner_radius: f64,
+        outer_radius: f64,
+        thickness: f64,
+        gap_angle_deg: f64,
+    },
 }
 
 /// 履歴に書けるブーリアン種別（`BooleanOpType` の直列化可能版）
@@ -670,6 +685,36 @@ impl FeatureTree {
                         *cb_depth,
                         *center_x,
                         *center_y,
+                    )?);
+                }
+                FeatureOp::SpringWasher {
+                    inner_radius,
+                    outer_radius,
+                    thickness,
+                    free_height,
+                    gap_deg,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_spring_washer(
+                        *inner_radius,
+                        *outer_radius,
+                        *thickness,
+                        *free_height,
+                        *gap_deg,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::RetainingRing {
+                    inner_radius,
+                    outer_radius,
+                    thickness,
+                    gap_angle_deg,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_retaining_ring(
+                        *inner_radius,
+                        *outer_radius,
+                        *thickness,
+                        *gap_angle_deg,
+                        &tol,
                     )?);
                 }
             }

@@ -79,8 +79,31 @@ fn test_feature_tree_extended_features() {
     let solid_slot = tree_slot.recompute().expect("evaluate slot tree");
     assert!(solid_slot.outer_shell.validate_closed(&tol).is_valid());
 
-    // 6. JSON シリアライズ / デシリアライズ検証
-    let json = serde_json::to_string(&tree_slot).expect("serialize tree");
+    // 6. スプリングワッシャー
+    let mut tree_sp = FeatureTree::new();
+    tree_sp.add_feature("spring_washer", FeatureOp::SpringWasher {
+        inner_radius: 4.25,
+        outer_radius: 7.4,
+        thickness: 2.0,
+        free_height: 3.5,
+        gap_deg: 20.0,
+    });
+    let solid_sp = tree_sp.recompute().expect("evaluate spring washer tree");
+    assert!(solid_sp.outer_shell.validate_closed(&tol).is_valid());
+
+    // 7. C形止め輪
+    let mut tree_rr = FeatureTree::new();
+    tree_rr.add_feature("retaining_ring", FeatureOp::RetainingRing {
+        inner_radius: 4.8,
+        outer_radius: 6.2,
+        thickness: 1.0,
+        gap_angle_deg: 45.0,
+    });
+    let solid_rr = tree_rr.recompute().expect("evaluate retaining ring tree");
+    assert!(solid_rr.outer_shell.validate_closed(&tol).is_valid());
+
+    // 8. JSON シリアライズ / デシリアライズ検証
+    let json = serde_json::to_string(&tree_rr).expect("serialize tree");
     let deserialized_tree: FeatureTree = serde_json::from_str(&json).expect("deserialize tree");
     let solid_recomputed = deserialized_tree.recompute().expect("recompute from json tree");
     assert!(solid_recomputed.outer_shell.validate_closed(&tol).is_valid());

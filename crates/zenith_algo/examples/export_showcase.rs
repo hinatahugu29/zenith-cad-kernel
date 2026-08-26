@@ -1046,6 +1046,26 @@ fn main() {
         analytic_volume: None,
     });
 
+    // 49_retaining_circlip
+    let rr_inner_r = 4.8; // M10 shaft
+    let rr_outer_r = 6.2;
+    let rr_t = 1.0;
+    let rr_gap_deg = 45.0;
+    let rr_ring = FastenerBuilder::make_retaining_ring(
+        rr_inner_r,
+        rr_outer_r,
+        rr_t,
+        rr_gap_deg,
+        &tol,
+    ).expect("retaining ring");
+    let rr_vol = PI * (rr_outer_r * rr_outer_r - rr_inner_r * rr_inner_r) * rr_t * ((360.0 - rr_gap_deg) / 360.0);
+    items.push(Item {
+        name: "49_retaining_circlip",
+        note: "JIS/ISO C-type external retaining snap ring (circlip) with open gap for shaft retention",
+        solid: rr_ring,
+        analytic_volume: Some(rr_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,
