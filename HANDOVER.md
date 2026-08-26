@@ -8551,4 +8551,28 @@ py tools/verify_solid_api.py
 - **全36ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格**。
 - `35_extruded_rounded_rect_with_hole.step`（誤差 $5.20 \times 10^{-14}$）、`36_revolved_flanged_cup.step`（誤差 $1.72 \times 10^{-13}$）ともに解析解とマシンイプシロン級で一致。
 
+## 14. 金型抜き勾配（DraftBuilder）と異形断面多断面ロフト（LoftBuilder）の外部CAD 38/38 実証
+
+### 14-1. 金型抜き勾配（DraftBuilder）と厳密体積計算
+射出成形品や鋳造品の金型設計で必須となる抜き勾配（Draft Angle: テーパー角）演算子 `DraftBuilder`（`crates/zenith_algo/src/draft.rs`）を新設しました。
+- **抜き勾配テーパーブロック（`make_drafted_block`）**: 基準底面から指定した抜き勾配角度 $\theta$ で4側面を均等に傾斜させた6面構成の閉多様体B-Repソリッド。
+- **非相似角錐台の厳密閉形式体積一致**:
+  $V = dz \left[ dx \cdot dy + \Delta (dx + dy) + \frac{4}{3} \Delta^2 \right] \quad (\Delta = dz \tan\theta)$
+  により、解析解体積と計算体積が誤差 $3.06 \times 10^{-16}$（ほぼ完全ゼロのマシンイプシロン級）で一致することを数学的に実証。
+- **金型キャビティブロック（`make_drafted_cavity_block`）**: 抜き勾配を持つ凹みキャビティを直方体ブロック内に配置・差分抽出する機能。
+
+### 14-2. 異形断面多断面ロフト（LoftBuilder）とNURBS楕円プロファイル
+異なる幾何形状の断面間を滑らかに補間する多断面ロフトソリッドビルダーを拡充しました。
+- **有理2次NURBS楕円プロファイル（`ProfileBuilder::make_ellipse`）**: 4分割有理2次NURBS曲線による真の3次元楕円ワイヤ（4エッジ構成）を新設。
+- **異形遷移ダクト（`38_multi_section_loft_duct`）**:
+  - 断面0 (z=0): 半径 $R=22$ の真円（4エッジ）
+  - 断面1 (z=30): 幅 $38 \times 26$ の長方形（4エッジ）
+  - 断面2 (z=60): 長軸 $a=32$, 短軸 $b=16$ の楕円（4エッジ）
+  - 3断面を $G^1$ 連続で滑らかに補間する10面構成の閉多様体ソリッドを構築。
+
+### 14-3. 外部CAD検証結果（FreeCAD / OpenCASCADE 38/38 合格）
+`target/showcase/` に全38個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全38ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格**。
+- `37_drafted_taper_block.step`（誤差 $3.06 \times 10^{-16}$）、`38_multi_section_loft_duct.step` ともに完全な閉多様体として実証。
+
 

@@ -408,4 +408,62 @@ impl ProfileBuilder {
 
         Ok(Wire::new(edges))
     }
+
+    /// 4分割有理2次NURBSによる厳密な3次元楕円ワイヤを生成（4エッジ構成）
+    pub fn make_ellipse(
+        major_radius: f64,
+        minor_radius: f64,
+        center: Point3,
+        normal: Vec3,
+        x_axis: Vec3,
+    ) -> Result<Wire, String> {
+        let x_axis = x_axis
+            .try_normalize_safe(1e-12)
+            .ok_or("x_axis cannot be zero")?;
+        let normal = normal
+            .try_normalize_safe(1e-12)
+            .ok_or("normal cannot be zero")?;
+        let y_axis = normal.cross(&x_axis).try_normalize_safe(1e-12).ok_or("x_axis and normal must not be parallel")?;
+
+        let a = major_radius;
+        let b = minor_radius;
+
+        let p_pts = [
+            center + x_axis * a,
+            center + y_axis * b,
+            center - x_axis * a,
+            center - y_axis * b,
+        ];
+        let v_pts: Vec<Vertex> = p_pts.iter().map(|&p| Vertex::from_point(p)).collect();
+
+        let corners = [
+            center + x_axis * a + y_axis * b,
+            center - x_axis * a + y_axis * b,
+            center - x_axis * a - y_axis * b,
+            center + x_axis * a - y_axis * b,
+        ];
+
+        let mut edges = Vec::with_capacity(4);
+        for i in 0..4 {
+            let next = (i + 1) % 4;
+            let arc = Edge::new(
+                NurbsCurve3::new(
+                    2,
+                    vec![
+                        ControlPoint3::unweighted(p_pts[i]),
+                        ControlPoint3::new(corners[i], FRAC_1_SQRT_2),
+                        ControlPoint3::unweighted(p_pts[next]),
+                    ],
+                    KnotVector::clamped_uniform(3, 2),
+                )?,
+                v_pts[i].clone(),
+                v_pts[next].clone(),
+                1e-6,
+            );
+            edges.push(OrientedEdge::forward(arc));
+        }
+
+        Ok(Wire::new(edges))
+    }
 }
+

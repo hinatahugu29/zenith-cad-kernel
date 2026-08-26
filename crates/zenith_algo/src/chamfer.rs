@@ -6,7 +6,7 @@ use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Shell, Solid, Vertex, 
 pub struct ChamferBuilder;
 
 impl ChamferBuilder {
-    /// 直方体のZ軸方向4エッジに面取り（Chamfer: 距離 c mm）を適用した完全閉B-Repソリッドを生成
+    /// 直方体のZ軸方向4エッジに面取りを適用したソリッドを生成
     pub fn chamfer_box_z_edges(
         dx: f64,
         dy: f64,
@@ -229,3 +229,4 @@ impl ChamferBuilder {
         crate::validated_solid(shell)
     }
 }
+

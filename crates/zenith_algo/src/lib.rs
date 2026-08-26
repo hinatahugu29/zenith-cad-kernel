@@ -11,8 +11,9 @@ pub mod contact;
 mod circular_fillet;
 mod cylinder_boolean;
 pub mod direct_edit;
-pub mod edge_blend;
 pub mod distance;
+pub mod draft;
+pub mod edge_blend;
 pub mod extrude;
 pub mod face_split;
 pub mod feature_tree;
@@ -73,6 +74,7 @@ pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;
 pub use contact::{find_result_pinch, pinch_along_edge, ContactPinch};
 pub use direct_edit::{DirectModeling, EdgeInspection, EdgeKind, FaceInspection};
+pub use draft::DraftBuilder;
 pub use edge_blend::{BlendKind, BlendableEdge, EdgeBlendReport, EdgeBlender};
 pub use extrude::ExtrudeBuilder;
 pub use feature_tree::{

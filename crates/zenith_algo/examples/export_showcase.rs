@@ -10,9 +10,9 @@ use std::path::Path;
 use zenith_algo::StepInterop;
 
 use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, EdgeBlender, ExtrudeBuilder, GearBuilder,
-    HelixBuilder, MassCalculator, PrimitiveBuilder, ProfileBuilder, RevolveBuilder,
-    ShaftBuilder, ShellingBuilder, SweepBuilder,
+    BooleanEngine, BooleanOpType, BrepTransform, DraftBuilder, EdgeBlender, ExtrudeBuilder,
+    GearBuilder, HelixBuilder, LoftBuilder, MassCalculator, PrimitiveBuilder, ProfileBuilder,
+    RevolveBuilder, ShaftBuilder, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -776,6 +776,58 @@ fn main() {
         note: "revolved flanged collar cup solid produced by full 360-deg rational NURBS sweep",
         solid: rev_solid,
         analytic_volume: Some(rev_flange_vol + rev_neck_vol),
+    });
+
+    // 37_drafted_taper_block
+    let draft_dx = 50.0;
+    let draft_dy = 35.0;
+    let draft_dz = 25.0;
+    let draft_angle_deg = 4.0;
+    let draft_angle_rad = draft_angle_deg * PI / 180.0;
+    let drafted_block = DraftBuilder::make_drafted_block(
+        draft_dx,
+        draft_dy,
+        draft_dz,
+        draft_angle_rad,
+        &tol,
+    ).expect("drafted block");
+    let draft_delta = draft_dz * draft_angle_rad.tan();
+    let draft_vol = draft_dz * (draft_dx * draft_dy + draft_delta * (draft_dx + draft_dy) + (4.0 / 3.0) * draft_delta * draft_delta);
+    items.push(Item {
+        name: "37_drafted_taper_block",
+        note: "molding drafted block with exact taper angle for mold release",
+        solid: drafted_block,
+        analytic_volume: Some(draft_vol),
+    });
+
+    // 38_multi_section_loft_duct
+    let loft_w0 = ProfileBuilder::make_circle(
+        22.0,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    ).expect("loft circle");
+    let loft_w1 = ProfileBuilder::make_rectangle(
+        38.0,
+        26.0,
+        Point3::new(0.0, 0.0, 30.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    ).expect("loft rect");
+    let loft_w2 = ProfileBuilder::make_ellipse(
+        32.0,
+        16.0,
+        Point3::new(0.0, 0.0, 60.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    ).expect("loft ellipse");
+    let loft_solid = LoftBuilder::loft_solid(&[loft_w0, loft_w1, loft_w2], 2, &tol)
+        .expect("loft duct");
+    items.push(Item {
+        name: "38_multi_section_loft_duct",
+        note: "transition duct solid lofted smoothly across 3 distinct profiles (circle -> rect -> ellipse)",
+        solid: loft_solid,
+        analytic_volume: None,
     });
 
     // --- 出力 ---
