@@ -8493,4 +8493,22 @@ py tools/verify_solid_api.py
 - **全31ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格**。
 - `30_slot_hole_chamfer.step`（誤差 $2.54 \times 10^{-14}$）、`31_slot_hole_fillet.step`（誤差 $4.58 \times 10^{-14}$）ともに閉形式解析解とマシンイプシロン級で一致。
 
+## 11. 薄肉中空シェル化（Open-Box, Open-Cylinder, Open-SlotTray）と外部CAD 34/34 ソリッド実証
+
+### 11-1. 薄肉中空シェル化（Solid Shelling）の幾何学
+射出成形品・板金・鋳造品で不可欠な「中空薄肉コンテナ・容器」を生成するシェル化演算子を実装しました（`crates/zenith_algo/src/shelling.rs`）。
+- **Open-Box（薄肉直方体コンテナ）**: 外側5面＋内側5面＋開口部天面リム1面の計11面。
+- **Open-Cylinder（薄肉円筒カップ）**: 外側円柱4面＋内側円柱4面＋外側底面＋内側底面＋開口部アニュラスリムの計11面（すべて有理2次NURBSで真円厳密表現）。
+- **Open-SlotTray（薄肉スロットトレイ）**: 外側6面＋内側6面＋外側底面＋内側底面＋開口部スロットリムの計15面。
+
+### 11-2. キャビティ内壁パッチ（Bore Patch）の幾何的一貫性
+中空内部のキャビティ壁面は、立体の材料側から見ると中空内部（中心）を向く法線が必要です。
+- **制御点行の反転配置**: NURBS曲面の $u$ 軸制御点（`row0`, `row1`, `row2`）を周方向の逆順（`next` $\to$ `i`）に配置することで、曲面の幾何自然法線 $\frac{\partial S}{\partial u} \times \frac{\partial S}{\partial v}$ を中心向き（内向き）に完全一致。
+- **UV空間p-curveループ**: ワイヤを（天面円弧 $\to$ 垂直下降 $\to$ 底面円弧逆向き $\to$ 垂直上昇）の順で構成し、UV空間での有向面積を正（CCW）に保つことで、厳密な多様体B-Repトポロジーを確立。
+
+### 11-3. 外部CAD検証結果（FreeCAD / OpenCASCADE 34/34 合格）
+`target/showcase/` に全34個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全34ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格**。
+- `32_open_box_shell.step`（誤差 $2.50 \times 10^{-16}$、ほぼゼロ）、`33_open_cylinder_shell.step`（誤差 $8.37 \times 10^{-14}$）、`34_open_slot_tray_shell.step`（誤差 $2.15 \times 10^{-13}$）ともに解析解とマシンイプシロン級で一致。
+
 

@@ -11,7 +11,7 @@ use zenith_algo::StepInterop;
 
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, EdgeBlender, GearBuilder, HelixBuilder,
-    MassCalculator, PrimitiveBuilder, ShaftBuilder, SweepBuilder,
+    MassCalculator, PrimitiveBuilder, ShaftBuilder, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -665,6 +665,49 @@ fn main() {
         note: "through-slot hole mouth rounded with exact quarter-cylinder and quarter-torus patches",
         solid: slot_hole_filleted,
         analytic_volume: Some(slotted_net_vol - hole_fillet_removed),
+    });
+
+    // --- 新機能: 薄肉中空シェル化（Box, Cylinder, Slot Tray） ---
+    // 32_open_box_shell
+    let box_dx = 50.0;
+    let box_dy = 40.0;
+    let box_dz = 25.0;
+    let box_t = 2.5;
+    let open_box = ShellingBuilder::make_open_box(box_dx, box_dy, box_dz, box_t).expect("open box shell");
+    let open_box_vol = (box_dx * box_dy * box_dz) - ((box_dx - 2.0 * box_t) * (box_dy - 2.0 * box_t) * (box_dz - box_t));
+    items.push(Item {
+        name: "32_open_box_shell",
+        note: "thin-wall hollow box container with open top face and uniform wall thickness",
+        solid: open_box,
+        analytic_volume: Some(open_box_vol),
+    });
+
+    // 33_open_cylinder_shell
+    let cyl_r = 20.0;
+    let cyl_h = 35.0;
+    let cyl_t = 2.0;
+    let open_cyl = ShellingBuilder::make_open_cylinder(cyl_r, cyl_h, cyl_t).expect("open cylinder shell");
+    let open_cyl_vol = (PI * cyl_r * cyl_r * cyl_h) - (PI * (cyl_r - cyl_t) * (cyl_r - cyl_t) * (cyl_h - cyl_t));
+    items.push(Item {
+        name: "33_open_cylinder_shell",
+        note: "thin-wall hollow cylindrical cup with open top rim and exact rational NURBS cavity",
+        solid: open_cyl,
+        analytic_volume: Some(open_cyl_vol),
+    });
+
+    // 34_open_slot_tray_shell
+    let slot_t_l = 30.0;
+    let slot_t_r = 12.0;
+    let slot_t_h = 20.0;
+    let slot_t_t = 2.0;
+    let open_tray = ShellingBuilder::make_open_slot_prism(slot_t_l, slot_t_r, slot_t_h, slot_t_t).expect("open slot tray");
+    let v_tray_out = (2.0 * slot_t_l * slot_t_r + PI * slot_t_r * slot_t_r) * slot_t_h;
+    let v_tray_in = (2.0 * slot_t_l * (slot_t_r - slot_t_t) + PI * (slot_t_r - slot_t_t).powi(2)) * (slot_t_h - slot_t_t);
+    items.push(Item {
+        name: "34_open_slot_tray_shell",
+        note: "thin-wall hollow stadium slot tray with open rim and exact rational NURBS cavity",
+        solid: open_tray,
+        analytic_volume: Some(v_tray_out - v_tray_in),
     });
 
     // --- 出力 ---
