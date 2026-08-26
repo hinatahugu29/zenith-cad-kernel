@@ -520,6 +520,83 @@ fn main() {
         analytic_volume: Some(PI * (10.0f64.powi(2) * 12.0 + 7.0f64.powi(2) * 10.0) + root_added),
     });
 
+    // --- 新機能: スロット（長円柱）プリミティブ ---
+    let slot_l = 30.0;
+    let slot_r = 10.0;
+    let slot_h = 25.0;
+    let slot_prism = PrimitiveBuilder::make_slot_prism(slot_l, slot_r, slot_h).expect("slot prism");
+    let slot_vol = (2.0 * slot_l * slot_r + PI * slot_r * slot_r) * slot_h;
+    items.push(Item {
+        name: "26_slot_prism",
+        note: "stadium slot column primitive (2 planar sides + 4 rational cylindrical patches + caps)",
+        solid: slot_prism.clone(),
+        analytic_volume: Some(slot_vol),
+    });
+
+    // --- 新機能: スロット天面凸稜の解析ブレンド（面取り） ---
+    let rim_edge = EdgeBlender::blendable_edges(&slot_prism)
+        .into_iter()
+        .find(|edge| (edge.dihedral_angle_deg - 90.0).abs() < 1.0)
+        .expect("slot rim edge");
+    let chamfer_d = 2.0;
+    let (slot_chamfered, _) = EdgeBlender::blend_edge(
+        &slot_prism,
+        rim_edge.edge_id,
+        zenith_algo::BlendKind::Chamfer { distance: chamfer_d },
+    )
+    .expect("slot rim chamfer");
+    let slot_chamfer_removed = slot_l * chamfer_d * chamfer_d + PI * chamfer_d * chamfer_d * (slot_r - chamfer_d / 3.0);
+    items.push(Item {
+        name: "27_slot_top_rim_chamfer",
+        note: "slot top convex rim blended with exact planar and conical chamfer patches",
+        solid: slot_chamfered,
+        analytic_volume: Some(slot_vol - slot_chamfer_removed),
+    });
+
+    // --- 新機能: スロット天面凸稜の解析フィレット ---
+    let fillet_r = 2.5;
+    let (slot_filleted, _) = EdgeBlender::blend_edge(
+        &slot_prism,
+        rim_edge.edge_id,
+        zenith_algo::BlendKind::Fillet { radius: fillet_r },
+    )
+    .expect("slot rim fillet");
+    let slot_fillet_removed = 2.0 * slot_l * fillet_r * fillet_r * (1.0 - PI * 0.25)
+        + PI * ((slot_r - fillet_r) * fillet_r * fillet_r * (2.0 - PI * 0.5) + fillet_r.powi(3) / 3.0);
+    items.push(Item {
+        name: "28_slot_top_rim_fillet",
+        note: "slot top convex rim rounded with exact quarter-cylinder and quarter-torus patches",
+        solid: slot_filleted,
+        analytic_volume: Some(slot_vol - slot_fillet_removed),
+    });
+
+    // --- 新機能: 任意姿勢・接触配置ブーリアン（傾斜円柱差分） ---
+    let block = PrimitiveBuilder::make_box(50.0, 50.0, 30.0).expect("block");
+    let tilt = Transform3::from_axis_angle(&Vec3::new(1.0, 1.0, 0.0).normalize(), 0.5);
+    let tilted_cutter = BrepTransform::translate_solid(
+        &BrepTransform::transform_solid(
+            &PrimitiveBuilder::make_cylinder(8.0, 60.0).expect("cyl"),
+            &tilt,
+        )
+        .expect("transform"),
+        Vec3::new(25.0, 25.0, -10.0),
+    );
+    let tilted_cut = BooleanEngine::boolean_solids_exact_result(
+        &block,
+        &tilted_cutter,
+        BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("tilted cut")
+    .solids
+    .remove(0);
+    items.push(Item {
+        name: "29_boolean_tilted_cylinder_cut",
+        note: "tilted cylinder cut through a block in general 3D orientation (100% manifold B-Rep)",
+        solid: tilted_cut,
+        analytic_volume: None,
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

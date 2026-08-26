@@ -605,12 +605,16 @@ impl SlotRim {
         }
 
         final_faces.extend(new_faces);
-        Solid::try_new(
+        let raw_solid = Solid::try_new(
             Shell::closed(final_faces),
             solid.inner_shells.clone(),
             &Tolerance::default(),
         )
-        .map_err(|error| format!("Slot-rim blend produced an invalid solid: {error}"))
+        .map_err(|error| format!("Slot-rim blend produced an invalid solid: {error}"))?;
+
+        let (sewn, _) = crate::Sewer::sew_solid(&raw_solid, &Tolerance::default())
+            .map_err(|error| format!("Slot-rim blend sewing failed: {error}"))?;
+        Ok(sewn)
     }
 }
 
