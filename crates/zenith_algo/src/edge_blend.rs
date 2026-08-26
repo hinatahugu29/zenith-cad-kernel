@@ -18,8 +18,8 @@
 //! 有理トーラス、円柱面取りは厳密な円錐台パッチで置き換えます。自作4分割円弧、
 //! 外部CADの全周1本円、剛体配置後を同じ経路で認識します。さらに平面板の
 //! 貫通円筒穴口は、選択した穴だけを局所再トリムしてフィレット/面取りできます。
-//! 円筒ボス根元と段付き軸の小径側肩も、90度の凹円周に限って局所フィレット
-//! できます。非円形・非直角の根元、根元面取り、円錐円周の面取りはまだ対象外です。
+//! 円筒ボス根元と段付き軸の小径側肩、平面肩と直円錐ボスの根元も、局所フィレット
+//! / 面取りできます。非円形根元はまだ対象外です。
 //! 満たさない配置は**近い別の形を返さず、理由を返して失敗します**。
 //!
 //! ## 測れること
@@ -100,6 +100,47 @@ pub struct BlendableEdge {
 pub struct EdgeBlender;
 
 impl EdgeBlender {
+    /// 1本の稜が現在の局所ブレンド契約を満たすか調べる。
+    ///
+    /// 成功時は許容寸法を返し、未対応の配置では `blend_edge` と同じ幾何判定に
+    /// 基づく理由を返す。UI や外部ツールが、形状を変更せずに対象選択を検証する
+    /// ための入口である。
+    pub fn blendability(solid: &Solid, edge_id: u64) -> Result<BlendableEdge, String> {
+        match BlendSite::locate(solid, edge_id) {
+            Ok(site) => {
+                let max_setback = site.max_setback * 0.999;
+                let half = site.dihedral * 0.5;
+                Ok(BlendableEdge {
+                    edge_id,
+                    length: site.length,
+                    dihedral_angle_deg: site.dihedral.to_degrees(),
+                    max_fillet_radius: max_setback * half.tan(),
+                    max_chamfer_distance: max_setback,
+                })
+            }
+            Err(general_error) => {
+                if let Some(edge) =
+                    crate::circular_fillet::circular_cylinder_blendable(solid, edge_id)
+                        .or_else(|| {
+                            crate::circular_fillet::hole_mouth::hole_mouth_blendable(solid, edge_id)
+                        })
+                        .or_else(|| {
+                            crate::circular_fillet::shoulder_root::shoulder_root_blendable(
+                                solid, edge_id,
+                            )
+                        })
+                        .or_else(|| {
+                            crate::circular_fillet::cone::conical_rim_blendable(solid, edge_id)
+                        })
+                {
+                    Ok(edge)
+                } else {
+                    Err(general_error)
+                }
+            }
+        }
+    }
+
     /// 半径 `radius` のフィレットを稜 `edge_id` に施す
     pub fn fillet_edge(solid: &Solid, edge_id: u64, radius: f64) -> Result<Solid, String> {
         if !(radius > 0.0) {
@@ -154,37 +195,10 @@ impl EdgeBlender {
             }
         }
 
-        let mut out = Vec::new();
-        for id in ids {
-            if let Ok(site) = BlendSite::locate(solid, id) {
-                // 後退距離が隣接稜の長さを食い切らない範囲を上限とする
-                let max_setback = site.max_setback * 0.999;
-                let half = site.dihedral * 0.5;
-                out.push(BlendableEdge {
-                    edge_id: id,
-                    length: site.length,
-                    dihedral_angle_deg: site.dihedral.to_degrees(),
-                    max_fillet_radius: max_setback * half.tan(),
-                    max_chamfer_distance: max_setback,
-                });
-            } else if let Some(edge) =
-                crate::circular_fillet::circular_cylinder_blendable(solid, id)
-            {
-                out.push(edge);
-            } else if let Some(edge) =
-                crate::circular_fillet::hole_mouth::hole_mouth_blendable(solid, id)
-            {
-                out.push(edge);
-            } else if let Some(edge) =
-                crate::circular_fillet::shoulder_root::shoulder_root_blendable(solid, id)
-            {
-                out.push(edge);
-            } else if let Some(edge) =
-                crate::circular_fillet::cone::conical_rim_blendable(solid, id)
-            {
-                out.push(edge);
-            }
-        }
+        let out = ids
+            .into_iter()
+            .filter_map(|id| Self::blendability(solid, id).ok())
+            .collect();
         out
     }
 
