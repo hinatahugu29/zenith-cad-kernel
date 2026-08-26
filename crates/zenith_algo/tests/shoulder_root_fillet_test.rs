@@ -22,6 +22,28 @@ fn added_volume(shaft_radius: f64, fillet: f64) -> f64 {
         + fillet.powi(3) * (5.0 / 3.0 - PI * 0.5))
 }
 
+fn conical_root_added_volume(root_radius: f64, slope: f64, fillet: f64) -> f64 {
+    let norm = slope.hypot(1.0);
+    let centre_radius = root_radius + fillet * (norm + slope);
+    let contact_z = fillet * (1.0 + slope / norm);
+    let arc_primitive = |z: f64| {
+        let shifted = z - fillet;
+        let root = (fillet * fillet - shifted * shifted).max(0.0).sqrt();
+        let integral_root =
+            0.5 * (shifted * root + fillet * fillet * (shifted / fillet).clamp(-1.0, 1.0).asin());
+        centre_radius * centre_radius * z - 2.0 * centre_radius * integral_root
+            + fillet * fillet * z
+            - shifted.powi(3) / 3.0
+    };
+    let cone_primitive = |z: f64| {
+        root_radius * root_radius * z
+            + root_radius * slope * z * z
+            + slope * slope * z.powi(3) / 3.0
+    };
+    PI * ((arc_primitive(contact_z) - arc_primitive(0.0))
+        - (cone_primitive(contact_z) - cone_primitive(0.0)))
+}
+
 fn chamfer_added_volume(shaft_radius: f64, distance: f64) -> f64 {
     PI * distance * distance * (shaft_radius + distance / 3.0)
 }
@@ -351,6 +373,146 @@ fn boolean_boss_root_is_locally_filleted_without_rebuilding_the_block() {
         .faces
         .iter()
         .any(|face| face.id == *id)));
+}
+
+#[test]
+fn boolean_conical_boss_root_is_recognized_and_filleted_exactly() {
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    let cone = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cone(8.0, 5.0, 12.0).unwrap(),
+        Vec3::new(20.0, 20.0, 20.0),
+    );
+    let joined = BooleanEngine::boolean_solids_exact(&block, &cone, BooleanOpType::Union, &tol)
+        .expect("block union conical boss");
+    let candidates: Vec<_> = EdgeBlender::blendable_edges(&joined)
+        .into_iter()
+        .filter(|edge| (edge.length - 2.0 * PI * 8.0).abs() < 1e-6)
+        .collect();
+    assert_eq!(
+        candidates.len(),
+        4,
+        "all four conical root arcs must select one ring"
+    );
+    let slope = (5.0_f64 - 8.0) / 12.0;
+    for candidate in &candidates {
+        close(
+            candidate.dihedral_angle_deg,
+            270.0 + slope.atan().to_degrees(),
+            1e-12,
+        );
+        assert!(candidate.max_fillet_radius > 10.0);
+        assert_eq!(candidate.max_chamfer_distance, 0.0);
+    }
+    assert!(EdgeBlender::chamfer_edge(&joined, candidates[0].edge_id, 1.0).is_err());
+
+    let before = MassCalculator::compute_from_brep(&joined, &params());
+    let old_planar_ids: Vec<u64> = joined
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| matches!(face.geometry, FaceGeometry::Plane(_)))
+        .map(|face| face.id)
+        .collect();
+    let fillet = 2.0;
+    let (rounded, report) = EdgeBlender::blend_edge(
+        &joined,
+        candidates[2].edge_id,
+        zenith_algo::BlendKind::Fillet { radius: fillet },
+    )
+    .expect("local conical boss-root fillet");
+    assert!(rounded.outer_shell.validate_closed(&tol).is_valid());
+    assert!(old_planar_ids.iter().all(|id| rounded
+        .outer_shell
+        .faces
+        .iter()
+        .any(|face| face.id == *id)));
+    let after = MassCalculator::compute_from_brep(&rounded, &params());
+    let added = conical_root_added_volume(8.0, slope, fillet);
+    close(after.volume - before.volume, added, 2e-9);
+    close(report.predicted_removed_volume, -added, 1e-13);
+    close(report.edge_length, 2.0 * PI * 8.0, 1e-13);
+
+    let blend_start = rounded.outer_shell.faces.len() - 4;
+    for face in &rounded.outer_shell.faces[blend_start..] {
+        let FaceGeometry::Nurbs(surface) = &face.geometry else {
+            panic!("conical root blend face is not NURBS");
+        };
+        let at_cone_point = surface.evaluate(0.0, 0.5);
+        let radial = Vec3::new(at_cone_point.x - 20.0, at_cone_point.y - 20.0, 0.0).normalize();
+        let expected_cone_normal = (radial - Vec3::new(0.0, 0.0, slope)).normalize();
+        assert!(surface.normal(0.0, 0.5).unwrap().dot(&expected_cone_normal) > 1.0 - 1e-12);
+        assert!(
+            surface
+                .normal(1.0, 0.5)
+                .unwrap()
+                .dot(&Vec3::new(0.0, 0.0, 1.0))
+                > 1.0 - 1e-12
+        );
+    }
+
+    let step = StepExporter::export_solid_to_string(&rounded, "CONICAL_BOSS_ROOT_FILLET");
+    let reread = StepImporter::import_solids_from_str(&step)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(reread.outer_shell.validate_closed(&tol).is_valid());
+    close(
+        MassCalculator::compute_from_brep(&reread, &params()).volume - before.volume,
+        added,
+        3e-9,
+    );
+    for divisions in [4, 8, 16, 32] {
+        let mesh = tessellate_solid(
+            &reread,
+            &TessellationParams {
+                u_divisions: divisions,
+                v_divisions: divisions,
+            },
+        );
+        let mut uses: HashMap<(u32, u32), usize> = HashMap::new();
+        for triangle in &mesh.indices {
+            let a = mesh.positions[triangle[0] as usize];
+            let b = mesh.positions[triangle[1] as usize];
+            let c = mesh.positions[triangle[2] as usize];
+            assert!((b - a).cross(&(c - a)).norm() > 1e-12);
+            for step in 0..3 {
+                let (a, b) = (triangle[step], triangle[(step + 1) % 3]);
+                *uses.entry(if a < b { (a, b) } else { (b, a) }).or_insert(0) += 1;
+            }
+        }
+        assert_eq!(uses.values().filter(|count| **count != 2).count(), 0);
+    }
+}
+
+#[test]
+fn conical_boss_root_fillet_survives_rigid_placement() {
+    let tol = Tolerance::default();
+    let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
+    let cone = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cone(8.0, 5.0, 12.0).unwrap(),
+        Vec3::new(20.0, 20.0, 20.0),
+    );
+    let joined = BooleanEngine::boolean_solids_exact(&block, &cone, BooleanOpType::Union, &tol)
+        .expect("block union conical boss");
+    let turn = Transform3::from_axis_angle(&Vec3::new(1.0, -2.0, 0.75), 31f64.to_radians());
+    let moved = BrepTransform::translate_solid(
+        &BrepTransform::transform_solid(&joined, &turn).unwrap(),
+        Vec3::new(17.0, -11.0, 8.0),
+    );
+    let candidate = EdgeBlender::blendable_edges(&moved)
+        .into_iter()
+        .find(|edge| (edge.length - 2.0 * PI * 8.0).abs() < 1e-6)
+        .expect("placed conical root remains selectable");
+    let before = MassCalculator::compute_from_brep(&moved, &params()).volume;
+    let rounded = EdgeBlender::fillet_edge(&moved, candidate.edge_id, 1.5).unwrap();
+    assert!(rounded.outer_shell.validate_closed(&tol).is_valid());
+    close(
+        MassCalculator::compute_from_brep(&rounded, &params()).volume - before,
+        conical_root_added_volume(8.0, -0.25, 1.5),
+        3e-9,
+    );
 }
 
 #[test]
