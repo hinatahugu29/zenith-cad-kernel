@@ -1,5 +1,5 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
-**Document Version:** 1.8.7 (4-102の稜ブレンド個別診断を反映)
+**Document Version:** 1.8.8 (4-103の段付き軸・複合ボス個別診断回帰を反映)
 **Last Updated:** 2026-08-26
 **Status:** Official Production Specification
 
@@ -181,14 +181,14 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ## 3. テストスイート検証結果
 
-4-102で稜ブレンド個別診断と矩形ボス根元拒否回帰2件を追加した後のワークスペース全体を
-Release構成の広域ゲートで再実行し、**591/591件の成功**を確認しました（`zenith_py` は環境依存のため除外）。
+4-103で段付き軸および複合ボスの個別診断回帰2件を追加した後のワークスペース全体を
+Release構成の広域ゲートで再実行し、**593/593件の成功**を確認しました（`zenith_py` は環境依存のため除外）。
 `zenith_tess` 3/3、`contact_placement_test` 4/4、主要回帰の `modeling_test`
 148/148、常設テッセレーションprobeも個別に確認済みです。
 
-- **総テスト数:** 591 件（`#[test]` の実測。4-102で個別診断回帰2件を追加。Release 全件 591/591）
+- **総テスト数:** 593 件（`#[test]` の実測。4-103で個別診断回帰2件を追加。Release 全件 593/593）
 - **常設プローブ（診断・ゲート）:** 35 本すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に
-- **4-102後に実行した広域ゲートの失敗:** 0 件（170バイナリ / 591合格 / 非ゼロ終了0。`tools/fast_test.sh`）
+- **4-103後に実行した広域ゲートの失敗:** 0 件（170バイナリ / 593合格 / 非ゼロ終了0。`tools/fast_test.sh`）
 - **主な検証項目:**
   - `zenith_math`: Shewchuk 幾何述語の符号厳密性、Bernstein 多項式の単位の分割性。
   - `zenith_geom`: NURBS 微分と中心差分の一致度（誤差 $< 10^{-7}$）、$G^1$ ブレンド曲面の法線連続性、SSI 交差収束精度、de Casteljau 分割後の真円保持性、`Circle3::to_nurbs()` 幾何誤差 $< 10^{-12}$、`NurbsCurve3::make_compatible` 次数・ノット統一化。
