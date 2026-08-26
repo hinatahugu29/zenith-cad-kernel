@@ -331,6 +331,21 @@ fn build_subjects() -> Vec<Subject> {
         )),
     });
 
+    let root_chamfer = 1.25;
+    let root_chamfer_added = PI * root_chamfer * root_chamfer * (7.0 + root_chamfer / 3.0);
+    subjects.push(Subject {
+        name: "stepped_shaft_root_chamfer_c1_25",
+        solid: EdgeBlender::chamfer_edge(&stepped, root.edge_id, root_chamfer).unwrap(),
+        analytic_volume: Some(
+            PI * (10.0f64.powi(2) * 12.0 + 7.0f64.powi(2) * 10.0) + root_chamfer_added,
+        ),
+        section: Some((
+            Point3::new(0.0, 0.0, 6.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Some(PI * 100.0),
+        )),
+    });
+
     if let Ok(solid) = ShellingBuilder::make_open_box(40.0, 30.0, 20.0, 2.0) {
         subjects.push(Subject {
             name: "shelled_open_box",
