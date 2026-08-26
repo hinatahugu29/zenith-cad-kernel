@@ -12,6 +12,31 @@ impl ExtrudeBuilder {
     }
 
     /// ドラフト角度（抜き勾配: draft_angle_rad）付きで閉じたワイヤを押し出し、完全閉Solidを構築
+    ///
+    /// **勾配は面ごとに測ります。** 抜き勾配とは、側面が引抜方向となす角の
+    /// ことなので、天面の輪郭は底面の輪郭を**各辺の外向き法線へ `h·tanα` だけ
+    /// 押し出した**もの（オフセット多角形）になります。頂点は隣り合う2辺の
+    /// オフセット線の交点へ動くので、動く距離は `h·tanα / sin(θ/2)` で、
+    /// **頂点ごとに違います**。
+    ///
+    /// 以前ここは、各頂点を**ワイヤの重心から放射状に** `h·tanα` だけ動かして
+    /// いました。長方形ではこれは相似拡大にしかならず、実測（40 × 25 を高さ
+    /// 30、指定 3 度）で
+    ///
+    /// | | 指定 | 実際 |
+    /// | :--- | ---: | ---: |
+    /// | 長辺側の面 | 3.0000° | **1.5910°** |
+    /// | 短辺側の面 | 3.0000° | **2.5446°** |
+    /// | 体積 | 33164.73 | **32044.32**（-3.38%） |
+    ///
+    /// と、**どちらの面も指定した角度になっていませんでした**。`DraftBuilder::
+    /// make_drafted_block` は同じ形を正しく作るので、2つの経路が食い違って
+    /// いたことになります。
+    ///
+    /// いまのところ直線の辺だけを扱います。円弧を含むワイヤは、正しい
+    /// オフセットが同心円弧で、有理曲線の中間制御点は `δ/cos(θ/2)` だけ動く
+    /// 必要があり、法線方向に一律に動かしても合いません。**近い別の形を
+    /// 返さず、理由を返して失敗します。**
     pub fn extrude_wire_with_draft(
         bottom_wire: &Wire,
         dir: Vec3,
@@ -31,56 +56,121 @@ impl ExtrudeBuilder {
             return Err("Extrude dir cannot be zero".to_string());
         }
 
-        // 1. 底面ワイヤの重心（Centroid）を計算
-        let mut sum_pt = Vec3::zeros();
-        for oe in &bottom_wire.edges {
-            let p = oe.start_vertex().point.coords;
-            sum_pt += p;
+        // 1. 各辺が直線であることを確かめる。曲がった辺のオフセットは
+        //    法線方向に一律に動かしても合わない（上のコメント）。
+        for (index, oe) in bottom_wire.edges.iter().enumerate() {
+            let curve = &oe.edge.curve;
+            // 次数だけでは決められない。次数1でも制御点が3つあれば折れ線で、
+            // まっすぐとは限らない。**点の並びを見る。**
+            let straight = curve.control_points.len() == 2
+                || {
+                    // 高次で書かれていても、制御点が始点と終点を結ぶ線分の
+                    // 上に並んでいれば直線。
+                    let start = curve.control_points[0].point;
+                    let end = curve.control_points[curve.control_points.len() - 1].point;
+                    let axis = end - start;
+                    let length = axis.norm();
+                    length > 1e-12
+                        && curve.control_points.iter().all(|cp| {
+                            (cp.point - start).cross(&axis).norm() / length <= tol.linear
+                        })
+                };
+            if !straight {
+                return Err(format!(
+                    "Extrude with draft only handles straight edges; edge {index} of the profile is curved"
+                ));
+            }
         }
-        let centroid = Point3::from(sum_pt / (num_edges as f64));
 
-        // 2. 底面頂点群およびドラフトテーパー付き天面頂点群の生成
+        // 2. 輪郭の平面と、その上での回り方を決める。外向きはここから出る。
+        let corners: Vec<Point3> = bottom_wire
+            .edges
+            .iter()
+            .map(|oe| oe.start_vertex().point)
+            .collect();
+        let plane_normal = newell_normal(&corners)
+            .ok_or_else(|| "Extrude with draft requires a planar, non-degenerate profile".to_string())?;
+
+        // 3. 各辺の外向き法線。反時計回り（`plane_normal` から見て）の輪郭では
+        //    `tangent × normal` が外を向く。
+        let mut outward = Vec::with_capacity(num_edges);
+        for index in 0..num_edges {
+            let start = corners[index];
+            let end = corners[(index + 1) % num_edges];
+            let tangent = end - start;
+            let length = tangent.norm();
+            if length <= 1e-12 {
+                return Err(format!("Edge {index} of the profile has zero length"));
+            }
+            outward.push((tangent / length).cross(&plane_normal));
+        }
+
+        // 4. 天面の輪郭は、隣り合う2辺のオフセット線の交点。
+        //    `(p - v)·n_a = δ` かつ `(p - v)·n_b = δ` を解くと
+        //    `p = v + (n_a + n_b)·δ / (1 + n_a·n_b)`。
+        let setback = height * draft_angle_rad.tan();
         let mut bottom_vertices = Vec::with_capacity(num_edges);
         let mut top_vertices = Vec::with_capacity(num_edges);
+        let mut vertex_offsets = Vec::with_capacity(num_edges);
 
-        let tan_draft = draft_angle_rad.tan();
-
-        for oe in &bottom_wire.edges {
-            let v_bot = oe.start_vertex();
+        for index in 0..num_edges {
+            let v_bot = bottom_wire.edges[index].start_vertex();
             bottom_vertices.push(v_bot.clone());
 
-            let diff = v_bot.point - centroid;
-            let dist_from_center = diff.norm();
-            let expansion_vector = if dist_from_center > 1e-9 {
-                (diff / dist_from_center) * (height * tan_draft)
-            } else {
-                Vec3::zeros()
-            };
-
-            let top_pt = v_bot.point + dir + expansion_vector;
-            top_vertices.push(Vertex::new(top_pt, tol.linear));
+            let previous = outward[(index + num_edges - 1) % num_edges];
+            let current = outward[index];
+            let bisector = previous + current;
+            let denominator = 1.0 + previous.dot(&current);
+            if denominator <= 1e-9 {
+                return Err(format!(
+                    "The profile doubles back on itself at vertex {index}; a draft offset is not defined there"
+                ));
+            }
+            let shift = bisector * (setback / denominator);
+            vertex_offsets.push(shift);
+            top_vertices.push(Vertex::new(v_bot.point + dir + shift, tol.linear));
         }
 
-        // 3. 天面エッジ群および天面ワイヤの生成
+        // 5. オフセットが輪郭を裏返していないか。凹んだ角では、後退距離が
+        //    その角の逃げより大きいと辺の向きが反転する。**そこで作った立体は
+        //    自分と交わる**ので、近い別の形を返さずに断る。
+        for index in 0..num_edges {
+            let next = (index + 1) % num_edges;
+            let before = corners[next] - corners[index];
+            let after = (corners[next] + vertex_offsets[next]) - (corners[index] + vertex_offsets[index]);
+            if before.dot(&after) <= 0.0 {
+                return Err(format!(
+                    "A draft of {:.4} deg over a height of {height} turns edge {index} of the profile inside out",
+                    draft_angle_rad.to_degrees()
+                ));
+            }
+        }
+
+        // 6. 天面エッジ群および天面ワイヤの生成
         let mut top_edges = Vec::with_capacity(num_edges);
         for i in 0..num_edges {
             let next_i = (i + 1) % num_edges;
             let v_start = top_vertices[i].clone();
             let v_end = top_vertices[next_i].clone();
 
-            // 底面エッジの曲線形状に沿って天面曲線を構築
+            // 辺は直線なので、制御点は線分上の位置をそのまま持ち越せばよい。
+            // 底面の制御点が始点から終点へ何割の所にあるかを測り、天面の
+            // 同じ割合の所へ置く。
             let bot_edge = &bottom_wire.edges[i].edge;
             let n_cp = bot_edge.curve.control_points.len();
+            let bottom_start = corners[i];
+            let axis = corners[next_i] - bottom_start;
+            let axis_length_squared = axis.norm_squared();
+            let top_start = top_vertices[i].point;
+            let top_axis = top_vertices[next_i].point - top_start;
             let mut top_cps = Vec::with_capacity(n_cp);
             for cp in &bot_edge.curve.control_points {
-                let diff = cp.point - centroid;
-                let dist = diff.norm();
-                let exp = if dist > 1e-9 {
-                    (diff / dist) * (height * tan_draft)
+                let fraction = if axis_length_squared > 1e-24 {
+                    (cp.point - bottom_start).dot(&axis) / axis_length_squared
                 } else {
-                    Vec3::zeros()
+                    0.0
                 };
-                let pt = cp.point + dir + exp;
+                let pt = top_start + top_axis * fraction;
                 top_cps.push(ControlPoint3::new(pt, cp.weight));
             }
             let top_curve = NurbsCurve3::new(
@@ -377,4 +467,27 @@ impl ExtrudeBuilder {
             .collect();
         Wire::new(edges)
     }
+}
+
+/// 平面多角形の法線（Newell の方法）。
+///
+/// 3点だけを見る外積と違って、どの3点が一直線に並んでいても落ちない。
+/// 向きは輪郭の回り方に従うので、これを上と見たとき輪郭は反時計回りになる。
+fn newell_normal(corners: &[Point3]) -> Option<Vec3> {
+    if corners.len() < 3 {
+        return None;
+    }
+    let mut normal = Vec3::zeros();
+    for index in 0..corners.len() {
+        let current = corners[index];
+        let next = corners[(index + 1) % corners.len()];
+        normal.x += (current.y - next.y) * (current.z + next.z);
+        normal.y += (current.z - next.z) * (current.x + next.x);
+        normal.z += (current.x - next.x) * (current.y + next.y);
+    }
+    let length = normal.norm();
+    if length <= 1e-12 {
+        return None;
+    }
+    Some(normal / length)
 }

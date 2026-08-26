@@ -46,10 +46,45 @@ fn test_extrude_wire_with_draft() {
     let report = solid.outer_shell.validate_closed(&tol);
     assert!(report.is_valid(), "Validation errors: {:?}", report.errors);
 
-    // 2. 体積検証（角錐台の体積計算）
-    let mesh = tessellate_solid(&solid, &TessellationParams::default());
-    let mass = MassCalculator::compute_from_mesh(&mesh);
-    assert!(mass.volume > 30.0 * 20.0 * 20.0, "Volume should be larger due to positive draft");
+    // 2. 閉形式体積一致検証
+    //
+    // **以前ここは「直方体より大きい」だけだった。** それでは勾配が指定の
+    // 半分でも通る。実際にそうなっていた——頂点を輪郭の重心から放射状に
+    // 動かしていたので、長方形では相似拡大にしかならず、面ごとの勾配は
+    // 指定と違っていた（`ExtrudeBuilder::extrude_wire_with_draft` の説明）。
+    //
+    // 各面が引抜方向と `α` をなすなら、高さ `z` での断面は
+    // `(w + 2z·tanα) × (d + 2z·tanα)` なので
+    //
+    //   V = w·d·h + tanα·h²·(w + d) + (4/3)·tan²α·h³
+    let w = 30.0_f64;
+    let d = 20.0_f64;
+    let h = 20.0_f64;
+    let t = draft_angle.tan();
+    let expected = w * d * h + t * h * h * (w + d) + (4.0 / 3.0) * t * t * h * h * h;
+
+    let mass = MassCalculator::compute_from_brep(&solid, &TessellationParams::default());
+    let error = (mass.volume - expected).abs() / expected;
+    assert!(
+        error < 1e-12,
+        "Drafted extrude volume {} does not match the closed form {expected} (relative {error:.3e})",
+        mass.volume
+    );
+
+    // 勾配そのものも測る。境界箱の広がりが h·tanα でなければ、面は指定した
+    // 角度になっていない。
+    let bbox = solid.bounding_box();
+    for (label, reach) in [
+        ("x", bbox.max.x - 15.0),
+        ("y", bbox.max.y - 10.0),
+    ] {
+        let delivered = (reach / h).atan().to_degrees();
+        assert!(
+            (delivered - draft_angle.to_degrees()).abs() < 1e-9,
+            "the {label} faces came out at {delivered} deg, not the requested {} deg",
+            draft_angle.to_degrees()
+        );
+    }
 
     // 3. STEP ラウンドトリップ
     let step_path = "test_draft_extrude_roundtrip.step";

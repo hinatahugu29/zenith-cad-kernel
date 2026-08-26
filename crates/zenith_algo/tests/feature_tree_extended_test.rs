@@ -21,7 +21,18 @@ fn test_feature_tree_extended_features() {
     let solid = tree.recompute().expect("evaluate draft block tree");
     assert!(solid.outer_shell.validate_closed(&tol).is_valid());
     let mass = MassCalculator::compute_from_brep(&solid, &params);
-    assert!(mass.volume > 0.0);
+    // 抜き勾配ブロックの閉じた式。**以前ここは `volume > 0` だった。**
+    // 勾配が指定と違っていても通るので、フィーチャーツリー経由で来たときに
+    // 角度が届いているかを見られなかった。
+    let t = 5.0_f64.to_radians().tan();
+    let expected =
+        40.0 * 30.0 * 20.0 + t * 20.0 * 20.0 * (40.0 + 30.0) + (4.0 / 3.0) * t * t * 20.0f64.powi(3);
+    let error = (mass.volume - expected).abs() / expected;
+    assert!(
+        error < 1e-12,
+        "DraftBlock through the feature tree is {} not {expected} (relative {error:.3e})",
+        mass.volume
+    );
 
     // 2. 三角柱ガセットリブ
     let mut tree_rib = FeatureTree::new();

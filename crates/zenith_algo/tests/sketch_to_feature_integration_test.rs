@@ -72,9 +72,27 @@ fn test_sketch_solver_to_feature_tree_pipeline() {
         "Solid created from solved sketch must be valid closed manifold"
     );
 
-    // 5. 質量物性値計算
+    // 5. 閉形式体積一致検証
+    //
+    // **以前ここは `volume > 0` だけだった。** 勾配が指定の半分でも通るので、
+    // 実際に半分になっていたのを見逃していた（`extrude_wire_with_draft`）。
+    // 各側面が引抜方向と α をなすなら
+    //
+    //   V = w·d·h + tanα·h²·(w + d) + (4/3)·tan²α·h³
     let mass = MassCalculator::compute_from_brep(&solid, &params);
-    assert!(mass.volume > 0.0, "Volume must be positive, got {}", mass.volume);
+    let h = 30.0_f64;
+    let t = 3.0_f64.to_radians().tan();
+    let expected = 40.0 * 25.0 * h + t * h * h * (40.0 + 25.0) + (4.0 / 3.0) * t * t * h * h * h;
+    //
+    // 帯は 1e-8。**押し出しの誤差ではなく、断面の誤差**で決まる。ソルバーは
+    // 上で 1e-7 まで詰めて止めているので、辺長は厳密な 40 / 25 ではない。
+    // 実測の残差は 1.25e-10。
+    let error = (mass.volume - expected).abs() / expected;
+    assert!(
+        error < 1e-8,
+        "Drafted extrude from the solved sketch is {} not {expected} (relative {error:.3e})",
+        mass.volume
+    );
 
     // 6. 回転体ソリッド（360度）への投入テスト
     let mut tree_revolve = FeatureTree::new();
