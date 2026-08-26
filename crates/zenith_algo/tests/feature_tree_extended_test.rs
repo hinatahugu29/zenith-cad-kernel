@@ -155,8 +155,19 @@ fn test_feature_tree_extended_features() {
     let solid_sb = tree_sb.recompute().expect("evaluate stud bolt tree");
     assert!(solid_sb.outer_shell.validate_closed(&tol).is_valid());
 
-    // 12. JSON シリアライズ / デシリアライズ検証
-    let json = serde_json::to_string(&tree_sb).expect("serialize tree");
+    // 12. 皿ばね
+    let mut tree_bs = FeatureTree::new();
+    tree_bs.add_feature("belleville_spring", FeatureOp::BellevilleSpring {
+        inner_radius: 8.2,
+        outer_radius: 16.0,
+        thickness: 0.9,
+        cone_height: 1.25,
+    });
+    let solid_bs = tree_bs.recompute().expect("evaluate belleville spring tree");
+    assert!(solid_bs.outer_shell.validate_closed(&tol).is_valid());
+
+    // 13. JSON シリアライズ / デシリアライズ検証
+    let json = serde_json::to_string(&tree_bs).expect("serialize tree");
     let deserialized_tree: FeatureTree = serde_json::from_str(&json).expect("deserialize tree");
     let solid_recomputed = deserialized_tree.recompute().expect("recompute from json tree");
     assert!(solid_recomputed.outer_shell.validate_closed(&tol).is_valid());

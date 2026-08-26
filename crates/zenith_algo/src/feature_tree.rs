@@ -260,6 +260,13 @@ pub enum FeatureOp {
         top_shank_radius: f64,
         top_shank_length: f64,
     },
+    /// 皿ばね
+    BellevilleSpring {
+        inner_radius: f64,
+        outer_radius: f64,
+        thickness: f64,
+        cone_height: f64,
+    },
 }
 
 /// 履歴に書けるブーリアン種別（`BooleanOpType` の直列化可能版）
@@ -825,6 +832,20 @@ impl FeatureTree {
                         *hex_height,
                         *top_shank_radius,
                         *top_shank_length,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::BellevilleSpring {
+                    inner_radius,
+                    outer_radius,
+                    thickness,
+                    cone_height,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_belleville_spring(
+                        *inner_radius,
+                        *outer_radius,
+                        *thickness,
+                        *cone_height,
                         &tol,
                     )?);
                 }

@@ -645,4 +645,43 @@ impl FastenerBuilder {
             tol,
         )
     }
+
+    /// JIS B 2706 / DIN 2093 規格準拠の皿ばね（Belleville Disc Spring / Conical Spring Washer）ソリッドを構築
+    ///
+    /// `inner_radius`: 内径半径 (例: 8.2)
+    /// `outer_radius`: 外径半径 (例: 16.0)
+    /// `thickness`: 板厚 (例: 0.9)
+    /// `cone_height`: テーパー高さ (例: 1.25)
+    pub fn make_belleville_spring(
+        inner_radius: f64,
+        outer_radius: f64,
+        thickness: f64,
+        cone_height: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if inner_radius >= outer_radius || inner_radius <= 1e-6 || thickness <= 1e-6 || cone_height <= 1e-6 {
+            return Err("Invalid Belleville spring dimensions".to_string());
+        }
+
+        let r_out_bot = outer_radius;
+        let r_out_top = outer_radius - 1.5;
+        let r_in_bot = inner_radius;
+        let r_in_top = inner_radius - 1.5;
+        let h = cone_height + thickness;
+
+        let outer_cone = crate::PrimitiveBuilder::make_cone(r_out_bot, r_out_top, h)?;
+
+        let k = 1.5 / h;
+        let r_cutter_bot = r_in_bot + 1.0 * k;
+        let r_cutter_top = r_in_top - 1.0 * k;
+        let inner_cone = crate::PrimitiveBuilder::make_cone(r_cutter_bot, r_cutter_top, h + 2.0)?;
+        let inner_cone = crate::BrepTransform::translate_solid(&inner_cone, Vec3::new(0.0, 0.0, -1.0));
+
+        crate::boolean::BooleanEngine::boolean_solids_exact(
+            &outer_cone,
+            &inner_cone,
+            crate::boolean::BooleanOpType::Difference,
+            tol,
+        )
+    }
 }

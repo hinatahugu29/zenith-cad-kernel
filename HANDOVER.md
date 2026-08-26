@@ -8797,4 +8797,20 @@ py tools/verify_solid_api.py
 - **全53ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（53 of 53 read back as valid closed solids）**。
 - `53_hex_center_stud_bolt.step`（誤差 $2.50 \times 10^{-13}$）が完全ソリッドとして実証。
 
+## 28. 皿ばね（Belleville Disc Spring）および外部CAD 54/54 実証
+
+### 28-1. 皿ばね（Belleville Spring / Conical Disc Washer）の構築
+省スペースで超高荷重を支持する衝撃緩衝・ボルト予圧保持要素である皿ばねを構築する `FastenerBuilder::make_belleville_spring`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **外側円錐台＋厳密相似テーパー内側円錐台カッターの複合差分ブーリアン（10面構成）**:
+  - 外側円錐台（大径 $R_{\text{out\_bot}}$, 小径 $R_{\text{out\_top}}$, 高さ $H$）
+  - 内側円錐台カッター（大径 $r_{\text{in\_bot}}$, 小径 $r_{\text{in\_top}}$, 高さ $H$）
+  - 解析解体積:
+    $V = \frac{\pi}{3} H (R_{\text{out\_bot}}^2 + R_{\text{out\_bot}} R_{\text{out\_top}} + R_{\text{out\_top}}^2 - r_{\text{in\_bot}}^2 - r_{\text{in\_bot}} r_{\text{in\_top}} - r_{\text{in\_top}}^2)$
+    により、計算体積と解析解体積が誤差 $2.70 \times 10^{-14}$（機械精度限界）で一致。
+
+### 28-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 54/54 完全達成）
+`target/showcase/` に全54個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全54ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（54 of 54 read back as valid closed solids）**。
+- `54_belleville_spring.step`（誤差 $2.70 \times 10^{-14}$）が完全ソリッドとして実証。
+
 

@@ -565,3 +565,59 @@ fn test_stud_bolt() {
         "Reimported stud bolt must be valid closed"
     );
 }
+
+#[test]
+fn test_belleville_spring() {
+    let tol = Tolerance::default();
+    let r_in = 8.2;
+    let r_out = 16.0;
+    let t = 0.9;
+    let h_cone = 1.25;
+
+    let solid = FastenerBuilder::make_belleville_spring(
+        r_in,
+        r_out,
+        t,
+        h_cone,
+        &tol,
+    )
+    .expect("belleville spring");
+
+    // 1. B-Rep 閉多様体検証
+    assert!(
+        solid.outer_shell.validate_closed(&tol).is_valid(),
+        "Belleville spring must be valid closed manifold"
+    );
+
+    // 2. 閉形式体積一致検証
+    let pi = std::f64::consts::PI;
+    let r_out_bot = r_out;
+    let r_out_top = r_out - 1.5;
+    let r_in_bot = r_in;
+    let r_in_top = r_in - 1.5;
+    let h = h_cone + t;
+    let outer_vol = (pi / 3.0) * h * (r_out_bot * r_out_bot + r_out_bot * r_out_top + r_out_top * r_out_top);
+    let inner_vol = (pi / 3.0) * h * (r_in_bot * r_in_bot + r_in_bot * r_in_top + r_in_top * r_in_top);
+    let expected_vol = outer_vol - inner_vol;
+
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = MassCalculator::compute_from_brep(&solid, &params);
+    let vol_diff = (mass.volume - expected_vol).abs() / expected_vol;
+    assert!(
+        vol_diff < 1e-4,
+        "Volume mismatch: computed={}, expected={}, diff={vol_diff}",
+        mass.volume,
+        expected_vol
+    );
+
+    // 3. STEP 往復検証
+    let step_str = StepExporter::export_solid_to_string(&solid, "BellevilleSpring");
+    let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
+    assert!(
+        reimported.outer_shell.validate_closed(&tol).is_valid(),
+        "Reimported belleville spring must be valid closed"
+    );
+}

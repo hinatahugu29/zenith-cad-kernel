@@ -1175,6 +1175,33 @@ fn main() {
         analytic_volume: Some(sb_vol),
     });
 
+    // 54_belleville_spring
+    let bs_r_in = 8.2;
+    let bs_r_out = 16.0;
+    let bs_t = 0.9;
+    let bs_h_cone = 1.25;
+    let bs_spring = FastenerBuilder::make_belleville_spring(
+        bs_r_in,
+        bs_r_out,
+        bs_t,
+        bs_h_cone,
+        &tol,
+    ).expect("belleville spring");
+    let bs_r_out_bot = bs_r_out;
+    let bs_r_out_top = bs_r_out - 1.5;
+    let bs_r_in_bot = bs_r_in;
+    let bs_r_in_top = bs_r_in - 1.5;
+    let bs_h = bs_h_cone + bs_t;
+    let bs_outer_vol = (PI / 3.0) * bs_h * (bs_r_out_bot * bs_r_out_bot + bs_r_out_bot * bs_r_out_top + bs_r_out_top * bs_r_out_top);
+    let bs_inner_vol = (PI / 3.0) * bs_h * (bs_r_in_bot * bs_r_in_bot + bs_r_in_bot * bs_r_in_top + bs_r_in_top * bs_r_in_top);
+    let bs_vol = bs_outer_vol - bs_inner_vol;
+    items.push(Item {
+        name: "54_belleville_spring",
+        note: "JIS/DIN Belleville disc spring (conical washer) for high-load compact shock absorption",
+        solid: bs_spring,
+        analytic_volume: Some(bs_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,
