@@ -260,7 +260,7 @@ impl ShoulderRoot {
                     // wires (the stepped-shaft builder intentionally overlaps
                     // adjacent cylinders before Boolean union). The wires
                     // above establish the actual axial interval; here only
-                    // prove that the support is the same right cylinder.
+                    // prove that the support is the same right cylinder or cone.
                     let expected = root_radius + slope * axial;
                     if (radial - expected).abs() > surface_tolerance {
                         return None;

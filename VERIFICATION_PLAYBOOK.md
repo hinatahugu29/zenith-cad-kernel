@@ -18,7 +18,7 @@
 > 部分集合を選ぶ速い段を作らなかったのは、このリポジトリで見つかった欠陥が
 > **まさに測っていなかったところ**から出ているからです。落とすものを人が
 > 覚えていなければならない仕組みは、ここでは向きません。
-**最終確認**: 2026年8月26日（HANDOVER 4-98 まで）
+**最終確認**: 2026年8月26日（HANDOVER 4-99 まで）
 
 この文書は、**このリポジトリを初めて見る人（または別の AI モデル）が、
 主張を信じずに自分で確かめながら作業を進める**ための手順書です。
@@ -106,7 +106,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 102 テストバイナリ（doctest 込み）、586 テスト、失敗 0。
+**期待**: 102 テストバイナリ（doctest 込み）、588 テスト、失敗 0。
 
 所要はおよそ **10〜11分**です。ただし**この環境の壁時計は当てになりません**
 （下の 2-3 を読んでください）。時間で良し悪しを判断しないでください。曲面同士が交わるブーリアン（球×球、円柱×円柱、
@@ -767,12 +767,12 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 
 ```bash
 cargo run --release -p zenith_algo --example export_showcase          # target/showcase   25形状
-cargo run --release -p zenith_algo --example export_validation_suite  # target/validation 22形状
+cargo run --release -p zenith_algo --example export_validation_suite  # target/validation 24形状
 cargo run --release -p zenith_algo --example foreign_reexport         # target/reexport    7形状
 ```
 
 | 置き場所 | 中身 | 突き合わせ |
 | :--- | :--- | :--- |
 | `target/showcase/` | 代表25形状。解析解を持つものは相対誤差付き | `verify_showcase.py`（25/25のゲート） |
-| `target/validation/` | 相互検証用23形状＋OCC が書いた参照ファイル | `freecad_cross_validate.py`（23/23のゲート） |
+| `target/validation/` | 相互検証用24形状＋OCC が書いた参照ファイル | `freecad_cross_validate.py`（24/24のゲート） |
 | `target/reexport/` | 他カーネルのファイルを読んで書き戻した7形状 | `verify_reexport.py`（**ゲート**） |
