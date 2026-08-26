@@ -14,10 +14,10 @@
 >
 > **達成していること（すべて外部検証つき）**:
 > - 出力用メッシュの完全閉多様体化。4〜32分割に加え48〜256でも open: 0, non-manifold: 0, degenerate: 0。ブーリアン曲面分割を含む `contact_placement_probe` も7配置・21演算でB-Rep / mesh異常0となり、赤ゲートへ昇格（修正前は5件・9〜126本。HANDOVER 3-N-2b、4-83〜4-89）。**これは常設検体の実測範囲で、任意の全立体の証明ではありません。**
-> - 書き出す STEP が ISO 10303-21 の構文に適合。OpenCASCADE が代表25形状すべてを valid closed solid として読む。
+> - 書き出す STEP が ISO 10303-21 の構文に適合。OpenCASCADE が代表54形状すべてを valid closed solid として読む（2026/08/27 実測。25形状だった頃の記述を更新）。
 > - 他カーネルのファイルを読んで書き戻した7形状が、解析解と 1e-11〜1e-13 で一致（OpenCASCADE 自身の NURBS 変換より高精度）。
 > - FreeCAD ヘッドレス相互検証 27/27。
-> - 単一の軽量C-Extension（`zenith_cad.pyd` 3.85MB）のみで外部依存ゼロ。
+> - 単一の軽量C-Extension（`zenith_cad.pyd` **4.74MB**、2026/08/27 実測）のみで外部依存ゼロ。
 
 Zenith CAD Kernel は、Rust でフルスクラッチ開発された **次世代型 3次元 B-Rep / 自由曲面 NURBS CAD カーネル** です。  
 巨大な外部ライブラリ（OpenCASCADE / pythonocc / FreeCAD）を一切介さず、**単一の軽量アドオン（`zenith_cad.pyd`）のみで完結する「真の脱OCCT」** を達成しています。
@@ -129,18 +129,18 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **IGES エクスポート** | IGES 5.3 | 各面の支持曲面を **Entity 128（有理Bスプライン曲面）** として出力。80桁固定レコード、Global 26フィールド、D/P セクション対応。**トリム（Entity 144 / 142 / 126）は未出力**。`tools/verify_iges.py` で OpenCASCADE が5検体すべてを読み、曲面枚数一致・境界箱のずれ 0。 |
 | **2D DXF 図面出力** | AutoCAD DXF (AC1015) | 断面スライサーからの閉ポリライン図面（LWPOLYLINE）。レイヤーは OUTLINE / HOLE / CENTERLINE / HATCH を **テーブルに定義**するが、`generate_dxf_string` が自動で割り当てるのは OUTLINE と HOLE のみ。**割り当ては X-Y へ落としたときの符号付き面積（向き）で決める**——2026/08/27 まではループの索引で決めており、断面に外形が2つ以上出る形では2つ目以降が `HOLE` 層に落ちていた（HANDOVER 4-112）。線種は全レイヤー CONTINUOUS で、HATCH エンティティは出力しない。 |
 | **OBJ / バイナリSTL / glTF** | 3D Mesh Formats | 頂点法線付きWavefront OBJ、バイナリSTL、glTF 2.0 JSON 出力。**8検体を書き出して外から解き直す常設ゲートがある**（`export_mesh_suite` ＋ `tools/verify_mesh_exports.py`、FreeCAD 不要・CI 収録）。見るのは閉じているか・体積が B-Rep と合うか・3形式が互いに一致するか・glTF の accessor と base64 の長さが整合するか。2026/08/27 まで、この4形式には**形に依存する検査が1つもありませんでした**（HANDOVER 4-111）。 |
-| **Python C-Extension** | Python 3.10 / 3.11 / 3.12 (PyO3) | **`zenith_cad.pyd`（わずか 3.85 MB、単一ファイル）** によるインプロセス完全インメモリ連携。 |
+| **Python C-Extension** | Python 3.10 / 3.11 / 3.12 (PyO3) | **`zenith_cad.pyd`（**4.74 MB**、単一ファイル。2026/08/27 実測 4,975,104 バイト）** によるインプロセス完全インメモリ連携。 |
 
 ---
 
 ## 🏆 テスト・検証実績総括
 
-すべて 2026年8月26日までの実測値です。数字の出どころは
+すべて 2026年8月27日までの実測値です。数字の出どころは
 [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の手順で再現できます。
 
 | 何を測ったか | 結果 | 再現コマンド |
 | :--- | :--- | :--- |
-| ワークスペース全テスト | **103 バイナリ（doctest 込み）/ 591 テスト 100% 合格**（0 failed, 0 ignored） | `cargo test --release --workspace --exclude zenith_py` |
+| ワークスペース全テスト | **119 バイナリ（doctest 込み）/ 632 テスト 100% 合格**（0 failed, 0 ignored） | `cargo test --release --workspace --exclude zenith_py` |
 | コンパイラ警告 | **0** | `cargo build --release --workspace --exclude zenith_py` |
 | ビルダー監査 | **24/24 クリーン**（解析解との差は最悪 6.3e-13、歯車 1.99e-9） | `--example builder_audit` |
 | 平面を NURBS で持つ面 | **全23ビルダーで0枚** | `--example planar_face_audit` |
@@ -149,4 +149,5 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | 他カーネルからの読み書き一周 | **7/7 が解析解と 1e-11〜1e-13** | `tools/verify_reexport.py` |
 | IGES 相互検証 | **5/5**（曲面枚数一致、境界箱のずれ 0） | `tools/verify_iges.py` |
 | 常設プローブ | **35/35 が exit 0** | 上記手順書の一覧 |
-| Python インプロセス往復 | 全合格 | `py tools/verify_solid_api.py` |
+| 非STEP出力（STL / OBJ / glTF / DXF） | **8/8**（閉じているか・体積・3形式の一致・DXF の層。**FreeCAD 不要**） | `py tools/verify_mesh_exports.py` |
+| Python インプロセス往復 | 全合格（B-Rep ハンドルの口・メッシュを返す旧い口とも） | `py tools/verify_solid_api.py`、`py tools/verify_python_binding.py` |

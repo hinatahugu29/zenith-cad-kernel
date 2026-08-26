@@ -35,6 +35,19 @@
 > **9.195e-12**、断面積 **1.556e-7**、真円錐面取りは体積 **9.175e-12**、
 > 表面積 **9.223e-12**、断面積 **3.148e-8**でした。現在地点は
 > [`HANDOVER.md`](HANDOVER.md) 4-101を優先し、上の25/25は4-100時点の履歴として残します。
+>
+> **2026年8月27日 追記（実測のやり直し）**
+>
+> 相互検証を自分でもう一度回して **27/27** を確認しました（件数は 4-101 から
+> 変わっていません）。同時に回した外部ゲートは、ショーケース **54/54**、
+> 書き戻し **7/7**、IGES **5/5** です。**7章のまとめが「代表25形状」と書いて
+> いたので、54形状に直しました**（ショーケースは 4-101 以降も増えていて、
+> まとめのほうが追いついていませんでした）。
+>
+> あわせて、外部カーネルを使わない出力ゲートを1つ足しています——STL / OBJ /
+> glTF / DXF の8検体を、書いたファイルだけから解き直す
+> `tools/verify_mesh_exports.py`（**8/8**、FreeCAD 不要で CI 収録）。
+> 経緯は [`HANDOVER.md`](HANDOVER.md) 4-111 に。
 
 ---
 
@@ -99,7 +112,7 @@ graph LR
 
 ## 3. 📊 全 37 STEP ファイルの包括的監査データ
 
-[`tools/freecad_step_validator.py`](file:///e:/CAD-Kernel/tools/freecad_step_validator.py) を用いて実施した全 37 モデルの FreeCAD / OpenCASCADE 監査結果一覧です。
+[`tools/freecad_step_validator.py`](tools/freecad_step_validator.py) を用いて実施した全 37 モデルの FreeCAD / OpenCASCADE 監査結果一覧です。
 
 | # | STEP ファイル名 | OpenCASCADE ShapeType | Solid数 | Face数 | isValid | isClosed | 計算体積 (${\text{mm}}^3$) | 判定ステータス |
 | :---: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -133,7 +146,7 @@ graph LR
 
 ## 4. 🔍 技術的課題の深掘りと修正内容
 
-### 4.1 EDGE_CURVE 共有化の確立 ([`crates/zenith_io/src/step.rs`](file:///e:/CAD-Kernel/crates/zenith_io/src/step.rs))
+### 4.1 EDGE_CURVE 共有化の確立 ([`crates/zenith_io/src/step.rs`](crates/zenith_io/src/step.rs))
 `get_or_create_edge_curve` により、隣接面が同一の `EDGE_CURVE` エンティティを
 Forward / Reversed として共有します。出力された STEP では `ORIENTED_EDGE` の数が
 `EDGE_CURVE` の**ちょうど2倍**になり、これは閉多様体の必要条件です。
@@ -143,7 +156,7 @@ Forward / Reversed として共有します。出力された STEP では `ORIEN
 > この関数は p-curve 出力のスタブとともに削除しました。OpenCASCADE 自身も
 > p-curve を出力せず、無くても厳密に往復することを実測で確認したためです。
 
-### 4.2 貫通穴あけの 4 象限パッチ化 ([`crates/zenith_algo/src/hole.rs`](file:///e:/CAD-Kernel/crates/zenith_algo/src/hole.rs))
+### 4.2 貫通穴あけの 4 象限パッチ化 ([`crates/zenith_algo/src/hole.rs`](crates/zenith_algo/src/hole.rs))
 `PLANE` 上の `FACE_BOUND` を避けるため、上下面を 4 枚の平面四角形パッチに分割する
 専用ビルダーです（16 面、`Volume = 34973.45 mm³`）。
 
@@ -243,8 +256,9 @@ cargo run --release -p zenith_algo --example step_import_audit
 
 ## 7. 🎯 まとめと到達水準
 
-STEP 経由の相互運用について、**23 対象すべてが OpenCASCADE で Solid・`isValid`・`isClosed` として読まれ、
-体積・表面積・断面積が両カーネルで一致**します。代表25形状のショーケースも全数が Solid として読めます。
+STEP 経由の相互運用について、**27 対象すべてが OpenCASCADE で Solid・`isValid`・`isClosed` として読まれ、
+体積・表面積・断面積が両カーネルで一致**します（2026/08/27 実測。23対象だった頃の記述を更新）。
+代表**54形状**のショーケースも全数が Solid として読めます。
 解析解を持つケースでは本カーネルが 1e-12 以下で一致し、多スパンB-スプライン曲面の体積積分では
 本カーネルの方が高精度です（直線掃引の円柱で 3.5e-14 対 1.1e-05）。
 

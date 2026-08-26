@@ -312,7 +312,8 @@ cargo run --release -p zenith_algo --example export_validation_suite
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/freecad_cross_validate.py
 ```
 
-**期待**: `23 of 23 subjects agree across both kernels`、**終了コード 0**。
+**期待**: `27 of 27 subjects agree across both kernels`、**終了コード 0**。
+（2026/08/27 実測。23対象だった頃の記述を更新しました）
 
 不一致があれば非ゼロ終了します。CI に置けます。
 
@@ -329,18 +330,39 @@ cargo run --release -p zenith_algo --example export_showcase
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_showcase.py
 ```
 
-**期待**: `24 of 24 read back as valid closed solids`、**終了コード 0**。
+**期待**: `54 of 54 read back as valid closed solids`、**終了コード 0**。
+（2026/08/27 実測。24形状だった頃の記述を更新しました）
 
 ```bash
 cargo run --release -p zenith_algo --example foreign_reexport
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/verify_reexport.py
 ```
 
-**期待**: `7 of 7 re-exports land on the analytic value within 1e-06`、
-**終了コード 0**。実測はすべて 1e-11 以内です。
+**期待**: `7 of 7 re-exports land on the analytic value within 1e-08`、
+**終了コード 0**。実測はすべて 1e-11 以内です（帯は 4-41 で 1e-06 から
+締めてあり、印字もそちらに変わっています）。
 
 これは以前は診断でした。比較相手を「OpenCASCADE 自身の NURBS 化」に置いていた
 ためで、その置き方が我々の欠陥を隠していました（3章末を参照）。
+
+**FreeCAD が無くても回せるゲートが1つあります。** STL / OBJ / glTF / DXF を
+書き出し、**書いたファイルだけ**から解き直します。
+
+```bash
+cargo run --release -p zenith_algo --example export_mesh_suite
+py tools/verify_mesh_exports.py
+```
+
+**期待**: `8 of 8 subject(s) round-tripped through STL / OBJ / glTF / DXF`、
+**終了コード 0**（2026/08/27 実測）。
+
+見るのは、辺がちょうど2枚の三角形に共有されているか・発散定理で積んだ体積が
+B-Rep と合うか・3形式が互いに一致するか・glTF の accessor と base64 の長さが
+整合するか・DXF の層と向きが断面と合うか、です。CI に入っています。
+
+**ただし、解いているのは自前のパーサです。** 4形式の実装は1つも入っていない
+ので、`verify_iges.py` が OpenCASCADE に読ませているのより弱い検査です
+（HANDOVER 4-111）。
 
 ### 2-9. まとめて実行する
 

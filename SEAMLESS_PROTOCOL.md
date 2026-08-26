@@ -2,6 +2,13 @@
 
 This file records the protocol used by `reference/CAD_8_1_5_1/core_bridge.py` so a Rust replacement for `cad_server.exe` can be built without rewriting the Blender UI first.
 
+> **これは「あるべき仕様」であって、`zenith_server` の現状ではありません。**
+> `zenith_server` が実装しているのは `create_stack` と `delete_stack` だけで、
+> ここに載っている他の動作は**名前を挙げて断ります**（空のメッシュや 0 の
+> 計測値を成功として返すのをやめたため。[`HANDOVER.md`](HANDOVER.md) 4-41）。
+> Blender との連携は、いまのところ `zenith_py` のインプロセス経路のほうが
+> 先に動いています。
+
 ## Transport
 
 - Host: `127.0.0.1`

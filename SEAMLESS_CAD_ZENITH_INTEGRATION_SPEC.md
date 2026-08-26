@@ -14,7 +14,7 @@
 ### 🌟 統合によって達成される革新
 1. **「脱 OCCT」によるアドオン配布の極小化**:
    - 200MB〜500MB の巨大 DLL 群（60個以上の `TK*.dll`）および外部 `cad_server.exe` を完全撤廃。
-   - **わずか 2.3MB の単一バイナリ（`zenith_cad.pyd`）** で全機能が完結。
+   - **単一バイナリ（`zenith_cad.pyd`）** で全機能が完結（2026/08/27 実測 **4.74 MB**。この行は長く 2.3MB と書いていました）。
 2. **インプロセス超高速実行とゼロクラッシュ（Memory Safety）**:
    - ソケット通信（TCP 127.0.0.1）によるプロセス間オーバーヘッドやゾンビプロセス問題を解消。
    - Blender プロセス内で直接 C-API 呼び出しを行い、リアルタイムプレビューを 60fps で駆動。
@@ -37,7 +37,7 @@ graph TD
 
     subgraph 新生: Seamless CAD (Zenith版)
         U2[Blender UI / Modal Operators] --> B2[zenith_bridge.py]
-        B2 -->|Direct Python C-Extension 呼び出し| Z2[zenith_cad.pyd 2.3MB]
+        B2 -->|Direct Python C-Extension 呼び出し| Z2[zenith_cad.pyd 4.74MB]
         Z2 -->|Rust Native In-Process B-Rep| B2
         B2 -->|Zero-Copy Mesh/GPU描画| U2
     end

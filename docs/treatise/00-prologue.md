@@ -37,7 +37,7 @@ graph TD
         Z2["zenith_geom: Gregory/Gordon/Coons"]
         Z3["zenith_algo: 厳密B-Rep CSG & 面併合"]
         Z4["zenith_math: ロバスト計算基盤"]
-        Z5["zenith_io & zenith_py: 3.85MB 単一DLL"]
+        Z5["zenith_io & zenith_py: 4.74MB 単一DLL"]
     end
 
     subgraph Rigorous Verification ["🔬 外部相互検証 & 実測ログ (Ground Truth)"]
