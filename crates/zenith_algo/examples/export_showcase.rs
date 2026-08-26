@@ -1093,6 +1093,37 @@ fn main() {
         analytic_volume: Some(cs_vol),
     });
 
+    // 51_weld_neck_pipe_flange
+    let fl_flange_r = 25.0;
+    let fl_flange_t = 10.0;
+    let fl_hub_r = 15.0;
+    let fl_hub_h = 15.0;
+    let fl_pipe_r = 8.0;
+    let fl_pcd_r = 19.0;
+    let fl_bolt_r = 3.0;
+    let fl_num_bolts = 4;
+    let fl_flange = FastenerBuilder::make_weld_neck_flange(
+        fl_flange_r,
+        fl_flange_t,
+        fl_hub_r,
+        fl_hub_h,
+        fl_pipe_r,
+        fl_pcd_r,
+        fl_bolt_r,
+        fl_num_bolts,
+        &tol,
+    ).expect("weld neck flange");
+    let fl_blank_vol = PI * fl_flange_r * fl_flange_r * fl_flange_t + PI * fl_hub_r * fl_hub_r * fl_hub_h;
+    let fl_pipe_vol = PI * fl_pipe_r * fl_pipe_r * (fl_flange_t + fl_hub_h);
+    let fl_bolts_vol = fl_num_bolts as f64 * (PI * fl_bolt_r * fl_bolt_r * fl_flange_t);
+    let fl_vol = fl_blank_vol - fl_pipe_vol - fl_bolts_vol;
+    items.push(Item {
+        name: "51_weld_neck_pipe_flange",
+        note: "JIS/ASME weld neck pipe flange with central bore, tapered welding hub, and 4 PCD bolt holes",
+        solid: fl_flange,
+        analytic_volume: Some(fl_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

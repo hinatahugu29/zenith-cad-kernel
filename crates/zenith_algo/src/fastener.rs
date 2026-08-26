@@ -467,4 +467,75 @@ impl FastenerBuilder {
             tol,
         )
     }
+
+    /// JIS B 2220 / ASME B16.5 規格準拠の溶接ネック配管フランジ（Weld Neck Pipe Flange）ソリッドを構築
+    ///
+    /// `flange_radius`: フランジ外径半径 (例: 25.0)
+    /// `flange_thickness`: フランジ厚み (例: 10.0)
+    /// `hub_radius`: ハブ首部外径半径 (例: 15.0)
+    /// `hub_height`: ハブ首部高さ (例: 15.0)
+    /// `pipe_radius`: パイプ貫通内径半径 (例: 8.0)
+    /// `pcd_radius`: ボルトピッチ円半径 (例: 19.0)
+    /// `bolt_hole_radius`: ボルト穴半径 (例: 3.0)
+    /// `num_bolt_holes`: ボルト穴数 (例: 4)
+    pub fn make_weld_neck_flange(
+        flange_radius: f64,
+        flange_thickness: f64,
+        hub_radius: f64,
+        hub_height: f64,
+        pipe_radius: f64,
+        pcd_radius: f64,
+        bolt_hole_radius: f64,
+        num_bolt_holes: usize,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if flange_radius <= hub_radius || hub_radius <= pipe_radius || flange_thickness <= 1e-6 {
+            return Err("Invalid flange dimensions: flange > hub > pipe required".to_string());
+        }
+        if pcd_radius + bolt_hole_radius >= flange_radius || pcd_radius - bolt_hole_radius <= hub_radius {
+            return Err("Bolt holes must fit inside flange outer rim outside hub".to_string());
+        }
+        if num_bolt_holes == 0 {
+            return Err("Must have at least 1 bolt hole".to_string());
+        }
+
+        // 1. フランジ本体 + ハブ首部の段付き軸
+        let mut solid = crate::ShaftBuilder::make_stepped_shaft(&[
+            (flange_radius, flange_thickness),
+            (hub_radius, hub_height),
+        ])?;
+
+        // 2. 中央パイプ貫通穴
+        let total_h = flange_thickness + hub_height;
+        let pipe_cutter = crate::PrimitiveBuilder::make_cylinder(pipe_radius, total_h + 2.0)?;
+        let pipe_cutter = crate::BrepTransform::translate_solid(&pipe_cutter, Vec3::new(0.0, 0.0, -1.0));
+        solid = crate::boolean::BooleanEngine::boolean_solids_exact(
+            &solid,
+            &pipe_cutter,
+            crate::boolean::BooleanOpType::Difference,
+            tol,
+        )?;
+
+        // 3. PCD 上のボルト穴群
+        let d_theta = std::f64::consts::TAU / num_bolt_holes as f64;
+        for i in 0..num_bolt_holes {
+            let theta = i as f64 * d_theta;
+            let bx = pcd_radius * theta.cos();
+            let by = pcd_radius * theta.sin();
+
+            let bolt_cutter = crate::PrimitiveBuilder::make_cylinder(bolt_hole_radius, flange_thickness + 2.0)?;
+            let bolt_cutter = crate::BrepTransform::translate_solid(
+                &bolt_cutter,
+                Vec3::new(bx, by, -1.0),
+            );
+            solid = crate::boolean::BooleanEngine::boolean_solids_exact(
+                &solid,
+                &bolt_cutter,
+                crate::boolean::BooleanOpType::Difference,
+                tol,
+            )?;
+        }
+
+        Ok(solid)
+    }
 }

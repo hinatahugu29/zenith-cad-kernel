@@ -115,8 +115,23 @@ fn test_feature_tree_extended_features() {
     let solid_cs = tree_cs.recompute().expect("evaluate countersunk screw tree");
     assert!(solid_cs.outer_shell.validate_closed(&tol).is_valid());
 
-    // 9. JSON シリアライズ / デシリアライズ検証
-    let json = serde_json::to_string(&tree_cs).expect("serialize tree");
+    // 9. 溶接ネック配管フランジ
+    let mut tree_fl = FeatureTree::new();
+    tree_fl.add_feature("weld_neck_flange", FeatureOp::WeldNeckFlange {
+        flange_radius: 25.0,
+        flange_thickness: 10.0,
+        hub_radius: 15.0,
+        hub_height: 15.0,
+        pipe_radius: 8.0,
+        pcd_radius: 19.0,
+        bolt_hole_radius: 3.0,
+        num_bolt_holes: 4,
+    });
+    let solid_flange = tree_fl.recompute().expect("evaluate flange tree");
+    assert!(solid_flange.outer_shell.validate_closed(&tol).is_valid());
+
+    // 10. JSON シリアライズ / デシリアライズ検証
+    let json = serde_json::to_string(&tree_fl).expect("serialize tree");
     let deserialized_tree: FeatureTree = serde_json::from_str(&json).expect("deserialize tree");
     let solid_recomputed = deserialized_tree.recompute().expect("recompute from json tree");
     assert!(solid_recomputed.outer_shell.validate_closed(&tol).is_valid());

@@ -232,6 +232,17 @@ pub enum FeatureOp {
         socket_across_flats: f64,
         socket_depth: f64,
     },
+    /// 溶接ネック配管フランジ
+    WeldNeckFlange {
+        flange_radius: f64,
+        flange_thickness: f64,
+        hub_radius: f64,
+        hub_height: f64,
+        pipe_radius: f64,
+        pcd_radius: f64,
+        bolt_hole_radius: f64,
+        num_bolt_holes: usize,
+    },
 }
 
 /// 履歴に書けるブーリアン種別（`BooleanOpType` の直列化可能版）
@@ -741,6 +752,28 @@ impl FeatureTree {
                         *head_height,
                         *socket_across_flats,
                         *socket_depth,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::WeldNeckFlange {
+                    flange_radius,
+                    flange_thickness,
+                    hub_radius,
+                    hub_height,
+                    pipe_radius,
+                    pcd_radius,
+                    bolt_hole_radius,
+                    num_bolt_holes,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_weld_neck_flange(
+                        *flange_radius,
+                        *flange_thickness,
+                        *hub_radius,
+                        *hub_height,
+                        *pipe_radius,
+                        *pcd_radius,
+                        *bolt_hole_radius,
+                        *num_bolt_holes,
                         &tol,
                     )?);
                 }

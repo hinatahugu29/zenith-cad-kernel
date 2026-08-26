@@ -8746,4 +8746,22 @@ py tools/verify_solid_api.py
 - **全50ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（50 of 50 read back as valid closed solids）**。
 - `50_countersunk_socket_screw.step`（誤差 $1.18 \times 10^{-14}$）が完全ソリッドとして実証。
 
+## 25. 溶接ネック配管フランジ（Weld Neck Pipe Flange）および外部CAD 51/51 実証
+
+### 25-1. 溶接ネック配管フランジ（Weld Neck Flange）の構築
+配管ラインの接続や高圧流体配管の結合に用いられるフランジ継手を構築する `FastenerBuilder::make_weld_neck_flange`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **フランジ本体＋溶接ハブ首部＋中央パイプ穴＋PCDボルト穴群の複合差分ブーリアン（31面構成）**:
+  - フランジ本体円柱（外径 $D_{\text{flange}}$, 厚み $T_{\text{flange}}$）
+  - ハブ首部円柱（外径 $D_{\text{hub}}$, 高さ $H_{\text{hub}}$）
+  - 中央貫通パイプ穴（内径 $d_{\text{pipe}}$）
+  - PCD円周上に均等配置された $N$ 個のボルト通し穴（半径 $r_{\text{bolt}}$）
+  - 解析解体積:
+    $V = (\pi R_{\text{flange}}^2 T_{\text{flange}} + \pi R_{\text{hub}}^2 H_{\text{hub}}) - \pi r_{\text{pipe}}^2 (T_{\text{flange}} + H_{\text{hub}}) - N_{\text{bolts}} (\pi r_{\text{bolt}}^2 T_{\text{flange}})$
+    により、計算体積と解析解体積が誤差 $2.56 \times 10^{-13}$ で一致。
+
+### 25-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 51/51 完全達成）
+`target/showcase/` に全51個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全51ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（51 of 51 read back as valid closed solids）**。
+- `51_weld_neck_pipe_flange.step`（誤差 $2.56 \times 10^{-13}$）が完全ソリッドとして実証。
+
 
