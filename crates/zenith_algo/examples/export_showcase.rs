@@ -11,8 +11,9 @@ use zenith_algo::StepInterop;
 
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, DraftBuilder, EdgeBlender, ExtrudeBuilder,
-    GearBuilder, HelixBuilder, HoleBuilder, LoftBuilder, MassCalculator, PrimitiveBuilder,
-    ProfileBuilder, RevolveBuilder, RibBuilder, ShaftBuilder, ShellingBuilder, SweepBuilder,
+    FastenerBuilder, GearBuilder, HelixBuilder, HoleBuilder, LoftBuilder, MassCalculator,
+    PrimitiveBuilder, ProfileBuilder, RevolveBuilder, RibBuilder, ShaftBuilder, ShellingBuilder,
+    SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -873,6 +874,33 @@ fn main() {
         note: "countersunk screw through-hole block combining cylindrical drill and conical bevel cavity",
         solid: cs_solid,
         analytic_volume: Some(cs_v_box - cs_v_drill - cs_v_cone),
+    });
+
+    // 41_hex_bolt_head
+    let hex_s = 32.0; // 二面幅 S=32
+    let hex_h = 18.0;
+    let hex_prism = FastenerBuilder::make_hex_prism(hex_s, hex_h, &tol)
+        .expect("hex prism");
+    let hex_vol = (3.0_f64.sqrt() * 0.5) * hex_s * hex_s * hex_h;
+    items.push(Item {
+        name: "41_hex_bolt_head",
+        note: "standard hexagonal bolt head solid (6 planar side faces + top and bottom hex caps)",
+        solid: hex_prism,
+        analytic_volume: Some(hex_vol),
+    });
+
+    // 42_hex_nut_blank
+    let nut_s = 32.0;
+    let nut_h = 16.0;
+    let nut_r_hole = 8.0; // M16 ナット下穴
+    let nut_solid = FastenerBuilder::make_hex_nut_blank(nut_s, nut_h, nut_r_hole, &tol)
+        .expect("hex nut blank");
+    let nut_vol = (3.0_f64.sqrt() * 0.5) * nut_s * nut_s * nut_h - PI * nut_r_hole * nut_r_hole * nut_h;
+    items.push(Item {
+        name: "42_hex_nut_blank",
+        note: "hexagonal fastener nut blank with central clearance through-hole",
+        solid: nut_solid,
+        analytic_volume: Some(nut_vol),
     });
 
     // --- 出力 ---

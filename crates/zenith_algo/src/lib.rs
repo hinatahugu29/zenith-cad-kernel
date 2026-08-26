@@ -16,6 +16,7 @@ pub mod draft;
 pub mod edge_blend;
 pub mod extrude;
 pub mod face_split;
+pub mod fastener;
 pub mod feature_tree;
 pub mod fillet;
 pub mod flange;
@@ -78,6 +79,7 @@ pub use direct_edit::{DirectModeling, EdgeInspection, EdgeKind, FaceInspection};
 pub use draft::DraftBuilder;
 pub use edge_blend::{BlendKind, BlendableEdge, EdgeBlendReport, EdgeBlender};
 pub use extrude::ExtrudeBuilder;
+pub use fastener::FastenerBuilder;
 pub use feature_tree::{
     edge_signature, match_edge, BooleanKind, FeatureNode, FeatureOp, FeatureTree,
 };

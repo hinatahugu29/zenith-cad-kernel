@@ -8609,4 +8609,21 @@ py tools/verify_solid_api.py
 - **全40ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（40 of 40 read back as valid closed solids）**。
 - `40_boolean_countersink_hole.step`（誤差 $1.95 \times 10^{-11}$）が完全ソリッドとして実証。
 
+## 17. ファスナー（六角ボルト頭・六角ナット）ビルダーと外部CAD 42/42 ソリッド完全実証
+
+### 17-1. 正六角柱（Hexagonal Prism）および六角ナット（Hex Nut Blank）の構築
+機械締結（ボルト頭部、六角ナット）のモデリングを行う `FastenerBuilder`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **正六角柱（`make_hex_prism`）**:
+  - 二面幅 $S$（外接円半径 $R = S/\sqrt{3}$）、高さ $H$ の正六角柱（8面構成）。
+  - 各側面の単位法線と天面・底面キャップのトポロジー対偶関係を厳密に構築。
+  - 解析解体積: $V = \frac{\sqrt{3}}{2} S^2 \cdot H$（誤差 $5.70 \times 10^{-16}$、マシンイプシロン級一致）。
+- **六角ナットブランク（`make_hex_nut_blank`）**:
+  - 正六角柱の中心にボルト貫通下穴（半径 $r$）を開けた12面構成の完全閉多様体B-Repソリッド。
+  - 解析解体積: $V = \frac{\sqrt{3}}{2} S^2 \cdot H - \pi r^2 \cdot H$（誤差 $2.70 \times 10^{-13}$）。
+
+### 17-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 42/42 合格）
+`target/showcase/` に全42個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全42ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（42 of 42 read back as valid closed solids）**。
+- `41_hex_bolt_head.step`（誤差 $5.70 \times 10^{-16}$）、`42_hex_nut_blank.step`（誤差 $2.70 \times 10^{-13}$）ともに完全ソリッドとして実証。
+
 
