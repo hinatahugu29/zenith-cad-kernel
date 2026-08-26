@@ -223,6 +223,15 @@ pub enum FeatureOp {
         thickness: f64,
         gap_angle_deg: f64,
     },
+    /// 皿頭六角穴付きボルト
+    CountersunkSocketScrew {
+        shank_radius: f64,
+        shank_length: f64,
+        head_radius: f64,
+        head_height: f64,
+        socket_across_flats: f64,
+        socket_depth: f64,
+    },
 }
 
 /// 履歴に書けるブーリアン種別（`BooleanOpType` の直列化可能版）
@@ -714,6 +723,24 @@ impl FeatureTree {
                         *outer_radius,
                         *thickness,
                         *gap_angle_deg,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::CountersunkSocketScrew {
+                    shank_radius,
+                    shank_length,
+                    head_radius,
+                    head_height,
+                    socket_across_flats,
+                    socket_depth,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_countersunk_socket_screw(
+                        *shank_radius,
+                        *shank_length,
+                        *head_radius,
+                        *head_height,
+                        *socket_across_flats,
+                        *socket_depth,
                         &tol,
                     )?);
                 }

@@ -1066,6 +1066,33 @@ fn main() {
         analytic_volume: Some(rr_vol),
     });
 
+    // 50_countersunk_socket_screw
+    let cs_shank_r = 4.0; // M8
+    let cs_shank_l = 20.0;
+    let cs_head_r = 8.0;
+    let cs_head_h = 4.4;
+    let cs_socket_s = 5.0;
+    let cs_socket_d = 2.8;
+    let cs_screw = FastenerBuilder::make_countersunk_socket_screw(
+        cs_shank_r,
+        cs_shank_l,
+        cs_head_r,
+        cs_head_h,
+        cs_socket_s,
+        cs_socket_d,
+        &tol,
+    ).expect("countersunk socket screw");
+    let cs_shank_vol = PI * cs_shank_r * cs_shank_r * cs_shank_l;
+    let cs_head_vol = (PI / 3.0) * cs_head_h * (cs_head_r * cs_head_r + cs_head_r * cs_shank_r + cs_shank_r * cs_shank_r);
+    let cs_socket_vol = (3.0_f64.sqrt() * 0.5) * cs_socket_s * cs_socket_s * cs_socket_d;
+    let cs_vol = cs_shank_vol + cs_head_vol - cs_socket_vol;
+    items.push(Item {
+        name: "50_countersunk_socket_screw",
+        note: "JIS/ISO countersunk flat head screw with internal hexagonal drive socket",
+        solid: cs_screw,
+        analytic_volume: Some(cs_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

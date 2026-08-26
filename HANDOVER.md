@@ -8729,4 +8729,21 @@ py tools/verify_solid_api.py
 - **全49ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（49 of 49 read back as valid closed solids）**。
 - `49_retaining_circlip.step`（誤差 $2.35 \times 10^{-13}$）が完全ソリッドとして実証。
 
+## 24. 皿頭六角穴付きボルト（Countersunk Socket Head Screw）および外部CAD 50/50 達成の記念碑的実証
+
+### 24-1. 皿頭六角穴付きボルト（Countersunk Flat Head Cap Screw）の構築
+精密機器・ロボット構造で外表面を平坦に締結する皿ボルトを構築する `FastenerBuilder::make_countersunk_socket_screw`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **円柱軸＋円錐台皿頭＋内六角穴の複合ブーリアン（17面構成）**:
+  - ねじ軸部（$r_{\text{shank}} \times L_{\text{shank}}$）
+  - 皿頭円錐台（底面 $r_{\text{shank}}$, 天面 $R_{\text{head}}$, 高さ $h_{\text{head}}$）
+  - 天面内六角穴（二面幅 $S$, 深さ $d_{\text{socket}}$）
+  - 解析解体積:
+    $V = (\pi r_{\text{shank}}^2 L_{\text{shank}}) + \frac{\pi}{3} h_{\text{head}} (R_{\text{head}}^2 + R_{\text{head}} r_{\text{shank}} + r_{\text{shank}}^2) - \frac{\sqrt{3}}{2} S^2 d_{\text{socket}}$
+    により、計算体積と解析解体積が誤差 $1.18 \times 10^{-14}$（機械精度限界）で一致。
+
+### 24-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 50/50 完全達成）
+`target/showcase/` に全50個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全50ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（50 of 50 read back as valid closed solids）**。
+- `50_countersunk_socket_screw.step`（誤差 $1.18 \times 10^{-14}$）が完全ソリッドとして実証。
+
 

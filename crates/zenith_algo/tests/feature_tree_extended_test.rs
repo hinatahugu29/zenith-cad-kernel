@@ -102,8 +102,21 @@ fn test_feature_tree_extended_features() {
     let solid_rr = tree_rr.recompute().expect("evaluate retaining ring tree");
     assert!(solid_rr.outer_shell.validate_closed(&tol).is_valid());
 
-    // 8. JSON シリアライズ / デシリアライズ検証
-    let json = serde_json::to_string(&tree_rr).expect("serialize tree");
+    // 8. 皿頭六角穴付きボルト
+    let mut tree_cs = FeatureTree::new();
+    tree_cs.add_feature("countersunk_screw", FeatureOp::CountersunkSocketScrew {
+        shank_radius: 4.0,
+        shank_length: 20.0,
+        head_radius: 8.0,
+        head_height: 4.4,
+        socket_across_flats: 5.0,
+        socket_depth: 2.8,
+    });
+    let solid_cs = tree_cs.recompute().expect("evaluate countersunk screw tree");
+    assert!(solid_cs.outer_shell.validate_closed(&tol).is_valid());
+
+    // 9. JSON シリアライズ / デシリアライズ検証
+    let json = serde_json::to_string(&tree_cs).expect("serialize tree");
     let deserialized_tree: FeatureTree = serde_json::from_str(&json).expect("deserialize tree");
     let solid_recomputed = deserialized_tree.recompute().expect("recompute from json tree");
     assert!(solid_recomputed.outer_shell.validate_closed(&tol).is_valid());

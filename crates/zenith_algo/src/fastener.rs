@@ -407,4 +407,64 @@ impl FastenerBuilder {
         let bottom_wire = zenith_topo::Wire::new(edges);
         crate::ExtrudeBuilder::extrude_wire(&bottom_wire, Vec3::new(0.0, 0.0, thickness), tol)
     }
+
+    /// JIS B 1194 / ISO 10642 規格準拠の皿頭六角穴付きボルト（Countersunk Socket Head Cap Screw）ソリッドを構築
+    ///
+    /// `shank_radius`: ねじ軸半径 (例: M8 なら 4.0)
+    /// `shank_length`: 首下ねじ長さ (例: 20.0)
+    /// `head_radius`: 皿頭天面半径 (例: 8.0)
+    /// `head_height`: 皿頭高さ (例: 4.4)
+    /// `socket_across_flats`: 内六角二面幅 (例: 5.0)
+    /// `socket_depth`: 六角穴深さ (例: 2.8)
+    pub fn make_countersunk_socket_screw(
+        shank_radius: f64,
+        shank_length: f64,
+        head_radius: f64,
+        head_height: f64,
+        socket_across_flats: f64,
+        socket_depth: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if socket_depth >= head_height + shank_length {
+            return Err("Socket depth exceeds bolt total height".to_string());
+        }
+        let r_socket_outer = socket_across_flats / 3.0_f64.sqrt();
+        if r_socket_outer >= head_radius {
+            return Err("Socket size must fit inside screw head radius".to_string());
+        }
+        if head_radius <= shank_radius {
+            return Err("Head radius must exceed shank radius".to_string());
+        }
+
+        // 1. 軸部円柱（皿頭側へわずかに 0.1 食い込ませて配置）
+        let shank = crate::PrimitiveBuilder::make_cylinder(shank_radius, shank_length + 0.1)?;
+
+        // 2. 皿頭円錐台（小径 shank_radius -> 大径 head_radius）
+        let head_cone = crate::PrimitiveBuilder::make_cone(shank_radius, head_radius, head_height)?;
+        let head_cone = crate::BrepTransform::translate_solid(
+            &head_cone,
+            Vec3::new(0.0, 0.0, shank_length),
+        );
+
+        let blank = crate::boolean::BooleanEngine::boolean_solids_exact(
+            &shank,
+            &head_cone,
+            crate::boolean::BooleanOpType::Union,
+            tol,
+        )?;
+
+        // 3. 六角穴カッター
+        let socket_cutter = Self::make_hex_prism(socket_across_flats, socket_depth + 1.0, tol)?;
+        let positioned_socket = crate::BrepTransform::translate_solid(
+            &socket_cutter,
+            Vec3::new(0.0, 0.0, shank_length + head_height - socket_depth),
+        );
+
+        crate::boolean::BooleanEngine::boolean_solids_exact(
+            &blank,
+            &positioned_socket,
+            crate::boolean::BooleanOpType::Difference,
+            tol,
+        )
+    }
 }
