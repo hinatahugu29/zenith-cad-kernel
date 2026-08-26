@@ -1,6 +1,6 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
-**Document Version:** 1.8.8 (4-103の段付き軸・複合ボス個別診断回帰を反映)
-**Last Updated:** 2026-08-26
+**Document Version:** 1.9.0 (4-109〜4-113: 抜き勾配・断面の接触・非STEP出力の外部検算・DXFの層を反映)
+**Last Updated:** 2026-08-27
 **Status:** Official Production Specification
 
 > **この文書は「何があるか」の棚卸しです。「どこまで測ったか」「何が
@@ -77,7 +77,7 @@ CAD の主要モデリング機能群。
 #### 2. フィーチャーモデリング
 - **`extrude.rs` (`ExtrudeBuilder`)**:
   - `extrude_wire`: 閉じた多角形/円弧ワイヤを指定ベクトル方向に掃引して完全閉ソリッドを生成。
-  - `extrude_wire_with_draft`: 抜き勾配（ドラフト角度 $\theta$）付きで底面ワイヤを拡縮・掃引し、側面ルールド NURBS 曲面 ＋ 上下端面を縫合した完全閉 B-Rep ソリッドを生成。
+  - `extrude_wire_with_draft`: 抜き勾配（ドラフト角度 $\theta$）付きで底面ワイヤを掃引し、側面ルールド NURBS 曲面 ＋ 上下端面を縫合した完全閉 B-Rep ソリッドを生成。天面の輪郭は底面を**各辺の外向き法線へ $h\tan\theta$ 押し出したオフセット多角形**（頂点の移動量は $h\tan\theta/\sin(\alpha/2)$ で頂点ごとに違う）。**2026/08/27 まではワイヤの重心からの放射状な拡縮で、指定した角度になっていませんでした**（HANDOVER 4-109）。輪郭は直線の辺のみ。円弧を含むものは理由を返して拒否。
   - `extrude_face_with_holes`: 外側境界ワイヤ ＋ 任意の複数穴ワイヤ（Inner Wires）から、外壁側面 Face 群、穴内壁側面 Face 群、穴あき底面・天面キャップを完全縫合した閉ソリッド（中空パイプ等）を構築。
 - **`revolve.rs` (`RevolveBuilder`)**:
   - `revolve_curve`: 2D/3D 曲線を回転軸まわりに回転させた有理NURBS回転曲面を生成。

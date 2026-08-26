@@ -18,7 +18,7 @@
 > 部分集合を選ぶ速い段を作らなかったのは、このリポジトリで見つかった欠陥が
 > **まさに測っていなかったところ**から出ているからです。落とすものを人が
 > 覚えていなければならない仕組みは、ここでは向きません。
-**最終確認**: 2026年8月26日（HANDOVER 4-102 まで）
+**最終確認**: 2026年8月27日（HANDOVER 4-113 まで）
 
 この文書は、**このリポジトリを初めて見る人（または別の AI モデル）が、
 主張を信じずに自分で確かめながら作業を進める**ための手順書です。
@@ -106,7 +106,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 cargo test --release --workspace --exclude zenith_py
 ```
 
-**期待**: 103 テストバイナリ（doctest 込み）、591 テスト、失敗 0。
+**期待**: 119 テストバイナリ（doctest 込み）、632 テスト、失敗 0、警告 0（2026/08/27 実測）。
 
 所要はおよそ **10〜11分**です。ただし**この環境の壁時計は当てになりません**
 （下の 2-3 を読んでください）。時間で良し悪しを判断しないでください。曲面同士が交わるブーリアン（球×球、円柱×円柱、
@@ -747,13 +747,14 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | コマンド | 何を測るか |
 | :--- | :--- |
 | `export_validation_suite` ＋ `tools/freecad_cross_validate.py` | 体積・表面積・断面積を OpenCASCADE と突き合わせ（ゲート） |
-| `export_showcase` ＋ `tools/verify_showcase.py` | 代表25形状が Solid として読めるか（ゲート） |
+| `export_showcase` ＋ `tools/verify_showcase.py` | 代表54形状が Solid として読めるか（ゲート） |
 | `occ_reference_export.py` | OpenCASCADE 自身に解析曲面の STEP を書かせる |
 | `occ_reference_swept.py` | OpenCASCADE 自身に掃引面・楕円の STEP を書かせ、どのエンティティを選ぶかを数える |
 | `occ_reference_shapes.py` | OpenCASCADE 自身に、**実務で普通に出てくる形**（フィレット・面取り・複数穴・スロット・ロフト・曲がり管・挽き物・中空・段付き軸）の STEP を書かせ、どの実体が入ったかを数える |
 | `revolved_volume_reference.py` | 挽き物の体積を**母線の評価だけ**から求める（グリーンの定理）。OCC の立体求積はこの形で 1.3e-5 外れるので、**相手の値を期待値にしない**ために要る |
 | `foreign_reexport` ＋ `tools/verify_reexport.py` | 読んで書き戻した一周が解析解に乗るか（**ゲート**） |
 | `export_iges_suite` ＋ `tools/verify_iges.py` | IGES を OpenCASCADE が読み、曲面の枚数と境界箱が合うか（**ゲート**） |
+| `export_mesh_suite` ＋ `tools/verify_mesh_exports.py` | STL / OBJ / glTF / DXF を**書いたファイルだけ**から解き直し、閉じているか・体積が B-Rep と合うか・3形式が互いに一致するか・DXF の層と向きが断面と合うかを見る（**ゲート**。FreeCAD 不要なので CI に入っている） |
 
 **突き合わせ相手は、相手の実装が書いたファイルに置いてください。** 自前の
 出力どうしを比べているあいだは、寛容な読み手が受け取ってしまう構文違反が
@@ -766,13 +767,14 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 ## 7. 出力物の置き場所
 
 ```bash
-cargo run --release -p zenith_algo --example export_showcase          # target/showcase   25形状
+cargo run --release -p zenith_algo --example export_showcase          # target/showcase   54形状
 cargo run --release -p zenith_algo --example export_validation_suite  # target/validation 27形状
 cargo run --release -p zenith_algo --example foreign_reexport         # target/reexport    7形状
 ```
 
 | 置き場所 | 中身 | 突き合わせ |
 | :--- | :--- | :--- |
-| `target/showcase/` | 代表25形状。解析解を持つものは相対誤差付き | `verify_showcase.py`（25/25のゲート） |
+| `target/showcase/` | 代表54形状。解析解を持つものは相対誤差付き | `verify_showcase.py`（54/54のゲート、2026/08/27 実測） |
 | `target/validation/` | 相互検証用27形状＋OCC が書いた参照ファイル | `freecad_cross_validate.py`（27/27のゲート） |
 | `target/reexport/` | 他カーネルのファイルを読んで書き戻した7形状 | `verify_reexport.py`（**ゲート**） |
+| `target/mesh_exports/` | STL / OBJ / glTF / DXF の8検体＋台帳（`manifest.json`） | `verify_mesh_exports.py`（**ゲート**、FreeCAD 不要） |
