@@ -10,7 +10,8 @@
 //! 測るものは3つです。
 //!
 //! 1. **稜の列挙。** `blendable_edges` が何本返し、二面角をどう見るか。
-//! 2. **フィレットと面取り。** 掛けた結果が閉じた立体か、体積が減ったか、
+//! 2. **フィレットと面取り。** 掛けた結果が閉じた立体か、体積変化の符号と量が
+//!    稜の凸凹に合うか。凹稜は材料を足すため、符号付き除去体積は負になります。
 //!    そして**直線の稜で二面角が 90 度なら、減った量は閉じた式で決まる**。
 //!    半径 $r$ のフィレットは $(1 - \pi/4) r^2 L$、距離 $c$ の面取りは
 //!    $c^2 L / 2$ を削ります。
@@ -19,7 +20,7 @@
 //!
 //! 掛からないこと自体は、ここでは欠陥として数えません（実装していない組み
 //! 合わせがあります）。**数えるのは「掛かったのに答えが違う」ほう**です。
-//! 壊れた立体を返す、体積が増える、閉じた式から外れる——それが赤です。
+//! 壊れた立体を返す、符号付き体積変化が契約と逆、閉じた式から外れる——それが赤です。
 //!
 //! ```bash
 //! cargo run --release -p zenith_algo --example foreign_edit_probe
@@ -272,6 +273,10 @@ fn main() {
                     let distance = target.max_chamfer_distance * 0.25;
                     let hole = target.length / std::f64::consts::TAU;
                     Some(std::f64::consts::PI * distance * distance * (hole + distance / 3.0))
+                } else if name == "stepped_shaft" {
+                    let distance = target.max_chamfer_distance * 0.25;
+                    let shaft = target.length / std::f64::consts::TAU;
+                    Some(-std::f64::consts::PI * distance * distance * (shaft + distance / 3.0))
                 } else {
                     right_angled_straight(
                         &solid,
