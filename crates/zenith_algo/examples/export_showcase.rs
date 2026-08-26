@@ -12,7 +12,7 @@ use zenith_algo::StepInterop;
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, DraftBuilder, EdgeBlender, ExtrudeBuilder,
     GearBuilder, HelixBuilder, LoftBuilder, MassCalculator, PrimitiveBuilder, ProfileBuilder,
-    RevolveBuilder, ShaftBuilder, ShellingBuilder, SweepBuilder,
+    RevolveBuilder, RibBuilder, ShaftBuilder, ShellingBuilder, SweepBuilder,
 };
 use zenith_geom::NurbsCurve3;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -828,6 +828,20 @@ fn main() {
         note: "transition duct solid lofted smoothly across 3 distinct profiles (circle -> rect -> ellipse)",
         solid: loft_solid,
         analytic_volume: None,
+    });
+
+    // 39_triangular_prism_rib
+    let rib_l = 40.0;
+    let rib_h = 30.0;
+    let rib_t = 8.0;
+    let rib_solid = RibBuilder::make_triangular_rib(rib_l, rib_h, rib_t, &tol)
+        .expect("triangular prism rib");
+    let rib_vol = 0.5 * rib_l * rib_h * rib_t;
+    items.push(Item {
+        name: "39_triangular_prism_rib",
+        note: "triangular gusset prism rib for mechanical bracket stiffening",
+        solid: rib_solid,
+        analytic_volume: Some(rib_vol),
     });
 
     // --- 出力 ---

@@ -8575,4 +8575,21 @@ py tools/verify_solid_api.py
 - **全38ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格**。
 - `37_drafted_taper_block.step`（誤差 $3.06 \times 10^{-16}$）、`38_multi_section_loft_duct.step` ともに完全な閉多様体として実証。
 
+## 15. 補強リブビルダー（RibBuilder）と外部CAD 39/39 ソリッド実証
+
+### 15-1. 三角柱ガセットリブ（Triangular Prism Rib）の構築
+機械構造物（ブラケット、ハウジング、モーターマウント）の剛性補強に必須となる三角リブ演算子 `RibBuilder`（`crates/zenith_algo/src/rib.rs`）を新設しました。
+- **直角三角形断面ソリッド（`make_triangular_rib`）**: 底辺 $L$、高さ $H$、肉厚 $T$ の5面構成閉多様体B-Repソリッド。
+- **面の幾何・法線整合性の確立**:
+  - 前面（$-Y$）/ 背面（$+Y$）の三角形面におけるクランプエッジの逆向きループ対偶関係と、UV空間での有向面積正値（CCW）を数学的に整合。
+  - 斜面（Hypotenuse Sloped Face）の単位法線 $\vec{N} = (H, 0, L) / \sqrt{H^2 + L^2}$ と平面自然法線を完全一致。
+- **閉形式体積一致**:
+  $V = \frac{1}{2} L \cdot H \cdot T$
+  により、解析解体積と計算体積が誤差 $0.00$（完全ゼロ一致）を達成。
+
+### 15-2. 外部CAD検証結果（FreeCAD / OpenCASCADE 39/39 合格）
+`target/showcase/` に全39個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全39ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格**。
+- `39_triangular_prism_rib.step`（体積 $4800.0000$、誤差 $0.00$）が完全ソリッドとして実証。
+
 
