@@ -62,22 +62,22 @@ pub(crate) fn try_chamfer_shoulder_root(
             "Shoulder-root chamfer distance must be finite and larger than 1e-6, got {distance}"
         ));
     }
-    let margin = 1e-6 * site.max_radius.max(site.root_radius).max(1.0);
-    if distance >= site.max_radius - margin {
+    let margin = 1e-6 * site.max_chamfer_distance.max(site.root_radius).max(1.0);
+    if distance >= site.max_chamfer_distance - margin {
         return Err(format!(
             "Shoulder-root chamfer distance {distance} must be smaller than the available setback {:.6}",
-            site.max_radius
+            site.max_chamfer_distance
         ));
     }
     let result = site.apply(solid, ShoulderRootBlend::Chamfer(distance))?;
     Ok(Some((
         result,
         EdgeBlendReport {
-            dihedral_angle_deg: 270.0,
+            dihedral_angle_deg: 270.0 + site.slope.atan().to_degrees(),
             edge_length: TAU * site.root_radius,
             setback: distance,
             // This concave chamfer adds material; removed volume is signed.
-            predicted_removed_volume: -chamfer_added_volume(site.root_radius, distance),
+            predicted_removed_volume: -site.chamfer_added_volume(distance),
         },
     )))
 }
@@ -89,16 +89,8 @@ pub(crate) fn shoulder_root_blendable(solid: &Solid, edge_id: u64) -> Option<Ble
         length: TAU * site.root_radius,
         dihedral_angle_deg: 270.0 + site.slope.atan().to_degrees(),
         max_fillet_radius: site.max_radius * 0.999,
-        max_chamfer_distance: if site.slope.abs() <= 1e-10 {
-            site.max_radius * 0.999
-        } else {
-            0.0
-        },
+        max_chamfer_distance: site.max_chamfer_distance * 0.999,
     })
-}
-
-fn chamfer_added_volume(shaft_radius: f64, distance: f64) -> f64 {
-    PI * distance * distance * (shaft_radius + distance / 3.0)
 }
 
 #[derive(Clone, Copy)]
@@ -120,6 +112,7 @@ struct ShoulderRoot {
     slope: f64,
     height: f64,
     max_radius: f64,
+    max_chamfer_distance: f64,
 }
 
 impl ShoulderRoot {
@@ -300,7 +293,8 @@ impl ShoulderRoot {
         let radial_factor = slope_norm + slope;
         let axial_factor = 1.0 + slope / slope_norm;
         let max_radius = (clearance / radial_factor).min(height / axial_factor);
-        if max_radius <= 1e-6 {
+        let max_chamfer_distance = clearance.min(height * slope_norm);
+        if max_radius <= 1e-6 || max_chamfer_distance <= 1e-6 {
             return None;
         }
 
@@ -317,6 +311,7 @@ impl ShoulderRoot {
             slope,
             height,
             max_radius,
+            max_chamfer_distance,
         })
     }
 
@@ -339,6 +334,25 @@ impl ShoulderRoot {
                 + self.slope * self.slope * z.powi(3) / 3.0
         };
         PI * ((arc_primitive(contact_z) - arc_primitive(0.0))
+            - (cone_primitive(contact_z) - cone_primitive(0.0)))
+    }
+
+    fn chamfer_added_volume(&self, distance: f64) -> f64 {
+        let norm = self.slope.hypot(1.0);
+        let contact_z = distance / norm;
+        let chamfer_slope = self.slope - norm;
+        let chamfer_primitive = |z: f64| {
+            let intercept = self.root_radius + distance;
+            intercept * intercept * z
+                + intercept * chamfer_slope * z * z
+                + chamfer_slope * chamfer_slope * z.powi(3) / 3.0
+        };
+        let cone_primitive = |z: f64| {
+            self.root_radius * self.root_radius * z
+                + self.root_radius * self.slope * z * z
+                + self.slope * self.slope * z.powi(3) / 3.0
+        };
+        PI * ((chamfer_primitive(contact_z) - chamfer_primitive(0.0))
             - (cone_primitive(contact_z) - cone_primitive(0.0)))
     }
 
@@ -381,15 +395,10 @@ impl ShoulderRoot {
                 )
             }
             ShoulderRootBlend::Chamfer(distance) => {
-                if self.slope.abs() > 1e-10 {
-                    return Err("Equal-setback chamfer for a non-right-angle shoulder root is not yet supported".into());
-                }
-                (
-                    self.root_radius + distance,
-                    self.root_radius,
-                    distance,
-                    None,
-                )
+                let norm = self.slope.hypot(1.0);
+                let join_height = distance / norm;
+                let join_radius = self.root_radius + self.slope * join_height;
+                (self.root_radius + distance, join_radius, join_height, None)
             }
         };
         let base: Vec<Vertex> = (0..4)

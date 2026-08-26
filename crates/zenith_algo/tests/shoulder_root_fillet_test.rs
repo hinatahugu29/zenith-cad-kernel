@@ -48,6 +48,19 @@ fn chamfer_added_volume(shaft_radius: f64, distance: f64) -> f64 {
     PI * distance * distance * (shaft_radius + distance / 3.0)
 }
 
+fn conical_root_chamfer_added_volume(root_radius: f64, slope: f64, distance: f64) -> f64 {
+    let norm = slope.hypot(1.0);
+    let contact_z = distance / norm;
+    let chamfer_slope = slope - norm;
+    let primitive = |intercept: f64, line_slope: f64, z: f64| {
+        intercept * intercept * z
+            + intercept * line_slope * z * z
+            + line_slope * line_slope * z.powi(3) / 3.0
+    };
+    PI * (primitive(root_radius + distance, chamfer_slope, contact_z)
+        - primitive(root_radius, slope, contact_z))
+}
+
 fn expected_area(
     base_radius: f64,
     base_height: f64,
@@ -376,7 +389,7 @@ fn boolean_boss_root_is_locally_filleted_without_rebuilding_the_block() {
 }
 
 #[test]
-fn boolean_conical_boss_root_is_recognized_and_filleted_exactly() {
+fn boolean_conical_boss_root_is_recognized_and_blended_exactly() {
     let tol = Tolerance::default();
     let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
     let cone = BrepTransform::translate_solid(
@@ -402,9 +415,9 @@ fn boolean_conical_boss_root_is_recognized_and_filleted_exactly() {
             1e-12,
         );
         assert!(candidate.max_fillet_radius > 10.0);
-        assert_eq!(candidate.max_chamfer_distance, 0.0);
+        assert!(candidate.max_chamfer_distance > 11.0);
     }
-    assert!(EdgeBlender::chamfer_edge(&joined, candidates[0].edge_id, 1.0).is_err());
+    assert!(EdgeBlender::chamfer_edge(&joined, candidates[0].edge_id, 12.0).is_err());
 
     let before = MassCalculator::compute_from_brep(&joined, &params());
     let old_planar_ids: Vec<u64> = joined
@@ -484,6 +497,49 @@ fn boolean_conical_boss_root_is_recognized_and_filleted_exactly() {
         }
         assert_eq!(uses.values().filter(|count| **count != 2).count(), 0);
     }
+
+    let distance = 2.0;
+    let (chamfered, chamfer_report) = EdgeBlender::blend_edge(
+        &joined,
+        candidates[0].edge_id,
+        zenith_algo::BlendKind::Chamfer { distance },
+    )
+    .expect("equal-setback conical boss-root chamfer");
+    assert!(chamfered.outer_shell.validate_closed(&tol).is_valid());
+    assert!(old_planar_ids.iter().all(|id| chamfered
+        .outer_shell
+        .faces
+        .iter()
+        .any(|face| face.id == *id)));
+    let chamfer_added = conical_root_chamfer_added_volume(8.0, slope, distance);
+    close(
+        MassCalculator::compute_from_brep(&chamfered, &params()).volume - before.volume,
+        chamfer_added,
+        2e-9,
+    );
+    close(
+        chamfer_report.predicted_removed_volume,
+        -chamfer_added,
+        1e-13,
+    );
+    close(
+        chamfer_report.dihedral_angle_deg,
+        270.0 + slope.atan().to_degrees(),
+        1e-12,
+    );
+    let chamfer_step =
+        StepExporter::export_solid_to_string(&chamfered, "CONICAL_BOSS_ROOT_CHAMFER");
+    let chamfer_reread = StepImporter::import_solids_from_str(&chamfer_step)
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(chamfer_reread.outer_shell.validate_closed(&tol).is_valid());
+    close(
+        MassCalculator::compute_from_brep(&chamfer_reread, &params()).volume - before.volume,
+        chamfer_added,
+        3e-9,
+    );
 }
 
 #[test]
@@ -511,6 +567,14 @@ fn conical_boss_root_fillet_survives_rigid_placement() {
     close(
         MassCalculator::compute_from_brep(&rounded, &params()).volume - before,
         conical_root_added_volume(8.0, -0.25, 1.5),
+        3e-9,
+    );
+
+    let chamfered = EdgeBlender::chamfer_edge(&moved, candidate.edge_id, 1.5).unwrap();
+    assert!(chamfered.outer_shell.validate_closed(&tol).is_valid());
+    close(
+        MassCalculator::compute_from_brep(&chamfered, &params()).volume - before,
+        conical_root_chamfer_added_volume(8.0, -0.25, 1.5),
         3e-9,
     );
 }
