@@ -6,7 +6,7 @@
 2. [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) — 主張を再測定する手順
 3. [`KERNEL_SPECS.md`](KERNEL_SPECS.md) — 現在の仕様と実装範囲
 4. [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) — 機能一覧と制限
-5. 必要な課題に対応する `Reference/`、Rustコード、その他の設計文書
+5. 必要な課題に対応する `reference/`、Rustコード、その他の設計文書
 
 最初に、文書内のスナップショットより手元のGit状態を優先して確認します。
 
