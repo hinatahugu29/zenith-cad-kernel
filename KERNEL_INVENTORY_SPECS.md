@@ -119,6 +119,7 @@ CAD の主要モデリング機能群。
   - `make_retaining_ring`: JIS B 2804 準拠の有理2次NURBS円弧＋直線エッジ閉ループ押し出しC形止め輪ソリッド（体積誤差 $2.35 \times 10^{-13}$）。
   - `make_countersunk_socket_screw`: JIS B 1194 / ISO 10642 準拠の皿頭六角穴付きボルトソリッド（体積誤差 $1.18 \times 10^{-14}$）。
   - `make_weld_neck_flange`: JIS B 2220 / ASME B16.5 準拠の溶接ネック配管フランジソリッド（体積誤差 $2.56 \times 10^{-13}$）。
+  - `make_taper_pipe_plug`: JIS B 0203 / ANSI B16.14 準拠の六角穴付き管用テーパプラグソリッド（体積誤差 $3.33 \times 10^{-15}$）。
 - **`shaft.rs` (`ShaftBuilder`)**:
   - `make_stepped_shaft`: 任意段数の円柱を安定結合した段付き軸ソリッド。
   - `make_shaft_with_keyway`: JIS B 1301 準拠の平行キー溝（長円ポケット）を差分切削した動力伝達軸ソリッド。
@@ -142,7 +143,7 @@ CAD の主要モデリング機能群。
 - 2D点、線分、円の多変数ニュートン・ラフソン法による 12 種の幾何拘束充足。
 
 #### 6. パラメトリック・フィーチャーツリー (`feature_tree.rs`)
-- 対応オペレーション: `CreateBox`, `CreateCylinder`, `CreateCone`, `CreateTorus`, `FilletEdge`, `ChamferEdge`, `HollowBox`, **`HollowThroughBox`**, `ExtrudeHollow`, `ExtrudeDraft`, `RevolveSolid`, `RevolvePartialSolid`, `LoftSolid`, `SweepWire`, `SweepHelix`, `MirrorSolid`, `PushPullFace`, `ThickenFace`, `DraftBlock`, `TriangularRib`, `HexPrism`, `HexNut`, `SocketHeadCapScrew`, `PlainWasher`, `FlangedHexBolt`, `CountersinkHole`, `CounterboredSlot`, `SpringWasher`, `RetainingRing`, `CountersunkSocketScrew`, `WeldNeckFlange`。
+- 対応オペレーション: `CreateBox`, `CreateCylinder`, `CreateCone`, `CreateTorus`, `FilletEdge`, `ChamferEdge`, `HollowBox`, **`HollowThroughBox`**, `ExtrudeHollow`, `ExtrudeDraft`, `RevolveSolid`, `RevolvePartialSolid`, `LoftSolid`, `SweepWire`, `SweepHelix`, `MirrorSolid`, `PushPullFace`, `ThickenFace`, `DraftBlock`, `TriangularRib`, `HexPrism`, `HexNut`, `SocketHeadCapScrew`, `PlainWasher`, `FlangedHexBolt`, `CountersinkHole`, `CounterboredSlot`, `SpringWasher`, `RetainingRing`, `CountersunkSocketScrew`, `WeldNeckFlange`, `TaperPipePlug`。
 
 #### 7. 物性値計算 (`mass_properties.rs`)
 - ガウスの発散定理に基づく表面積分により、厳密な **体積（Volume）**、**表面積（Surface Area）**、**重心（Center of Mass）**、**慣性モーメントテンソル（Inertia Tensor）** を算出。
