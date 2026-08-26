@@ -135,6 +135,79 @@ pub enum FeatureOp {
         target: EdgeSignature,
         distance: f64,
     },
+
+    /// 金型抜き勾配ブロック
+    DraftBlock {
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        draft_angle_deg: f64,
+    },
+    /// 三角柱ガセット補強リブ
+    TriangularRib {
+        length: f64,
+        height: f64,
+        thickness: f64,
+    },
+    /// 正六角柱（ボルト頭）
+    HexPrism {
+        across_flats: f64,
+        height: f64,
+    },
+    /// 六角ナットブランク
+    HexNut {
+        across_flats: f64,
+        height: f64,
+        hole_radius: f64,
+    },
+    /// 六角穴付きボルト
+    SocketHeadCapScrew {
+        shank_radius: f64,
+        shank_length: f64,
+        head_radius: f64,
+        head_height: f64,
+        socket_across_flats: f64,
+        socket_depth: f64,
+    },
+    /// 平座金
+    PlainWasher {
+        inner_radius: f64,
+        outer_radius: f64,
+        thickness: f64,
+    },
+    /// フランジ付き六角ボルト
+    FlangedHexBolt {
+        shank_radius: f64,
+        shank_length: f64,
+        flange_radius: f64,
+        flange_height: f64,
+        hex_across_flats: f64,
+        hex_head_height: f64,
+    },
+    /// 皿モミ穴ブロック
+    CountersinkHole {
+        box_w: f64,
+        box_d: f64,
+        box_h: f64,
+        hole_radius: f64,
+        sink_radius: f64,
+        angle_deg: f64,
+        center_x: f64,
+        center_y: f64,
+    },
+    /// 座ぐり長穴ブロック
+    CounterboredSlot {
+        box_w: f64,
+        box_d: f64,
+        box_h: f64,
+        slot_length: f64,
+        slot_radius: f64,
+        cb_length: f64,
+        cb_radius: f64,
+        cb_depth: f64,
+        center_x: f64,
+        center_y: f64,
+    },
 }
 
 /// 履歴に書けるブーリアン種別（`BooleanOpType` の直列化可能版）
@@ -495,6 +568,109 @@ impl FeatureTree {
                     let edge_id = match_edge(&solid, target)?;
                     current_solid =
                         Some(crate::EdgeBlender::chamfer_edge(&solid, edge_id, *distance)?);
+                }
+                FeatureOp::DraftBlock { dx, dy, dz, draft_angle_deg } => {
+                    current_solid = Some(crate::DraftBuilder::make_drafted_block(
+                        *dx,
+                        *dy,
+                        *dz,
+                        draft_angle_deg.to_radians(),
+                        &tol,
+                    )?);
+                }
+                FeatureOp::TriangularRib { length, height, thickness } => {
+                    current_solid = Some(crate::RibBuilder::make_triangular_rib(*length, *height, *thickness, &tol)?);
+                }
+                FeatureOp::HexPrism { across_flats, height } => {
+                    current_solid = Some(crate::FastenerBuilder::make_hex_prism(*across_flats, *height, &tol)?);
+                }
+                FeatureOp::HexNut { across_flats, height, hole_radius } => {
+                    current_solid = Some(crate::FastenerBuilder::make_hex_nut_blank(*across_flats, *height, *hole_radius, &tol)?);
+                }
+                FeatureOp::SocketHeadCapScrew {
+                    shank_radius,
+                    shank_length,
+                    head_radius,
+                    head_height,
+                    socket_across_flats,
+                    socket_depth,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_socket_head_cap_screw(
+                        *shank_radius,
+                        *shank_length,
+                        *head_radius,
+                        *head_height,
+                        *socket_across_flats,
+                        *socket_depth,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::PlainWasher { inner_radius, outer_radius, thickness } => {
+                    current_solid = Some(crate::FastenerBuilder::make_plain_washer(*inner_radius, *outer_radius, *thickness, &tol)?);
+                }
+                FeatureOp::FlangedHexBolt {
+                    shank_radius,
+                    shank_length,
+                    flange_radius,
+                    flange_height,
+                    hex_across_flats,
+                    hex_head_height,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_flanged_hex_bolt(
+                        *shank_radius,
+                        *shank_length,
+                        *flange_radius,
+                        *flange_height,
+                        *hex_across_flats,
+                        *hex_head_height,
+                        &tol,
+                    )?);
+                }
+                FeatureOp::CountersinkHole {
+                    box_w,
+                    box_d,
+                    box_h,
+                    hole_radius,
+                    sink_radius,
+                    angle_deg,
+                    center_x,
+                    center_y,
+                } => {
+                    current_solid = Some(crate::HoleBuilder::make_countersink_hole_box(
+                        *box_w,
+                        *box_d,
+                        *box_h,
+                        *hole_radius,
+                        *sink_radius,
+                        *angle_deg,
+                        *center_x,
+                        *center_y,
+                    )?);
+                }
+                FeatureOp::CounterboredSlot {
+                    box_w,
+                    box_d,
+                    box_h,
+                    slot_length,
+                    slot_radius,
+                    cb_length,
+                    cb_radius,
+                    cb_depth,
+                    center_x,
+                    center_y,
+                } => {
+                    current_solid = Some(crate::HoleBuilder::make_counterbored_slot_box(
+                        *box_w,
+                        *box_d,
+                        *box_h,
+                        *slot_length,
+                        *slot_radius,
+                        *cb_length,
+                        *cb_radius,
+                        *cb_depth,
+                        *center_x,
+                        *center_y,
+                    )?);
                 }
             }
         }

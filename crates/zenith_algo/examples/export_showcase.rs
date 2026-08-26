@@ -1025,6 +1025,27 @@ fn main() {
         analytic_volume: Some(fl_bolt_vol),
     });
 
+    // 48_spring_lock_washer
+    let sp_inner_r = 4.25; // M8
+    let sp_outer_r = 7.4;
+    let sp_t = 2.0;
+    let sp_free_h = 3.5;
+    let sp_gap_deg = 20.0;
+    let sp_washer = FastenerBuilder::make_spring_washer(
+        sp_inner_r,
+        sp_outer_r,
+        sp_t,
+        sp_free_h,
+        sp_gap_deg,
+        &tol,
+    ).expect("spring washer");
+    items.push(Item {
+        name: "48_spring_lock_washer",
+        note: "JIS/ISO spring lock washer helical split ring solid with rectangular wire cross-section",
+        solid: sp_washer,
+        analytic_volume: None,
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

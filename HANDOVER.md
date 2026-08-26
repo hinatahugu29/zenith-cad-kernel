@@ -8696,4 +8696,21 @@ py tools/verify_solid_api.py
 - **全47ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（47 of 47 read back as valid closed solids）**。
 - `47_flanged_hex_bolt.step`（誤差 $2.06 \times 10^{-13}$）が完全ソリッドとして実証。
 
+## 22. スプリングワッシャー（ばね座金）および拡張フィーチャーツリー / スケッチ拘束連携の外部CAD 48/48 実証
+
+### 22-1. スプリングワッシャー（Spring Lock Washer）の構築
+ボルト締結の緩み止めとして用いられるスプリングワッシャーを構築する `FastenerBuilder::make_spring_washer`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **矩形線材ヘリカルスプリットリングソリッド（6面構成）**:
+  - 内径 $r_{\text{inner}}$、外径 $R_{\text{outer}}$、板厚 $T$、自由高さ $H_{\text{free}}$、切欠きスリット角度 $\theta_{\text{gap}}$
+  - 螺旋スイープ軸に沿って矩形プロファイルを安定掃引した6面構成の完全閉多様体B-Repソリッド（`48_spring_lock_washer`）。
+
+### 22-2. 拡張フィーチャーツリー（`FeatureTree`）とスケッチ拘束（`SketchSolver`）の連携
+- `FeatureOp` に新規設計された全フィーチャー（`DraftBlock`, `TriangularRib`, `HexPrism`, `HexNut`, `SocketHeadCapScrew`, `PlainWasher`, `FlangedHexBolt`, `CountersinkHole`, `CounterboredSlot`）を統合。
+- スケッチ幾何拘束ソルバーで最適化された2D幾何プロファイルから、フィーチャーツリーを介してドラフト押し出し・360度回転体閉ソリッドを構築するエンドツーエンドパイプラインを確立・実証（`tests/sketch_to_feature_integration_test.rs`）。
+
+### 22-3. 外部CAD検証結果（FreeCAD / OpenCASCADE 48/48 合格）
+`target/showcase/` に全48個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全48ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（48 of 48 read back as valid closed solids）**。
+- `48_spring_lock_washer.step` が完全ソリッドとして実証。
+
 

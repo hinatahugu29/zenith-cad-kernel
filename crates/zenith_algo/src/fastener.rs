@@ -246,4 +246,51 @@ impl FastenerBuilder {
             tol,
         )
     }
+
+    /// JIS B 1251 規格準拠のスプリングワッシャー（ばね座金 / Spring Lock Washer）ソリッドを構築
+    ///
+    /// `inner_radius`: 内径半径 (M8なら 4.25)
+    /// `outer_radius`: 外径半径 (7.4)
+    /// `thickness`: 板厚 (2.0)
+    /// `free_height`: 自由状態の高さ (3.5)
+    /// `gap_deg`: 切欠きスリット角度 (20.0 度)
+    pub fn make_spring_washer(
+        inner_radius: f64,
+        outer_radius: f64,
+        thickness: f64,
+        free_height: f64,
+        gap_deg: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if inner_radius >= outer_radius || thickness <= 1e-6 || free_height <= thickness {
+            return Err("Invalid spring washer dimensions: outer must exceed inner, free_height must exceed thickness".to_string());
+        }
+        if gap_deg <= 0.0 || gap_deg >= 90.0 {
+            return Err("Gap angle must be between 0 and 90 degrees".to_string());
+        }
+
+        let turns = (360.0 - gap_deg) / 360.0;
+        let pitch = (free_height - thickness) / turns;
+        let mean_radius = (inner_radius + outer_radius) * 0.5;
+        let width = outer_radius - inner_radius;
+
+        let profile_wire = crate::ProfileBuilder::make_rectangle(
+            width,
+            thickness,
+            Point3::new(mean_radius, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )?;
+
+        crate::HelixBuilder::sweep_wire_along_helix(
+            &profile_wire,
+            mean_radius,
+            pitch,
+            turns,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            64,
+            tol,
+        )
+    }
 }

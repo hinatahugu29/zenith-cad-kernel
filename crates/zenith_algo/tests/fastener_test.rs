@@ -236,3 +236,58 @@ fn test_flanged_hex_bolt() {
         "Reimported flanged bolt must be valid closed"
     );
 }
+
+#[test]
+fn test_spring_washer() {
+    let tol = Tolerance::default();
+    let inner_r = 4.25; // M8
+    let outer_r = 7.4;
+    let t = 2.0;
+    let free_h = 3.5;
+    let gap_deg = 20.0;
+
+    let solid = FastenerBuilder::make_spring_washer(
+        inner_r,
+        outer_r,
+        t,
+        free_h,
+        gap_deg,
+        &tol,
+    )
+    .expect("spring washer");
+
+    // 1. B-Rep 閉多様体検証
+    assert!(
+        solid.outer_shell.validate_closed(&tol).is_valid(),
+        "Spring washer must be valid closed manifold"
+    );
+
+    // 2. 閉形式体積一致検証
+    let turns = (360.0 - gap_deg) / 360.0;
+    let pitch = (free_h - t) / turns;
+    let mean_r = (inner_r + outer_r) * 0.5;
+    let width = outer_r - inner_r;
+    let helix_len = turns * ((2.0 * std::f64::consts::PI * mean_r).powi(2) + pitch.powi(2)).sqrt();
+    let expected_vol = width * t * helix_len;
+
+    let params = TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let mass = MassCalculator::compute_from_brep(&solid, &params);
+    let vol_diff = (mass.volume - expected_vol).abs() / expected_vol;
+    assert!(
+        vol_diff < 0.15,
+        "Volume mismatch: computed={}, expected={}, diff={vol_diff}",
+        mass.volume,
+        expected_vol
+    );
+
+    // 3. STEP 往復検証
+    let step_str = StepExporter::export_solid_to_string(&solid, "SpringWasher");
+    let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
+    assert!(
+        reimported.outer_shell.validate_closed(&tol).is_valid(),
+        "Reimported spring washer must be valid closed"
+    );
+}
