@@ -41,15 +41,28 @@ impl DxfLayer {
 }
 
 pub struct DxfExporter;
-
 impl DxfExporter {
     /// 3D断面ループ群（X-Y平面射影）を標準DXF文字列として生成
+    ///
+    /// **層は向きで決めます。索引ではありません。** `SectionSlicer` は外周を
+    /// 反時計回り、穴を時計回りで返すので、X-Y へ落としたときの符号付き面積が
+    /// 正なら外形、負なら穴です。
+    ///
+    /// 以前はここを「最初のループが外形、残りは全部穴」と決めていました。
+    /// 断面に**外形が2つ以上**出る形（上から溝を掘った棒を溝の底より上で
+    /// 切る、離れたボスを2本切る、など）では、2つ目以降の外形がすべて
+    /// `HOLE` 層に落ちます。実測（`export_mesh_suite` の
+    /// `slotted_bar_two_outlines`）では、外形2・穴0の断面が
+    /// `OUTLINE` 1本・`HOLE` 1本として書かれていました。
     pub fn generate_dxf_string(loops: &[Vec<Point3>]) -> String {
         let layered: Vec<(DxfLayer, &[Point3])> = loops
             .iter()
-            .enumerate()
-            .map(|(idx, l)| {
-                let layer = if idx == 0 { DxfLayer::Outline } else { DxfLayer::Hole };
+            .map(|l| {
+                let layer = if signed_area_xy(l) < 0.0 {
+                    DxfLayer::Hole
+                } else {
+                    DxfLayer::Outline
+                };
                 (layer, l.as_slice())
             })
             .collect();
@@ -106,4 +119,20 @@ impl DxfExporter {
             .map_err(|e| format!("Failed to write DXF content: {e}"))?;
         Ok(())
     }
+}
+
+/// X-Y へ落としたときの符号付き面積（靴紐公式）。
+///
+/// 反時計回りが正。`SectionSlicer` はこの向きで外周を、逆向きで穴を返す。
+fn signed_area_xy(points: &[Point3]) -> f64 {
+    if points.len() < 3 {
+        return 0.0;
+    }
+    let mut twice = 0.0;
+    for index in 0..points.len() {
+        let a = points[index];
+        let b = points[(index + 1) % points.len()];
+        twice += a.x * b.y - b.x * a.y;
+    }
+    twice * 0.5
 }
