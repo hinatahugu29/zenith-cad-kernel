@@ -28,10 +28,6 @@ Thumbs.db
 *.swp
 *.swo
 
-# 生成した統合ドキュメント（`tools/generate_unified_pdf.py` の出力）
-/Zenith_CAD_Kernel_Documentation.pdf
-/tools/unified_docs.html
-
 # Python のキャッシュ
 __pycache__/
 *.pyc

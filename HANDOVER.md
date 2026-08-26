@@ -7520,6 +7520,21 @@ LaTeX コマンドが解析時に消えていました。
 いまは黙って待ち続けます。
 
 
+### 4-115. 統合 PDF / HTML の生成をやめました（2026/08/27）
+
+`tools/generate_unified_pdf.py` と、その出力（`Zenith_CAD_Kernel_Documentation.pdf`、
+`tools/unified_docs.html`）を削除しました。
+
+4-114 で本文を [`docs/treatise/`](docs/treatise/) へ出した時点で、**束ねた
+出力は「読むために必要なもの」ではなくなっていました。** 残していると、
+
+- 描画段がこの環境で繰り返し実行すると返ってこない（4-114、原因未特定）
+- 生成物は追跡していないので、手元にあるものが何時点の本文か分からない
+- 見出しで切る指定を、文書の見出しを変えるたびに合わせ続ける必要がある
+
+という保守だけが残ります。`.gitignore` の項目も消しました。束ねたものが要る
+ときは、`docs/treatise/README.md` の該当節を消して作り直してください。
+
 ---
 
 ## 5. 踏んだ落とし穴（繰り返さないために）
@@ -8571,16 +8586,10 @@ cargo run --release -p zenith_algo --example export_mesh_suite        # target/m
 | `target/iges/` | IGES 5.3 の検体5形状＋`manifest.json` | `tools/verify_iges.py`（**ゲート**。曲面の枚数と境界箱、不一致で非ゼロ終了） |
 | `target/mesh_exports/` | STL / OBJ / glTF / DXF の検体8形状＋`manifest.json` | `tools/verify_mesh_exports.py`（**ゲート**。閉じているか・体積・3形式の一致・DXF の層。**FreeCAD 不要なので CI に入っている**） |
 
-読み物のほうは別系統です。
-
-```bash
-py tools/generate_unified_pdf.py    # tools/unified_docs.html と Zenith_CAD_Kernel_Documentation.pdf
-```
-
-本文は [`docs/treatise/`](docs/treatise/) にあり、リポジトリの文書
-（`KERNEL_SPECS.md`、`HANDOVER.md` など）を**見出しで切って**取り込みます。
-行番号で切っていた頃は文書が伸びるたびに末尾が黙って落ちていました（4-114）。
-生成物（HTML と PDF）は追跡していません。`markdown` と `PySide6` が要ります。
+読み物のほうは別系統で、[`docs/treatise/`](docs/treatise/) に Markdown として
+置いてあります。**束ねる生成（`tools/generate_unified_pdf.py`、HTML、PDF）は
+2026年8月27日に削除しました**——本文が Markdown で読めるので束ねる意味がなく、
+描画段は繰り返し実行で返ってきませんでした（4-114、4-115）。
 
 ショーケースの 17〜24 は今回のセッションで通るようになった範囲です
 （円錐を平面で切る3種、トーラスをスラブで切る2種、球を切る2種、
