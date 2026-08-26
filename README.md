@@ -8,6 +8,11 @@
 4. [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) — 機能一覧と制限
 5. 必要な課題に対応する `reference/`、Rustコード、その他の設計文書
 
+読み物（理論の解説、用語集、プローブ一覧）は [`docs/treatise/`](docs/treatise/)
+にあります。統合 PDF（`Zenith_CAD_Kernel_Documentation.pdf`）はここから組み
+立てます。**実測値の正はあくまで `HANDOVER.md` で、解説側の数字は書いた時点の
+ものです。**
+
 最初に、文書内のスナップショットより手元のGit状態を優先して確認します。
 
 ```bash

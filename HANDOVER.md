@@ -7427,10 +7427,96 @@ z = 14 で切る）:
 **残した1か所**: `sweep_wire_test`（三角形断面の3Dスイープ）。管の公式は円断面
 にしか使えず、初等的な閉じた式がありません。
 
+### 4-114. 統合ドキュメントの生成が、本文を抱え込み・行番号で切り・LaTeX を壊していました（2026/08/27）
+
+`tools/generate_unified_pdf.py` に3つ問題がありました。**どれも、出来上がった
+PDF を見ても分かりません。**
+
+#### 置き場が直書きだった
+
+```python
+WORKSPACE_DIR = r"e:\CAD-Kernel"
+```
+
+**別の場所へ clone した人の手元では動きません。** ファイルの位置から決める
+ようにしました。
+
+#### 読み物がスクリプトの中に埋まっていた
+
+巻頭言・各章の基礎理論・用語集・プローブ一覧が、1300行のスクリプトの中に
+Python の文字列として直書きされていました。差分が「スクリプトの変更」に
+見えるのでレビューに掛からず、他の文書と食い違っても気づけません。
+
+[`docs/treatise/`](../docs/treatise/) に Markdown として出し、スクリプトは
+組み立てだけをするようにしました。
+
+#### 章の切れ目が行番号の直値だった
+
+```python
+("HANDOVER.md", "Zenith CAD Kernel 開発引継書 本文", 1, 8349)
+```
+
+**文書が伸びると、末尾が黙って落ちます。** 2026年8月27日の実測:
+
+| 文書 | 入っていた範囲 | 実際の行数 | 落ちていた行 |
+| :--- | ---: | ---: | ---: |
+| `HANDOVER.md` | 1〜8349 | 9012 | **663** |
+| `FREECAD_VALIDATION_REPORT.md` | 1〜234 | 265 | 31 |
+| `KERNEL_INVENTORY_SPECS.md` | 63〜205 | 228 | 23 |
+| `KERNEL_SPECS.md` | 77〜149 | 152 | 3 |
+
+9章（実用に耐えるまでに何が要るか）と10〜28章が丸ごと入っていませんでした。
+見出しで切るようにし、見出しが見つからなければ止めます。直したあと、PDF は
+5,204,029 → 5,530,854 バイトになりました。
+
+#### LaTeX が Python の文字列エスケープに食われていた
+
+本文が**素の**三重引用符文字列だったので、頭文字がエスケープと衝突する
+LaTeX コマンドが解析時に消えていました。
+
+| 書いたもの | PDF に載っていたもの |
+| :--- | :--- |
+| `\frac` | 改ページ文字 ＋ `rac` |
+| `\approx` | ベル文字 ＋ `pprox` |
+| `\begin{cases}` | バックスペース ＋ `egin{cases}` |
+| `\text` / `\times` | タブ ＋ `ext` / `imes` |
+| `\neq` / `\nabla` | **改行** ＋ `eq` / `abla` |
+
+11か所ありました。NURBS の有理式、Cox-de Boor の漸化式、ツイスト不整合の
+条件式、発散定理の式が**すべて壊れたまま**載っていたことになります。Markdown
+に出したので、いまは普通に読めば分かります。
+
+**この3つは、いずれも「出力が出来上がること」と「出力が正しいこと」を取り
+違えた形の欠陥です。** 4-111 の非STEP出力と同じ一族で、PDF が出来るので
+誰も疑いませんでした。
+
 
 ---
 
 ## 5. 踏んだ落とし穴（繰り返さないために）
+
+### 出力が出来上がることは、出力が正しいことではありません（2026/08/27）
+
+**PDF は出来ます。HTML も出来ます。STL も OBJ も書けます。それでも中身は
+壊れていることがあります。**
+
+同じ日に3つ出ました。
+
+| どこ | 出来上がっていたが | 実際 |
+| :--- | :--- | :--- |
+| 非STEP出力 | 4形式とも問題なく書けていた | **形を見る検査が1つも無かった**。検証スクリプトは検査関数を呼んでいなかった（4-111） |
+| 統合PDF | 5.2MB の立派な本が出来ていた | 本文が **663行落ちて**おり、数式の `\frac` `\approx` `\begin` が**制御文字**になっていた（4-114） |
+| DXF | 図面として開ける | 外形が2つある断面で、2つ目が穴の層に落ちていた（4-112） |
+
+**見分け方は、出力を作った側と別の道具で読み直すことだけです。** 自分が
+書いたものを自分で読み返しても、同じ誤解が両側に乗るので何も出ません。
+`tools/verify_iges.py` が OpenCASCADE に読ませているのが良い形で、
+`tools/verify_mesh_exports.py` はまだ自前のパーサ止まりです（そこが弱いと
+文書に書いてあります）。
+
+**生成物の中に本文を書かないでください。** 差分がスクリプトの変更に見えるので
+レビューに掛からず、他の文書と食い違っても誰も気づきません。今回の LaTeX の
+破損は、Markdown として出した瞬間に見えました。
 
 ### `volume > 0` は、テストではなく願望です（2026/08/27）
 
@@ -8445,6 +8531,7 @@ cargo run --release -p zenith_algo --example export_showcase          # target/s
 cargo run --release -p zenith_algo --example export_validation_suite  # target/validation 22形状
 cargo run --release -p zenith_algo --example foreign_reexport         # target/reexport    7形状
 cargo run --release -p zenith_algo --example export_iges_suite        # target/iges        5形状
+cargo run --release -p zenith_algo --example export_mesh_suite        # target/mesh_exports 8形状
 ```
 
 | 置き場所 | 中身 | 突き合わせ |
@@ -8453,6 +8540,18 @@ cargo run --release -p zenith_algo --example export_iges_suite        # target/i
 | `target/validation/` | 相互検証用27形状＋OpenCASCADE が書いた参照ファイル | `tools/freecad_cross_validate.py`（27/27、不一致で非ゼロ終了） |
 | `target/reexport/` | 他カーネルのファイルを読んで書き戻したもの7形状 | `tools/verify_reexport.py`（**ゲート**。解析解と 1e-8 以内、不一致で非ゼロ終了） |
 | `target/iges/` | IGES 5.3 の検体5形状＋`manifest.json` | `tools/verify_iges.py`（**ゲート**。曲面の枚数と境界箱、不一致で非ゼロ終了） |
+| `target/mesh_exports/` | STL / OBJ / glTF / DXF の検体8形状＋`manifest.json` | `tools/verify_mesh_exports.py`（**ゲート**。閉じているか・体積・3形式の一致・DXF の層。**FreeCAD 不要なので CI に入っている**） |
+
+読み物のほうは別系統です。
+
+```bash
+py tools/generate_unified_pdf.py    # tools/unified_docs.html と Zenith_CAD_Kernel_Documentation.pdf
+```
+
+本文は [`docs/treatise/`](docs/treatise/) にあり、リポジトリの文書
+（`KERNEL_SPECS.md`、`HANDOVER.md` など）を**見出しで切って**取り込みます。
+行番号で切っていた頃は文書が伸びるたびに末尾が黙って落ちていました（4-114）。
+生成物（HTML と PDF）は追跡していません。`markdown` と `PySide6` が要ります。
 
 ショーケースの 17〜24 は今回のセッションで通るようになった範囲です
 （円錐を平面で切る3種、トーラスをスラブで切る2種、球を切る2種、
