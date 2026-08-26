@@ -230,22 +230,17 @@ impl BooleanEngine {
     /// do overlap say nothing about whether the solids do, and those go on to
     /// the ordinary path.
     fn bounds_overlap_in_volume(solid_a: &Solid, solid_b: &Solid, tol: &Tolerance) -> bool {
-        let params = zenith_tess::TessellationParams::default();
-        let bounds = |solid: &Solid| {
-            let mesh = zenith_tess::tessellate_solid(solid, &params);
-            let mut low = [f64::INFINITY; 3];
-            let mut high = [f64::NEG_INFINITY; 3];
-            for point in &mesh.positions {
-                for (axis, value) in [point.x, point.y, point.z].into_iter().enumerate() {
-                    low[axis] = low[axis].min(value);
-                    high[axis] = high[axis].max(value);
-                }
-            }
-            (low, high)
-        };
+        let bbox_a = solid_a.bounding_box();
+        let bbox_b = solid_b.bounding_box();
+        if !bbox_a.is_valid() || !bbox_b.is_valid() {
+            return false;
+        }
 
-        let (low_a, high_a) = bounds(solid_a);
-        let (low_b, high_b) = bounds(solid_b);
+        let low_a = [bbox_a.min.x, bbox_a.min.y, bbox_a.min.z];
+        let high_a = [bbox_a.max.x, bbox_a.max.y, bbox_a.max.z];
+        let low_b = [bbox_b.min.x, bbox_b.min.y, bbox_b.min.z];
+        let high_b = [bbox_b.max.x, bbox_b.max.y, bbox_b.max.z];
+
         (0..3).all(|axis| {
             low_a[axis].is_finite()
                 && low_b[axis].is_finite()
