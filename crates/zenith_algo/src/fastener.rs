@@ -128,4 +128,50 @@ impl FastenerBuilder {
             tol,
         )
     }
+
+    /// JIS/ISO規格準拠の六角穴付きボルト（Socket Head Cap Screw）ソリッドを構築
+    ///
+    /// `shank_radius`: ボルトねじ軸部半径 (M8なら 4.0)
+    /// `shank_length`: 軸部長 (30.0)
+    /// `head_radius`: 頭部円柱半径 (6.5)
+    /// `head_height`: 頭部高さ (8.0)
+    /// `socket_across_flats`: 六角穴の二面幅 S (6.0)
+    /// `socket_depth`: 六角穴の深さ (4.0)
+    pub fn make_socket_head_cap_screw(
+        shank_radius: f64,
+        shank_length: f64,
+        head_radius: f64,
+        head_height: f64,
+        socket_across_flats: f64,
+        socket_depth: f64,
+        tol: &Tolerance,
+    ) -> Result<Solid, String> {
+        if socket_depth >= head_height {
+            return Err("Socket depth must be less than head height".to_string());
+        }
+        let r_socket_outer = socket_across_flats / 3.0_f64.sqrt();
+        if r_socket_outer >= head_radius {
+            return Err("Socket size must fit inside screw head radius".to_string());
+        }
+
+        // 1. 段付きシャフト（下部: 軸部 shank_radius x shank_length, 上部: 頭部 head_radius x head_height）
+        let bolt_blank = crate::ShaftBuilder::make_stepped_shaft(&[
+            (shank_radius, shank_length),
+            (head_radius, head_height),
+        ])?;
+
+        // 2. 六角穴カッターソリッド
+        let socket_cutter = Self::make_hex_prism(socket_across_flats, socket_depth + 1.0, tol)?;
+        let positioned_socket = crate::BrepTransform::translate_solid(
+            &socket_cutter,
+            Vec3::new(0.0, 0.0, shank_length + head_height - socket_depth),
+        );
+
+        crate::boolean::BooleanEngine::boolean_solids_exact(
+            &bolt_blank,
+            &positioned_socket,
+            crate::boolean::BooleanOpType::Difference,
+            tol,
+        )
+    }
 }

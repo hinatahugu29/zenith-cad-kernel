@@ -903,6 +903,51 @@ fn main() {
         analytic_volume: Some(nut_vol),
     });
 
+    // 43_stepped_shaft_with_keyway
+    let shaft_raw = ShaftBuilder::make_stepped_shaft(&[(16.0, 40.0), (12.0, 30.0)])
+        .expect("stepped shaft");
+    let shaft_keyway = ShaftBuilder::make_shaft_with_keyway(
+        &shaft_raw,
+        12.0,
+        5.0,
+        3.0,
+        20.0,
+        45.0,
+    ).expect("shaft with keyway");
+    items.push(Item {
+        name: "43_stepped_shaft_with_keyway",
+        note: "power transmission stepped shaft with parallel drive keyway pocket",
+        solid: shaft_keyway,
+        analytic_volume: None,
+    });
+
+    // 44_socket_head_cap_screw
+    let cap_shank_r = 4.0; // M8
+    let cap_shank_l = 30.0;
+    let cap_head_r = 6.5;
+    let cap_head_h = 8.0;
+    let cap_socket_s = 6.0;
+    let cap_socket_d = 4.0;
+    let cap_screw = FastenerBuilder::make_socket_head_cap_screw(
+        cap_shank_r,
+        cap_shank_l,
+        cap_head_r,
+        cap_head_h,
+        cap_socket_s,
+        cap_socket_d,
+        &tol,
+    ).expect("socket head cap screw");
+    let cap_shank_vol = PI * cap_shank_r * cap_shank_r * cap_shank_l;
+    let cap_head_vol = PI * cap_head_r * cap_head_r * cap_head_h;
+    let cap_socket_vol = (3.0_f64.sqrt() * 0.5) * cap_socket_s * cap_socket_s * cap_socket_d;
+    let cap_vol = cap_shank_vol + cap_head_vol - cap_socket_vol;
+    items.push(Item {
+        name: "44_socket_head_cap_screw",
+        note: "JIS/ISO socket head cap screw with cylindrical head and internal hexagonal drive socket",
+        solid: cap_screw,
+        analytic_volume: Some(cap_vol),
+    });
+
     // --- 出力 ---
     let integration = TessellationParams {
         u_divisions: 48,

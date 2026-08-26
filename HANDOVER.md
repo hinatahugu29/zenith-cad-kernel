@@ -8626,4 +8626,24 @@ py tools/verify_solid_api.py
 - **全42ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（42 of 42 read back as valid closed solids）**。
 - `41_hex_bolt_head.step`（誤差 $5.70 \times 10^{-16}$）、`42_hex_nut_blank.step`（誤差 $2.70 \times 10^{-13}$）ともに完全ソリッドとして実証。
 
+## 18. キー溝付き動力伝達軸（Shaft with Keyway）および六角穴付きボルト（Cap Screw）の外部CAD 44/44 実証
+
+### 18-1. キー溝付き動力伝達軸（Shaft with Keyway）の構築
+モータ・減速機・スピンドルなどの動力伝達に不可欠な平行キー溝（JIS B 1301 準拠）を多段軸に加工する `ShaftBuilder::make_shaft_with_keyway`（`crates/zenith_algo/src/shaft.rs`）を検証・統合しました。
+- **多段円柱＋長円・直角キー溝ポケット切削**:
+  - 段付き軸（段1: 半径16, 長さ40 / 段2: 半径12, 長さ30）の外周面から、深さ3.0, 幅5.0, 長さ20.0 の平行キー溝を厳密差分切削した16面構成の完全閉多様体B-Repソリッド（`43_stepped_shaft_with_keyway`）。
+
+### 18-2. 六角穴付きボルト（Socket Head Cap Screw）の構築
+機械構造締結で最も多用される六角穴付きボルト（キャップスクリュー）を構築する `FastenerBuilder::make_socket_head_cap_screw`（`crates/zenith_algo/src/fastener.rs`）を新設しました。
+- **円柱頭部＋円柱軸部＋内六角穴（Hex Socket）の複合ブーリアン**:
+  - ねじ軸部（$r_{\text{shank}} \times L$）、頭部（$r_{\text{head}} \times H$）、天面六角穴（二面幅 $S$, 深さ $d$）を持つ18面構成の締結ソリッド（`44_socket_head_cap_screw`）。
+  - 解析解体積:
+    $V = (\pi r_{\text{shank}}^2 L) + (\pi r_{\text{head}}^2 H) - (\frac{\sqrt{3}}{2} S^2 d)$
+    により、計算体積と解析解体積が誤差 $1.01 \times 10^{-13}$ で一致。
+
+### 18-3. 外部CAD検証結果（FreeCAD / OpenCASCADE 44/44 合格）
+`target/showcase/` に全44個のSTEPファイルを出力し、FreeCAD / OpenCASCADE (`tools/verify_showcase.py`) による全件検証を実施。
+- **全44ファイルすべてが `Solid True True`（有効な閉多様体ソリッド）として100%合格（44 of 44 read back as valid closed solids）**。
+- `43_stepped_shaft_with_keyway.step`、`44_socket_head_cap_screw.step`（誤差 $1.01 \times 10^{-13}$）ともに完全ソリッドとして実証。
+
 
