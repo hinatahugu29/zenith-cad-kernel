@@ -211,3 +211,105 @@ fn a_tangent_contact_that_pinches_the_material_is_refused_by_name() {
         }
     }
 }
+
+/// 円錐が箱に**内接**していて、頂点が上面にちょうど乗る配置。
+///
+/// この配置は 2026/08/27 まで積が断られていました。原因は分類の代表点で、
+/// **箱の上面の中心が、たまたま円錐の頂点そのもの**だったことです。1点で
+/// 触れているだけの上面が `Boundary` と判定されて積に採られ、その4辺が
+/// あぶれていました。真の積は円錐なので、上面を採ってはいけません。
+///
+/// **`volume > 0` では捕まりません**（誤って上面を採った積にも体積は
+/// あります）。閉じた式に乗るかで見ます——円錐の体積は πr²h/3 です。
+#[test]
+fn a_cone_inscribed_in_a_box_intersects_to_exactly_the_cone() {
+    let tol = Tolerance::default();
+    let boxa = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box");
+    let cone = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cone(10.0, 0.0, 20.0).expect("cone"),
+        Vec3::new(10.0, 10.0, 0.0),
+    );
+
+    let cone_volume = std::f64::consts::PI * 100.0 * 20.0 / 3.0;
+    let box_volume = 8000.0;
+
+    for (op, expected) in [
+        (BooleanOpType::Intersection, cone_volume),
+        (BooleanOpType::Union, box_volume),
+        (BooleanOpType::Difference, box_volume - cone_volume),
+    ] {
+        let result = BooleanEngine::boolean_solids_exact_result(&boxa, &cone, op, &tol)
+            .unwrap_or_else(|err| panic!("{op:?} on an inscribed cone was refused: {err}"));
+        assert_eq!(result.solids.len(), 1, "{op:?} should return one solid");
+        let measured = volume(&result.solids);
+        assert!(
+            (measured - expected).abs() <= expected * 1e-3,
+            "{op:?} volume {measured} is not the closed form {expected}"
+        );
+        for solid in &result.solids {
+            assert_eq!(
+                non_manifold_edges(solid),
+                0,
+                "{op:?} returned a solid that is not manifold"
+            );
+        }
+    }
+}
+
+/// 円錐を半頂角だけ回すと母線の1本が鉛直になり、その母線が箱の面 x=20 の
+/// 中にまるごと乗ります。**線で触れている**配置です。
+///
+/// 上のテストと同じ欠陥で積が断られていました。ここは閉じた式が書けないので
+/// 「返って、多様体で、恒等式が閉じる」までを見ます——和 + 積 = A + B です。
+#[test]
+fn a_cone_touching_a_face_along_a_generatrix_closes_the_identity() {
+    let tol = Tolerance::default();
+    let boxa = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box");
+    let half_angle = (10f64 / 20.0).atan();
+    let stand = Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), half_angle);
+    let cone = BrepTransform::translate_solid(
+        &BrepTransform::transform_solid(
+            &PrimitiveBuilder::make_cone(10.0, 0.0, 20.0).expect("cone"),
+            &stand,
+        )
+        .expect("stand the cone up"),
+        Vec3::new(20.0 - 20.0 / 5f64.sqrt(), 10.0, 5.0),
+    );
+
+    let mut measured = std::collections::BTreeMap::new();
+    for op in [
+        BooleanOpType::Union,
+        BooleanOpType::Intersection,
+        BooleanOpType::Difference,
+    ] {
+        let result = BooleanEngine::boolean_solids_exact_result(&boxa, &cone, op, &tol)
+            .unwrap_or_else(|err| panic!("{op:?} on a generatrix contact was refused: {err}"));
+        for solid in &result.solids {
+            assert_eq!(
+                non_manifold_edges(solid),
+                0,
+                "{op:?} returned a solid that is not manifold"
+            );
+        }
+        measured.insert(format!("{op:?}"), volume(&result.solids));
+    }
+
+    let box_volume = 8000.0;
+    let cone_volume = std::f64::consts::PI * 100.0 * 20.0 / 3.0;
+    let union = measured["Union"];
+    let intersection = measured["Intersection"];
+    let difference = measured["Difference"];
+
+    // |A ∪ B| + |A ∩ B| = |A| + |B|
+    assert!(
+        (union + intersection - (box_volume + cone_volume)).abs() <= 1e-2,
+        "union {union} + intersection {intersection} should be {} ",
+        box_volume + cone_volume
+    );
+    // |A \ B| = |A| - |A ∩ B|
+    assert!(
+        (difference - (box_volume - intersection)).abs() <= 1e-2,
+        "difference {difference} should be {}",
+        box_volume - intersection
+    );
+}

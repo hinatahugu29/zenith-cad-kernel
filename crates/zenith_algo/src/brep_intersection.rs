@@ -3462,7 +3462,41 @@ fn classify_face_against_mesh(
     tol: &Tolerance,
 ) -> FaceRegionLocation {
     let sample = representative_face_point(face);
-    if point_mesh_distance(sample, mesh) <= tol.linear * 100.0 {
+    let near = |point: Point3| point_mesh_distance(point, mesh) <= tol.linear * 100.0;
+    if near(sample) {
+        // **1点で触れていることは、重なっていることではありません。**
+        //
+        // 代表点は面の中でいちばん縁から遠い点なので、**接触点にちょうど
+        // 落ちることがあります**。実測（`box × cone (apex on a face)`）:
+        // 円錐の頂点 (10,10,20) が箱の上面の中心そのもので、上面 1枚が
+        // `Boundary` と判定されて積に採られ、その4辺があぶれていました。
+        // 真の積は円錐なので、上面は採ってはいけません。
+        //
+        // 重なっているなら、**面の中のどこを取っても相手の表面の近くに
+        // ある**はずです。散らして取り直して、そうなっていなければ
+        // `Boundary` を取り下げます。
+        //
+        // **下げる方向にしか効かせません。** 最初の点が相手から離れて
+        // いるときは、この検査を通しません——`Inside` / `Outside` を
+        // 新たに `Boundary` に変えることはないので、いま通っている経路の
+        // 判定は動きません。
+        let spread = spread_face_points(face, 9);
+        if spread.len() >= 4 {
+            let near_count = spread.iter().filter(|point| near(**point)).count();
+            if near_count * 2 < spread.len() {
+                let off: Vec<Point3> =
+                    spread.into_iter().filter(|point| !near(*point)).collect();
+                let inside = off
+                    .iter()
+                    .filter(|point| crate::BooleanEngine::is_point_inside_mesh(**point, mesh))
+                    .count();
+                return if inside * 2 > off.len() {
+                    FaceRegionLocation::Inside
+                } else {
+                    FaceRegionLocation::Outside
+                };
+            }
+        }
         return FaceRegionLocation::Boundary;
     }
     if crate::BooleanEngine::is_point_inside_mesh(sample, mesh) {
@@ -3470,6 +3504,127 @@ fn classify_face_against_mesh(
     } else {
         FaceRegionLocation::Outside
     }
+}
+
+/// 面の中の点を、**散らして**取る。
+///
+/// `representative_face_point` は「縁からいちばん遠い1点」なので、面が
+/// 相手と面積をもって重なっているのか、1点で触れているだけなのかを
+/// 区別できません。ここは同じトリム領域から、**離れた場所の点**を
+/// 集めます。穴の中と縁の上は避けます（そこは面の材料ではありません）。
+fn spread_face_points(face: &Face, want: usize) -> Vec<Point3> {
+    if want == 0 {
+        return Vec::new();
+    }
+
+    let pick_spread = |mut all: Vec<Point3>| -> Vec<Point3> {
+        if all.len() <= want {
+            return all;
+        }
+        // 端を含めつつ等間隔に間引く。固まった点ばかり取ると、
+        // 「散らして取った」ことになりません。
+        let stride = all.len() as f64 / want as f64;
+        let picked: Vec<Point3> = (0..want)
+            .map(|index| all[((index as f64 + 0.5) * stride) as usize % all.len()])
+            .collect();
+        all.clear();
+        picked
+    };
+
+    if let FaceGeometry::Plane(plane) = &face.geometry {
+        const GRID: usize = 12;
+        let outer: Vec<Point2> = face
+            .outer_wire
+            .sample_points(8)
+            .iter()
+            .map(|point| project_to_plane_uv(*point, plane))
+            .collect();
+        if outer.len() >= 3 {
+            let holes: Vec<Vec<Point2>> = face
+                .inner_wires
+                .iter()
+                .map(|wire| {
+                    wire.sample_points(8)
+                        .iter()
+                        .map(|point| project_to_plane_uv(*point, plane))
+                        .collect()
+                })
+                .collect();
+            let (mut min_u, mut max_u) = (f64::INFINITY, f64::NEG_INFINITY);
+            let (mut min_v, mut max_v) = (f64::INFINITY, f64::NEG_INFINITY);
+            for uv in &outer {
+                min_u = min_u.min(uv.x);
+                max_u = max_u.max(uv.x);
+                min_v = min_v.min(uv.y);
+                max_v = max_v.max(uv.y);
+            }
+            let span = (max_u - min_u).max(max_v - min_v);
+            // 縁のすぐ内側は取りません。トリムの標本誤差で外に出ます。
+            let margin = span * 1e-3;
+            let mut inside_points = Vec::new();
+            for i in 1..GRID {
+                for j in 1..GRID {
+                    let uv = Point2::new(
+                        min_u + (max_u - min_u) * (i as f64 / GRID as f64),
+                        min_v + (max_v - min_v) * (j as f64 / GRID as f64),
+                    );
+                    if !point_in_polygon_2d(uv, &outer, 0.0) {
+                        continue;
+                    }
+                    if holes.iter().any(|hole| point_in_polygon_2d(uv, hole, 0.0)) {
+                        continue;
+                    }
+                    let clearance = std::iter::once(&outer)
+                        .chain(holes.iter())
+                        .map(|polygon| polygon_min_distance_2d(uv, polygon))
+                        .fold(f64::INFINITY, f64::min);
+                    if clearance <= margin {
+                        continue;
+                    }
+                    inside_points.push(plane.evaluate(uv.x, uv.y));
+                }
+            }
+            if inside_points.len() >= 4 {
+                return pick_spread(inside_points);
+            }
+        }
+        return Vec::new();
+    }
+
+    if let FaceGeometry::Nurbs(surface) = &face.geometry {
+        let domain = zenith_tess::face_uv_triangulation(
+            face,
+            &zenith_tess::TessellationParams::default(),
+        );
+        let mut by_area: Vec<(f64, Point3)> = domain
+            .triangles
+            .iter()
+            .filter_map(|triangle| {
+                let a = domain.uvs[triangle[0]];
+                let b = domain.uvs[triangle[1]];
+                let c = domain.uvs[triangle[2]];
+                let area =
+                    0.5 * ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs();
+                if area <= 0.0 {
+                    return None;
+                }
+                Some((
+                    area,
+                    surface.evaluate((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0),
+                ))
+            })
+            .collect();
+        // 大きい三角形から取ります。潰れた三角形の重心は面の内側とは
+        // 限りません。
+        by_area.sort_by(|left, right| right.0.total_cmp(&left.0));
+        let points: Vec<Point3> = by_area.into_iter().map(|(_, point)| point).collect();
+        if points.len() >= 4 {
+            return points.into_iter().take(want).collect();
+        }
+        return Vec::new();
+    }
+
+    Vec::new()
 }
 
 fn keep_piece(
