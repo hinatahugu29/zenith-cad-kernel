@@ -726,6 +726,7 @@ fn main() {
     let mut returned = 0usize;
     let mut refused = 0usize;
     let mut mesh_broken = 0usize;
+    let mut swap_mismatch = 0usize;
 
     println!("接触している配置（規約: 接触は、それ自体では位相を作らない）");
     println!();
@@ -755,6 +756,60 @@ fn main() {
                 .unwrap_or(true)
         }) {
             let outcome = BooleanEngine::boolean_solids_exact_result(&case.a, &case.b, op, &tol);
+
+            // **引数を入れ替えても同じ答えのはずです**（和と積は可換）。
+            //
+            // **閉じた式が要らない検査です。** どちらか片方しか返らない、
+            // あるいは体積や立体の数が違うなら、選び方が対称になって
+            // いません。`ZENITH_CONTACT_SWAP=1` で走ります（演算が倍に
+            // なるので既定は切ってあります）。
+            if std::env::var_os("ZENITH_CONTACT_SWAP").is_some()
+                && !matches!(op, BooleanOpType::Difference)
+            {
+                let swapped =
+                    BooleanEngine::boolean_solids_exact_result(&case.b, &case.a, op, &tol);
+                let measure = |solids: &[Solid]| -> f64 {
+                    solids
+                        .iter()
+                        .map(|solid| {
+                            zenith_algo::MassCalculator::compute_from_brep(
+                                solid,
+                                &zenith_tess::TessellationParams {
+                                    u_divisions: 32,
+                                    v_divisions: 32,
+                                },
+                            )
+                            .volume
+                        })
+                        .sum()
+                };
+                match (&outcome, &swapped) {
+                    (Ok(forward), Ok(backward)) => {
+                        let (x, y) = (measure(&forward.solids), measure(&backward.solids));
+                        if (x - y).abs() > x.abs().max(1.0) * 2e-3
+                            || forward.solids.len() != backward.solids.len()
+                        {
+                            eprintln!(
+                                "SWAPWHY {} {label}: A op B = {x:.6}（{} 立体）, B op A = {y:.6}（{} 立体）",
+                                case.name,
+                                forward.solids.len(),
+                                backward.solids.len()
+                            );
+                            swap_mismatch += 1;
+                        }
+                    }
+                    (Ok(_), Err(_)) | (Err(_), Ok(_)) => {
+                        eprintln!(
+                            "SWAPWHY {} {label}: **片方だけ返る**（A op B {}, B op A {}）",
+                            case.name,
+                            outcome.is_ok(),
+                            swapped.is_ok()
+                        );
+                        swap_mismatch += 1;
+                    }
+                    _ => {}
+                }
+            }
 
             let (result, solids, bad_edges, verdict) = match &outcome {
                 Err(reason) => {
@@ -815,6 +870,9 @@ fn main() {
     }
 
     println!("{}", "-".repeat(118));
+    if std::env::var_os("ZENITH_CONTACT_SWAP").is_some() {
+        println!("引数を入れ替えたときの食い違い: **{swap_mismatch} 件**（和と積のみ）");
+    }
     println!(
         "{returned} 件が立体を返し、{refused} 件が断られました。**B-Rep が非多様体だったもの {wrong} 件**、メッシュが非多様体だったもの {mesh_broken} 件。"
     );
