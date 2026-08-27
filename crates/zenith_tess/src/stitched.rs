@@ -1528,6 +1528,18 @@ fn repair_boundary_ears(
 
     let why = std::env::var_os("ZENITH_TESS_WHY").is_some();
     let mut skipped: std::collections::HashSet<usize> = Default::default();
+    // **横移動（2 → 2）で一度でも触った辺**。二度と触りません。
+    //
+    // 端の無い塊（悪い三角形が閉じた輪になっている）では、どこを選んでも悪い
+    // 枚数が減らないので、`new_bad < old_bad` だけでは一歩も動けません
+    // （4-125 実測: 断った 364 件が全部これ）。そこで**端が1つも無いときに
+    // 限って** 2 → 2 の入れ替えを許します。
+    //
+    // ただし条件を緩めるだけでは**循環します**（入れ替えて、戻して、また
+    // 入れ替える）。歯止めは、横移動で消した辺と作った辺を覚えて二度と触ら
+    // ないことです。横移動は1回につき辺を恒久的に使い切るので、回数は辺の
+    // 本数で頭打ちになり、循環しません。
+    let mut lateral_taboo: std::collections::HashSet<(usize, usize)> = Default::default();
     for _round in 0..triangles.len() * 4 {
         let mut edge_uses: std::collections::HashMap<(usize, usize), Vec<usize>> =
             Default::default();
@@ -1584,6 +1596,9 @@ fn repair_boundary_ears(
                 candidates().count()
             );
         }
+        // 端が1つも無いときだけ、横移動を許します。端があるなら「必ず減る」
+        // 入れ替えだけで鎖はほどけるので、緩める必要がありません。
+        let allow_lateral = end_of_a_chain.is_none();
         let Some(flat_index) = end_of_a_chain.or_else(|| candidates().next()) else {
             break;
         };
@@ -1593,7 +1608,7 @@ fn repair_boundary_ears(
         for corner in 0..3 {
             let (u, v) = (flat[corner], flat[(corner + 1) % 3]);
             let shared = if u < v { (u, v) } else { (v, u) };
-            if protected.contains(&shared) {
+            if protected.contains(&shared) || lateral_taboo.contains(&shared) {
                 continue;
             }
             let Some(uses) = edge_uses.get(&shared) else {
@@ -1652,7 +1667,11 @@ fn repair_boundary_ears(
             // 直す。単なる横移動（1 -> 1）は許さないので循環しない。
             let old_bad = usize::from(needs_repair(flat)) + usize::from(needs_repair(neighbour));
             let new_bad = usize::from(needs_repair(first)) + usize::from(needs_repair(second));
-            if new_bad >= old_bad {
+            let lateral = allow_lateral
+                && old_bad == 2
+                && new_bad == old_bad
+                && !lateral_taboo.contains(&diagonal);
+            if new_bad >= old_bad && !lateral {
                 if why {
                     eprintln!("TESSWHY   FLIPWHY {flat:?} 角 {corner}: 悪い枚数が減らない {old_bad} -> {new_bad}");
                 }
@@ -1668,6 +1687,17 @@ fn repair_boundary_ears(
                 continue;
             }
 
+            if lateral {
+                // 消した辺と作った辺の両方を封じます。戻す道が無くなるので、
+                // 循環しません。
+                lateral_taboo.insert(shared);
+                lateral_taboo.insert(diagonal);
+                if why {
+                    eprintln!(
+                        "TESSWHY   FLIPWHY {flat:?} 角 {corner}: 端が無いので横移動 {shared:?} -> {diagonal:?}"
+                    );
+                }
+            }
             triangles[flat_index] = first;
             triangles[neighbour_index] = second;
             skipped.clear();
