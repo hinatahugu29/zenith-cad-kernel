@@ -47,7 +47,19 @@ use crate::surface_tess::TessellationParams;
 pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> TriangleMesh {
     let plan = SamplePlan::for_solid(solid, params);
 
-    let mut mesh = tessellate_shell_stitched(&solid.outer_shell, params, &plan);
+    // `ZENITH_FACE_OWNER_WHY=1` のときだけ、三角形がどの面から来たかを覚えて
+    // おきます。溶接して1つのメッシュになったあとでは、非多様体の稜を見ても
+    // **どの面とどの面の間で開いているのかが分かりません**。稜の刻みが両側で
+    // 揃っているかを疑うには、その2枚を名指しできる必要があります。
+    let mut owners: Vec<(u64, std::ops::Range<usize>)> = Vec::new();
+    let attribute = std::env::var_os("ZENITH_FACE_OWNER_WHY").is_some();
+
+    let mut mesh = tessellate_shell_stitched_owned(
+        &solid.outer_shell,
+        params,
+        &plan,
+        attribute.then_some(&mut owners),
+    );
     for inner in &solid.inner_shells {
         let mut inner_mesh = tessellate_shell_stitched(inner, params, &plan);
         for normal in &mut inner_mesh.normals {
@@ -60,7 +72,80 @@ pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> 
     }
 
     weld(&mut mesh, 1e-7);
+    if attribute {
+        explain_face_owners(&mesh, &owners);
+    }
     mesh
+}
+
+/// 溶接前の三角形添字の範囲を面ごとに控えながら、殻をメッシュにする。
+fn tessellate_shell_stitched_owned(
+    shell: &Shell,
+    params: &TessellationParams,
+    plan: &SamplePlan,
+    mut owners: Option<&mut Vec<(u64, std::ops::Range<usize>)>>,
+) -> TriangleMesh {
+    let mut mesh = TriangleMesh::new();
+    for face in &shell.faces {
+        let start = mesh.indices.len();
+        mesh.merge(&tessellate_face_stitched(face, params, plan));
+        if let Some(owners) = owners.as_mut() {
+            owners.push((face.id, start..mesh.indices.len()));
+        }
+    }
+    mesh
+}
+
+/// 溶接後のメッシュで、ちょうど2枚に共有されていない稜を、**それを出した面の
+/// 番号つきで**並べる。
+///
+/// 溶接は頂点を潰すだけで三角形の並び順を変えないので、溶接前に控えた範囲が
+/// そのまま使えます。
+fn explain_face_owners(mesh: &TriangleMesh, owners: &[(u64, std::ops::Range<usize>)]) {
+    let face_of = |triangle: usize| -> Option<u64> {
+        owners
+            .iter()
+            .find(|(_, range)| range.contains(&triangle))
+            .map(|(id, _)| *id)
+    };
+    let mut uses: BTreeMap<(u32, u32), Vec<usize>> = BTreeMap::new();
+    for (index, triangle) in mesh.indices.iter().enumerate() {
+        for step in 0..3 {
+            let (a, b) = (triangle[step], triangle[(step + 1) % 3]);
+            if a == b {
+                continue;
+            }
+            uses.entry(if a < b { (a, b) } else { (b, a) })
+                .or_default()
+                .push(index);
+        }
+    }
+    let bad: Vec<_> = uses.iter().filter(|(_, tris)| tris.len() != 2).collect();
+    eprintln!("OWNERWHY 非多様体の稜 {} 本", bad.len());
+    let mut pairs: BTreeMap<Vec<Option<u64>>, usize> = BTreeMap::new();
+    for (_, tris) in &bad {
+        let mut faces: Vec<Option<u64>> = tris.iter().map(|t| face_of(*t)).collect();
+        faces.sort();
+        faces.dedup();
+        *pairs.entry(faces).or_insert(0) += 1;
+    }
+    for (faces, count) in &pairs {
+        eprintln!("OWNERWHY   面 {faces:?} が出した稜 {count} 本");
+    }
+    for ((a, b), tris) in bad.iter().take(6) {
+        let (pa, pb) = (mesh.positions[*a as usize], mesh.positions[*b as usize]);
+        eprintln!(
+            "OWNERWHY   ({:.6},{:.6},{:.6})-({:.6},{:.6},{:.6}) 使用 {}、面 {:?}",
+            pa.x,
+            pa.y,
+            pa.z,
+            pb.x,
+            pb.y,
+            pb.z,
+            tris.len(),
+            tris.iter().map(|t| face_of(*t)).collect::<Vec<_>>()
+        );
+    }
 }
 
 fn tessellate_shell_stitched(
@@ -264,6 +349,33 @@ fn tessellate_face_stitched(
         }
         return crate::surface_tess::tessellate_face(face, params);
     }
+    if std::env::var_os("ZENITH_FACE_EDGES_WHY").is_some() {
+        for (index, wire) in std::iter::once(&face.outer_wire)
+            .chain(face.inner_wires.iter())
+            .enumerate()
+        {
+            for oriented in &wire.edges {
+                let (a, b) = (
+                    oriented.edge.start_vertex.point,
+                    oriented.edge.end_vertex.point,
+                );
+                eprintln!(
+                    "FACEEDGE face {} wire {} edge {} seg {} ({:.6},{:.6},{:.6})-({:.6},{:.6},{:.6}) 長さ {:.6}",
+                    face.id,
+                    index,
+                    oriented.edge.id,
+                    plan.segments_for(oriented.edge.id),
+                    a.x,
+                    a.y,
+                    a.z,
+                    b.x,
+                    b.y,
+                    b.z,
+                    (b - a).norm()
+                );
+            }
+        }
+    }
     if explain {
         eprintln!(
             "TESSWHY face {}: ring 点数 {:?}, 稜ごとの刻み {:?}",
@@ -458,6 +570,18 @@ fn patch_mesh(
         &mut triangles,
     );
     explain_flat("極小 ear 修復後", &triangles, &uvs);
+
+    // 修復で直らなかった耳を外し、空いた境界を張り直す。
+    //
+    // `repair_boundary_ears` は内部の対角線を入れ替えるだけなので、**境界の
+    // 点が3点より多く一直線に並ぶと手が出ません**——入れ替えた先も同じ直線の
+    // 上なので、潰れた枚数が減らないからです。そこで潰れたままの耳を外して
+    // 点を「使われていない」状態へ戻し、同じ受け皿に扇で張り直させます。
+    let dropped = drop_flat_boundary_triangles(&uvs, &ring_ranges, &mut triangles);
+    if dropped > 0 {
+        reinsert_dropped_boundary_points(&uvs, &ring_ranges, &mut triangles);
+        explain_flat("潰れた耳を外して張り直した後", &triangles, &uvs);
+    }
 
     if let Some(surface) = surface {
         // 境界の点は先頭に固めて入っている。その数を渡して、**境界の点
@@ -878,6 +1002,59 @@ fn degenerate_side_counts(counts: &[usize]) -> Option<(usize, usize)> {
 /// 自分で「共線かどうか」を判定しないのが要点です。earcut が何を落とすかは
 /// earcut の基準で決まるので、こちらで別の基準を持つと食い違います
 /// （4-85 で1度やって悪化しました）。**落ちた結果のほうを見ます。**
+/// 境界の上で潰れたままの三角形を外す。
+///
+/// **これは「捨てる」段ではありません。** 外したあとに
+/// [`reinsert_dropped_boundary_points`] を通すための下ごしらえです。
+///
+/// earcut は、境界の点が一直線に並ぶところに面積 0 の耳を作ります
+/// （円錐を斜めに切った面で実測: 共有稜の格子点が 4 点以上そのまま
+/// 一直線に乗る）。耳の中の点は**三角形に使われてはいる**ので、
+/// `reinsert_dropped_boundary_points` の「使われていない点」には入りません。
+/// かといって耳自身は 3D で面積 0 なので、`push_with_uv_winding` が黙って
+/// 落とします。**落ちた先で、保護していた境界辺が誰にも使われない稜として
+/// 残ります**——隣の面はその辺を持っているので、溶接しても閉じません
+/// （4-116）。
+///
+/// そこで、**同じリングの上だけで潰れている三角形**を先に外し、点を
+/// 「使われていない」状態に戻してから受け皿へ渡します。外すのは
+///
+/// - uv で面積が 0 とみなせる
+/// - 3頂点が同じ境界リングに乗っている
+///
+/// の両方を満たすものだけです。内部の頂点を含む三角形には触れません。
+fn drop_flat_boundary_triangles(
+    uvs: &[Point2],
+    ring_ranges: &[std::ops::Range<usize>],
+    triangles: &mut Vec<[usize; 3]>,
+) -> usize {
+    let mut u_min = f64::INFINITY;
+    let mut u_max = f64::NEG_INFINITY;
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    for uv in uvs {
+        u_min = u_min.min(uv.x);
+        u_max = u_max.max(uv.x);
+        v_min = v_min.min(uv.y);
+        v_max = v_max.max(uv.y);
+    }
+    let span = (u_max - u_min).abs().max((v_max - v_min).abs()).max(1.0);
+    let flat_eps = span * span * 2e-14;
+
+    let before = triangles.len();
+    triangles.retain(|triangle| {
+        let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+        let area2 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        if area2.abs() > flat_eps {
+            return true;
+        }
+        !ring_ranges
+            .iter()
+            .any(|range| triangle.iter().all(|vertex| range.contains(vertex)))
+    });
+    before - triangles.len()
+}
+
 fn reinsert_dropped_boundary_points(
     uvs: &[Point2],
     ring_ranges: &[std::ops::Range<usize>],
@@ -1148,6 +1325,37 @@ fn repair_boundary_ears(
         area2(triangle).abs() <= flat_eps || (curved_surface && lies_on_one_boundary_edge(triangle))
     };
 
+    // 面の向き。**隣の三角形からは取れません。**
+    //
+    // 境界の点が一直線に並ぶところでは、耳もその隣も潰れています（円錐を斜めに
+    // 切った面で実測: 共有稜の格子点 8・9・10・11 が同一直線に乗る）。隣の符号で
+    // 向きを決めていると、そこで「向きが取れない」という理由だけで修復を諦め、
+    // 直らなかった耳は後段の 3D 面積 0 で捨てられます。**捨てると、保護して
+    // いたはずの境界辺が誰にも使われないまま開きます**——隣の面はその2本を
+    // 持っているので、溶接後に T 字が残ります（4-116）。
+    //
+    // 向きはリング1つにつき1つなので、外周リングの符号を使います。
+    let ring_sign = {
+        let mut twice_area = 0.0;
+        if let Some(range) = ring_ranges.first() {
+            for index in range.clone() {
+                let a = uvs[index];
+                let b = uvs[if index + 1 < range.end {
+                    index + 1
+                } else {
+                    range.start
+                }];
+                twice_area += a.x * b.y - b.x * a.y;
+            }
+        }
+        if twice_area >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        }
+    };
+
+    let why = std::env::var_os("ZENITH_TESS_WHY").is_some();
     let mut skipped: std::collections::HashSet<usize> = Default::default();
     for _round in 0..triangles.len() * 4 {
         let Some(flat_index) = triangles
@@ -1210,13 +1418,19 @@ fn repair_boundary_ears(
             }
             let diagonal = if a < d { (a, d) } else { (d, a) };
             if edge_uses.contains_key(&diagonal) {
+                if why {
+                    eprintln!("TESSWHY   FLIPWHY {flat:?} 角 {corner}: 対角 {diagonal:?} は既にある");
+                }
                 continue;
             }
 
-            let sign = area2(neighbour);
-            if sign.abs() <= flat_eps {
-                continue;
-            }
+            // 潰れた隣とも入れ替えられるように、向きはリングから取ります。
+            let neighbour_area2 = area2(neighbour);
+            let sign = if neighbour_area2.abs() > flat_eps {
+                neighbour_area2
+            } else {
+                ring_sign
+            };
             let first = orient([a, u, d], sign);
             let second = orient([a, d, v], sign);
             let first_area = area2(first).abs();
@@ -1228,12 +1442,18 @@ fn repair_boundary_ears(
             let old_bad = usize::from(needs_repair(flat)) + usize::from(needs_repair(neighbour));
             let new_bad = usize::from(needs_repair(first)) + usize::from(needs_repair(second));
             if new_bad >= old_bad {
+                if why {
+                    eprintln!("TESSWHY   FLIPWHY {flat:?} 角 {corner}: 悪い枚数が減らない {old_bad} -> {new_bad}");
+                }
                 continue;
             }
             let old_area = area2(flat).abs() + area2(neighbour).abs();
             let new_area = first_area + second_area;
             let area_tolerance = flat_eps * 16.0 + old_area * 1e-9;
             if (new_area - old_area).abs() > area_tolerance {
+                if why {
+                    eprintln!("TESSWHY   FLIPWHY {flat:?} 角 {corner}: 面積が変わる {old_area:.3e} -> {new_area:.3e}");
+                }
                 continue;
             }
 
