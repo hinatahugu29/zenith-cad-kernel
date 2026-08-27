@@ -1575,10 +1575,16 @@ fn repair_boundary_ears(
             (0..triangles.len())
                 .filter(|index| !skipped.contains(index) && is_bad(*index))
         };
-        let Some(flat_index) = candidates()
-            .find(|index| touches_a_good_neighbour(*index))
-            .or_else(|| candidates().next())
-        else {
+        let end_of_a_chain = candidates().find(|index| touches_a_good_neighbour(*index));
+        if end_of_a_chain.is_none() && why && candidates().next().is_some() {
+            // **端が1つも無い。** 悪い三角形が閉じた輪になっていると
+            // こうなります。輪には端が無いので、どこを選んでも 2 → 2 です。
+            eprintln!(
+                "TESSWHY   FLIPWHY 端の無い悪い三角形が {} 枚（閉じた輪か）",
+                candidates().count()
+            );
+        }
+        let Some(flat_index) = end_of_a_chain.or_else(|| candidates().next()) else {
             break;
         };
 
