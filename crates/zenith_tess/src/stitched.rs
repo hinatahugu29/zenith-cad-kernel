@@ -440,6 +440,7 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
             }
             let segments = plan.segments_for(segment.edge_id).max(1);
             segment_counts.push(segments);
+            let mut dropped_here = 0usize;
             let (t_min, t_max) = segment.curve.param_range();
             for step in 0..=segments {
                 let fraction = step as f64 / segments as f64;
@@ -468,7 +469,21 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
                 if !duplicate {
                     uv.push(here);
                     points.push(point);
+                } else {
+                    dropped_here += 1;
+                    if std::env::var_os("ZENITH_DROP_WHY").is_some() {
+                        eprintln!(
+                            "DROPSTEP face {} edge {} step {step}/{segments}",
+                            face.id, segment.edge_id
+                        );
+                    }
                 }
+            }
+            if std::env::var_os("ZENITH_DROP_WHY").is_some() && dropped_here > 0 {
+                eprintln!(
+                    "DROPWHY face {} edge {} 刻み {segments} のうち {dropped_here} 点を落とした",
+                    face.id, segment.edge_id
+                );
             }
         }
 
