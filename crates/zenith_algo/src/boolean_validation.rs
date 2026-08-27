@@ -157,10 +157,11 @@ impl BooleanResultVerifier {
         // 2. Volume bounds implied by the operation.
         report.volume_a = MassCalculator::compute_from_brep(solid_a, &params.tessellation).volume;
         report.volume_b = MassCalculator::compute_from_brep(solid_b, &params.tessellation).volume;
-        report.volume_result = result
+        let solid_volumes: Vec<f64> = result
             .iter()
             .map(|s| MassCalculator::compute_from_brep(s, &params.tessellation).volume)
-            .sum();
+            .collect();
+        report.volume_result = solid_volumes.iter().sum();
 
         let va = report.volume_a;
         let vb = report.volume_b;
@@ -208,6 +209,24 @@ impl BooleanResultVerifier {
             report
                 .errors
                 .push(format!("result volume {vr:.6} is not positive"));
+        }
+
+        // **1つずつ見ます。合計だけでは、打ち消し合うものが通ります。**
+        //
+        // 実測（4-135、半径 5・高さ 10 の円柱を軸方向に 1e-5 ずらした差）:
+        // 返ってきた立体は2つで、体積が **+7.854e-4 と -7.854e-4**。
+        // 同じ薄片が、片方だけ**裏返し**で2回出ています。合計は 0 に
+        // 打ち消されるので、合計だけを見る検査では通ってしまいます。
+        //
+        // **裏返しの立体は、それ自体が誤りです。** 向きの揃った B-Rep なら
+        // 体積は必ず正になります（空洞は `inner_shells` として別に持ち、
+        // `compute_from_brep` が引きます）。
+        for (index, volume) in solid_volumes.iter().enumerate() {
+            if *volume <= zero_eps {
+                report.errors.push(format!(
+                    "result solid {index} encloses volume {volume:.6e}, which is not positive: it is inside-out or collapsed"
+                ));
+            }
         }
 
         match op {
