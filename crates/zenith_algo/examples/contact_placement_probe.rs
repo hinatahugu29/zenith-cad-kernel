@@ -354,6 +354,83 @@ fn cases() -> Vec<Case> {
         ],
     });
 
+    // **ここから下は 3-N-2 が名指しで求めていた置き方です**（2026/08/27）。
+    // 「同じ形を置き方だけ変えて測る」が、いまのところいちばん当たる手だと
+    // 書いてあるので、そのとおりにしました。
+
+    // 切る側と切られる側を**両方**回す。どちらか片方だけを回した配置は
+    // 上にありますが、両方回すと、箱の面ももう軸に平行ではなくなります。
+    let spin_box = Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), 19f64.to_radians());
+    let tilt_cyl = Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), 27f64.to_radians());
+    out.push(Case {
+        name: "box x cylinder (both turned)",
+        why: "箱を 19 度、円柱を 27 度回す。切る面も切られる面も軸に平行でなくなる",
+        a: BrepTransform::transform_solid(&boxa, &spin_box).expect("spin box"),
+        b: shifted(
+            &BrepTransform::transform_solid(&cylinder, &tilt_cyl).expect("tilt cylinder"),
+            6.0,
+            10.0,
+            -10.0,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+
+    // 円錐を、軸のまわりにも回してから傾ける。上の `apex tilted 45` は
+    // 傾けるだけなので、**継ぎ目は切断平面に対して同じ位置**にあります。
+    let spin_then_tilt = Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), 45f64.to_radians())
+        .compose(&Transform3::from_axis_angle(
+            &Vec3::new(0.0, 0.0, 1.0),
+            37f64.to_radians(),
+        ));
+    out.push(Case {
+        name: "box x cone (seam spun then tilted)",
+        why: "円錐を軸まわりに 37 度回してから 45 度傾ける。継ぎ目が切断平面から外れる",
+        a: boxa.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(&cone, &spin_then_tilt).expect("spin then tilt"),
+            10.0,
+            10.0,
+            -5.0,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+
+    // トーラスを、穴の軸が箱の稜を向くように回す。上の `inclined 25` は
+    // 1軸まわりなので、穴の軸は座標平面の中に残っています。
+    let torus_two_axes = Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), 41f64.to_radians())
+        .compose(&Transform3::from_axis_angle(
+            &Vec3::new(1.0, 0.0, 0.0),
+            33f64.to_radians(),
+        ));
+    out.push(Case {
+        name: "box x torus (two axes)",
+        why: "トーラスを2軸で回す。穴の軸が座標平面から外れ、継ぎ目も切断面から外れる",
+        a: boxa.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(&torus, &torus_two_axes).expect("turn torus"),
+            10.0,
+            10.0,
+            10.0,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+
+    // 球を、極が切断平面のどこにも来ない角度で回して、**角**で当てる。
+    // 上の球の配置はどれも面で切っています。
+    let sphere_corner = Transform3::from_axis_angle(&Vec3::new(1.0, 2.0, 3.0), 51f64.to_radians());
+    out.push(Case {
+        name: "box x sphere (at a corner)",
+        why: "球を箱の角に当てる。3枚の面が同時に切る（面1枚で切る上の配置とは別）",
+        a: boxa.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(&sphere, &sphere_corner).expect("turn sphere"),
+            20.0,
+            20.0,
+            20.0,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+
     out
 }
 
@@ -396,8 +473,11 @@ fn main() {
             let outcome = BooleanEngine::boolean_solids_exact_result(&case.a, &case.b, op, &tol);
 
             let (result, solids, bad_edges, verdict) = match &outcome {
-                Err(_) => {
+                Err(reason) => {
                     refused += 1;
+                    if std::env::var_os("ZENITH_REFUSE_WHY").is_some() {
+                        eprintln!("REFUSEWHY {} {label}: {reason}", case.name);
+                    }
                     (
                         "REFUSED",
                         "-".to_string(),

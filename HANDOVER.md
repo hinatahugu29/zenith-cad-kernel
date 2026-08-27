@@ -316,8 +316,8 @@ intersection は半球の解析解に乗ります。
 
 #### 3-N-2b. ブーリアンが割った曲面のメッシュ非多様体（4-89で常設検体は解消）
 
-**常設の11配置・25演算は B-Rep が異常0、mesh は 4演算が異常です**（2026/08/27
-実測、4-116）。**この節は長らく「7配置・21演算とも異常0」「probe は mesh 異常も
+**常設の15配置・34演算は B-Rep が異常0、mesh は 10演算が異常です**（2026/08/27
+実測、4-116〜4-119。4配置は 4-119 で足しました）。**この節は長らく「7配置・21演算とも異常0」「probe は mesh 異常も
 exit 1 にするラチェットへ昇格した」と書いていましたが、どちらも実装と違って
 いました。** 4-104 で足した4配置（円錐・直交円柱・球×円柱・トーラス）に mesh が
 赤になるものが入り、記述だけが残っていたものです。
@@ -7688,6 +7688,11 @@ uv では離れているのに 3D では溶接距離の中に来る頂点対**�
 
 **推測で直そうとして外したので、そのまま書いておきます。**
 
+**4-118 で主因（境界の重複点）を消したあと、同じ歯止めをもう一度測りました。
+やはり1枚も減りません**（潰れ 188、非多様体 92 のまま。2026/08/27、傾けた
+トーラス × 箱の和）。**細分が作る辺の細かさは主因ではない**と、これで2回
+測って確定しました。次の人はここを再試行しないでください。
+
 #### 次に測るとよさそうなこと
 
 - 潰れた 622枚が**どの uv 領域に固まっているか**。1本の等パラメータ線に
@@ -7765,6 +7770,63 @@ STL / OBJ / glTF / DXF から解き直して **8/8 通りました**（閉じて
 
 `box × cone` intersection の 12本は、4-117 で見たとおり**潰れていない**細長い
 三角形のほうなので、この一族とは別です。
+
+### 4-119. 45ケースに無い置き方を4つ足したら、4つとも新しいものが出ました（2026/08/27）
+
+3-N-2 が「同じ形を置き方だけ変えて測る、が今のところいちばん当たる手」と
+書いているので、そのとおりにしました。`contact_placement_probe` に4配置
+（12演算）を足しています。**4配置とも、何かしら新しいものが出ました。**
+
+| 足した配置 | union | difference | intersection |
+| :--- | :--- | :--- | :--- |
+| `box × cylinder (both turned)` | **REFUSED** | **REFUSED** | **REFUSED** |
+| `box × cone (seam spun then tilted)` | 1 | 4 | 0 |
+| `box × torus (two axes)` | 11 | 7 | 5 |
+| `box × sphere (at a corner)` | 0 | 0 | **48** |
+
+（数字はメッシュの非多様体の稜。**B-Rep は全34件で 0 のままです**。）
+
+probe は 25 → **34演算**（返るもの）、断られるもの 8 → 11 になりました。
+
+#### いちばん重いのは「両方を回すと断られる」
+
+**片側だけ回した配置は通ります。** 箱を 19 度、円柱を 27 度、**両方**回すと
+3演算とも断られます。断り方の中身:
+
+```
+preparation reached 10 face-pair candidates, 8 intersection edges,
+0 planar split candidates, 6 batch-split faces, 10 applied batch splits,
+6 skipped batch splits, 0 classified split candidates, 14 selected face pieces,
+0 cap loops, and 0 cap faces;
+selected face stitching has 7 unmatched edge uses, 0 non-manifold edge uses,
+and 0 same-direction edge uses
+```
+
+**交線は8本見つかっていて、面も10回割れています。** 閉じないのは、
+
+- `6 skipped batch splits` — 割るべき面のうち6枚が割られていない
+- `0 cap loops` / `0 cap faces` — 切り口に蓋が1枚もできていない
+- `7 unmatched edge uses` — その結果、殻が7か所で開いている
+
+**「交線が引けない」ではありません。** 引けたあとの、割る・蓋をする段です。
+`ZENITH_REFUSE_WHY=1` で読めます（この作業で足しました）。
+
+#### 球を角に当てると intersection だけ壊れる
+
+`box × sphere (at a corner)` は union と difference が 0 本で、
+**intersection だけ 48本**です。3枚の面が同時に切る配置で、面で切る上の
+球の配置（4-82 など）はどれも1枚です。union / difference が綺麗なので、
+これは交線側ではなく**取り出す領域の側**の問題に見えます。
+
+#### 断り方を読めるようにしました
+
+```bash
+ZENITH_REFUSE_WHY=1 cargo run --release -p zenith_algo --example contact_placement_probe
+```
+
+断られた演算の理由をそのまま出します。**「断られた」だけでは、実装していない
+のか、答えが非多様体なのか、途中まで行って閉じなかったのかが分かりません。**
+上の内訳はこれで読みました。
 
 ---
 
