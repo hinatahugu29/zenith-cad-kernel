@@ -645,6 +645,23 @@ fn trimmed_uv_triangulation(
 /// 1枚も減りませんでした（測って戻しました）。
 pub(crate) const WELD_TOLERANCE: f64 = 1e-7;
 
+/// 細分が**新しい点を作らない**距離。溶接の距離より広く取ります。
+///
+/// 溶接そのものは緩めません（上の注記のとおり、緩めると別のところが
+/// 潰れます）。ここは「割らずに置く」だけの歯止めで、**割らなくても形は
+/// 変わりません**（細分は品質のための段です）。
+///
+/// **なぜ溶接の距離ちょうどでは足りないのか。** 束ねられて潰れる対だけが
+/// 問題ではありません。**束ねられないまま、すぐ隣に居る対**も、面積が
+/// ほぼ 0 の薄片を作ります。実測（4-131、トーラス × 半径 9 の円柱の差、
+/// 24分割）: 面の中を割って作った点が、境界の点から **1.7e-7** のところに
+/// 落ち、面積 1.06e-8 の薄片が残って稜が4回使われていました。溶接の距離
+/// (1e-7) のすぐ外側なので、そこちょうどの歯止めでは掛かりません。
+///
+/// 境界の点は稜から取った 3D 点で上書きされるので、面の中の評価とは
+/// この桁でずれます。**そのずれより広く取る**のが要ります。
+pub(crate) const REFINEMENT_CLEARANCE: f64 = WELD_TOLERANCE * 8.0;
+
 const MAX_REFINED_TRIANGLES: usize = 200_000;
 const MAX_REFINEMENT_PASSES: usize = 24;
 
@@ -748,7 +765,7 @@ pub(crate) fn refine_uv_triangulation_protected(
     // 測ったら悪くなりました**（メッシュが非多様体の演算が 6 → 7）。仕事量も
     // ほとんど変わりません（58,923,183 → 58,769,054）。**測って良かった
     // ほうを採ります。**
-    let cell = |v: f64| (v / WELD_TOLERANCE).floor() as i64;
+    let cell = |v: f64| (v / REFINEMENT_CLEARANCE).floor() as i64;
     let mut weld_grid: HashMap<(i64, i64, i64), (Vec<usize>, Vec<Point3>)> = HashMap::new();
     for index in 0..uvs.len() {
         let position = cache.corner(surface, uvs, index);
@@ -819,7 +836,7 @@ pub(crate) fn refine_uv_triangulation_protected(
                             continue;
                         };
                         for existing in &bucket.1 {
-                            if (existing - position).norm() <= WELD_TOLERANCE {
+                            if (existing - position).norm() <= REFINEMENT_CLEARANCE {
                                 collides = true;
                                 break 'search;
                             }
