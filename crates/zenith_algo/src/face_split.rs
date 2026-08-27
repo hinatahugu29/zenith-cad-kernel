@@ -182,6 +182,66 @@ fn null_piece(check: &ParameterAreaCheck) -> Option<(usize, f64)> {
 /// いま使っているパラメータ側の判定と、**以前の 3D 側**を並べて出す
 /// （`ZENITH_AREA_CHECK_WHY=1`）。
 ///
+/// パラメータ面積が断ろうとしたとき、**3D で確かめてから断る**。
+///
+/// パラメータ面積は安い物差しで、揃うところでは 3〜4 桁鋭く出ます（4-76）。
+/// **ただし、面が導出した p-curve しか持たないときは、その忠実度がそのまま
+/// 残差に出ます。**
+///
+/// 実測（4-122、箱を 19 度・円柱を 27 度回した和）: 箱の側面を交線の鎖で
+/// 割った結果は、
+///
+/// ```text
+/// AREACHECK split_by_chain  pieces 2  uv 2.176e-6 REFUSE  3d 4.317e-16 **3d differs**
+/// ```
+///
+/// **3D で測れば残差 4.3e-16——割り方は厳密に正しい**のに、パラメータ側の
+/// 2.176e-6 だけで捨てられていました。落とされた片は、そのあと縫合で
+/// 「相手のいない稜 7本」として現れます。
+///
+/// そこで、**パラメータ側が断ろうとしたときだけ** 3D で測り直します。
+/// 通る場合には走らないので、4-77 で減らした仕事は増えません。**両方が
+/// 駄目と言ったときだけ断ります。**
+fn residual_confirmed_in_3d(face: &Face, pieces: &[Face], check: &ParameterAreaCheck) -> f64 {
+    // 安いほうが通しているなら、そのまま。
+    if check.residual <= AREA_RESIDUAL_LIMIT {
+        return check.residual;
+    }
+    // パラメータで測れなかった面は、既に 3D で測っています。二度測りません。
+    if !check.parametric {
+        return check.residual;
+    }
+    if std::env::var_os("ZENITH_CONFIRM_WHY").is_some() {
+        // **3D で測り直した回数と、そのときのパラメータ残差**を数える。
+        // 確認は「断ろうとしたときだけ」走る建て付けなので、本当にそうか、
+        // どれくらいの残差で走っているかを測れるようにしておく。
+        eprintln!(
+            "CONFIRMWHY 3D で測り直す（uv 残差 {:.3e}、片 {} 枚）",
+            check.residual,
+            pieces.len()
+        );
+    }
+    let params = TessellationParams::default();
+    let original = MassCalculator::compute_face_integral(face, &params).0;
+    let summed: f64 = pieces
+        .iter()
+        .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+        .sum();
+    let residual = if original.abs() > 1e-12 {
+        (summed - original).abs() / original.abs()
+    } else {
+        (summed - original).abs()
+    };
+    // 3D のほうが厳しければ、厳しいほうを返します。緩める方向にだけ効かせる
+    // のではなく、**より忠実な物差しの答えを採る**ということです。
+    residual
+}
+
+/// 面積の残差をここまで許す。**相対**です。
+///
+/// 呼ぶ側がそれぞれ `1e-6` と書いていたのを1か所にまとめました。
+pub(crate) const AREA_RESIDUAL_LIMIT: f64 = 1e-6;
+
 /// 入れ替えたあとも残してあります。**3D 側は重いので、既定では走りません。**
 /// 判定を疑ったとき、両方を1行ずつ並べて見るための口です（4-76 の実測は
 /// これで取りました）。
@@ -341,12 +401,13 @@ impl FaceSplitter {
         let pieces = vec![inside, outside];
         let check = Self::checked_areas("split_by_interior_loop", face, &pieces)?;
 
+        let confirmed_residual = residual_confirmed_in_3d(face, &pieces, &check);
         Ok((
             pieces,
             FaceSplitReport {
                 original_parameter_area: check.original,
                 piece_parameter_areas: check.pieces,
-                area_residual: check.residual,
+                area_residual: confirmed_residual,
                 curve_off_surface,
                 // 内側のループは境界に着きません。着いていたら、それは
                 // 境界から境界への切り込みで、こちらの口ではありません。
@@ -522,12 +583,13 @@ impl FaceSplitter {
         // 4. 面積を測って足す。ここが合わなければ領域を取り違えている。
         let check = Self::checked_areas("split_by_chain", face, &pieces)?;
 
+        let confirmed_residual = residual_confirmed_in_3d(face, &pieces, &check);
         Ok((
             pieces,
             FaceSplitReport {
                 original_parameter_area: check.original,
                 piece_parameter_areas: check.pieces,
-                area_residual: check.residual,
+                area_residual: confirmed_residual,
                 curve_off_surface,
                 ends_off_boundary,
             },
@@ -610,12 +672,13 @@ impl FaceSplitter {
         let check = parameter_area_check(face, &pieces);
         compare_area_checks("split_by_curves", face, &pieces, &check);
 
+        let confirmed_residual = residual_confirmed_in_3d(face, &pieces, &check);
         Ok((
             pieces,
             MultiSplitReport {
                 original_parameter_area: check.original,
                 piece_parameter_areas: check.pieces,
-                area_residual: check.residual,
+                area_residual: confirmed_residual,
                 cuts_applied: applied,
                 cuts_refused: splits.len() - applied,
                 refusals,

@@ -1640,8 +1640,19 @@ impl BrepIntersectionBuilder {
         //
         // **当たらなかった稜だけ**を鎖にまとめて、当たった片に対して当て直し
         // ます。全部当たっていれば残りは無く、ここは素通りします。
+        let leftover_why = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
+        if leftover_why && !leftover.is_empty() {
+            eprintln!(
+                "LEFTWHY 当たらなかった稜 {} 本（当たった割り {}）",
+                leftover.len(),
+                applied_split_count
+            );
+        }
         if applied_split_count > 0 && leftover.len() >= 2 {
             let chains = group_edges_into_chains(&deduplicate_split_edges(&leftover, tol), tol);
+            if leftover_why {
+                eprintln!("LEFTWHY   残りを鎖に: {} 本", chains.len());
+            }
             for chain in chains.iter().filter(|chain| chain.len() >= 2) {
                 let mut next_faces = Vec::new();
                 let mut applied_this_chain = false;
@@ -1653,7 +1664,27 @@ impl BrepIntersectionBuilder {
                             applied_this_chain = true;
                             next_faces.extend(pieces);
                         }
-                        _ => next_faces.push(current_face),
+                        // **理由を捨てない。** ここは「1本でも当たると鎖が
+                        // 走らない」を埋めるための受け皿なので、断られた
+                        // 理由が読めないと、埋まっているのかも分からない。
+                        other => {
+                            if leftover_why {
+                                match &other {
+                                    Ok((pieces, report)) => eprintln!(
+                                        "LEFTWHY   鎖 {} 本: 片 {} 枚、面積残差 {:.3e} で採らず",
+                                        chain.len(),
+                                        pieces.len(),
+                                        report.area_residual
+                                    ),
+                                    Err(reason) => eprintln!(
+                                        "LEFTWHY   鎖 {} 本: {}",
+                                        chain.len(),
+                                        reason.chars().take(160).collect::<String>()
+                                    ),
+                                }
+                            }
+                            next_faces.push(current_face)
+                        }
                     }
                 }
                 faces = next_faces;
