@@ -221,6 +221,39 @@ impl BooleanResultVerifier {
         // **裏返しの立体は、それ自体が誤りです。** 向きの揃った B-Rep なら
         // 体積は必ず正になります（空洞は `inner_shells` として別に持ち、
         // `compute_from_brep` が引きます）。
+        // **返す立体どうしは、重なってはいけません。**
+        //
+        // ブーリアンの答えは「互いに交わらない立体の集まり」です。重なった
+        // 2つを返すと、体積は足し合わさるのに、内外判定はどの点でも一致
+        // します（重なった2つは、どの点から見ても「中は中」）。**足し算の
+        // 上限も、和なら `va + vb` にちょうど収まるので通ります。**
+        //
+        // 実測（4-137）: 半径 5 の球を z 軸まわりに 30 度回して和を取ると、
+        // **同じ球が2つ**返り、体積が 1047.197551（真値の2倍）になります。
+        // トーラスも同じ。**90 度・180 度では起きません**——パッチの境が
+        // ちょうど重なるので、面の重なりが解消されるからです。
+        if result.len() >= 2 {
+            let coarse = TessellationParams {
+                u_divisions: 12,
+                v_divisions: 12,
+            };
+            let meshes: Vec<TriangleMesh> = result
+                .iter()
+                .map(|solid| zenith_tess::tessellate_solid(solid, &coarse))
+                .collect();
+            'pairs: for left in 0..result.len() {
+                for right in (left + 1)..result.len() {
+                    if let Some(point) = shared_interior_point(&meshes[left], &meshes[right]) {
+                        report.errors.push(format!(
+                            "result solids {left} and {right} overlap at ({:.6} {:.6} {:.6}): a boolean result must be a set of solids that do not intersect",
+                            point.x, point.y, point.z
+                        ));
+                        break 'pairs;
+                    }
+                }
+            }
+        }
+
         for (index, volume) in solid_volumes.iter().enumerate() {
             if *volume <= zero_eps {
                 report.errors.push(format!(
@@ -557,6 +590,59 @@ fn combined_bbox(boxes: &[Option<(Point3, Point3)>]) -> Option<(Point3, Point3)>
 
 /// Halton sequence, so the samples spread evenly without a random source and
 /// stay identical between runs.
+/// 2つのメッシュの**中を同時に通る点**を1つ探す。無ければ `None`。
+///
+/// 共通の境界箱の中だけを Halton 列で撒きます。**境界の上は数えません**
+/// ——触れているだけの2つは重なっていません。
+fn shared_interior_point(left: &TriangleMesh, right: &TriangleMesh) -> Option<Point3> {
+    let bounds = |mesh: &TriangleMesh| {
+        let mut low = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut high = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for point in &mesh.positions {
+            low.x = low.x.min(point.x);
+            low.y = low.y.min(point.y);
+            low.z = low.z.min(point.z);
+            high.x = high.x.max(point.x);
+            high.y = high.y.max(point.y);
+            high.z = high.z.max(point.z);
+        }
+        (low, high)
+    };
+    if left.positions.is_empty() || right.positions.is_empty() {
+        return None;
+    }
+    let (low_left, high_left) = bounds(left);
+    let (low_right, high_right) = bounds(right);
+    let low = Point3::new(
+        low_left.x.max(low_right.x),
+        low_left.y.max(low_right.y),
+        low_left.z.max(low_right.z),
+    );
+    let high = Point3::new(
+        high_left.x.min(high_right.x),
+        high_left.y.min(high_right.y),
+        high_left.z.min(high_right.z),
+    );
+    if low.x >= high.x || low.y >= high.y || low.z >= high.z {
+        return None;
+    }
+    let span = high - low;
+    const SAMPLES: usize = 512;
+    for index in 1..=SAMPLES {
+        let point = Point3::new(
+            low.x + span.x * halton(index, 2),
+            low.y + span.y * halton(index, 3),
+            low.z + span.z * halton(index, 5),
+        );
+        if crate::BooleanEngine::is_point_inside_mesh(point, left)
+            && crate::BooleanEngine::is_point_inside_mesh(point, right)
+        {
+            return Some(point);
+        }
+    }
+    None
+}
+
 fn halton(mut index: usize, base: usize) -> f64 {
     let mut result = 0.0;
     let mut fraction = 1.0 / base as f64;

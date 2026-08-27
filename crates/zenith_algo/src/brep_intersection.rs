@@ -3881,7 +3881,23 @@ fn connected_piece_groups(pieces: &[SelectedBooleanFacePiece], tol: &Tolerance) 
         )
     };
 
-    let mut users: BTreeMap<((i64, i64, i64), (i64, i64, i64)), Vec<usize>> = BTreeMap::new();
+    // **端点だけでは、別々の稜が同じものに見えます。**
+    //
+    // 球の経線はどれも極から極へ走るので、**8本すべてが同じ端点の対**を
+    // 持ちます。端点だけで照合すると、経度の違う稜が全部1本と数えられ、
+    // 別々の閉じた曲面が「繋がっている」ことになります。
+    //
+    // 実測（4-137）: 半径 5 の球を z 軸まわりに 30 度回して和を取ると、
+    // **16面（8 + 8）が1つの立体として返り**、体積が 1047.197551 と
+    // ちょうど2倍になります。**稜はどれもちょうど2回使われるので、
+    // `validate_closed` も「妥当な閉シェル」と答えます**——中身は
+    // 二重被覆です。
+    //
+    // 中点を鍵に足せば、経度の違う稜は別物になります。
+    let mut users: BTreeMap<
+        ((i64, i64, i64), (i64, i64, i64), (i64, i64, i64)),
+        Vec<usize>,
+    > = BTreeMap::new();
     for (index, piece) in pieces.iter().enumerate() {
         let face = &piece.face;
         for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
@@ -3889,8 +3905,9 @@ fn connected_piece_groups(pieces: &[SelectedBooleanFacePiece], tol: &Tolerance) 
                 let (start, end) = edge.edge.curve.param_range();
                 let a = key(edge.edge.curve.evaluate(start));
                 let b = key(edge.edge.curve.evaluate(end));
+                let middle = key(edge.edge.curve.evaluate((start + end) * 0.5));
                 let pair = if a <= b { (a, b) } else { (b, a) };
-                users.entry(pair).or_default().push(index);
+                users.entry((pair.0, pair.1, middle)).or_default().push(index);
             }
         }
     }
