@@ -3906,7 +3906,16 @@ fn nest_cavity_shells_into_solids(simple_solids: Vec<Solid>, _tol: &Tolerance) -
             (volume, solid)
         })
         .collect();
-    with_volume.sort_by(|(a, _), (b, _)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    // **大きさで並べます。符号ではありません。**
+    //
+    // 空洞になる塊は**内向き**で出てくることがあり（差の B 側は面を反転して
+    // 採るので）、そのとき符号つき体積は負になります。符号で並べると、
+    // 内向きの塊が「いちばん小さい」ことになって、入れ子の親子が
+    // 取り違えられます。大きさで並べれば向きに依存しません。
+    with_volume.sort_by(|(a, _), (b, _)| {
+        b.abs().partial_cmp(&a.abs()).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let shell_volumes: Vec<f64> = with_volume.iter().map(|(volume, _)| *volume).collect();
     let simple_solids: Vec<Solid> = with_volume.into_iter().map(|(_, solid)| solid).collect();
 
     let meshes: Vec<TriangleMesh> = simple_solids
@@ -3934,10 +3943,32 @@ fn nest_cavity_shells_into_solids(simple_solids: Vec<Solid>, _tol: &Tolerance) -
 
     for (j, parent) in contained_in.iter().enumerate() {
         if let Some(p) = parent {
-            outer_to_inners
-                .entry(*p)
-                .or_default()
-                .push(simple_solids[j].outer_shell.clone());
+            // **空洞シェルは、外殻と同じ向きで持ちます。**
+            //
+            // `MassCalculator::compute_from_brep` は「空洞シェルは外殻と
+            // 同じ向きで保持されるため、寄与を反転して足す」と書いて
+            // あります。**その約束が守られていませんでした。**
+            //
+            // 差の B 側は面を反転して採るので（`reverse_orientation`）、
+            // 空洞になる塊は**内向き**で出てくることがあります。内向きの
+            // まま入れると、反転して足すぶんと合わせて**符号が2回変わり**、
+            // 体積が `A - B` ではなく `A + B` になります。
+            //
+            // 実測（4-133）: `cone - sphere` は球が円錐に完全に入って
+            // いる（触れてもいない r=1.5 でも）のに、空洞シェルの符号つき
+            // 体積が **-14.137167** で、結果が 2108.53 = A + B。
+            // `box - sphere (r=5)` は **+523.598776** で正しく 7476.40。
+            // **同じ経路で向きが揃っていませんでした。**
+            //
+            // ここで揃えます。**形は変わりません**——同じ面を、向きだけ
+            // 約束どおりにします。
+            let shell = &simple_solids[j].outer_shell;
+            let cavity = if shell_volumes[j] < 0.0 {
+                Shell::closed(shell.faces.iter().map(reverse_face_orientation).collect())
+            } else {
+                shell.clone()
+            };
+            outer_to_inners.entry(*p).or_default().push(cavity);
         } else {
             root_indices.push(j);
         }
