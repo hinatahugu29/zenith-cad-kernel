@@ -2181,8 +2181,9 @@ fn select_operand_faces_after_batch_split(
                 // 区別できない。
                 let point = representative_face_point(face);
                 eprintln!(
-                    "SELECTWHY {:?} 面 {face_index} の片（{} 枚中）: {:?} → {} 代表点 ({:.4} {:.4} {:.4})",
+                    "SELECTWHY {:?} 面 {face_index} の片 id {} （{} 枚中）: {:?} → {} 代表点 ({:.4} {:.4} {:.4})",
                     operand,
+                    face.id,
                     face_pieces.len(),
                     location,
                     if keep_piece(operand, location, op) {

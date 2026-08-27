@@ -35,7 +35,7 @@
 //!
 //! 最後に座標で頂点を束ね、面積0の三角形を落とします（球の極など）。
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use zenith_math::{Point2, Point3, Tolerance, Vec3};
 use zenith_topo::{Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Wire};
@@ -122,6 +122,9 @@ fn explain_face_owners(mesh: &TriangleMesh, owners: &[(u64, std::ops::Range<usiz
     }
     let bad: Vec<_> = uses.iter().filter(|(_, tris)| tris.len() != 2).collect();
     eprintln!("OWNERWHY 非多様体の稜 {} 本", bad.len());
+    for (id, range) in owners {
+        eprintln!("OWNERWHY   面 {id} の三角形は {}..{}", range.start, range.end);
+    }
     let mut pairs: BTreeMap<Vec<Option<u64>>, usize> = BTreeMap::new();
     for (_, tris) in &bad {
         let mut faces: Vec<Option<u64>> = tris.iter().map(|t| face_of(*t)).collect();
@@ -912,11 +915,11 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
         arr
     };
 
-    let mut seen = HashSet::new();
+    let mut seen: std::collections::HashMap<[u32; 3], usize> = Default::default();
     let mut indices = Vec::with_capacity(mesh.indices.len());
     let (mut collapsed, mut flat, mut duplicated) = (0usize, 0usize, 0usize);
     let collapse_why = std::env::var_os("ZENITH_COLLAPSE_WHY").is_some();
-    for triangle in &mesh.indices {
+    for (triangle_index, triangle) in mesh.indices.iter().enumerate() {
         let mapped = [
             remap[triangle[0] as usize],
             remap[triangle[1] as usize],
@@ -968,10 +971,20 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
             continue;
         }
         let key = sorted_triangle(mapped);
-        if seen.insert(key) {
-            indices.push(mapped);
-        } else {
+        if let Some(first) = seen.get(&key).copied() {
             duplicated += 1;
+            if collapse_why {
+                // **同じ3頂点の三角形を2枚出したのはどこか。**
+                // 溶接前の三角形の添字で言う。面ごとの範囲と突き合わせれば、
+                // 1枚の面の中なのか、2枚の面にまたがるのかが分かる。
+                eprintln!(
+                    "DUPWHY 三角形 {} は {} と同じ3頂点",
+                    triangle_index, first
+                );
+            }
+        } else {
+            seen.insert(key, triangle_index);
+            indices.push(mapped);
         }
     }
     let before_flaps = indices.len();
