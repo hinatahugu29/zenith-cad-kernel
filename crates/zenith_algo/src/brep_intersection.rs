@@ -1365,6 +1365,16 @@ impl BrepIntersectionBuilder {
                 .collect();
             let chains = group_edges_into_chains(&cutting, tol);
 
+            let explain = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
+            if explain {
+                eprintln!(
+                    "SPLITWHY   鎖にまとめ直す: 交線 {} 本 → 鎖 {} 本（2本以上のもの {} 本）",
+                    cutting.len(),
+                    chains.len(),
+                    chains.iter().filter(|chain| chain.len() >= 2).count()
+                );
+            }
+
             let mut chain_faces = vec![face.clone()];
             let mut applied: usize = 0;
             for chain in chains.iter().filter(|chain| chain.len() >= 2) {
@@ -1375,7 +1385,19 @@ impl BrepIntersectionBuilder {
                             applied += 1;
                             next_faces.extend(split_faces);
                         }
-                        Err(_) => next_faces.push(current_face),
+                        Err(reason) => {
+                            // **理由を捨てない。** 鎖にまとめ直しても割れない
+                            // ときは、ここが最後の砦なので、断った理由が
+                            // 分からないと次に測るところが決まらない。
+                            if explain {
+                                eprintln!(
+                                    "SPLITWHY     鎖 {} 本を当てて断られた: {}",
+                                    chain.len(),
+                                    reason.chars().take(160).collect::<String>()
+                                );
+                            }
+                            next_faces.push(current_face)
+                        }
                     }
                 }
                 chain_faces = next_faces;
