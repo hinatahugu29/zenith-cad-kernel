@@ -1529,15 +1529,6 @@ fn repair_boundary_ears(
     let why = std::env::var_os("ZENITH_TESS_WHY").is_some();
     let mut skipped: std::collections::HashSet<usize> = Default::default();
     for _round in 0..triangles.len() * 4 {
-        let Some(flat_index) = triangles
-            .iter()
-            .enumerate()
-            .find(|(index, triangle)| !skipped.contains(index) && needs_repair(**triangle))
-            .map(|(index, _)| index)
-        else {
-            break;
-        };
-
         let mut edge_uses: std::collections::HashMap<(usize, usize), Vec<usize>> =
             Default::default();
         for (index, triangle) in triangles.iter().enumerate() {
@@ -1547,6 +1538,49 @@ fn repair_boundary_ears(
                 edge_uses.entry(key).or_default().push(index);
             }
         }
+
+        // **鎖の端から解きます。**
+        //
+        // 悪い三角形は1枚ずつ独立には出ません。境界に沿って**鎖**になります
+        // （4-117）。鎖の途中を選ぶと、入れ替える相手も同じく悪いので、
+        // 悪い枚数は 2 → 2 のままで、`new_bad >= old_bad` で必ず止まります。
+        //
+        // 実測（4-124、`box × cylinder (both turned)` の積、24分割）: 断った
+        // 理由は **3113 件すべて「悪い枚数が減らない 2 → 2」**でした。
+        // 「対角が既にある」も「面積が変わる」も1件も出ません。**つまり
+        // 一度も端に当たっていませんでした。**
+        //
+        // 端（相手が良い三角形であるもの）を先に選べば 2 → 1 になるので、
+        // そこから鎖をほどけます。端が無ければ従来どおり最初の1枚を選びます。
+        let is_bad = |index: usize| needs_repair(triangles[index]);
+        let touches_a_good_neighbour = |index: usize| {
+            let triangle = triangles[index];
+            (0..3).any(|corner| {
+                let (u, v) = (triangle[corner], triangle[(corner + 1) % 3]);
+                let shared = if u < v { (u, v) } else { (v, u) };
+                if protected.contains(&shared) {
+                    return false;
+                }
+                let Some(uses) = edge_uses.get(&shared) else {
+                    return false;
+                };
+                if uses.len() != 2 {
+                    return false;
+                }
+                let neighbour = if uses[0] == index { uses[1] } else { uses[0] };
+                !is_bad(neighbour)
+            })
+        };
+        let candidates = || {
+            (0..triangles.len())
+                .filter(|index| !skipped.contains(index) && is_bad(*index))
+        };
+        let Some(flat_index) = candidates()
+            .find(|index| touches_a_good_neighbour(*index))
+            .or_else(|| candidates().next())
+        else {
+            break;
+        };
 
         let flat = triangles[flat_index];
         let mut repaired = false;
