@@ -728,6 +728,38 @@ pub(crate) fn refine_uv_triangulation_protected(
     let mut settled = vec![false; triangles.len()];
     let mut cache = EvaluatedPositions::new(uvs.len());
 
+    // **溶接で既にある頂点と1点になる中点は、作らない。**
+    //
+    // 作ると `weld` がそれを束ね、両方を使っている三角形が潰れ、外した跡が
+    // 穴になります（4-117）。実測（4-123、傾けたトーラス × 箱の積、24分割）:
+    // 束ねられていた対は**すべて細分が作った頂点どうし**で、境界の点は1組も
+    // 関与していませんでした（uv の隔たり 2e-9〜1.5e-8）。
+    //
+    // **使い回してはいけません。** その頂点は辺の中点ではないので、細分の
+    // 三角形が壊れます（実測で 1本 → 34本に悪化。4-123）。**割らずに置く**
+    // のが正しい手当てです。細分は品質のための段で、割らなくても形は
+    // 変わりません。
+    //
+    // 格子はパスをまたいで持ち越します——衝突する中点は**別のパス**で
+    // 作られていました（同じパスの中だけで見ても1組も減りませんでした）。
+    // **最初からある頂点（境界の点と earcut の点）も入れます。**
+    //
+    // 実測で束ねられていた対は「細分どうし」だけでしたが、**入れないほうを
+    // 測ったら悪くなりました**（メッシュが非多様体の演算が 6 → 7）。仕事量も
+    // ほとんど変わりません（58,923,183 → 58,769,054）。**測って良かった
+    // ほうを採ります。**
+    let cell = |v: f64| (v / WELD_TOLERANCE).floor() as i64;
+    let mut weld_grid: HashMap<(i64, i64, i64), (Vec<usize>, Vec<Point3>)> = HashMap::new();
+    for index in 0..uvs.len() {
+        let position = cache.corner(surface, uvs, index);
+        let bucket = weld_grid
+            .entry((cell(position.x), cell(position.y), cell(position.z)))
+            .or_default();
+        bucket.0.push(index);
+        bucket.1.push(position);
+    }
+    let mut skipped_for_weld = 0usize;
+
     for _ in 0..MAX_REFINEMENT_PASSES {
         if triangles.len() * 2 > MAX_REFINED_TRIANGLES {
             return;
@@ -775,11 +807,45 @@ pub(crate) fn refine_uv_triangulation_protected(
         let mut midpoints: HashMap<(usize, usize), usize> = HashMap::new();
         for edge in split_edges {
             let midpoint = Point2::from((uvs[edge.0].coords + uvs[edge.1].coords) * 0.5);
+            let position = cache.midpoint(surface, uvs, edge.0, edge.1);
+            let key = (cell(position.x), cell(position.y), cell(position.z));
+
+            let mut collides = false;
+            'search: for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        let Some(bucket) = weld_grid.get(&(key.0 + dx, key.1 + dy, key.2 + dz))
+                        else {
+                            continue;
+                        };
+                        for existing in &bucket.1 {
+                            if (existing - position).norm() <= WELD_TOLERANCE {
+                                collides = true;
+                                break 'search;
+                            }
+                        }
+                    }
+                }
+            }
+            if collides {
+                // この辺は割らない。中点を入れないので `subdivide_triangle`
+                // はここを割りません。
+                skipped_for_weld += 1;
+                continue;
+            }
+
             let index = uvs.len();
             midpoints.insert(edge, index);
             uvs.push(midpoint);
             // 判定で既に評価した点である。頂点になっても評価し直さない。
             cache.adopt_midpoint(edge.0, edge.1, index, uvs);
+            let bucket = weld_grid.entry(key).or_default();
+            bucket.0.push(index);
+            bucket.1.push(position);
+        }
+        if midpoints.is_empty() {
+            // 割れる辺が1本も無い。これ以上進んでも変わらない。
+            break;
         }
 
 
@@ -796,6 +862,47 @@ pub(crate) fn refine_uv_triangulation_protected(
         }
         *triangles = refined;
         settled = refined_settled;
+    }
+
+    if skipped_for_weld > 0 && std::env::var_os("ZENITH_REFINE_WHY").is_some() {
+        eprintln!("REFINEWHY 溶接で1点になる中点 {skipped_for_weld} 個を、作らずに置いた");
+    }
+
+    if std::env::var_os("ZENITH_REFINE_WHY").is_some() {
+        // **溶接で束ねられる対が、細分のあとに何組できているか。**
+        //
+        // 束ねられると三角形が潰れ、`weld` がそれを外し、跡が穴になります
+        // （4-117）。対の**両方が境界の点**なのか、**片方が細分の点**なのか、
+        // **両方が細分の点**なのかで、直す場所が変わります。
+        let mut cache = EvaluatedPositions::new(uvs.len());
+        let mut both_boundary = 0usize;
+        let mut mixed = 0usize;
+        let mut both_interior = 0usize;
+        let mut worst_uv = 0.0f64;
+        let points: Vec<Point3> = (0..uvs.len())
+            .map(|index| cache.corner(surface, uvs, index))
+            .collect();
+        for left in 0..points.len() {
+            for right in (left + 1)..points.len() {
+                if (points[right] - points[left]).norm() > WELD_TOLERANCE {
+                    continue;
+                }
+                let left_boundary = left < boundary_vertex_count;
+                let right_boundary = right < boundary_vertex_count;
+                match (left_boundary, right_boundary) {
+                    (true, true) => both_boundary += 1,
+                    (false, false) => both_interior += 1,
+                    _ => mixed += 1,
+                }
+                worst_uv = worst_uv.max((uvs[right] - uvs[left]).norm());
+            }
+        }
+        if both_boundary + mixed + both_interior > 0 {
+            eprintln!(
+                "REFINEWHY 溶接で束ねられる対 {}（境界どうし {both_boundary}、境界と細分 {mixed}、細分どうし {both_interior}）、uv の隔たりは最大 {worst_uv:.3e}",
+                both_boundary + mixed + both_interior
+            );
+        }
     }
 }
 
