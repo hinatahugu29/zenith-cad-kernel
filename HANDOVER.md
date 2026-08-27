@@ -95,7 +95,7 @@ PYO3_PYTHON="C:/Users/hinat/AppData/Local/Programs/Python/Python311/python.exe" 
 | 指標 | 値 |
 | :--- | :--- |
 | テストバイナリ | **119（doctest 込み）すべてグリーン（632テスト 100%合格、0 failed、0 ignored、警告 0）**（2026/08/27 実測）。`tools/fast_test.sh` の言う「170 バイナリ」には**プローブ（examples）が含まれます**——`cargo test` は examples もビルドするので、あの数え方だと一緒に拾って走ります。テストは 0 件ですが、**非ゼロ終了すれば落ちます**（そのぶん時間もかかります） |
-| 診断プローブ | **常設35本**すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と `VERIFICATION_PLAYBOOK.md` の道具表にあります。**ここに名前を並べると必ず古くなる**ので、数だけ書いています |
+| 診断プローブ | **常設36本**すべて exit 0。一覧は CI（`.github/workflows/gates.yml`）と `VERIFICATION_PLAYBOOK.md` の道具表にあります。**ここに名前を並べると必ず古くなる**ので、数だけ書いています |
 | **自作立体どうしのブーリアン（45ケース表）** | `boolean_envelope` で **supported 44 / wrong-result 0 / エラー 1**（8月24日は 39 / 0 / 6）。仕事量は曲面評価 **56,340,279 回**（4-77 で 114,842,103 から半分以下に。4-82後の現値）。**残る1件は直す対象ではありません**——`box × cylinder` 接線の差で、**答えのほうが非多様体**なので場所を名指しして断ります（4-74）。**ここが `ok` に変わったら誤答です。** 45ケース外の任意姿勢（傾斜円錐×箱、直交円柱×円柱、偏心球×円柱、傾斜トーラス×箱）を `contact_placement_probe` に拡充し、**B-Rep多様体性は全25件で100%完全多様体（nm brep = 0）** を実測確認（4-104）。
 **メッシュのほうは 4演算がまだ非多様体です**（`box × cone` intersection 12本、
 `box × torus` の union 92本 / difference 2本 / intersection 1本。2026/08/27 実測、
