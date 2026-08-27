@@ -37,12 +37,13 @@ fn volume(solids: &[Solid]) -> f64 {
         .sum()
 }
 
-/// **返ったら合っていること。断るのは赤にしません。**
+/// **返って、合っていること。** 4-139 で断りも無くなりました。
 ///
-/// 部分的な面の重なりはまだ解消できないので（4-137）、パッチの境に
-/// 揃わない角度では断られます。**断るのは誤答ではありません。**
+/// 「同じ場所を占めるなら、面を刻み直さなくても答えは決まる」を入れた
+/// ので、パッチの境に揃わない角度（7°・30°・45°）でも通ります。
+/// **ここが断られるようになったら、その道が塞がったということです。**
 #[test]
-fn spinning_a_duplicate_about_its_own_axis_never_returns_a_wrong_answer() {
+fn spinning_a_duplicate_about_its_own_axis_gives_back_the_same_solid() {
     let tol = Tolerance::default();
     let mut failures: Vec<String> = Vec::new();
 
@@ -70,7 +71,7 @@ fn spinning_a_duplicate_about_its_own_axis_never_returns_a_wrong_answer() {
     ];
 
     for (name, solid, whole) in shapes {
-        for angle in [30.0_f64, 90.0, 180.0] {
+        for angle in [7.0_f64, 30.0, 45.0, 90.0, 180.0] {
             let turn = Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), angle.to_radians());
             let spun = BrepTransform::transform_solid(&solid, &turn).expect("spin");
             for (label, op, expected) in [
@@ -78,11 +79,16 @@ fn spinning_a_duplicate_about_its_own_axis_never_returns_a_wrong_answer() {
                 ("difference", BooleanOpType::Difference, 0.0),
                 ("intersection", BooleanOpType::Intersection, whole),
             ] {
-                let Ok(result) =
-                    BooleanEngine::boolean_solids_exact_result(&solid, &spun, op, &tol)
-                else {
-                    continue;
-                };
+                let result =
+                    match BooleanEngine::boolean_solids_exact_result(&solid, &spun, op, &tol) {
+                        Ok(result) => result,
+                        Err(err) => {
+                            failures.push(format!(
+                                "{name} / {angle}deg / {label}: refused: {err}"
+                            ));
+                            continue;
+                        }
+                    };
                 let measured = volume(&result.solids);
                 if (measured - expected).abs() > whole * 2e-3 {
                     failures.push(format!(

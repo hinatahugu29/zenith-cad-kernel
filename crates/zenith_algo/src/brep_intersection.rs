@@ -510,6 +510,21 @@ impl BrepIntersectionBuilder {
         classify_face_against_mesh(face, &mesh, Some(solid), tol)
     }
 
+    /// [`Self::classify_face_against_solid`] と同じ判定を、**メッシュを
+    /// 使い回して**行う。
+    ///
+    /// あちらは呼ぶたびに相手を丸ごとテッセレーションします。面ごとに
+    /// 呼ぶと面の枚数だけ張り直すので、16面のトーラスなら16回です。
+    /// 立体まるごとを判定するところでは、こちらで1回に済ませます。
+    pub fn classify_face_against_solid_mesh(
+        face: &Face,
+        solid: &Solid,
+        mesh: &TriangleMesh,
+        tol: &Tolerance,
+    ) -> FaceRegionLocation {
+        classify_face_against_mesh(face, mesh, Some(solid), tol)
+    }
+
     pub fn select_boolean_face_pieces(
         candidate: &ClassifiedPlanarFaceSplitCandidate,
         op: crate::BooleanOpType,

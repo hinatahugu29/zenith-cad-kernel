@@ -294,6 +294,29 @@ impl BooleanEngine {
             return Ok(ExactBooleanResult::from_solids(Vec::new()));
         }
 
+        // **同じ場所を占める2つには、切る仕事がありません。**
+        //
+        // 和も積も元の立体、差は空です。**位置だけでなく、面の割り方が
+        // 違っていても同じです**——同じ球を自分の軸まわりに 30 度回した
+        // ものは、パッチの境が違うだけで、占める場所は1ミクロンも
+        // 変わりません。
+        //
+        // 実測（4-139）: そこが通っていませんでした。回した球やトーラスの
+        // 和は、**同じ立体を2枚重ねた「二重被覆」**になります（4-137 で
+        // 断るようにしましたが、返せてはいませんでした）。90 度・180 度で
+        // 通るのは、パッチの境がちょうど重なって面の重なりが解消される
+        // からで、**30 度では部分的にしか重ならないので解消できません。**
+        //
+        // 面を刻み直さなくても、**占める場所が同じなら答えは決まります。**
+        if Self::occupy_the_same_region(solid_a, solid_b, tol) {
+            return match op {
+                BooleanOpType::Union | BooleanOpType::Intersection => {
+                    Ok(ExactBooleanResult::single(solid_a.clone()))
+                }
+                BooleanOpType::Difference => Ok(ExactBooleanResult::from_solids(Vec::new())),
+            };
+        }
+
         if !Self::has_face_pair_candidates(solid_a, solid_b, tol) {
             return Self::boolean_solids_exact_without_intersections(solid_a, solid_b, op, tol);
         }
@@ -544,6 +567,73 @@ impl BooleanEngine {
                 }
             }
         }
+    }
+
+    /// 2つの立体が**同じ場所を占めている**か。
+    ///
+    /// 面の割り方は問いません。互いに「相手の中か境界の上」なら、占める
+    /// 場所は同じです。
+    ///
+    /// **境界箱で先に足切りします。** 場所が同じなら境界箱も一致するので、
+    /// 一致しないものはここで落ちます。面ごとの分類は高いので、当たる
+    /// 見込みのある組だけに掛けます。
+    fn occupy_the_same_region(solid_a: &Solid, solid_b: &Solid, tol: &Tolerance) -> bool {
+        // **`Solid::bounding_box` は使えません。** あれは制御点から取るので、
+        // 同じ形でも回すと広がります（実測: 半径 5 の円柱を 30 度回すと
+        // ±5 が ±6.830127019 になる）。**メッシュの実寸**で比べます。
+        let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
+        let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
+        let bounds = |mesh: &TriangleMesh| {
+            let mut low = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+            let mut high = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for point in &mesh.positions {
+                low.x = low.x.min(point.x);
+                low.y = low.y.min(point.y);
+                low.z = low.z.min(point.z);
+                high.x = high.x.max(point.x);
+                high.y = high.y.max(point.y);
+                high.z = high.z.max(point.z);
+            }
+            (low, high)
+        };
+        if mesh_a.positions.is_empty() || mesh_b.positions.is_empty() {
+            return false;
+        }
+        let (low_a, high_a) = bounds(&mesh_a);
+        let (low_b, high_b) = bounds(&mesh_b);
+        let span = (high_a - low_a).norm().max(1.0);
+        // メッシュは弦で近似されるので、**分割数で決まるぶんのずれ**は
+        // 許します。ここは足切りで、決めるのは下の面ごとの判定です。
+        let close = |left: f64, right: f64| (left - right).abs() <= span * 1e-2;
+        if !(close(low_a.x, low_b.x)
+            && close(low_a.y, low_b.y)
+            && close(low_a.z, low_b.z)
+            && close(high_a.x, high_b.x)
+            && close(high_a.y, high_b.y)
+            && close(high_a.z, high_b.z))
+        {
+            return false;
+        }
+
+        // 体積も足切りに入れます。**同じ場所なら体積も同じ**です。
+        let volume_a = crate::MassCalculator::compute_from_mesh(&mesh_a).volume;
+        let volume_b = crate::MassCalculator::compute_from_mesh(&mesh_b).volume;
+        if (volume_a - volume_b).abs() > volume_a.abs().max(1.0) * 1e-2 {
+            return false;
+        }
+
+        // **面ごとに判定します。ここが本番です。** メッシュは張り直しません。
+        let all_on = |from: &Solid, to: &Solid, to_mesh: &TriangleMesh| {
+            from.outer_shell.faces.iter().all(|face| {
+                matches!(
+                    crate::BrepIntersectionBuilder::classify_face_against_solid_mesh(
+                        face, to, to_mesh, tol
+                    ),
+                    crate::FaceRegionLocation::Inside | crate::FaceRegionLocation::Boundary
+                )
+            })
+        };
+        all_on(solid_a, solid_b, &mesh_b) && all_on(solid_b, solid_a, &mesh_a)
     }
 
     fn solid_is_inside_or_on_boundary(solid: &Solid, container: &Solid, tol: &Tolerance) -> bool {
