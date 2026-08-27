@@ -977,9 +977,18 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
                 // **同じ3頂点の三角形を2枚出したのはどこか。**
                 // 溶接前の三角形の添字で言う。面ごとの範囲と突き合わせれば、
                 // 1枚の面の中なのか、2枚の面にまたがるのかが分かる。
+                let (p0, p1, p2) = (
+                    positions[mapped[0] as usize],
+                    positions[mapped[1] as usize],
+                    positions[mapped[2] as usize],
+                );
                 eprintln!(
-                    "DUPWHY 三角形 {} は {} と同じ3頂点",
-                    triangle_index, first
+                    "DUPWHY 三角形 {} は {} と同じ3頂点 ({:.4} {:.4} {:.4}) ({:.4} {:.4} {:.4}) ({:.4} {:.4} {:.4})",
+                    triangle_index,
+                    first,
+                    p0.x, p0.y, p0.z,
+                    p1.x, p1.y, p1.z,
+                    p2.x, p2.y, p2.z
                 );
             }
         } else {

@@ -6358,6 +6358,65 @@ fn face_encloses_no_area(face: &Face, tol: &Tolerance) -> bool {
 fn resolve_coincident_face_pieces(pieces: &mut Vec<SelectedBooleanFacePiece>, tol: &Tolerance) {
     let mut drop_flags = vec![false; pieces.len()];
 
+    if std::env::var_os("ZENITH_OVERLAP_WHY").is_some() {
+        // **同一平面に乗る2枚が、どれだけ重なっているか。**
+        //
+        // いまの判定は「面全体の一致」（重心と広がり）なので、部分的な
+        // 重なりは捕まりません。実測（4-124）で、残るメッシュ非多様体は
+        // 全件この形でした。**まず重なりの大きさを測ります。**
+        for left in 0..pieces.len() {
+            for right in (left + 1)..pieces.len() {
+                let (FaceGeometry::Plane(left_plane), FaceGeometry::Plane(right_plane)) =
+                    (&pieces[left].face.geometry, &pieces[right].face.geometry)
+                else {
+                    continue;
+                };
+                let (Some(left_normal), Some(right_normal)) = (
+                    selected_piece_normal(&pieces[left], left_plane),
+                    selected_piece_normal(&pieces[right], right_plane),
+                ) else {
+                    continue;
+                };
+                if left_normal.cross(&right_normal).norm() > 1e-9 {
+                    continue;
+                }
+                if (right_plane.origin - left_plane.origin)
+                    .dot(&left_normal)
+                    .abs()
+                    > tol.linear * 10.0
+                {
+                    continue;
+                }
+                let left_points = pieces[left].face.outer_wire.sample_points(16);
+                let right_points = pieces[right].face.outer_wire.sample_points(16);
+                if left_points.is_empty() || right_points.is_empty() {
+                    continue;
+                }
+                let centre = |points: &[Point3]| {
+                    let mut sum = Vec3::zeros();
+                    for point in points {
+                        sum += point.coords;
+                    }
+                    Point3::from(sum / points.len() as f64)
+                };
+                let (lc, rc) = (centre(&left_points), centre(&right_points));
+                eprintln!(
+                    "OVERLAPWHY 同一平面の2枚: {:?} 面 id {} と {:?} 面 id {}、重心の隔たり {:.4}、向き {}",
+                    pieces[left].operand,
+                    pieces[left].face.id,
+                    pieces[right].operand,
+                    pieces[right].face.id,
+                    (rc - lc).norm(),
+                    if left_normal.dot(&right_normal) > 0.0 {
+                        "同じ"
+                    } else {
+                        "逆"
+                    }
+                );
+            }
+        }
+    }
+
     for left in 0..pieces.len() {
         if drop_flags[left] {
             continue;
