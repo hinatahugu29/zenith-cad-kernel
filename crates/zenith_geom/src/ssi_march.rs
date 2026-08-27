@@ -641,6 +641,109 @@ impl IntersectionMarcher {
         (gap.norm() <= tol.linear).then_some(gap.norm())
     }
 
+    /// 2つの法線の外積を、決めた向きへ落とした量。**符号つき**です。
+    ///
+    /// `tangent` が返す正弦は外積の**長さ**なので、接点では 0 に触れて折り
+    /// 返すだけで、符号が変わりません。長さを 0 にする解き方は重根になります。
+    /// 向きを1つ固定して落とすと、接点を境に**符号が変わる**ので単根です。
+    fn tangency_measure(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        state: &[f64; 4],
+        onto: Vec3,
+    ) -> Option<f64> {
+        let (_, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
+        let (_, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
+        let n1 = match du1.cross(&dv1).try_normalize_safe(1e-12) {
+            Some(normal) => normal,
+            None => s1.normal_or_limit(state[0], state[1])?,
+        };
+        let n2 = match du2.cross(&dv2).try_normalize_safe(1e-12) {
+            Some(normal) => normal,
+            None => s2.normal_or_limit(state[2], state[3])?,
+        };
+        Some(n1.cross(&n2).dot(&onto))
+    }
+
+    /// 交線が**接点で終わる**とき、その接点そのものに着地する。
+    ///
+    /// 辿りは正弦が `TANGENCY_SINE_LIMIT` を切ったところで止まります。**止まる
+    /// だけで、接点には着いていません。** そこが 2つの弧の共有端になっている
+    /// と、A 側と B 側がそれぞれ別の場所で止まるので、稜が突き合いません。
+    ///
+    /// 実測（半径の等しい直交2円柱の和、4-128）: A 側の端が
+    /// `(0, -6, -2e-5)`、B 側の端が `(-2e-5, -6, 0)` で、真の接点
+    /// `(0, -6, 0)` からどちらも 2e-5 ずれていました。**中点は完全に一致
+    /// しているのに端だけが合わない**ので、縫合で 16本があぶれます。
+    ///
+    /// ずれの大きさは、`ssi_probe` が前から書いていたとおりです——「曲線から
+    /// 2.99e-5 離れた点でも、両曲面を 2.24e-11 で満たす」。**残差では位置が
+    /// 決まりません**（4-81 と同じ機構）。
+    ///
+    /// ## 解くもの
+    ///
+    /// 3本は今までどおり `p1 = p2`。4本目を「外積を**入口の接線向きへ落とした
+    /// 量**が 0」にします。長さではなく符号つきの量なので単根で、倍精度まで
+    /// 詰まります。4本目の行だけ中心差分で作るのは
+    /// [`Self::newton_to_bound_extremum`] と同じ理由です。
+    fn newton_to_tangency(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        state: &mut [f64; 4],
+        onto: Vec3,
+        tol: &Tolerance,
+    ) -> Option<f64> {
+        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
+        let limit = tol.linear.min(1e-10);
+
+        for _ in 0..40 {
+            crate::work_counter::count_marching_newton_iteration();
+            let (p1, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
+            let (p2, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
+            let gap = p1 - p2;
+            let measure = Self::tangency_measure(s1, s2, state, onto)?;
+
+            if gap.norm() <= limit && measure.abs() <= 1e-13 {
+                return Some(gap.norm());
+            }
+
+            let spans = [u_max - u_min, v_max - v_min, s_max - s_min, t_max - t_min];
+            let mut row = [0.0f64; 4];
+            for index in 0..4 {
+                let step = (spans[index].abs().max(1.0)) * 1e-4;
+                let mut plus = *state;
+                let mut minus = *state;
+                plus[index] += step;
+                minus[index] -= step;
+                let (Some(a), Some(b)) = (
+                    Self::tangency_measure(s1, s2, &plus, onto),
+                    Self::tangency_measure(s1, s2, &minus, onto),
+                ) else {
+                    return None;
+                };
+                row[index] = (a - b) / (2.0 * step);
+            }
+
+            let jacobian = nalgebra::Matrix4::new(
+                du1.x, dv1.x, -du2.x, -dv2.x, du1.y, dv1.y, -du2.y, -dv2.y, du1.z, dv1.z, -du2.z,
+                -dv2.z, row[0], row[1], row[2], row[3],
+            );
+            let rhs = nalgebra::Vector4::new(-gap.x, -gap.y, -gap.z, -measure);
+            let delta = jacobian.lu().solve(&rhs)?;
+            if !delta.iter().all(|value| value.is_finite()) {
+                return None;
+            }
+            state[0] = (state[0] + delta[0]).clamp(u_min, u_max);
+            state[1] = (state[1] + delta[1]).clamp(v_min, v_max);
+            state[2] = (state[2] + delta[2]).clamp(s_min, s_max);
+            state[3] = (state[3] + delta[3]).clamp(t_min, t_max);
+        }
+
+        let gap = s1.evaluate(state[0], state[1]) - s2.evaluate(state[2], state[3]);
+        (gap.norm() <= tol.linear).then_some(gap.norm())
+    }
+
     /// 交線に沿って進むとき、`state[which]` がどれだけの速さで動くか。
     ///
     /// 単位を持たない量にするため、そのパラメータ対の速さで割ります。
@@ -742,6 +845,29 @@ impl IntersectionMarcher {
             };
             if sine < TANGENCY_SINE_LIMIT {
                 hit_tangency = true;
+                // **止まるだけでは、接点に着いていません。**
+                //
+                // ここは交線が終わる場所なので、弧の端になります。同じ接点で
+                // 終わる弧が他にもあると（半径の等しい直交2円柱では、2本の
+                // 楕円がそこで交わります）、**それぞれ別の場所で止まる**ので
+                // 稜が突き合いません。実測で 2e-5 ずれ、16本があぶれました
+                // （4-128）。接点そのものを解いて足します。
+                //
+                // **届かなければ、何も足しません。** 従来どおりそこで終わる
+                // だけなので、解けない配置で悪くはなりません。
+                let mut landing = state;
+                if Self::newton_to_tangency(s1, s2, &mut landing, direction, tol).is_some()
+                    && inside(&landing)
+                {
+                    let here = s1.evaluate(landing[0], landing[1]);
+                    let previous = s1.evaluate(state[0], state[1]);
+                    let travel = (here - previous).norm();
+                    // 遠くの別の接点へ飛んだものは採りません。歩幅の2倍を
+                    // 超えたら、それは「この弧の端」ではありません。
+                    if travel > tol.linear && travel <= step.abs() * 2.0 {
+                        points.push(Self::sample(s1, s2, &landing));
+                    }
+                }
                 break;
             }
             let anchor = s1.evaluate(state[0], state[1]);

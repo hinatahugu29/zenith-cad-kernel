@@ -604,6 +604,21 @@ impl BrepIntersectionBuilder {
         // 落としても形は動きません。面積 0 の面は立体の境界に何も足しません。
         selected_face_pieces.retain(|piece| !face_encloses_no_area(&piece.face, tol));
 
+        // **長さ 0 の稜は、稜ではありません。**
+        //
+        // 交線が接点で終わる配置では、同じ接点で終わる弧が複数あります
+        // （半径の等しい直交2円柱では、2本の楕円がそこで交わります）。弧の
+        // 端が接点にきちんと着地するようになると（4-128）、割った輪の中に
+        // **行って戻る長さ 0 の稜**が残ります。実測: 和で 1本が1回だけ、
+        // 1本が3回使われ、縫合の非多様体として出ていました。
+        //
+        // 落としても輪は繋がったままです——両端が同じ点なので、前後の稜は
+        // もともと繋がっています。面の形も動きません。
+        for piece in &mut selected_face_pieces {
+            remove_degenerate_wire_edges(&mut piece.face, tol);
+        }
+        selected_face_pieces.retain(|piece| piece.face.outer_wire.edges.len() >= 2);
+
         // 同じ平面に重なって乗る面は、両オペランドから同じ領域が採られる。
         // そのまま縫うと同じ稜を4回使うことになるので、ここで解消する。
         resolve_coincident_face_pieces(&mut selected_face_pieces, tol);
@@ -3063,6 +3078,33 @@ fn split_apex_patch_by_section_edge(
 }
 
 /// How far an edge reaches, as a length to scale tolerances against.
+/// 面の輪から、長さ 0 の稜を取り除く。
+///
+/// 両端が同じ点にある稜は、境界に何も足しません。**取り除いても輪は
+/// 繋がったまま**です（前後の稜はもともと同じ点で出会っています）。
+/// 残しておくと、同じ稜が1回だけ、あるいは3回使われて、縫合が
+/// 非多様体になります（4-128）。
+///
+/// **輪が2本未満になる場合は触りません。** そこまで潰れているなら、
+/// それは輪ではなく別の欠陥なので、隠さずに残します。
+fn remove_degenerate_wire_edges(face: &mut Face, tol: &Tolerance) {
+    let prune = |wire: &mut zenith_topo::Wire| {
+        let kept: Vec<_> = wire
+            .edges
+            .iter()
+            .filter(|oriented| sampled_edge_extent(&oriented.edge) > tol.linear)
+            .cloned()
+            .collect();
+        if kept.len() >= 2 && kept.len() < wire.edges.len() {
+            wire.edges = kept;
+        }
+    };
+    prune(&mut face.outer_wire);
+    for wire in &mut face.inner_wires {
+        prune(wire);
+    }
+}
+
 fn sampled_edge_extent(edge: &Edge) -> f64 {
     let samples = sample_curve_points(&edge.curve, 8);
     let origin = samples[0];
