@@ -735,8 +735,12 @@ impl BrepIntersectionBuilder {
             op,
             tol,
         );
-        let cap_generation =
-            Self::build_planar_caps_from_intersection_edge_candidates(&edge_candidates, tol);
+        let cap_generation = Self::build_planar_caps_grouped_by_planar_face(
+            &edge_candidates,
+            &faces_a,
+            &faces_b,
+            tol,
+        );
         let assembly = Self::assemble_selected_face_pieces_with_caps(
             &selection.selected_face_pieces,
             &cap_generation.cap_faces,
@@ -866,6 +870,104 @@ impl BrepIntersectionBuilder {
             edge_loop_extraction,
             cap_faces,
             failed_loop_count,
+        }
+    }
+
+    /// 蓋の材料を、対の**平面側の面**ごとに束ねる。
+    ///
+    /// [`build_planar_caps_from_intersection_edge_candidates`] は常に
+    /// `face_b` で束ねます。**B が平面ならそれで合いますが、B が曲面だと
+    /// 合いません。**
+    ///
+    /// 実測（4-121、箱を 19 度・円柱を 27 度回した和）: 切り口の楕円は
+    /// 円柱の**4枚のパッチにまたがります**。`face_b` で束ねると1枚あたり
+    /// 2本ずつに割れ、どの束も輪になりません。
+    ///
+    /// ```text
+    /// cap group face_b 0: 2 edge(s) in -> 0 loop(s), 2 skipped, 0 cap face(s)
+    /// cap group face_b 1: 2 edge(s) in -> 0 loop(s), 2 skipped, 0 cap face(s)
+    /// cap group face_b 2: 2 edge(s) in -> 0 loop(s), 2 skipped, 0 cap face(s)
+    /// cap group face_b 3: 2 edge(s) in -> 0 loop(s), 2 skipped, 0 cap face(s)
+    /// ```
+    ///
+    /// 蓋が乗る平面は、対のうち**平面のほう**が決めます。どちらが A で
+    /// どちらが B かは関係ありません。両方が平面のときは `face_b` を採り、
+    /// 従来と同じ束ね方になります（既に通っている配置を動かさないため）。
+    /// 両方が曲面のときも `face_b` のままです——その組では、この関数が
+    /// 決められることはありません。
+    pub fn build_planar_caps_grouped_by_planar_face(
+        candidates: &[IntersectionEdgeCandidate],
+        faces_a: &[Face],
+        faces_b: &[Face],
+        tol: &Tolerance,
+    ) -> PlanarCapGeneration {
+        let is_plane = |faces: &[Face], index: usize| {
+            faces
+                .get(index)
+                .is_some_and(|face| matches!(face.geometry, FaceGeometry::Plane(_)))
+        };
+
+        let mut groups: BTreeMap<(u8, usize), Vec<Edge>> = BTreeMap::new();
+        for candidate in candidates {
+            let key = if is_plane(faces_b, candidate.face_b_index) {
+                (1u8, candidate.face_b_index)
+            } else if is_plane(faces_a, candidate.face_a_index) {
+                (0u8, candidate.face_a_index)
+            } else {
+                (1u8, candidate.face_b_index)
+            };
+            groups.entry(key).or_default().push(candidate.edge.clone());
+        }
+
+        let mut all_loops = Vec::new();
+        let mut all_cap_faces = Vec::new();
+        let mut total_failed_loop_count = 0;
+        let mut total_skipped_edge_count = 0;
+
+        for ((side, index), edges) in groups {
+            let cap_gen = Self::build_planar_caps_from_intersection_edges(&edges, tol);
+            if std::env::var_os("ZENITH_CAP_TRACE").is_some() {
+                if cap_gen.edge_loop_extraction.loops.is_empty() {
+                    // **輪にならなかったときは、材料そのものを見せる。**
+                    // 「0 loops」だけでは、端が繋がっていないのか、本数が
+                    // 足りないのか、向きの問題なのかが分からない。
+                    for edge in &edges {
+                        let (a, b) = (edge.start_vertex.point, edge.end_vertex.point);
+                        eprintln!(
+                            "      稜 ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4}) 長さ {:.4}",
+                            a.x,
+                            a.y,
+                            a.z,
+                            b.x,
+                            b.y,
+                            b.z,
+                            (b - a).norm()
+                        );
+                    }
+                }
+                eprintln!(
+                    "    cap group {} {index}: {} edge(s) in -> {} loop(s), {} skipped, {} cap face(s), {} failed loop(s)",
+                    if side == 0 { "face_a" } else { "face_b" },
+                    edges.len(),
+                    cap_gen.edge_loop_extraction.loops.len(),
+                    cap_gen.edge_loop_extraction.skipped_edge_count,
+                    cap_gen.cap_faces.len(),
+                    cap_gen.failed_loop_count
+                );
+            }
+            total_skipped_edge_count += cap_gen.edge_loop_extraction.skipped_edge_count;
+            all_loops.extend(cap_gen.edge_loop_extraction.loops);
+            all_cap_faces.extend(cap_gen.cap_faces);
+            total_failed_loop_count += cap_gen.failed_loop_count;
+        }
+
+        PlanarCapGeneration {
+            edge_loop_extraction: IntersectionEdgeLoopExtraction {
+                loops: all_loops,
+                skipped_edge_count: total_skipped_edge_count,
+            },
+            cap_faces: all_cap_faces,
+            failed_loop_count: total_failed_loop_count,
         }
     }
 
@@ -1436,6 +1538,14 @@ impl BrepIntersectionBuilder {
             // 端の繋がりで鎖に分け、**1本ずつ順に**当てる。平面の経路は既に
             // そうしている（`group_edges_into_chains`）。
             let chains = group_edges_into_chains(&deduplicate_split_edges(split_edges, tol), tol);
+            let why = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
+            if why {
+                eprintln!(
+                    "CHAINWHY 汎用の鎖分割へ: 交線 {} 本 → 鎖 {} 本",
+                    split_edges.len(),
+                    chains.len()
+                );
+            }
             let mut chain_faces = vec![face.clone()];
             let mut applied: usize = 0;
             for chain in chains.iter() {
@@ -1448,7 +1558,26 @@ impl BrepIntersectionBuilder {
                             applied += 1;
                             next_faces.extend(pieces);
                         }
-                        _ => next_faces.push(current_face),
+                        // **理由を捨てない。** ここは最後の受け皿なので、
+                        // 断られた理由が読めないと、次に測るところが決まらない。
+                        other => {
+                            if why {
+                                match &other {
+                                    Ok((pieces, report)) => eprintln!(
+                                        "CHAINWHY   鎖 {} 本: 片 {} 枚、面積残差 {:.3e} で採らず",
+                                        chain.len(),
+                                        pieces.len(),
+                                        report.area_residual
+                                    ),
+                                    Err(reason) => eprintln!(
+                                        "CHAINWHY   鎖 {} 本: {}",
+                                        chain.len(),
+                                        reason.chars().take(160).collect::<String>()
+                                    ),
+                                }
+                            }
+                            next_faces.push(current_face)
+                        }
                     }
                 }
                 chain_faces = next_faces;
@@ -2015,6 +2144,39 @@ fn select_operand_faces_after_batch_split(
 
         for face in face_pieces {
             let location = classify_face_against_mesh(face, other_mesh, tol);
+            if std::env::var_os("ZENITH_SELECT_WHY").is_some() {
+                // **採否そのものを見せる。** 片が欠けているとき、割れて
+                // いないのか、割れたが採られなかったのかは、ここでしか
+                // 区別できない。
+                let point = representative_face_point(face);
+                eprintln!(
+                    "SELECTWHY {:?} 面 {face_index} の片（{} 枚中）: {:?} → {} 代表点 ({:.4} {:.4} {:.4})",
+                    operand,
+                    face_pieces.len(),
+                    location,
+                    if keep_piece(operand, location, op) {
+                        "採る"
+                    } else {
+                        "落とす"
+                    },
+                    point.x,
+                    point.y,
+                    point.z
+                );
+                if std::env::var_os("ZENITH_SELECT_EDGES").is_some()
+                    && keep_piece(operand, location, op)
+                {
+                    // 採った片の境界そのもの。**相手を欠いている稜が
+                    // どの片から来たのか**は、これがないと辿れない。
+                    for oriented in &face.outer_wire.edges {
+                        let (a, b) = (oriented.start_vertex(), oriented.end_vertex());
+                        eprintln!(
+                            "SELECTEDGE   ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})",
+                            a.point.x, a.point.y, a.point.z, b.point.x, b.point.y, b.point.z
+                        );
+                    }
+                }
+            }
             if keep_piece(operand, location, op) {
                 selected.push(SelectedBooleanFacePiece {
                     operand,
@@ -2467,14 +2629,41 @@ fn split_cylinder_side_face_by_horizontal_edge(
     let bounds = cylinder_face_bounds(face, &patch, tol)
         .ok_or_else(|| "Cylinder-side face boundary is not a four-sided patch".to_string())?;
 
-    let (split_start, split_end) = ruling_boundary_endpoints(
+    let Some((split_start, split_end)) = ruling_boundary_endpoints(
         split_edge,
         bounds.bottom_start,
         bounds.bottom_end,
         &patch,
         tol,
-    )
-    .ok_or_else(|| "Split edge endpoints do not match cylinder side boundaries".to_string())?;
+    ) else {
+        if std::env::var_os("ZENITH_SPLIT_WHY").is_some() {
+            let (a, b) = (
+                split_edge.start_vertex.point,
+                split_edge.end_vertex.point,
+            );
+            eprintln!(
+                "CYLWHY 端点が母線に乗らない: 交線 ({:.4} {:.4} {:.4})-({:.4} {:.4} {:.4})",
+                a.x, a.y, a.z, b.x, b.y, b.z
+            );
+            eprintln!(
+                "CYLWHY   面の隅 底 ({:.4} {:.4} {:.4})-({:.4} {:.4} {:.4}) 天 ({:.4} {:.4} {:.4})-({:.4} {:.4} {:.4})",
+                bounds.bottom_start.x, bounds.bottom_start.y, bounds.bottom_start.z,
+                bounds.bottom_end.x, bounds.bottom_end.y, bounds.bottom_end.z,
+                bounds.top_start.x, bounds.top_start.y, bounds.top_start.z,
+                bounds.top_end.x, bounds.top_end.y, bounds.top_end.z
+            );
+            eprintln!(
+                "CYLWHY   交線の端点の 軸方向 {:.4} / {:.4}、半径 {:.4} / {:.4}（面の半径 {:.4}、高さ {:.4}）",
+                patch.axial_coordinate(a),
+                patch.axial_coordinate(b),
+                patch.radial_distance(a),
+                patch.radial_distance(b),
+                patch.radius,
+                patch.height
+            );
+        }
+        return Err("Split edge endpoints do not match cylinder side boundaries".to_string());
+    };
 
     for endpoint in [split_start, split_end] {
         let axial = patch.axial_coordinate(endpoint);
