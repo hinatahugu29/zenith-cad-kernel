@@ -477,7 +477,7 @@ impl BrepIntersectionBuilder {
                 .split_faces_a
                 .into_iter()
                 .map(|face| ClassifiedFacePiece {
-                    location: classify_face_against_mesh(&face, &mesh_b, tol),
+                    location: classify_face_against_mesh(&face, &mesh_b, Some(solid_b), tol),
                     face,
                 })
                 .collect();
@@ -485,7 +485,7 @@ impl BrepIntersectionBuilder {
                 .split_faces_b
                 .into_iter()
                 .map(|face| ClassifiedFacePiece {
-                    location: classify_face_against_mesh(&face, &mesh_a, tol),
+                    location: classify_face_against_mesh(&face, &mesh_a, Some(solid_a), tol),
                     face,
                 })
                 .collect();
@@ -507,7 +507,7 @@ impl BrepIntersectionBuilder {
         tol: &Tolerance,
     ) -> FaceRegionLocation {
         let mesh = tessellate_solid(solid, &TessellationParams::default());
-        classify_face_against_mesh(face, &mesh, tol)
+        classify_face_against_mesh(face, &mesh, Some(solid), tol)
     }
 
     pub fn select_boolean_face_pieces(
@@ -580,6 +580,7 @@ impl BrepIntersectionBuilder {
             &batch_splits.splits_a,
             BooleanOperand::A,
             &mesh_b,
+            Some(solid_b),
             op,
             tol,
         ));
@@ -588,6 +589,7 @@ impl BrepIntersectionBuilder {
             &batch_splits.splits_b,
             BooleanOperand::B,
             &mesh_a,
+            Some(solid_a),
             op,
             tol,
         ));
@@ -2173,6 +2175,7 @@ fn select_operand_faces_after_batch_split(
     batch_splits: &[PlanarFaceBatchSplit],
     operand: BooleanOperand,
     other_mesh: &TriangleMesh,
+    other_solid: Option<&Solid>,
     op: crate::BooleanOpType,
     tol: &Tolerance,
 ) -> Vec<SelectedBooleanFacePiece> {
@@ -2189,7 +2192,7 @@ fn select_operand_faces_after_batch_split(
             .unwrap_or_else(|| std::slice::from_ref(original_face));
 
         for face in face_pieces {
-            let location = classify_face_against_mesh(face, other_mesh, tol);
+            let location = classify_face_against_mesh(face, other_mesh, other_solid, tol);
             if std::env::var_os("ZENITH_SELECT_WHY").is_some() {
                 // **採否そのものを見せる。** 片が欠けているとき、割れて
                 // いないのか、割れたが採られなかったのかは、ここでしか
@@ -3498,13 +3501,62 @@ fn edge_lies_on_recognized_cylinder_patch(
     })
 }
 
+/// メッシュの広がり（対角）。**形の大きさに合わせた物差しが要る**ところで
+/// 使います。
+fn mesh_extent(mesh: &TriangleMesh) -> f64 {
+    let mut low = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+    let mut high = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+    for point in &mesh.positions {
+        low.x = low.x.min(point.x);
+        low.y = low.y.min(point.y);
+        low.z = low.z.min(point.z);
+        high.x = high.x.max(point.x);
+        high.y = high.y.max(point.y);
+        high.z = high.z.max(point.z);
+    }
+    if low.x > high.x {
+        return 0.0;
+    }
+    (high - low).norm()
+}
+
 fn classify_face_against_mesh(
     face: &Face,
     mesh: &TriangleMesh,
+    other: Option<&Solid>,
     tol: &Tolerance,
 ) -> FaceRegionLocation {
     let sample = representative_face_point(face);
-    let near = |point: Point3| point_mesh_distance(point, mesh) <= tol.linear * 100.0;
+    // **メッシュの弦誤差では、曲面の重なりが見えません。**
+    //
+    // 「相手の境界の上にあるか」をメッシュとの距離だけで見ていました。
+    // 平面ならメッシュは厳密なので効きますが、**曲面ではメッシュが弦で
+    // 近似されている**ので、面の上の点でも 1e-4 より離れます。
+    //
+    // 実測（4-134）: まったく同じトーラス2つの和で、**16面のどれも
+    // `Boundary` と判定されません**。外側の片は `Outside`、内側の片は
+    // `Inside` になり、和で半分だけが採られて縫合が開きます。球・円柱・
+    // 円錐も同じで、**箱だけが通っていました**（平面はメッシュが厳密）。
+    //
+    // メッシュで決まらないときだけ、B-Rep の面へ厳密に当てます。**遠い面
+    // では走りません**——メッシュとの距離が形の 1% より遠ければ、そこは
+    // 相手の境界ではありません。
+    let scale = mesh_extent(mesh).max(1.0);
+    let near = |point: Point3| {
+        let to_mesh = point_mesh_distance(point, mesh);
+        if to_mesh <= tol.linear * 100.0 {
+            return true;
+        }
+        if to_mesh > scale * 1e-2 {
+            return false;
+        }
+        let Some(solid) = other else {
+            return false;
+        };
+        crate::distance::boundary_projections(point, solid)
+            .iter()
+            .any(|projection| projection.distance <= tol.linear * 100.0)
+    };
     if near(sample) {
         // **1点で触れていることは、重なっていることではありません。**
         //
@@ -6690,7 +6742,14 @@ fn coincident_face_direction(
     let (FaceGeometry::Plane(left_plane), FaceGeometry::Plane(right_plane)) =
         (&left.face.geometry, &right.face.geometry)
     else {
-        return None;
+        // **平面でなければ諦める、ではありません。**
+        //
+        // ここは長らく平面だけを見ていました。**曲面の重なりは一度も
+        // 解消されていません**でした。実測（4-134）: まったく同じ球の和は
+        // **重なった立体を2つ**返し、体積が 1047.19755（真値の2倍）に
+        // なります。トーラスも同じ。円柱・円錐・球・トーラスの差と積は
+        // 断られます。**箱だけが通っていました。**
+        return curved_coincident_face_direction(left, right, tol);
     };
 
     let left_normal = selected_piece_normal(left, left_plane)?;
@@ -6743,6 +6802,99 @@ fn coincident_face_direction(
     }
 
     Some(left_normal.dot(&right_normal) > 0.0)
+}
+
+/// 曲面の面片どうしが、**同じ場所を同じ向きで**占めているか。
+///
+/// 平面の判定（[`coincident_face_direction`]）と同じ考え方を、曲面へ
+/// 広げたものです。平面は「同一平面か」を法線と原点で決められますが、
+/// 曲面はそうはいかないので、**面の上の点を相手の面へ当てて**測ります。
+///
+/// 採るのは次を**全部**満たすときだけです。平面側と同じ厳しさにして
+/// あります——**緩めると、重なっていない面まで落ちます。**
+///
+/// 1. 境界の標本の重心と広がりが一致する（平面側と同じ、相対 1e-6）
+/// 2. 片方の代表点が、もう片方の曲面の上に乗っている
+/// 3. その点で法線の向きが決まる（同じか、逆か）
+fn curved_coincident_face_direction(
+    left: &SelectedBooleanFacePiece,
+    right: &SelectedBooleanFacePiece,
+    tol: &Tolerance,
+) -> Option<bool> {
+    let left_points = left.face.outer_wire.sample_points(16);
+    let right_points = right.face.outer_wire.sample_points(16);
+    if left_points.len() < 3 || right_points.len() < 3 {
+        return None;
+    }
+
+    let centroid = |points: &[Point3]| {
+        let mut sum = Vec3::zeros();
+        for point in points {
+            sum += point.coords;
+        }
+        Point3::from(sum / points.len() as f64)
+    };
+    let extent = |points: &[Point3], centre: Point3| {
+        points
+            .iter()
+            .map(|point| (*point - centre).norm())
+            .fold(0.0f64, f64::max)
+    };
+
+    let left_centre = centroid(&left_points);
+    let right_centre = centroid(&right_points);
+    let left_extent = extent(&left_points, left_centre);
+    let scale = left_extent.max(1.0);
+    if (right_centre - left_centre).norm() > scale * 1e-6 {
+        return None;
+    }
+    if (extent(&right_points, right_centre) - left_extent).abs() > scale * 1e-6 {
+        return None;
+    }
+
+    // **境界が同じでも、中身が同じとは限りません。** 面の中の点を1つ取って、
+    // 相手の曲面の上に乗っているかを見ます。
+    let sample = representative_face_point(&left.face);
+    let left_normal = piece_normal_at(left, sample, tol)?;
+    let right_normal = piece_normal_at(right, sample, tol)?;
+
+    Some(left_normal.dot(&right_normal) > 0.0)
+}
+
+/// 面片が組み上がった結果で持つ外向き法線を、3D の点のところで求める。
+///
+/// 点が面の曲面の上に乗っていなければ `None` です（別の場所にある面）。
+fn piece_normal_at(
+    piece: &SelectedBooleanFacePiece,
+    point: Point3,
+    tol: &Tolerance,
+) -> Option<Vec3> {
+    let mut normal = match &piece.face.geometry {
+        FaceGeometry::Plane(plane) => {
+            if (point - plane.origin).dot(&plane.normal).abs() > tol.linear * 10.0 {
+                return None;
+            }
+            plane.normal.try_normalize(1e-12)?
+        }
+        FaceGeometry::Nurbs(surface) => {
+            let projection =
+                ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric).ok()?;
+            // 乗っていなければ、同じ場所の面ではありません。
+            let scale = (point - Point3::origin()).norm().max(1.0);
+            if projection.distance > tol.linear * 100.0 * scale {
+                return None;
+            }
+            surface.normal(projection.u, projection.v)?
+        }
+        _ => return None,
+    };
+    if !piece.face.orientation.is_forward() {
+        normal = -normal;
+    }
+    if piece.reverse_orientation {
+        normal = -normal;
+    }
+    Some(normal)
 }
 
 /// The outward normal a selected piece will have in the assembled result,
