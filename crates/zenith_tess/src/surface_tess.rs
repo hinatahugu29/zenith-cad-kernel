@@ -817,6 +817,24 @@ pub(crate) fn refine_uv_triangulation_protected(
             };
             split_edges.insert(edge_key(triangle[longest], triangle[(longest + 1) % 3]));
         }
+        // **順序を決めます。**
+        //
+        // この下のループは、中点を1つ作るたびに `weld_grid` を更新し、
+        // 次の中点はその格子と突き合わせて「作るか、割らずに置くか」を
+        // 決めます。**つまり結果は順序に依存します。**
+        //
+        // `HashSet` の反復順は実行ごとに変わります（Rust の既定のハッシャは
+        // プロセスごとに種が違います）。実測（4-132）: **同じバイナリ・同じ
+        // 入力で `sphere × cylinder (eccentric)` の和が、ある実行では
+        // メッシュ非多様体 6本、別の実行では 0本**になりました。ほかの
+        // 89演算はすべて一致していたので、揺れているのはここだけです。
+        //
+        // 添字で並べれば、実行をまたいで同じ答えになります。**この
+        // リポジトリは仕事量を実行間で突き合わせる建て付けなので
+        // （`boolean_envelope` の「deterministic; compare these across
+        // runs」）、揺れるものを残してはいけません。**
+        let mut split_edges: Vec<(usize, usize)> = split_edges.into_iter().collect();
+        split_edges.sort_unstable();
         if split_edges.is_empty() {
             return;
         }

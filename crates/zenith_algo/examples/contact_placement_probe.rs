@@ -611,7 +611,111 @@ fn cases() -> Vec<Case> {
         ],
     });
 
+    // **ここから下は 2026/08/27 に足した「まだ1件も無かった組み合わせ」です**
+    // （4-132）。
+    //
+    // ここまでの配置を数えたら、**曲面の組み合わせに穴がありました**——
+    // 円錐×円柱、円錐×円錐、トーラス×球、トーラス×トーラスが1件も
+    // ありません。実務では面取り穴やテーパのボスで普通に出ます。
+    // **「置き方」だけでなく「組み合わせ」も測っていない、が抜けていました。**
+
+    // 円錐と円柱を直交させる。テーパの穴に横穴を開ける形。
+    out.push(Case {
+        name: "cone x cylinder (crossed)",
+        why: "円錐（底 10、高さ 20）に、半径 4 の円柱を直交させて通す。母線と円柱の交線は片方だけが直線",
+        a: cone.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(
+                &PrimitiveBuilder::make_cylinder(4.0, 40.0).expect("pin"),
+                &cyl_x,
+            )
+            .expect("turn x"),
+            -20.0,
+            0.0,
+            6.0,
+        ),
+        note: [
+            "実測: 3演算とも多様体",
+            "同上",
+            "同上",
+        ],
+    });
+
+    // 円錐2つを頂点どうしで合わせる。**触っているのは特異点どうし**です。
+    let flipped_cone = Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), 180f64.to_radians());
+    out.push(Case {
+        name: "cone x cone (apex to apex)",
+        why: "円錐2つを頂点どうしで合わせる。触っているのは特異点どうし1点だけ",
+        a: cone.clone(),
+        b: shifted(
+            &BrepTransform::transform_solid(&cone, &flipped_cone).expect("flip"),
+            0.0,
+            0.0,
+            40.0,
+        ),
+        note: [
+            "実測: 立体2つ。接触は位相を作らないので繋がらない",
+            "実測: A がそのまま返る（立体1つ）",
+            "実測: 立体0つ。1点は体積を持たない",
+        ],
+    });
+
+    // 円錐と球。球を円錐の中に落として、側面に**円で内接**させる。
+    // 半頂角 atan(10/20) の円錐に半径 r の球を軸上で内接させると、
+    // 中心の高さは頂点から r/sin(半頂角) 下がったところ。
+    let half = (10f64 / 20.0).atan();
+    let inscribed_radius = 3.0;
+    out.push(Case {
+        name: "cone x sphere (inscribed, tangent along a circle)",
+        why: "円錐の内側に球を内接させる。側面と円まるごとで触れる（曲面どうしの曲線接触）",
+        a: cone.clone(),
+        b: shifted(
+            &sphere_of(inscribed_radius),
+            0.0,
+            0.0,
+            20.0 - inscribed_radius / half.sin(),
+        ),
+        note: [
+            "実測: 円錐がそのまま返る（球は中に入っている）",
+            "実測: **検証ゲートが誤答を捕まえて断る**——体積が A + B（2207.492438 = 2094.395102 + 113.097336）になっている。差なのに球が凸として足されている（4-132。未解決）",
+            "実測: 球がそのまま返る",
+        ],
+    });
+
+    // トーラスと球。球をトーラスの管に食い込ませる。
+    out.push(Case {
+        name: "torus x sphere (biting the tube)",
+        why: "トーラス（芯 12、管 4）の管に、半径 6 の球を食い込ませる。どちらもパッチに割れている",
+        a: torus.clone(),
+        b: shifted(&sphere_of(6.0), 12.0, 0.0, 0.0),
+        note: [
+            "実測: 3演算とも多様体",
+            "同上",
+            "同上",
+        ],
+    });
+
+    // トーラス2つを、軸を直交させて絡ませる。**いちばんパッチが多い組**です。
+    let torus_upright = Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), 90f64.to_radians());
+    out.push(Case {
+        name: "torus x torus (crossed axes)",
+        why: "トーラス2つの軸を直交させ、中心を揃える。芯の円が (±12,0,0) で交わるので、管どうしがそこで食い合う。パッチが 16 x 16 で当たる",
+        a: torus.clone(),
+        b: BrepTransform::transform_solid(&torus, &torus_upright).expect("upright"),
+        note: [
+            "実測: 未実装として断られる（交線16本、あぶれ14、非多様体0）。あぶれは端点のずれではなく**相手のいない弧**で、すべて接点 (±16,0,0)/(±8,0,0) に接している（4-132。未解決）",
+            "同上",
+            "同上",
+        ],
+    });
+
     out
+}
+
+/// 半径を指定した球。**`sphere` は半径 10 固定**なので、別の大きさが要る
+/// ところはここから作ります。
+fn sphere_of(radius: f64) -> Solid {
+    PrimitiveBuilder::make_sphere(radius).expect("sphere")
 }
 
 fn main() {
