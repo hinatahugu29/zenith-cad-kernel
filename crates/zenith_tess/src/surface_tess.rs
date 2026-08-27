@@ -635,6 +635,16 @@ fn trimmed_uv_triangulation(
 
 /// Upper bound on triangles produced by trimmed refinement, so a pathological
 /// surface degrades into a coarse mesh instead of exhausting memory.
+/// メッシュを溶接するときの距離（`stitched::tessellate_solid_stitched`）。
+///
+/// **ここより細かい三角形は、溶接で頂点が束ねられて潰れ、`weld` が外します。
+/// 外した跡はそのまま穴になります**——実測（4-117、傾けたトーラス × 箱の差、
+/// 24分割）: 1枚の面で **622枚が潰れて消え**、非多様体の稜が 121本
+/// 残っていました。潰れているのは分割した辺ではなく、**uv では離れているのに
+/// 3D では溶接距離の中に来る頂点対**なので、「短い辺を割らない」歯止めでは
+/// 1枚も減りませんでした（測って戻しました）。
+pub(crate) const WELD_TOLERANCE: f64 = 1e-7;
+
 const MAX_REFINED_TRIANGLES: usize = 200_000;
 const MAX_REFINEMENT_PASSES: usize = 24;
 

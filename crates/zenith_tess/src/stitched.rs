@@ -71,7 +71,7 @@ pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> 
         mesh.merge(&inner_mesh);
     }
 
-    weld(&mut mesh, 1e-7);
+    weld(&mut mesh, crate::surface_tess::WELD_TOLERANCE);
     if attribute {
         explain_face_owners(&mesh, &owners);
     }
@@ -719,6 +719,9 @@ fn push_with_uv_winding(
     let p1 = mesh.positions[triangle[1] as usize];
     let p2 = mesh.positions[triangle[2] as usize];
     if (p1 - p0).cross(&(p2 - p0)).norm() <= 1e-18 {
+        if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+            eprintln!("TESSWHY   EMITDROP 3d-zero");
+        }
         return;
     }
 
@@ -727,6 +730,9 @@ fn push_with_uv_winding(
     let c = uvs[triangle[2] as usize];
     let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
     if signed == 0.0 {
+        if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+            eprintln!("TESSWHY   EMITDROP uv-zero");
+        }
         return;
     }
 
@@ -814,6 +820,7 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
 
     let mut seen = HashSet::new();
     let mut indices = Vec::with_capacity(mesh.indices.len());
+    let (mut collapsed, mut flat, mut duplicated) = (0usize, 0usize, 0usize);
     for triangle in &mesh.indices {
         let mapped = [
             remap[triangle[0] as usize],
@@ -821,20 +828,33 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
             remap[triangle[2] as usize],
         ];
         if mapped[0] == mapped[1] || mapped[1] == mapped[2] || mapped[2] == mapped[0] {
+            collapsed += 1;
             continue;
         }
         let p0 = positions[mapped[0] as usize];
         let p1 = positions[mapped[1] as usize];
         let p2 = positions[mapped[2] as usize];
         if (p1 - p0).cross(&(p2 - p0)).norm() <= 1e-18 {
+            flat += 1;
             continue;
         }
         let key = sorted_triangle(mapped);
         if seen.insert(key) {
             indices.push(mapped);
+        } else {
+            duplicated += 1;
         }
     }
+    let before_flaps = indices.len();
     remove_redundant_flap_triangles(&mut indices);
+    if std::env::var_os("ZENITH_TESS_WHY").is_some()
+        && (collapsed + flat + duplicated + (before_flaps - indices.len())) > 0
+    {
+        eprintln!(
+            "TESSWHY weld が外した三角形: 頂点が潰れた {collapsed}、面積 0 {flat}、同じ3頂点の重複 {duplicated}、flap {}",
+            before_flaps - indices.len()
+        );
+    }
 
     mesh.positions = positions;
     mesh.normals = normals;
