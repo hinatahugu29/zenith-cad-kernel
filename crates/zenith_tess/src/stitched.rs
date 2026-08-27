@@ -447,9 +447,23 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
                 let here = segment.curve.evaluate(t);
                 // 位置は稜そのものから。p-curve はパラメータを取るためだけに使う。
                 let point = oriented.evaluate_normalized(fraction);
+                // **落とす基準は、溶接の距離に合わせます。**
+                //
+                // ここが 1e-12 で、あとから掛かる `weld` が 1e-7 だと、その
+                // 隙間に入った標本は「境界の点としては別、溶接では同じ」に
+                // なります。すると、両方を使っている三角形は溶接で潰れ、
+                // `weld` がそれを外し、外した跡が穴になります——実測
+                // （4-117、傾けたトーラス × 箱の差、24分割）で1枚の面から
+                // 622枚が消え、非多様体の稜が 121本残っていました。
+                //
+                // **落としても継ぎ目は開きません。** どの点を落とすかは稜の
+                // 幾何と刻み方だけで決まり、隣の面も同じ稜を同じ割合で標本
+                // するので、同じ点を落とします。
                 let duplicate = points
                     .last()
-                    .map(|last: &Point3| (point - *last).norm() <= 1e-12)
+                    .map(|last: &Point3| {
+                        (point - *last).norm() <= crate::surface_tess::WELD_TOLERANCE
+                    })
                     .unwrap_or(false);
                 if !duplicate {
                     uv.push(here);
@@ -458,7 +472,10 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
             }
         }
 
-        if points.len() > 1 && (points[points.len() - 1] - points[0]).norm() <= 1e-12 {
+        if points.len() > 1
+            && (points[points.len() - 1] - points[0]).norm()
+                <= crate::surface_tess::WELD_TOLERANCE
+        {
             uv.pop();
             points.pop();
         }
@@ -523,6 +540,68 @@ fn patch_mesh(
             protected.insert(if a < b { (a, b) } else { (b, a) });
         }
         ring_ranges.push(first..uvs.len());
+    }
+
+    if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+        // 同じ uv に頂点が2つ以上あると、溶接でそれらが1点になり、両方を
+        // 使っている三角形が潰れて外されます（4-117）。境界を作った時点で
+        // 重複があるのかを、推測せずに数えます。
+        // 見るのは **3D で溶接距離の中に来る対**です。uv で重なっているかでは
+        // ありません——潰すかどうかを決めるのは `weld` で、`weld` は 3D の
+        // 距離で束ねます（4-118）。
+        let mut duplicates = 0usize;
+        let mut worst = 0.0f64;
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        for left in 0..uvs.len() {
+            for right in (left + 1)..uvs.len() {
+                let (Some(a), Some(b)) = (fixed[left], fixed[right]) else {
+                    continue;
+                };
+                let gap = (b - a).norm();
+                if gap <= crate::surface_tess::WELD_TOLERANCE {
+                    duplicates += 1;
+                    worst = worst.max(gap);
+                    pairs.push((left, right));
+                }
+            }
+        }
+        if duplicates > 0 {
+            eprintln!(
+                "TESSWHY   境界の点 {} 個のうち、同じ uv に重なっている対 {duplicates}（最大の隔たり {worst:.3e}）",
+                uvs.len()
+            );
+            {
+                for (left, right) in pairs.iter().copied() {
+                    let place = |index: usize| {
+                        for (ring, range) in ring_ranges.iter().enumerate() {
+                            if range.contains(&index) {
+                                let offset = index - range.start;
+                                let mut start = 0usize;
+                                for (edge, segments) in
+                                    rings[ring].segments.iter().enumerate()
+                                {
+                                    if offset < start + *segments {
+                                        return format!(
+                                            "ring {ring} 位置 {offset}/{}（{edge} 本目の稜の {} 点目）",
+                                            range.len(),
+                                            offset - start
+                                        );
+                                    }
+                                    start += *segments;
+                                }
+                                return format!("ring {ring} 位置 {offset}/{}（稜の外）", range.len());
+                            }
+                        }
+                        "不明".to_string()
+                    };
+                    eprintln!(
+                        "TESSWHY     重複: {} と {}",
+                        place(left),
+                        place(right)
+                    );
+                }
+            }
+        }
     }
 
     let mut triangles = earcut_boundary_rings(&uvs, &ring_ranges, &flat, &hole_indices);
@@ -821,6 +900,7 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
     let mut seen = HashSet::new();
     let mut indices = Vec::with_capacity(mesh.indices.len());
     let (mut collapsed, mut flat, mut duplicated) = (0usize, 0usize, 0usize);
+    let collapse_why = std::env::var_os("ZENITH_COLLAPSE_WHY").is_some();
     for triangle in &mesh.indices {
         let mapped = [
             remap[triangle[0] as usize],
@@ -829,6 +909,40 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
         ];
         if mapped[0] == mapped[1] || mapped[1] == mapped[2] || mapped[2] == mapped[0] {
             collapsed += 1;
+            if collapse_why {
+                // 束ねられた対を、**uv でどれだけ離れていたか**と一緒に出す。
+                // 溶接は 3D の距離で束ねるので、uv で離れた対が束ねられて
+                // いるなら、支持曲面のパラメータ付けがそこで縮退している
+                // （極や継ぎ目）ということになる。
+                for corner in 0..3 {
+                    let (a, b) = (corner, (corner + 1) % 3);
+                    if mapped[a] != mapped[b] {
+                        continue;
+                    }
+                    let (ua, ub) = (
+                        mesh.uvs
+                            .get(triangle[a] as usize)
+                            .copied()
+                            .unwrap_or_default(),
+                        mesh.uvs
+                            .get(triangle[b] as usize)
+                            .copied()
+                            .unwrap_or_default(),
+                    );
+                    let position = positions[mapped[a] as usize];
+                    eprintln!(
+                        "COLLAPSEWHY uv ({:.9},{:.9})-({:.9},{:.9}) uv 距離 {:.3e} → 3D ({:.6},{:.6},{:.6})",
+                        ua.x,
+                        ua.y,
+                        ub.x,
+                        ub.y,
+                        (ub - ua).norm(),
+                        position.x,
+                        position.y,
+                        position.z
+                    );
+                }
+            }
             continue;
         }
         let p0 = positions[mapped[0] as usize];
