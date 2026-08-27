@@ -374,6 +374,14 @@ impl BrepIntersectionBuilder {
         )
     }
 
+    /// 立体の面を、**組み立てが使うのと同じ並び**で返す（内側シェル込み）。
+    ///
+    /// 交線の候補が持つ添字はこの並びを指します。外側シェルだけを渡すと、
+    /// 空洞のある立体で範囲外になります（4-141）。
+    pub fn all_faces_of(solid: &Solid) -> Vec<Face> {
+        all_solid_faces(solid)
+    }
+
     /// 既に求めてある交線の候補から、面の分割候補を組む。
     pub fn planar_face_split_candidates_from_edge_candidates(
         faces_a: &[Face],
@@ -384,18 +392,14 @@ impl BrepIntersectionBuilder {
         candidates
             .into_iter()
             .filter_map(|candidate| {
-                let split_faces_a = Self::split_face_by_edge(
-                    &faces_a[candidate.face_a_index],
-                    &candidate.edge,
-                    tol,
-                )
-                .ok()?;
-                let split_faces_b = Self::split_face_by_edge(
-                    &faces_b[candidate.face_b_index],
-                    &candidate.edge,
-                    tol,
-                )
-                .ok()?;
+                // **添字で落ちません。** 呼び側が組み立てと違う並びを渡す
+                // ことがあります（4-141 で実際に落ちました）。合わない
+                // 候補は捨てて先へ進みます——**カーネルがパニックするのは、
+                // 誤答より悪い**からです。
+                let face_a = faces_a.get(candidate.face_a_index)?;
+                let face_b = faces_b.get(candidate.face_b_index)?;
+                let split_faces_a = Self::split_face_by_edge(face_a, &candidate.edge, tol).ok()?;
+                let split_faces_b = Self::split_face_by_edge(face_b, &candidate.edge, tol).ok()?;
 
                 Some(PlanarFaceSplitCandidate {
                     face_a_index: candidate.face_a_index,

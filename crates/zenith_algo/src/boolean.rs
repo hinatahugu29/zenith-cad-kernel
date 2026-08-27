@@ -697,8 +697,16 @@ impl BooleanEngine {
         let intersection_edge_candidate_count = shell_assembly.edge_candidates.len();
         let planar_splits =
             crate::BrepIntersectionBuilder::planar_face_split_candidates_from_edge_candidates(
-                &solid_a.outer_shell.faces,
-                &solid_b.outer_shell.faces,
+                // **組み立てと同じ面の並びを渡します。**
+                //
+                // 組み立ては `all_solid_faces`（内側シェル込み）で添字を
+                // 作ります。ここが `outer_shell.faces` だけを渡していたので、
+                // **空洞のある立体では添字が範囲外になり、パニックして
+                // いました**。実測（4-141）: OpenCASCADE が書いた
+                // `hollow_box` どうしのブーリアンで
+                // `index out of bounds: the len is 6 but the index is 8`。
+                &crate::BrepIntersectionBuilder::all_faces_of(solid_a),
+                &crate::BrepIntersectionBuilder::all_faces_of(solid_b),
                 shell_assembly.edge_candidates.clone(),
                 tol,
             );
