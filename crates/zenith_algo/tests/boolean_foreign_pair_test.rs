@@ -116,8 +116,52 @@ fn booleans_on_a_solid_with_a_cavity_hold_the_identities() {
         compared >= 3,
         "空洞のある立体で3演算そろったのは {compared} 組でした。
          2026/08/28 の実測では 3 組（elliptic_prism / sphere / stepped_shaft）です。
-         減ったなら、通っていたものが通らなくなっています（4-144）。"
+         減ったなら、通っていたものが通らなくなっています（4-144、4-145）。"
     );
+
+    // **`hollow_box` から円柱を引くのは、断るのが正しい配置です。**
+    //
+    // 中心を揃えると、半径 10 の円柱は箱の面 `y = ±10` に線で接します。
+    // そこを抜くと材料は接点だけで2つに分かれるので、**真の答えが本当に
+    // 非多様体**です。規約（3-N-1）どおり、**場所を名指しして断る**ことを
+    // ここに固定します。
+    //
+    // **逆向き（`cylinder − hollow_box`）は通ります**（4-145）。順序で
+    // 変わるのは、この配置では A の材料が割れるかどうかが順序で決まる
+    // からです。
+    let Some(cylinder) = load("cylinder", &tol) else {
+        return;
+    };
+    let cylinder = centred(&cylinder);
+    let refusal = BooleanEngine::boolean_solids_exact_result(
+        &hollow,
+        &cylinder,
+        BooleanOpType::Difference,
+        &tol,
+    )
+    .err();
+    let refusal = refusal.expect(
+        "hollow_box から円柱を引くと、材料が接点だけで2つに分かれます。
+         真の答えが非多様体なので、返ってきたらそれは誤答です（3-N-1）。",
+    );
+    assert!(
+        refusal.contains("non-manifold at"),
+        "断るのは正しいのですが、**場所を名指ししていません**。
+         規約は「答えが本当に非多様体なら、場所を名指して断る」です。
+         実際の断り文: {refusal}"
+    );
+
+    // 逆向きは通ります。ここが断られるようになったら、4-145 が戻っています。
+    for op in [
+        BooleanOpType::Union,
+        BooleanOpType::Intersection,
+        BooleanOpType::Difference,
+    ] {
+        assert!(
+            BooleanEngine::boolean_solids_exact_result(&cylinder, &hollow, op, &tol).is_ok(),
+            "cylinder から見た {op:?} が断られました。4-145 が戻っています。"
+        );
+    }
 }
 
 /// 立体の中心を原点へ。**必ず重ねる**ため。

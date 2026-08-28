@@ -4753,7 +4753,7 @@ fn clip_candidate_to_face_bboxes(
             // 存在判定には公差ぶんの余裕を持たせるが、区間そのものは余裕なしの
             // 重なりで切る。余裕を残したままだと交線が面の外へわずかにはみ出し、
             // 後段のループ組み立てで端点が一致しなくなる。
-            let padded = bbox_overlap(bbox_a, bbox_b, tol.linear)?;
+            let padded = bbox_overlap_where_needed(bbox_a, bbox_b, tol.linear)?;
             let exact = bbox_overlap(bbox_a, bbox_b, 0.0);
             let (t_min, t_max) = exact
                 .as_ref()
@@ -4769,6 +4769,44 @@ fn clip_candidate_to_face_bboxes(
         }
         other => Some(other),
     }
+}
+
+/// 重なりの箱。**余裕は、それが要る軸にだけ当てる。**
+///
+/// 全部の軸に一律で当てると、**要らない軸にも余裕が残ります**。接触配置が
+/// まさにそれで、余裕なしの重なりは接している軸の厚さが 0 になるため
+/// `clip_line_to_bbox` が通らず、余裕つきの箱へ落ちます。**そのとき、
+/// 接していない軸にも余裕が乗り、交線の端点が公差ぶんだけ面の外へ出ます。**
+///
+/// 実測（4-145、他カーネルの円柱 × 空洞つき箱）: 半径 10 の円柱は箱の面
+/// `y = ±10` に線で接します。そこで作られた交線の端点が
+/// **z = −7.000001**（= −7 − `tol.linear`）になり、同じ稜を別の面の組から
+/// 作った `z = −7.000000` と**公差の外で食い違いました**。あぶれた稜として
+/// 縫合が止まり、3演算とも断られていました。
+///
+/// **厚さが 0 の軸だけ広げれば、探すのに足りて、答えは動きません。**
+fn bbox_overlap_where_needed(
+    a: &BoundingBox3,
+    b: &BoundingBox3,
+    tol: f64,
+) -> Option<BoundingBox3> {
+    let axis = |low_a: f64, high_a: f64, low_b: f64, high_b: f64| {
+        let low = low_a.max(low_b);
+        let high = high_a.min(high_b);
+        if high - low > tol {
+            // この軸は厚みがある。広げない。
+            (low, high)
+        } else {
+            (low - tol, high + tol)
+        }
+    };
+    let (min_x, max_x) = axis(a.min.x, a.max.x, b.min.x, b.max.x);
+    let (min_y, max_y) = axis(a.min.y, a.max.y, b.min.y, b.max.y);
+    let (min_z, max_z) = axis(a.min.z, a.max.z, b.min.z, b.max.z);
+    let min = Point3::new(min_x, min_y, min_z);
+    let max = Point3::new(max_x, max_y, max_z);
+    (min.x <= max.x && min.y <= max.y && min.z <= max.z)
+        .then_some(BoundingBox3::from_min_max(min, max))
 }
 
 fn bbox_overlap(a: &BoundingBox3, b: &BoundingBox3, tol: f64) -> Option<BoundingBox3> {
