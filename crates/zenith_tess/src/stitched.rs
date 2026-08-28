@@ -692,6 +692,9 @@ fn patch_mesh(
             &protected,
             boundary_vertex_count,
             &ring_ranges,
+            // **ここは表示・書き出し用のメッシュ**なので、パラメータ格子の
+            // 条項は掛けません（弦誤差の基準はそのまま掛かります。4-150）。
+            false,
         );
         explain_flat("適応細分後", &triangles, &uvs);
     }

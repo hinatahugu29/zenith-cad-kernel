@@ -746,6 +746,8 @@ fn trimmed_uv_triangulation(
             &HashSet::new(),
             0,
             &[],
+            // ここは面を1枚で刻む経路。**積む側も、面ごとの表示も掛けます。**
+            true,
         );
     }
     if std::env::var_os("ZENITH_TRIM_WHY").is_some() {
@@ -804,6 +806,10 @@ pub(crate) fn refine_uv_triangulation_protected(
     protected: &HashSet<(usize, usize)>,
     boundary_vertex_count: usize,
     boundary_rings: &[std::ops::Range<usize>],
+    // パラメータ格子の条項を掛けるか。**答えを積む側だけ `true`**。
+    // 表示側で掛けると、弦誤差が足りているのに割り続けて枚数が
+    // 17〜23 倍になります（4-150）。
+    enforce_parametric_cells: bool,
 ) {
     // **境界の点どうしを結ぶ辺は、連続していなくても割ってはいけません。**
     //
@@ -923,6 +929,7 @@ pub(crate) fn refine_uv_triangulation_protected(
                 cell_u,
                 cell_v,
                 deflection,
+                enforce_parametric_cells,
                 &mut cache,
             ) {
                 settled[index] = true;
@@ -1169,6 +1176,7 @@ fn triangle_needs_refinement(
     cell_u: f64,
     cell_v: f64,
     deflection: f64,
+    enforce_parametric_cells: bool,
     cache: &mut EvaluatedPositions,
 ) -> bool {
     let corners = [uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]];
@@ -1180,7 +1188,20 @@ fn triangle_needs_refinement(
         .iter()
         .fold(f64::NEG_INFINITY, |acc, uv| acc.max(uv.y))
         - corners.iter().fold(f64::INFINITY, |acc, uv| acc.min(uv.y));
-    if u_extent > cell_u || v_extent > cell_v {
+    // **パラメータ格子の条項。答えを積む側だけで掛けます。**
+    //
+    // 三角形の uv 範囲が格子1マスを超えたら、**弦誤差に関係なく**割ります。
+    // これは幾何の基準ではなく、パラメータの細かさを揃えるためのものです。
+    //
+    // 積分では要ります。外して測ったら、板に穴を1つ開けた体積が
+    // 94429.2036732051 → 94429.2035749507 と**相対 1.04e-9 動きました**
+    // （`boolean_chained_test`。4-150）。
+    //
+    // **表示では要りません。** 弦誤差の基準はそのまま掛かるので形は保たれ、
+    // 枚数だけが落ちます。実測（傾けたトーラス × 箱の差、4-150）:
+    // 縫合メッシュ 124,804 → **7,428 枚**（24分割）、1,294,274 → **56,592 枚**
+    // （64分割）。1枚の面の最大は 71,250 → **3,572 枚**。
+    if enforce_parametric_cells && (u_extent > cell_u || v_extent > cell_v) {
         return true;
     }
 
@@ -1189,6 +1210,10 @@ fn triangle_needs_refinement(
         cache.corner(surface, uvs, triangle[1]),
         cache.corner(surface, uvs, triangle[2]),
     ];
+    // **重心も見る、を試して外しました**（4-150）。3辺の中点が弦に乗って
+    // いても内側が膨らむことはある、という理屈は立ちますが、**測ったら
+    // 枚数が1枚も変わりませんでした**（縫合メッシュ 7,428 枚で前後同じ）。
+    // 効果の測れないものは入れません。
     (0..3).any(|corner| {
         let next = (corner + 1) % 3;
         let chord = Point3::from((positions[corner].coords + positions[next].coords) * 0.5);
