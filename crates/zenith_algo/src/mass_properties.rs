@@ -610,13 +610,26 @@ impl SurfaceIntegral {
                     let rows = nurbs.control_points.len();
                     let cols = nurbs.control_points.first().map(|r| r.len()).unwrap_or(0);
                     let ragged = nurbs.control_points.iter().any(|r| r.len() != cols);
+                    // v を動かしてヤコビアンが変わらなければ、母線に沿って
+                    // 半径が一定——つまり真の円柱です。円錐は変わります。
+                    let ((u0, u1), (v0, v1)) = surface.param_range();
+                    let middle = (u0 + u1) * 0.5;
+                    let jacobian = |v: f64| {
+                        let (_, du, dv) = surface.evaluate_with_derivatives(middle, v);
+                        let cross: zenith_math::Vec3 = du.cross(&dv);
+                        cross.norm()
+                    };
+                    let low = jacobian(v0);
+                    let high = jacobian(v1);
+                    let uniform = (low - high).abs() <= low.abs().max(1.0) * 1e-9;
                     format!(
-                        "NURBS 次数{}x{} 制御点{}x{}{}",
+                        "NURBS 次数{}x{} 制御点{}x{}{} v方向一定{}",
                         nurbs.degree_u,
                         nurbs.degree_v,
                         rows,
                         cols,
-                        if ragged { "（不揃い）" } else { "" }
+                        if ragged { "（不揃い）" } else { "" },
+                        if uniform { "○" } else { "×" }
                     )
                 }
                 FaceGeometry::Plane(_) => "平面（線積分に落ちなかったもの）".to_string(),
