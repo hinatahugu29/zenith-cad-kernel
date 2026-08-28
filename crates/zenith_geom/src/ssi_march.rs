@@ -665,6 +665,103 @@ impl IntersectionMarcher {
         Some(n1.cross(&n2).dot(&onto))
     }
 
+    /// 2つの単位法線の外積。接点ではゼロベクトルになります。
+    fn normal_cross(s1: &NurbsSurface3, s2: &NurbsSurface3, state: &[f64; 4]) -> Option<Vec3> {
+        let (_, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
+        let (_, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
+        let n1 = match du1.cross(&dv1).try_normalize_safe(1e-12) {
+            Some(normal) => normal,
+            None => s1.normal_or_limit(state[0], state[1])?,
+        };
+        let n2 = match du2.cross(&dv2).try_normalize_safe(1e-12) {
+            Some(normal) => normal,
+            None => s2.normal_or_limit(state[2], state[3])?,
+        };
+        Some(n1.cross(&n2))
+    }
+
+    /// 接点を、**射影で1本に潰さずに**解く。
+    ///
+    /// [`Self::newton_to_tangency`] は4本目の式を「外積を1つの向きへ落とした
+    /// 量が 0」にしています。**外積が 0 でなくても、その向きと直交すれば
+    /// 0 になります**——偽の根です。実測（4-153）: 球の継ぎ目の端点から
+    /// 解くと `(9.999999999912, 3.64e-5, 0)` という**赤道の上の点**へ落ち、
+    /// そこは接点ではありません（正弦はむしろ大きい）。
+    ///
+    /// 接点が満たすのは **6本**です——`p1 - p2 = 0`（3本）と
+    /// `n1 × n2 = 0`（3本。独立なのは2本）。未知数は4つなので過剰決定系に
+    /// なりますが、**真の接点では全部同時に 0 になる**ので、最小二乗で
+    /// 解けば向きを選ばずに済みます。
+    ///
+    /// ガウス・ニュートンで解きます。外積の行は中心差分で作ります（ここは
+    /// 傾きとしてしか使わないので、桁が半分落ちても収束に効きません。
+    /// [`Self::newton_to_bound_extremum`] と同じ理由）。
+    fn newton_to_tangency_least_squares(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        state: &mut [f64; 4],
+        tol: &Tolerance,
+    ) -> Option<f64> {
+        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
+        let limit = tol.linear.min(1e-10);
+        let spans = [u_max - u_min, v_max - v_min, s_max - s_min, t_max - t_min];
+
+        for _ in 0..40 {
+            crate::work_counter::count_marching_newton_iteration();
+            let (p1, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
+            let (p2, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
+            let gap = p1 - p2;
+            let cross = Self::normal_cross(s1, s2, state)?;
+
+            if gap.norm() <= limit && cross.norm() <= 1e-12 {
+                return Some(gap.norm());
+            }
+
+            let mut jacobian = nalgebra::SMatrix::<f64, 6, 4>::zeros();
+            for (row, value) in [du1, dv1, -du2, -dv2].iter().enumerate() {
+                jacobian[(0, row)] = value.x;
+                jacobian[(1, row)] = value.y;
+                jacobian[(2, row)] = value.z;
+            }
+            for index in 0..4 {
+                let step = spans[index].abs().max(1.0) * 1e-4;
+                let mut plus = *state;
+                let mut minus = *state;
+                plus[index] += step;
+                minus[index] -= step;
+                let (Some(a), Some(b)) = (
+                    Self::normal_cross(s1, s2, &plus),
+                    Self::normal_cross(s1, s2, &minus),
+                ) else {
+                    return None;
+                };
+                let slope = (a - b) / (2.0 * step);
+                jacobian[(3, index)] = slope.x;
+                jacobian[(4, index)] = slope.y;
+                jacobian[(5, index)] = slope.z;
+            }
+
+            let residual = nalgebra::SVector::<f64, 6>::new(
+                gap.x, gap.y, gap.z, cross.x, cross.y, cross.z,
+            );
+            let transposed = jacobian.transpose();
+            let normal_matrix = transposed * jacobian;
+            let right = -(transposed * residual);
+            let delta = normal_matrix.lu().solve(&right)?;
+            if !delta.iter().all(|value| value.is_finite()) {
+                return None;
+            }
+            state[0] = (state[0] + delta[0]).clamp(u_min, u_max);
+            state[1] = (state[1] + delta[1]).clamp(v_min, v_max);
+            state[2] = (state[2] + delta[2]).clamp(s_min, s_max);
+            state[3] = (state[3] + delta[3]).clamp(t_min, t_max);
+        }
+
+        let gap = s1.evaluate(state[0], state[1]) - s2.evaluate(state[2], state[3]);
+        (gap.norm() <= tol.linear).then_some(gap.norm())
+    }
+
     /// 交線が**接点で終わる**とき、その接点そのものに着地する。
     ///
     /// 辿りは正弦が `TANGENCY_SINE_LIMIT` を切ったところで止まります。**止まる
@@ -1070,9 +1167,26 @@ impl IntersectionMarcher {
                                 !held[index] || (refined[index] - state[index]).abs() <= 1e-12
                             })
                         };
-                        if Self::newton_to_tangency(s1, s2, &mut refined, heading, tol).is_some()
+                        // **まず、射影で潰さずに解きます**（4-153）。
+                        //
+                        // 落とす向きを1つ選ぶと、外積がその向きと直交する
+                        // だけの点でも「0」になります。過剰決定系を最小二乗で
+                        // 解けば、向きを選ばずに済みます。届かなければ、
+                        // 従来どおり接線向きへ落とす解き方に落とします。
+                        let mut solved = Self::newton_to_tangency_least_squares(
+                            s1, s2, &mut refined, tol,
+                        )
+                        .is_some()
                             && inside(&refined)
-                            && stays(&refined)
+                            && stays(&refined);
+                        if !solved {
+                            refined = state;
+                            solved = Self::newton_to_tangency(s1, s2, &mut refined, heading, tol)
+                                .is_some()
+                                && inside(&refined)
+                                && stays(&refined);
+                        }
+                        if solved
                         {
                             let here = s1.evaluate(refined[0], refined[1]);
                             let previous = s1.evaluate(state[0], state[1]);
