@@ -221,11 +221,11 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ## 3. テストスイート検証結果
 
-2026年8月27日にワークスペース全体を Release 構成で回し、**608/608件の成功**を
+2026年8月28日にワークスペース全体を Release 構成で回し、**629/629件の成功**を
 確認しました（`zenith_py` は環境依存のため除外）。警告 0。
 
-- **総テスト数:** 608 件（`cargo test --release --workspace --exclude zenith_py` の実測。104 テストバイナリ、doctest 込み。2026/08/27 夕）。**数え方で値が変わります**——同じ日の午前に 119 バイナリ / 632 テストと記録していましたが、数え方（どのコマンドで何を数えたか）が書かれていませんでした（HANDOVER 4-115）
-- **常設プローブ（診断・ゲート）:** 36 本すべて exit 0、WRONG 0・PANIC 0。一覧は CI（`.github/workflows/gates.yml`）と [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に
+- **総テスト数:** 629 件（`cargo test --release --workspace --exclude zenith_py` の実測。114 テストバイナリ、doctest 込み。2026/08/28 夕）。**数え方で値が変わります**——同じ日の午前に 119 バイナリ / 632 テストと記録していましたが、数え方（どのコマンドで何を数えたか）が書かれていませんでした（HANDOVER 4-115）
+- **常設プローブ（診断・ゲート）:** 38 本すべて exit 0、WRONG 0・PANIC 0。一覧は CI（`.github/workflows/gates.yml`）と [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に
 - **外部カーネルとの突き合わせ:** FreeCAD 相互検証 27/27、ショーケース 54/54、書き戻し 7/7、IGES 5/5
 - **非STEP出力（STL / OBJ / glTF / DXF）:** 8/8（`py tools/verify_mesh_exports.py`。FreeCAD 不要で CI に入っている）
 - **Python 往復:** `tools/verify_solid_api.py`（B-Rep ハンドルの口）と `tools/verify_python_binding.py`（メッシュを返す旧い口）とも全合格
