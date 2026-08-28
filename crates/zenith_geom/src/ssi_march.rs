@@ -1030,6 +1030,60 @@ impl IntersectionMarcher {
             }
             if at_edge(&state) {
                 hit_boundary = true;
+                // **縁に着いたことと、縁のどこに着いたかは別です。**
+                //
+                // 接点のすぐそばでは残差が位置を決めません（4-81）。歩いて
+                // 縁に乗ったところで止めると、**縁の上のどこに乗ったかが
+                // $\sqrt{arepsilon}$ でしか決まっていません**。
+                //
+                // 実測（偏心する球×円柱の差、4-152）: 球の継ぎ目 `(10,0,0)` は
+                // **接点でもありパッチの角でもあります**。そこで終わる4つの弧の
+                // うち2つが、縁の上の `6.35e-6` と `5.70e-5` で止まっていて、
+                // B-Rep に頂点が3つ並んでいました。
+                //
+                // **採る条件を3つ全部満たすときだけ**置き換えます。
+                //
+                // 1. 接点のそば（正弦が `TANGENCY_SINE_LIMIT` を切っている）
+                // 2. **着いたときに縁に張り付いていた座標が、解き直しても
+                //    同じ値のまま**——つまり**同じ縁に留まっている**
+                // 3. 領域の中にあり、歩幅の2倍より遠くへ飛んでいない
+                //
+                // **2 が要ります。** 「どれかの縁の上にある」だけでは足りません
+                // ——実測で、別の弧が**赤道側の縁**へ滑って `6.35e-6` から
+                // `3.64e-5` に悪化し、3演算とも断られるようになりました
+                // （2度測って2度とも同じでした）。
+                let pinned = |st: &[f64; 4]| -> [bool; 4] {
+                    let margin = 1e-9;
+                    [
+                        (st[0] - u_min).abs() < margin || (st[0] - u_max).abs() < margin,
+                        (st[1] - v_min).abs() < margin || (st[1] - v_max).abs() < margin,
+                        (st[2] - s_min).abs() < margin || (st[2] - s_max).abs() < margin,
+                        (st[3] - t_min).abs() < margin || (st[3] - t_max).abs() < margin,
+                    ]
+                };
+                if let Some((heading, sine_here)) = Self::tangent(s1, s2, &state) {
+                    if sine_here < TANGENCY_SINE_LIMIT {
+                        let held = pinned(&state);
+                        let mut refined = state;
+                        let stays = |refined: &[f64; 4]| {
+                            (0..4).all(|index| {
+                                !held[index] || (refined[index] - state[index]).abs() <= 1e-12
+                            })
+                        };
+                        if Self::newton_to_tangency(s1, s2, &mut refined, heading, tol).is_some()
+                            && inside(&refined)
+                            && stays(&refined)
+                        {
+                            let here = s1.evaluate(refined[0], refined[1]);
+                            let previous = s1.evaluate(state[0], state[1]);
+                            let travel = (here - previous).norm();
+                            if travel > tol.linear && travel <= step.abs() * 2.0 {
+                                points.pop();
+                                points.push(Self::sample(s1, s2, &refined));
+                            }
+                        }
+                    }
+                }
                 break;
             }
         }
