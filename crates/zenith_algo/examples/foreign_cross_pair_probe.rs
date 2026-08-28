@@ -81,6 +81,10 @@ fn main() {
     let rotate_degrees: Option<f64> = std::env::var("ZENITH_PAIR_ROTATE")
         .ok()
         .and_then(|value| value.parse().ok());
+    // **ずらしてから重ねる軸**。境界箱に対する割合で指定します。
+    let shift_fraction: Option<f64> = std::env::var("ZENITH_PAIR_SHIFT")
+        .ok()
+        .and_then(|value| value.parse().ok());
 
     // **既定は6検体・15組です**（9-G の G2）。
     //
@@ -132,6 +136,24 @@ fn main() {
                 }
             }
             let (a, b) = (&loaded[left].1, &loaded[right].1);
+            // **重なり方を変える軸**（2026/08/28 に足しました。9-G の G1）。
+            //
+            // いままでは「中心を揃えて必ず重ねる」だけでした。**中心を揃えると
+            // 対称な配置ばかりになります**——対称性は交線を綺麗にするので、
+            // 通りやすい側に偏ります。境界箱の対角ぶんだけずらすと、対称性が
+            // 崩れて片側だけが刺さる配置になります。
+            let shifted;
+            let b = if let Some(fraction) = shift_fraction {
+                let span = b.bounding_box();
+                let size = span.max - span.min;
+                shifted = BrepTransform::translate_solid(
+                    b,
+                    Vec3::new(size.x * fraction, size.y * fraction * 0.5, size.z * fraction * 0.25),
+                );
+                &shifted
+            } else {
+                b
+            };
             // **回してから重ねる。** いまの掃き出しは軸に平行な配置だけです。
             // 回すと、面も稜も軸に平行でなくなり、別の経路を通ります。
             let turned;
