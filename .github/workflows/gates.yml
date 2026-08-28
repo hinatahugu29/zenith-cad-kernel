@@ -70,7 +70,8 @@ jobs:
             grid_fallback_probe foreign_edit_probe foreign_inertia_probe \
             contact_placement_probe curved_placement_probe \
             oblique_section_probe \
-            foreign_cross_pair_probe
+            foreign_cross_pair_probe \
+            face_merge_probe step_representation_probe step_unit_probe
           do
             echo "=== $probe"
             if ! timeout 1200 "./target/release/examples/$probe" > "/tmp/$probe.txt" 2>&1; then
