@@ -594,8 +594,11 @@ impl BrepIntersectionBuilder {
         let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
 
         let mut selected_face_pieces = Vec::new();
+        let inner_a = face_comes_from_inner_shell(solid_a);
+        let inner_b = face_comes_from_inner_shell(solid_b);
         selected_face_pieces.extend(select_operand_faces_after_batch_split(
             &faces_a,
+            &inner_a,
             &batch_splits.splits_a,
             BooleanOperand::A,
             &mesh_b,
@@ -605,6 +608,7 @@ impl BrepIntersectionBuilder {
         ));
         selected_face_pieces.extend(select_operand_faces_after_batch_split(
             &faces_b,
+            &inner_b,
             &batch_splits.splits_b,
             BooleanOperand::B,
             &mesh_a,
@@ -2191,6 +2195,7 @@ fn collect_closed_intersection_edge_loops(
 
 fn select_operand_faces_after_batch_split(
     faces: &[Face],
+    inner_shell_flags: &[bool],
     batch_splits: &[PlanarFaceBatchSplit],
     operand: BooleanOperand,
     other_mesh: &TriangleMesh,
@@ -2361,12 +2366,19 @@ fn select_operand_faces_after_batch_split(
                 }
             }
             if keep_piece(operand, location, op) {
+                // **空洞の壁は、この立体では実効法線が材料の中を向いています**
+                // （外側シェルは外向き。4-144）。切り手が空洞を貫くと壁が
+                // 外側の境界に繋がるので、ここで揃えないと縫合が
+                // 「同方向の稜」になります。
+                let from_inner_shell =
+                    inner_shell_flags.get(face_index).copied().unwrap_or(false);
+                let reverse_for_difference =
+                    operand == BooleanOperand::B && op == crate::BooleanOpType::Difference;
                 selected.push(SelectedBooleanFacePiece {
                     operand,
                     face: face.clone(),
                     location,
-                    reverse_orientation: operand == BooleanOperand::B
-                        && op == crate::BooleanOpType::Difference,
+                    reverse_orientation: reverse_for_difference != from_inner_shell,
                 });
             }
         }
@@ -3937,6 +3949,17 @@ fn diagnose_selected_face_stitching(
                 }
                 if !opposite_stitch_edge_direction(&edge_uses[i], &edge_uses[mate], tol.linear) {
                     same_direction_edge_use_count += 1;
+                    // **「同方向」は閉じた多様体では起こりえません。**
+                    // 数だけでは、どの面のどの稜なのかが分かりません。
+                    if i < mate && std::env::var_os("ZENITH_STITCH_WHY").is_some() {
+                        let use_a = &edge_uses[i];
+                        eprintln!(
+                            "STITCHWHY same-direction ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6}) mid ({:.6} {:.6} {:.6})",
+                            use_a.start.x, use_a.start.y, use_a.start.z,
+                            use_a.end.x, use_a.end.y, use_a.end.z,
+                            use_a.middle.x, use_a.middle.y, use_a.middle.z
+                        );
+                    }
                 }
             }
             _ => non_manifold_edge_use_count += 1,
@@ -4087,6 +4110,20 @@ pub(crate) fn all_solid_faces(solid: &Solid) -> Vec<Face> {
         faces.extend(inner.faces.clone());
     }
     faces
+}
+
+/// `all_solid_faces` と同じ並びで、**その面が内側シェル（空洞）から来たか**。
+///
+/// **並びに潰すと、どちらのシェルから来たかが失われます。** 空洞の壁は、
+/// この立体では**実効法線が材料の中を向いています**（外側シェルは外向き。
+/// 2026/08/28 実測、4-144）。切り手が空洞を貫くと空洞の壁が外側の境界に
+/// 繋がるので、**そのままでは巻きが食い違います**。
+pub(crate) fn face_comes_from_inner_shell(solid: &Solid) -> Vec<bool> {
+    let mut flags = vec![false; solid.outer_shell.faces.len()];
+    for inner in &solid.inner_shells {
+        flags.extend(std::iter::repeat_n(true, inner.faces.len()));
+    }
+    flags
 }
 
 fn nest_cavity_shells_into_solids(simple_solids: Vec<Solid>, _tol: &Tolerance) -> Vec<Solid> {

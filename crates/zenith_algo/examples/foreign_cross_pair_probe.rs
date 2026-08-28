@@ -78,14 +78,12 @@ fn main() {
     let tol = Tolerance::default();
     let filter = std::env::var("ZENITH_PAIR_FILTER").ok();
 
-    // **既定は3検体・3組です。実行時間を測って絞りました。**
+    // **既定は3検体・3組で 143 秒です**（実測）。`ZENITH_PAIR_EXTRA=1` で
+    // 6検体・15組になり、**654 秒**（実測）。CI の1本あたりの上限は 1200 秒
+    // なので広いほうも入りますが、既定は短いほうにしてあります——**この
+    // プローブは CI で毎回走ります**。
     //
-    // 6検体（15組）にすると**10分で終わりません**（実測）。CI の1本あたりの
-    // 上限は 1200 秒なので、そのままでは常設に置けません。**4-142 の現場
-    // （`cylinder × elliptic_prism`）を含む最小の組**を既定にしてあります。
-    //
-    // **広げるときは、まず実行時間を測ってください。** `ZENITH_PAIR_EXTRA=1`
-    // で、時間の掛かる検体（トーラス・段付き軸・空洞つき）も足せます。
+    // **広げるときは、まず実行時間を測ってください。**
     let mut names = vec!["cylinder", "elliptic_prism", "sphere"];
     if std::env::var_os("ZENITH_PAIR_EXTRA").is_some() {
         names.extend(["torus", "stepped_shaft", "hollow_box"]);
@@ -125,9 +123,20 @@ fn main() {
             let volume_b = MassCalculator::compute_from_brep(b, &params()).volume;
 
             let run = |op| {
-                BooleanEngine::boolean_solids_exact_result(a, b, op, &tol)
-                    .ok()
-                    .map(|result| volume(&result.solids))
+                match BooleanEngine::boolean_solids_exact_result(a, b, op, &tol) {
+                    Ok(result) => Some(volume(&result.solids)),
+                    Err(reason) => {
+                        // **「そろわなかった」だけでは、実装が足りないのか、
+                        // 答えが返せないのかが分かりません。**
+                        if std::env::var_os("ZENITH_PAIR_WHY").is_some() {
+                            eprintln!(
+                                "PAIRWHY {label} {op:?}: {}",
+                                reason.chars().take(700).collect::<String>()
+                            );
+                        }
+                        None
+                    }
+                }
             };
             let union = run(BooleanOpType::Union);
             let meet = run(BooleanOpType::Intersection);
