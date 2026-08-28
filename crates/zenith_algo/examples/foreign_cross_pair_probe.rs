@@ -29,6 +29,14 @@
 //! ZENITH_PAIR_FILTER="cylinder+elliptic_prism" \
 //!   cargo run --release -p zenith_algo --example foreign_cross_pair_probe
 //! ```
+//!
+//! ## 重なり方を変える軸（9-G の G1）
+//!
+//! | 環境変数 | 何をするか |
+//! | :--- | :--- |
+//! | `ZENITH_PAIR_ROTATE=<度>` | B を軸 (1,2,3) まわりに回してから重ねる |
+//! | `ZENITH_PAIR_SHIFT=<割合>` | B を境界箱に対する割合でずらしてから重ねる |
+//! | `ZENITH_PAIR_MIRROR=x/y/z/tilted` | B を原点を通る平面で鏡映してから重ねる |
 
 use std::path::PathBuf;
 
@@ -85,6 +93,17 @@ fn main() {
     let shift_fraction: Option<f64> = std::env::var("ZENITH_PAIR_SHIFT")
         .ok()
         .and_then(|value| value.parse().ok());
+    // **鏡映してから重ねる軸**（9-G の G1、3本目）。`x` / `y` / `z` /
+    // `tilted` で鏡の法線を選びます。既定は鏡映しません。
+    let mirror_normal: Option<Vec3> = std::env::var("ZENITH_PAIR_MIRROR")
+        .ok()
+        .map(|value| match value.trim() {
+            "y" => Vec3::new(0.0, 1.0, 0.0),
+            "z" => Vec3::new(0.0, 0.0, 1.0),
+            // 軸に平行でない鏡。対称な検体でも「同じ形」に戻りません。
+            "tilted" => Vec3::new(1.0, 2.0, 3.0),
+            _ => Vec3::new(1.0, 0.0, 0.0),
+        });
 
     // **既定は6検体・15組です**（9-G の G2）。
     //
@@ -162,6 +181,49 @@ fn main() {
                 let turn = Transform3::from_axis_angle(&axis, degrees.to_radians());
                 turned = BrepTransform::transform_solid(b, &turn).unwrap_or_else(|_| b.clone());
                 &turned
+            } else {
+                b
+            };
+
+            // **鏡映してから重ねる。**
+            //
+            // **これは「裏返しの立体」を作る軸ではありません。**
+            // `MirrorBuilder::mirror_solid` は `mirror_wire_reversed` で
+            // ループの巡回順序と辺の向きを反転するので、**向きの揃った
+            // 立体が返ります**（コードを読んで確かめました。最初は
+            // 「向きが逆の入力になる」と書きましたが、実装と違いました）。
+            //
+            // **測っているのは、鏡映された NURBS 面そのもの**です。制御点を
+            // 鏡に映したうえで、**v 方向のノット列を逆順に張り直します**
+            // （`mirror.rs` の `reversed_knots`）。対称な検体では形が元へ
+            // 戻るので、**同じ形を別の作り方で組んだ B-Rep** になります。
+            // 面の張り方が変われば、交線の取り方も面の割り方も変わります。
+            //
+            // **裏返しの立体を食わせる軸は、まだ掃いていません**（4-135 で
+            // 誤答が出たのはそちらです）。3本目の候補として残します。
+            //
+            // 検体は原点に寄せてあるので、鏡は原点を通る平面にします。
+            let flipped;
+            let b = if let Some(normal) = mirror_normal {
+                match zenith_algo::MirrorBuilder::mirror_solid(
+                    b,
+                    zenith_math::Point3::origin(),
+                    normal,
+                    &tol,
+                ) {
+                    Ok(solid) => {
+                        flipped = solid;
+                        &flipped
+                    }
+                    // **鏡映そのものが断られたら、その組は測りません。**
+                    // ここで元の立体に落とすと、鏡映していない配置を
+                    // 「鏡映で測った」と数えてしまいます。
+                    Err(reason) => {
+                        println!("{label:<34} 鏡映できず: {reason}");
+                        refused += 1;
+                        continue;
+                    }
+                }
             } else {
                 b
             };
