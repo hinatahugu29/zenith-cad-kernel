@@ -582,7 +582,134 @@ fn trimmed_uv_triangulation(
         }
     }
 
-    let triangle_indices = earcutr::earcut(&flat_coords, &hole_indices, 2).unwrap_or_default();
+    // **earcut の出したものを、面積で検算します。**
+    //
+    // ここは**体積を積む経路**です（`MassCalculator::compute_face_integral`
+    // はこの三角形分割を使います）。earcut が多角形より広いものを返すと、
+    // **黙って体積が過大になります**。
+    //
+    // 実測（4-143、他カーネルの円柱 × 楕円柱）: 切り欠きのある4分の1面で、
+    // 標本した外周は 0.219583860 なのに earcut の出力は 0.223069042 でした。
+    // その 0.003485 が 3D で 9.07、立体の体積で 30.23 の過大として出ます。
+    // **恒等式でしか見えませんでした。**
+    //
+    // 直し方は「別の始点で引き直す」です。earcut の出力は多角形をどの点から
+    // 辿るかで変わるので、**回してやり直すと通ることがあります**。回す量は
+    // 決め打ちの列なので、答えは実行ごとに変わりません（4-132 で測定の
+    // 非決定性を直したばかりなので、ここで戻さないようにしています）。
+    let polygon_area = {
+        let mut twice = 0.0;
+        for index in 0..outer_uvs.len() {
+            let a = outer_uvs[index];
+            let b = outer_uvs[(index + 1) % outer_uvs.len()];
+            twice += a.x * b.y - b.x * a.y;
+        }
+        (twice * 0.5).abs()
+    };
+    let hole_area: f64 = {
+        let mut sum = 0.0;
+        for start in &hole_indices {
+            let end = uvs.len();
+            // 穴は外周のあとに続けて入っている。次の穴の手前まで。
+            let stop = hole_indices
+                .iter()
+                .copied()
+                .find(|next| next > start)
+                .unwrap_or(end);
+            let mut twice = 0.0;
+            for index in *start..stop {
+                let a = uvs[index];
+                let b = uvs[if index + 1 < stop { index + 1 } else { *start }];
+                twice += a.x * b.y - b.x * a.y;
+            }
+            sum += (twice * 0.5).abs();
+        }
+        sum
+    };
+    let wanted_area = polygon_area - hole_area;
+
+    let triangulated_area = |indices: &[usize], points: &[Point2]| {
+        let mut sum = 0.0;
+        for chunk in indices.chunks_exact(3) {
+            let (a, b, c) = (points[chunk[0]], points[chunk[1]], points[chunk[2]]);
+            sum += ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)) * 0.5;
+        }
+        sum.abs()
+    };
+
+    let why = std::env::var_os("ZENITH_TRIM_AREA_WHY").is_some();
+    let mut triangle_indices =
+        earcutr::earcut(&flat_coords, &hole_indices, 2).unwrap_or_default();
+    let tolerance = wanted_area.abs().max(1e-12) * 1e-9;
+
+    if !triangle_indices.is_empty()
+        && (triangulated_area(&triangle_indices, &uvs) - wanted_area).abs() > tolerance
+    {
+        // **合いません。** 外周を回して引き直します。穴は動かしません。
+        let count = outer_uvs.len();
+        let mut best: Option<(f64, Vec<usize>, Vec<Point2>)> = None;
+        for shift_step in 1..8 {
+            let shift = count * shift_step / 8;
+            if shift == 0 {
+                continue;
+            }
+            let mut rotated_flat = Vec::with_capacity(flat_coords.len());
+            let mut rotated_uvs = Vec::with_capacity(uvs.len());
+            for offset in 0..count {
+                let uv = outer_uvs[(offset + shift) % count];
+                rotated_flat.push(uv.x);
+                rotated_flat.push(uv.y);
+                rotated_uvs.push(uv);
+            }
+            for index in count..uvs.len() {
+                rotated_flat.push(uvs[index].x);
+                rotated_flat.push(uvs[index].y);
+                rotated_uvs.push(uvs[index]);
+            }
+            let candidate =
+                earcutr::earcut(&rotated_flat, &hole_indices, 2).unwrap_or_default();
+            if candidate.is_empty() {
+                continue;
+            }
+            let error = (triangulated_area(&candidate, &rotated_uvs) - wanted_area).abs();
+            if error <= tolerance {
+                if why {
+                    eprintln!(
+                        "TRIMAREA earcut が多角形より広いものを返したので、始点を {shift} 回して引き直しました（残差 {error:.3e}）"
+                    );
+                }
+                triangle_indices = candidate;
+                uvs = rotated_uvs;
+                break;
+            }
+            let better = match &best {
+                Some((previous, _, _)) => error < *previous,
+                None => true,
+            };
+            if better {
+                best = Some((error, candidate, rotated_uvs));
+            }
+        }
+        if (triangulated_area(&triangle_indices, &uvs) - wanted_area).abs() > tolerance {
+            if let Some((error, candidate, candidate_uvs)) = best {
+                if why {
+                    eprintln!(
+                        "TRIMAREA どの始点でも合わないので、いちばん近いものを採りました（残差 {error:.3e}）"
+                    );
+                }
+                triangle_indices = candidate;
+                uvs = candidate_uvs;
+            }
+        }
+    }
+
+    if why {
+        eprintln!(
+            "TRIMAREA 標本した外周 {polygon_area:.9}、穴 {hole_area:.9}、三角形 {:.9}（点 {}）",
+            triangulated_area(&triangle_indices, &uvs),
+            outer_uvs.len()
+        );
+    }
     if triangle_indices.is_empty() {
         return UvTriangulation::default();
     }

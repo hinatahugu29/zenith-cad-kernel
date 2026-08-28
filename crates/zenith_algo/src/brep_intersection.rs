@@ -2217,8 +2217,77 @@ fn select_operand_faces_after_batch_split(
                 // いないのか、割れたが採られなかったのかは、ここでしか
                 // 区別できない。
                 let point = representative_face_point(face);
+                let piece_area = crate::MassCalculator::compute_face_integral(
+                    face,
+                    &TessellationParams::default(),
+                )
+                .0;
+                // **面積を積む側が見ている領域**を、そのまま測る。
+                // `face_parameter_area` は p-curve から、こちらは
+                // 三角形分割から。食い違えば、経路が違う。
+                let triangulated = {
+                    let uv = zenith_tess::face_uv_triangulation(
+                        face,
+                        &TessellationParams::default(),
+                    );
+                    let mut sum = 0.0;
+                    for triangle in &uv.triangles {
+                        let (a, b, c) = (
+                            uv.uvs[triangle[0]],
+                            uv.uvs[triangle[1]],
+                            uv.uvs[triangle[2]],
+                        );
+                        sum += ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5;
+                    }
+                    sum
+                };
+                let from_pcurves = zenith_tess::face_parameter_area(face).unwrap_or(f64::NAN);
+                if (triangulated - from_pcurves).abs() > 1e-9
+                    && std::env::var_os("ZENITH_TRI_WHY").is_some()
+                {
+                    // **三角形分割が p-curve より広い。** どの三角形が
+                    // 余分なのかを、切り欠きの中に重心がある三角形として出す。
+                    let uv = zenith_tess::face_uv_triangulation(
+                        face,
+                        &TessellationParams::default(),
+                    );
+                    eprintln!(
+                        "TRIWHY 三角形 {} 枚、p-curve {from_pcurves:.6} < 三角形 {triangulated:.6}（差 {:.6}）",
+                        uv.triangles.len(),
+                        triangulated - from_pcurves
+                    );
+                    let (mut signed, mut negative_area, mut negative_count) = (0.0, 0.0, 0usize);
+                    let mut worst: Option<(f64, f64, f64)> = None;
+                    for triangle in &uv.triangles {
+                        let (a, b, c) = (
+                            uv.uvs[triangle[0]],
+                            uv.uvs[triangle[1]],
+                            uv.uvs[triangle[2]],
+                        );
+                        let twice = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                        signed += twice * 0.5;
+                        if twice < 0.0 {
+                            negative_count += 1;
+                            negative_area += -twice * 0.5;
+                            let centre = (
+                                (a.x + b.x + c.x) / 3.0,
+                                (a.y + b.y + c.y) / 3.0,
+                                -twice * 0.5,
+                            );
+                            if worst.is_none_or(|w| centre.2 > w.2) {
+                                worst = Some(centre);
+                            }
+                        }
+                    }
+                    eprintln!(
+                        "TRIWHY   符号付きの和 {signed:.6}、裏返った三角形 {negative_count} 枚（面積の合計 {negative_area:.6}）"
+                    );
+                    if let Some((u, v, area)) = worst {
+                        eprintln!("TRIWHY   いちばん大きい裏返り: 重心 ({u:.6},{v:.6}) 面積 {area:.6}");
+                    }
+                }
                 eprintln!(
-                    "SELECTWHY {:?} 面 {face_index} の片 id {} （{} 枚中）: {:?} → {} 代表点 ({:.4} {:.4} {:.4})",
+                    "SELECTWHY {:?} 面 {face_index} の片 id {} （{} 枚中）: {:?} → {} 面積 {piece_area:.6} uv[p-curve {from_pcurves:.6} / 三角形 {triangulated:.6}] 代表点 ({:.4} {:.4} {:.4})",
                     operand,
                     face.id,
                     face_pieces.len(),
@@ -2232,6 +2301,51 @@ fn select_operand_faces_after_batch_split(
                     point.y,
                     point.z
                 );
+                if std::env::var_os("ZENITH_SELECT_UV").is_some() {
+                    // 片の境界を uv で見る。3D 面積だけ違って uv 面積が同じ
+                    // なら、**同じ広さの別の場所**を占めているか、ループが
+                    // 自分と重なっている。
+                    if let Some(pcurves) = face
+                        .pcurves
+                        .clone()
+                        .or_else(|| face.pcurves(&Tolerance::default()).ok())
+                    {
+                        let mut points: Vec<zenith_math::Point2> = Vec::new();
+                        for segment in &pcurves.outer_loop.segments {
+                            let (t0, t1) = segment.curve.param_range();
+                            for step in 0..=8 {
+                                points.push(
+                                    segment
+                                        .curve
+                                        .evaluate(t0 + (t1 - t0) * step as f64 / 8.0),
+                                );
+                            }
+                        }
+                        let (mut u0, mut u1, mut v0, mut v1) =
+                            (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+                        for point in &points {
+                            u0 = u0.min(point.x);
+                            u1 = u1.max(point.x);
+                            v0 = v0.min(point.y);
+                            v1 = v1.max(point.y);
+                        }
+                        eprintln!(
+                            "SELECTUV   uv 範囲 u {u0:.6}..{u1:.6}、v {v0:.6}..{v1:.6}、稜 {}、点 {}",
+                            pcurves.outer_loop.segments.len(),
+                            points.len()
+                        );
+                        for (segment_index, segment) in
+                            pcurves.outer_loop.segments.iter().enumerate()
+                        {
+                            let (t0, t1) = segment.curve.param_range();
+                            let (a, b) = (segment.curve.evaluate(t0), segment.curve.evaluate(t1));
+                            eprintln!(
+                                "SELECTUV     稜 {segment_index}: ({:.6},{:.6}) -> ({:.6},{:.6})",
+                                a.x, a.y, b.x, b.y
+                            );
+                        }
+                    }
+                }
                 if std::env::var_os("ZENITH_SELECT_EDGES").is_some()
                     && keep_piece(operand, location, op)
                 {
