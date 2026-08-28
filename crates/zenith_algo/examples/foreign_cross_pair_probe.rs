@@ -36,7 +36,7 @@ use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, Regularizer,
 };
 use zenith_io::StepImporter;
-use zenith_math::{Tolerance, Vec3};
+use zenith_math::{Tolerance, Transform3, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
 
@@ -77,6 +77,10 @@ fn centred(solid: &Solid) -> Solid {
 fn main() {
     let tol = Tolerance::default();
     let filter = std::env::var("ZENITH_PAIR_FILTER").ok();
+    // **回してから重ねる軸**（2026/08/28 に足しました）。既定は回しません。
+    let rotate_degrees: Option<f64> = std::env::var("ZENITH_PAIR_ROTATE")
+        .ok()
+        .and_then(|value| value.parse().ok());
 
     // **既定は3検体・3組で 143 秒です**（実測）。`ZENITH_PAIR_EXTRA=1` で
     // 6検体・15組になり、**654 秒**（実測）。CI の1本あたりの上限は 1200 秒
@@ -118,6 +122,17 @@ fn main() {
                 }
             }
             let (a, b) = (&loaded[left].1, &loaded[right].1);
+            // **回してから重ねる。** いまの掃き出しは軸に平行な配置だけです。
+            // 回すと、面も稜も軸に平行でなくなり、別の経路を通ります。
+            let turned;
+            let b = if let Some(degrees) = rotate_degrees {
+                let axis = Vec3::new(1.0, 2.0, 3.0);
+                let turn = Transform3::from_axis_angle(&axis, degrees.to_radians());
+                turned = BrepTransform::transform_solid(b, &turn).unwrap_or_else(|_| b.clone());
+                &turned
+            } else {
+                b
+            };
 
             let volume_a = MassCalculator::compute_from_brep(a, &params()).volume;
             let volume_b = MassCalculator::compute_from_brep(b, &params()).volume;
