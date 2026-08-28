@@ -413,11 +413,31 @@ fn tessellate_face_stitched(
         }
     }
 
-    match &face.geometry {
+    let mesh = match &face.geometry {
         FaceGeometry::Plane(_) => patch_mesh(&rings, None, face.orientation, params),
         FaceGeometry::Nurbs(surface) => patch_mesh(&rings, Some(surface), face.orientation, params),
         _ => crate::surface_tess::tessellate_face(face, params),
+    };
+
+    // **画面に出る枚数を、面ごとに数える口**（9-G の G3。4-151）。
+    //
+    // G3 は長く `ZENITH_TRIM_WHY=1` の値で測っていましたが、あれは
+    // `trimmed_uv_triangulation`——**積分と、面を1枚だけ刻む経路**の値です。
+    // 画面に出るのはこちら（縫合）なので、狙っているものを測るならここで
+    // 数えます（4-150 で取り違えに気づきました）。
+    if std::env::var_os("ZENITH_PATCH_WHY").is_some() {
+        eprintln!(
+            "PATCHWHY 面 {} 枚（境界のリング {}、{}）",
+            mesh.num_triangles(),
+            rings.len(),
+            match &face.geometry {
+                FaceGeometry::Plane(_) => "平面",
+                FaceGeometry::Nurbs(_) => "曲面",
+                _ => "その他",
+            }
+        );
     }
+    mesh
 }
 
 /// 各ループを、稜ごとに決めた刻み方で uv と 3D の点列にする
