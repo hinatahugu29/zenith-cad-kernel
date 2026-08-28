@@ -974,7 +974,7 @@ impl BrepIntersectionBuilder {
                     for edge in &edges {
                         let (a, b) = (edge.start_vertex.point, edge.end_vertex.point);
                         eprintln!(
-                            "      稜 ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4}) 長さ {:.4}",
+                            "      稜 ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) 長さ {:.9}",
                             a.x,
                             a.y,
                             a.z,
