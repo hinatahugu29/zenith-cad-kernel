@@ -596,6 +596,38 @@ impl SurfaceIntegral {
         orientation_sign: f64,
     ) {
         let domain = face_uv_triangulation(face, params);
+
+        // **面積分の内訳を数える口**（9-1 / 9-3 の「解析曲面を持つか」を
+        // 決めるため。三角形の枚数が仕事量そのものなので、そこを数えます）。
+        //
+        // `ZENITH_INTEGRAL_WHY=1` で、1回ぶんに「曲面の種類」と「三角形の
+        // 枚数」を出します。円柱・円錐の四半パッチは次数 2 × 1・制御点
+        // 3 × 2 なので、そこで見分けます（`recognize_cylinder_patch` と
+        // 同じ形の判定です）。
+        if std::env::var_os("ZENITH_INTEGRAL_WHY").is_some() {
+            let kind = match &face.geometry {
+                FaceGeometry::Nurbs(nurbs) => {
+                    let rows = nurbs.control_points.len();
+                    let cols = nurbs.control_points.first().map(|r| r.len()).unwrap_or(0);
+                    let ragged = nurbs.control_points.iter().any(|r| r.len() != cols);
+                    format!(
+                        "NURBS 次数{}x{} 制御点{}x{}{}",
+                        nurbs.degree_u,
+                        nurbs.degree_v,
+                        rows,
+                        cols,
+                        if ragged { "（不揃い）" } else { "" }
+                    )
+                }
+                FaceGeometry::Plane(_) => "平面（線積分に落ちなかったもの）".to_string(),
+                _ => "その他".to_string(),
+            };
+            eprintln!(
+                "INTEGRALWHY {kind} 三角形 {}",
+                domain.triangles.len()
+            );
+        }
+
         // 三角形がノット区間をまたいでいたら、そこで割ってから当てる。
         // B-spline が滑らかなのは区間の内側だけで、またいだまま次数4の
         // 則を当てても次数が効かない。トリムされた面の三角形は earcut と
