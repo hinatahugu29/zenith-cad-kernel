@@ -1162,6 +1162,9 @@ impl IntersectionMarcher {
                     if sine_here < TANGENCY_SINE_LIMIT {
                         let held = pinned(&state);
                         let mut refined = state;
+                        // **ビット一致で見ます。** 「同じ縁の上」に緩めて
+                        // みましたが（4-167）、**揺れは1つも止まりません
+                        // でした**。緩める理由が無いので戻しました。
                         let stays = |refined: &[f64; 4]| {
                             (0..4).all(|index| {
                                 !held[index] || (refined[index] - state[index]).abs() <= 1e-12
