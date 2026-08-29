@@ -1758,6 +1758,9 @@ struct StitchEdgeUse {
     /// 「同じ稜が3回使われている」（非多様体）と報告されます。**壊れていたのは
     /// 立体ではなく、数え方でした**（4-65）。
     middle: Point3,
+    /// **診断だけに使います。** どちらの立体の面片から来た稜か。
+    /// 照合には使いません（4-174）。
+    operand: BooleanOperand,
 }
 
 fn collect_batch_splits_for_faces(
@@ -3959,7 +3962,8 @@ fn diagnose_selected_face_stitching(
                 if std::env::var_os("ZENITH_STITCH_WHY").is_some() {
                     let use_ = &edge_uses[i];
                     eprintln!(
-                        "STITCHWHY unmatched ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9}) len {:.9}",
+                        "STITCHWHY unmatched {:?} ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9}) len {:.9}",
+                        use_.operand,
                         use_.start.x,
                         use_.start.y,
                         use_.start.z,
@@ -4021,10 +4025,16 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
         collect_wire_stitch_edge_uses(
             &piece.face.outer_wire,
             piece.reverse_orientation,
+            piece.operand,
             &mut edge_uses,
         );
         for wire in &piece.face.inner_wires {
-            collect_wire_stitch_edge_uses(wire, piece.reverse_orientation, &mut edge_uses);
+            collect_wire_stitch_edge_uses(
+                wire,
+                piece.reverse_orientation,
+                piece.operand,
+                &mut edge_uses,
+            );
         }
     }
 
@@ -4034,6 +4044,7 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
 fn collect_wire_stitch_edge_uses(
     wire: &Wire,
     reverse_orientation: bool,
+    operand: BooleanOperand,
     edge_uses: &mut Vec<StitchEdgeUse>,
 ) {
     for edge in &wire.edges {
@@ -4046,9 +4057,15 @@ fn collect_wire_stitch_edge_uses(
                 start: end,
                 end: start,
                 middle,
+                operand,
             });
         } else {
-            edge_uses.push(StitchEdgeUse { start, end, middle });
+            edge_uses.push(StitchEdgeUse {
+                start,
+                end,
+                middle,
+                operand,
+            });
         }
     }
 }
