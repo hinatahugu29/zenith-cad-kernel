@@ -4140,7 +4140,31 @@ fn diagnose_selected_face_stitching(
                     }
                 }
             }
-            _ => non_manifold_edge_use_count += 1,
+            count => {
+                non_manifold_edge_use_count += 1;
+                // **何回使われている稜なのかを出す口。** 「非多様体」とだけ
+                // 言われても、3回なのか4回なのかで話が違います。4回なら、
+                // **本来は稜でないものを稜にしている**疑いがあります
+                // （接する線がまさにそれ。HANDOVER 3-1「接触は、それ自体
+                // では位相を作らない」）。
+                if std::env::var_os("ZENITH_STITCH_WHY").is_some() {
+                    let use_ = &edge_uses[i];
+                    eprintln!(
+                        "STITCHWHY non-manifold x{} {:?} ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9})",
+                        count + 1,
+                        use_.operand,
+                        use_.start.x,
+                        use_.start.y,
+                        use_.start.z,
+                        use_.end.x,
+                        use_.end.y,
+                        use_.end.z,
+                        use_.middle.x,
+                        use_.middle.y,
+                        use_.middle.z
+                    );
+                }
+            }
         }
     }
 
