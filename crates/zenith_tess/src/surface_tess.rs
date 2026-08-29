@@ -874,6 +874,45 @@ pub(crate) fn refine_uv_triangulation_protected(
     let cell_v = (v_max - v_min) / params.v_divisions.max(2) as f64;
     let deflection = surface_deflection_target(surface, params);
 
+    // **その向きに曲面が直線なら、その向きには割りません。**
+    //
+    // パラメータ格子の条項は「三角形の uv 範囲が1マスを超えたら、弦誤差に
+    // 関係なく割る」というものです（4-150）。**曲面がその向きに直線なら、
+    // 割っても何も良くなりません**——求積の則はそこで厳密ですし、弦誤差も
+    // ちょうど 0 です。
+    //
+    // 円柱・円錐の四半パッチは母線が直線なので、**v 方向がこれに当たります**。
+    // 45ケースの面積分の 46.1% がその形です（4-154）。
+    //
+    // **表現ではなく、形で見ます。** 中点が両端の平均に一致するかを数点で
+    // 測ります。NURBS の重みを覗くより、これが効く条件そのものです。
+    let straight_along = |axis: usize| {
+        let scale = {
+            let a = surface.evaluate(u_min, v_min);
+            let b = surface.evaluate(u_max, v_max);
+            (b - a).norm().max(1.0)
+        };
+        [0.15, 0.5, 0.85].iter().all(|fraction| {
+            let other = if axis == 0 {
+                v_min + (v_max - v_min) * fraction
+            } else {
+                u_min + (u_max - u_min) * fraction
+            };
+            let at = |t: f64| {
+                if axis == 0 {
+                    surface.evaluate(u_min + (u_max - u_min) * t, other)
+                } else {
+                    surface.evaluate(other, v_min + (v_max - v_min) * t)
+                }
+            };
+            let (low, middle, high) = (at(0.0), at(0.5), at(1.0));
+            let average = Point3::from((low.coords + high.coords) * 0.5);
+            (middle - average).norm() <= scale * 1e-12
+        })
+    };
+    let straight_u = enforce_parametric_cells && straight_along(0);
+    let straight_v = enforce_parametric_cells && straight_along(1);
+
     // 一度基準を満たした三角形は、隣が辺を割らない限り再評価しない
     let mut settled = vec![false; triangles.len()];
     let mut cache = EvaluatedPositions::new(uvs.len());
@@ -929,7 +968,8 @@ pub(crate) fn refine_uv_triangulation_protected(
                 cell_u,
                 cell_v,
                 deflection,
-                enforce_parametric_cells,
+                enforce_parametric_cells && !straight_u,
+                enforce_parametric_cells && !straight_v,
                 &mut cache,
             ) {
                 settled[index] = true;
@@ -1176,7 +1216,8 @@ fn triangle_needs_refinement(
     cell_u: f64,
     cell_v: f64,
     deflection: f64,
-    enforce_parametric_cells: bool,
+    enforce_cell_u: bool,
+    enforce_cell_v: bool,
     cache: &mut EvaluatedPositions,
 ) -> bool {
     let corners = [uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]];
@@ -1201,7 +1242,7 @@ fn triangle_needs_refinement(
     // 枚数だけが落ちます。実測（傾けたトーラス × 箱の差、4-150）:
     // 縫合メッシュ 124,804 → **7,428 枚**（24分割）、1,294,274 → **56,592 枚**
     // （64分割）。1枚の面の最大は 71,250 → **3,572 枚**。
-    if enforce_parametric_cells && (u_extent > cell_u || v_extent > cell_v) {
+    if (enforce_cell_u && u_extent > cell_u) || (enforce_cell_v && v_extent > cell_v) {
         return true;
     }
 
