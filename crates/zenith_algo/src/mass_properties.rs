@@ -620,6 +620,86 @@ impl SurfaceIntegral {
         true
     }
 
+    /// 回転面の一部である面を、**トリム境界だけで**積む。
+    ///
+    /// 球とトーラスがここに入ります（面積分の 53.9%。4-154）。
+    ///
+    /// ```text
+    /// 面積      = ε · ∮ G(ψ) dφ            G = r(ρ_c ψ + r sinψ)
+    /// 体積の寄与 = s · σ · ε · ∮ H(ψ) dφ / 3
+    /// ```
+    ///
+    /// `ε` は回り方の符号、`σ` はパラメータの向きの符号。**どちらも
+    /// 出てきた答えを測って決めます。**
+    fn add_revolution_face(
+        &mut self,
+        face: &Face,
+        surface: &impl Surface3,
+        orientation_sign: f64,
+    ) -> bool {
+        let Some(pcurves) = face.pcurves.as_ref() else {
+            return false;
+        };
+        let Some(patch) = recognise_revolution_patch(surface) else {
+            return false;
+        };
+        let Some(mut moments) = loop_revolution_moments(&pcurves.outer_loop, surface, &patch) else {
+            return false;
+        };
+        let outer = moments[0];
+        if outer.abs() <= f64::EPSILON {
+            return false;
+        }
+        for hole in &pcurves.inner_loops {
+            let Some(part) = loop_revolution_moments(hole, surface, &patch) else {
+                return false;
+            };
+            let sign = if part[0].signum() == outer.signum() {
+                -1.0
+            } else {
+                1.0
+            };
+            for (total, piece) in moments.iter_mut().zip(part.iter()) {
+                *total += piece * sign;
+            }
+        }
+        let normalisation = outer.signum();
+        for moment in moments.iter_mut() {
+            *moment *= normalisation;
+        }
+
+        // **世界の原点から見た位置のぶん**を足します。
+        //
+        // 体積は `∬ p·(p_u × p_v)/3` で、`p` は世界の原点からの位置です。
+        // 上の `volume_antiderivative` は軸の上の点から見たぶんしか
+        // 積んでいないので、差のぶんを面素ベクトルの積分に掛けて足します。
+        let origin = patch.origin.coords;
+        let area_vector = patch.e1 * moments[3] * -1.0
+            + patch.e2 * moments[4] * -1.0
+            + patch.axis * moments[5];
+        let volume_moment = moments[2] + origin.dot(&area_vector);
+
+        let area = moments[1];
+        if std::env::var_os("ZENITH_REV_WHY").is_some() {
+            eprintln!(
+                "REVWHY r={:.6} rc={:.6} 軸=({:.4},{:.4},{:.4}) 符号={} 基準u={:.4} 積分=[{:.6},{:.6},{:.6}]",
+                patch.meridian_radius, patch.meridian_offset,
+                patch.axis.x, patch.axis.y, patch.axis.z,
+                patch.jacobian_sign, patch.reference_u,
+                moments[0], moments[1], moments[2]
+            );
+        }
+        if !(area.is_finite() && area >= 0.0) {
+            return false;
+        }
+        self.area += area;
+        self.volume += orientation_sign * patch.jacobian_sign * volume_moment / 3.0;
+        if std::env::var_os("ZENITH_INTEGRAL_WHY").is_some() {
+            eprintln!("INTEGRALWHY 回転面（解析。中身を刻まない） 三角形 0");
+        }
+        true
+    }
+
     /// 円柱の一部である面を、**トリム境界だけで**積む。
     ///
     /// 積めたら `true`。積めなければ何も足さずに `false` を返すので、
@@ -709,7 +789,8 @@ impl SurfaceIntegral {
         // ありません。
         if self.area_and_volume_only
             && std::env::var_os("ZENITH_NO_ANALYTIC_FACE").is_none()
-            && self.add_cylindrical_face(face, surface, orientation_sign)
+            && (self.add_cylindrical_face(face, surface, orientation_sign)
+                || self.add_revolution_face(face, surface, orientation_sign))
         {
             return;
         }
@@ -884,6 +965,324 @@ const fn index_uv(p: usize, q: usize) -> usize {
 ///
 /// Green's theorem gives `∫∫ u^p v^q du dv = ∮ u^(p+1)/(p+1) * v^q dv`, so the
 /// whole set follows from one pass along the loop's p-curves.
+/// 回転面のパッチ。**球とトーラスは、これ1つで両方とも入ります。**
+///
+/// 実測（4-157）: 球の `u` 等パラメータ線は、球心を中心とする半径 10 の円。
+/// トーラスのそれは、芯の円の上を中心とする半径 4 の円。**どちらも
+/// 「半径一定の円弧を、軸まわりに回した面」**でした。
+struct RevolutionPatch {
+    axis: Vec3,
+    /// 軸の上の点。**子午線円の中心と同じ高さ**に取ります。
+    origin: Point3,
+    /// 軸に直交する枠。回した角をここで測ります。
+    e1: Vec3,
+    e2: Vec3,
+    /// 子午線円の半径。
+    meridian_radius: f64,
+    /// 子午線円の中心の、軸からの距離。球なら 0。
+    meridian_offset: f64,
+    /// 子午線の角と回した角の、進む向きの積の符号。
+    /// **理屈で決めず、中央で測ります。**
+    jacobian_sign: f64,
+    /// 回した角を読む基準の `u`。**極を避けるため**、軸から
+    /// いちばん遠い所を使います。
+    reference_u: f64,
+}
+
+impl RevolutionPatch {
+    /// 点を「軸からの距離」と「軸に沿った高さ」に落とす。
+    fn cylindrical(&self, point: Point3) -> (f64, f64) {
+        let offset = point - self.origin;
+        let z = offset.dot(&self.axis);
+        let radial = offset - self.axis * z;
+        (radial.norm(), z)
+    }
+
+    /// 子午線上の角度。
+    fn meridian_angle(&self, point: Point3) -> f64 {
+        let (rho, z) = self.cylindrical(point);
+        z.atan2(rho - self.meridian_offset)
+    }
+
+    /// 面積の被積分関数の原始関数。sympy と手計算の両方で確かめました（4-157）。
+    fn area_antiderivative(&self, psi: f64) -> f64 {
+        let (r, rc) = (self.meridian_radius, self.meridian_offset);
+        r * (rc * psi + r * psi.sin())
+    }
+
+    /// 体積の被積分関数の原始関数。同上。
+    ///
+    /// **これは「軸の上の点から見た」ぶんです。** 世界の原点から見た位置の
+    /// ぶんは別に足します（下の2つ。4-157 で、原点にある球とトーラスでは
+    /// 0 なので気づけず、動かした途端に出ました）。
+    fn volume_antiderivative(&self, psi: f64) -> f64 {
+        let (r, rc) = (self.meridian_radius, self.meridian_offset);
+        -r / 2.0
+            * (3.0 * r * rc * psi
+                + 2.0 * r * r * psi.sin()
+                + r * rc * (2.0 * psi).sin() / 2.0
+                + 2.0 * rc * rc * psi.sin())
+    }
+
+    /// 面素ベクトルの、軸に直交する向きの成分の原始関数。
+    /// `∫ ρ·dz/dψ dψ`。
+    fn axial_antiderivative(&self, psi: f64) -> f64 {
+        let (r, rc) = (self.meridian_radius, self.meridian_offset);
+        r * rc * psi.sin() + r * r * (psi / 2.0 + (2.0 * psi).sin() / 4.0)
+    }
+
+    /// 面素ベクトルの、軸方向の成分の原始関数。`∫ ρ·dρ/dψ dψ`。
+    fn radial_antiderivative(&self, psi: f64) -> f64 {
+        let (r, rc) = (self.meridian_radius, self.meridian_offset);
+        r * rc * psi.cos() - r * r * psi.sin().powi(2) / 2.0
+    }
+}
+
+/// 3点から円を当てる。中心・半径・その平面の法線。
+fn fit_circle(a: Point3, b: Point3, c: Point3) -> Option<(Point3, f64, Vec3)> {
+    let (ab, ac) = (b - a, c - a);
+    let normal = ab.cross(&ac);
+    let norm = normal.norm();
+    let scale = ab.norm().max(ac.norm()).max(1.0);
+    if norm <= scale * scale * 1e-12 {
+        return None;
+    }
+    let denominator = 2.0 * norm * norm;
+    let alpha = ac.norm_squared() * ab.dot(&(ab - ac)) / denominator;
+    let beta = ab.norm_squared() * ac.dot(&(ac - ab)) / denominator;
+    let centre = Point3::from(a.coords + ab * alpha + ac * beta);
+    let radius = (a - centre).norm();
+    if radius <= scale * 1e-12 {
+        return None;
+    }
+    Some((centre, radius, normal / norm))
+}
+
+/// 面が**回転面の一部**なら、積むのに要る量を返す。
+///
+/// **推測しません。** 子午線が本当に半径一定の円か、それが軸まわりに回って
+/// いるか、標本がその面に乗るか——全部測ってから返します。1つでも外れたら
+/// `None` を返し、従来どおり三角形で積みます。
+fn recognise_revolution_patch(surface: &impl Surface3) -> Option<RevolutionPatch> {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let (span_u, span_v) = (u_max - u_min, v_max - v_min);
+    if !(span_u.abs() > 0.0 && span_v.abs() > 0.0) {
+        return None;
+    }
+    let at = |t: f64, w: f64| surface.evaluate(u_min + span_u * t, v_min + span_v * w);
+
+    let mut fitted = Vec::with_capacity(3);
+    for w in [0.0f64, 0.5, 1.0] {
+        fitted.push(fit_circle(at(0.0, w), at(0.5, w), at(1.0, w))?);
+    }
+    let radius = fitted[0].1;
+    let scale = radius.max((at(0.0, 0.0) - at(0.0, 1.0)).norm()).max(1.0);
+    if fitted.iter().any(|(_, r, _)| (r - radius).abs() > radius * 1e-9) {
+        return None;
+    }
+
+    let axis = fitted[0].2.cross(&fitted[2].2).try_normalize_safe(1e-12)?;
+
+    let moved = (fitted[2].0 - fitted[0].0).norm();
+    let (origin, meridian_offset) = if moved <= scale * 1e-9 {
+        (fitted[0].0, 0.0)
+    } else {
+        let (centre, offset, normal) = fit_circle(fitted[0].0, fitted[1].0, fitted[2].0)?;
+        if 1.0 - normal.dot(&axis).abs() > 1e-9 {
+            return None;
+        }
+        (centre, offset)
+    };
+
+    let candidate = RevolutionPatch {
+        axis,
+        origin,
+        e1: Vec3::new(1.0, 0.0, 0.0),
+        e2: Vec3::new(0.0, 1.0, 0.0),
+        meridian_radius: radius,
+        meridian_offset,
+        jacobian_sign: 1.0,
+        reference_u: u_min + span_u * 0.5,
+    };
+
+    for t in [0.0f64, 0.125, 0.375, 0.625, 0.875, 1.0] {
+        for w in [0.0f64, 0.25, 0.75, 1.0] {
+            let (rho, z) = candidate.cylindrical(at(t, w));
+            let residual = ((rho - meridian_offset).powi(2) + z * z).sqrt() - radius;
+            if residual.abs() > radius * 1e-9 {
+                return None;
+            }
+        }
+    }
+
+    let mut reference_u = candidate.reference_u;
+    let mut best_rho = 0.0;
+    for t in 0..=8 {
+        let u = u_min + span_u * (t as f64 / 8.0);
+        let (rho, _) = candidate.cylindrical(surface.evaluate(u, v_min));
+        if rho > best_rho {
+            best_rho = rho;
+            reference_u = u;
+        }
+    }
+    if best_rho <= scale * 1e-9 {
+        return None;
+    }
+    let reference = surface.evaluate(reference_u, v_min);
+    let offset = reference - origin;
+    let e1 = (offset - axis * offset.dot(&axis)).try_normalize_safe(1e-12)?;
+    let e2 = axis.cross(&e1);
+
+    let middle_u = u_min + span_u * 0.5;
+    let middle_v = v_min + span_v * 0.5;
+    let step_u = span_u * 1e-6;
+    let step_v = span_v * 1e-6;
+    let psi_of = |u: f64, v: f64| candidate.meridian_angle(surface.evaluate(u, v));
+    let phi_of = |v: f64| {
+        let point = surface.evaluate(reference_u, v);
+        let offset = point - origin;
+        let radial = offset - axis * offset.dot(&axis);
+        radial.dot(&e2).atan2(radial.dot(&e1))
+    };
+    let d_psi = psi_of(middle_u + step_u, middle_v) - psi_of(middle_u - step_u, middle_v);
+    let d_phi = phi_of(middle_v + step_v) - phi_of(middle_v - step_v);
+    if d_psi == 0.0 || d_phi == 0.0 {
+        return None;
+    }
+
+    Some(RevolutionPatch {
+        e1,
+        e2,
+        jacobian_sign: (d_psi * d_phi).signum(),
+        reference_u,
+        ..candidate
+    })
+}
+
+/// トリム境界だけを回って、領域積分を6つ求める。**u 方向には刻みません。**
+///
+/// 回した角の増分は曲面の導関数から厳密に取ります——`v` 方向の導関数は
+/// 接線向きで、大きさが「軸からの距離 × 角の増分率」なので割れば出ます。
+/// **極を避けるため、軸からいちばん遠い `u` で読みます**（回した角は `v`
+/// だけの関数なので、どの `u` で読んでも同じです）。
+///
+/// ## **輪は自分で閉じます**
+///
+/// p-curve のループは、**3D で潰れる辺を落として**返ってきます。球の
+/// パッチは実測で **3区間**で、極の辺がありません（4-157）。グリーンの
+/// 定理は閉じた輪を要求するので、隙間があれば `(u, v)` の直線で埋めます。
+///
+/// **落ちていたのは、ちょうど全部でした**——閉じずに積むと、球の面積が
+/// 0 になります（残りの辺の寄与が 0 だったため）。
+fn loop_revolution_moments(
+    pcurve_loop: &FacePcurveLoop,
+    surface: &impl Surface3,
+    patch: &RevolutionPatch,
+) -> Option<[f64; 6]> {
+    let mut moments = [0.0f64; 6];
+    let mut previous_psi: Option<f64> = None;
+    let mut failed = false;
+
+    // 1区間ぶんを積む。`uv_at` は媒介変数から `(u, v)`、`slope_at` はその微分。
+    let mut integrate = |uv_at: &dyn Fn(f64) -> Point2,
+                         slope_at: &dyn Fn(f64) -> Point2,
+                         previous_psi: &mut Option<f64>| {
+        for (node, weight) in GAUSS_LEGENDRE_10 {
+            let t = 0.5 * (node + 1.0);
+            let uv = uv_at(t);
+            let slope = slope_at(t);
+
+            // 子午線の角は繋げて読みます。トーラスの内側で折り返しを
+            // またぐと、切れたところで正弦が飛びます。
+            let mut psi = patch.meridian_angle(surface.evaluate(uv.x, uv.y));
+            if let Some(last) = *previous_psi {
+                let turns = ((psi - last) / std::f64::consts::TAU).round();
+                psi -= turns * std::f64::consts::TAU;
+            }
+            *previous_psi = Some(psi);
+
+            let (point, _, dv_vector) =
+                surface.evaluate_with_derivatives(patch.reference_u, uv.y);
+            let offset = point - patch.origin;
+            let axial = offset.dot(&patch.axis);
+            let radial = offset - patch.axis * axial;
+            let rho = radial.norm();
+            if rho <= f64::EPSILON {
+                failed = true;
+                return;
+            }
+            let unit = radial / rho;
+            let tangential = patch.axis.cross(&unit);
+            let angle_rate = dv_vector.dot(&tangential) / rho;
+            let (cos_phi, sin_phi) = (unit.dot(&patch.e1), unit.dot(&patch.e2));
+
+            // 0.5 は t を [-1,1] から [0,1] へ移したぶん。
+            let scale = 0.5 * weight * angle_rate * slope.y;
+            moments[0] += psi * scale;
+            moments[1] += patch.area_antiderivative(psi) * scale;
+            moments[2] += patch.volume_antiderivative(psi) * scale;
+            let axial_moment = patch.axial_antiderivative(psi);
+            moments[3] += axial_moment * cos_phi * scale;
+            moments[4] += axial_moment * sin_phi * scale;
+            moments[5] += patch.radial_antiderivative(psi) * scale;
+        }
+    };
+
+    // 区間の並びを (u, v) で拾い、隙間があれば直線で埋める。
+    let mut first: Option<Point2> = None;
+    let mut cursor: Option<Point2> = None;
+    for segment in &pcurve_loop.segments {
+        let (t_min, t_max) = segment.curve.param_range();
+        if (t_max - t_min).abs() <= f64::EPSILON {
+            continue;
+        }
+        let start = segment.curve.evaluate(t_min);
+        if first.is_none() {
+            first = Some(start);
+        }
+        if let Some(previous) = cursor {
+            if (start - previous).norm() > 1e-12 {
+                let gap_start = previous;
+                let gap_end = start;
+                let step = gap_end - gap_start;
+                integrate(
+                    &|t| Point2::from(gap_start.coords + step * t),
+                    &|_| Point2::from(step),
+                    &mut previous_psi,
+                );
+            }
+        }
+        for (span_start, span_end) in knot_spans(&segment.curve, t_min, t_max) {
+            let width = span_end - span_start;
+            if width.abs() <= f64::EPSILON {
+                continue;
+            }
+            integrate(
+                &|t| segment.curve.evaluate(span_start + width * t),
+                &|t| (segment.curve.evaluate_derivative(span_start + width * t) * width).into(),
+                &mut previous_psi,
+            );
+        }
+        cursor = Some(segment.curve.evaluate(t_max));
+    }
+    // 最後から最初へ戻る辺。**ここが球の極の辺です。**
+    if let (Some(start), Some(end)) = (first, cursor) {
+        if (start - end).norm() > 1e-12 {
+            let step = start - end;
+            integrate(
+                &|t| Point2::from(end.coords + step * t),
+                &|_| Point2::from(step),
+                &mut previous_psi,
+            );
+        }
+    }
+
+    if failed {
+        return None;
+    }
+    moments.iter().all(|m| m.is_finite()).then_some(moments)
+}
+
 /// 円柱の四半パッチ。**面の中身を刻まずに積むために要る量**だけ持ちます。
 struct CylindricalPatch {
     /// 円の中心（世界座標）。
