@@ -102,12 +102,47 @@ pub fn face_parameter_area(face: &Face) -> Option<f64> {
 /// cannot be used, and surface classes without p-curve support, fall back to a
 /// uniform grid over the whole parameter rectangle.
 pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTriangulation {
-    let result = face_uv_triangulation_inner(face, params);
+    let result = face_uv_triangulation_inner(face, params, true);
     zenith_geom::work_counter::count_uv_triangulation(result.triangles.len());
+    if std::env::var_os("ZENITH_UVWHY").is_some() {
+        eprintln!("UVWHY 細分あり {} u{} v{}", result.triangles.len(), params.u_divisions, params.v_divisions);
+    }
     result
 }
 
-fn face_uv_triangulation_inner(face: &Face, params: &TessellationParams) -> UvTriangulation {
+/// **面の中の点を選ぶための**トリム領域の三角化。
+///
+/// 細分を掛けず、境界も表示用の精度で標本します。**点を1つ選ぶだけなら
+/// どちらも要りません**——earcut が出した三角形の重心は、もう領域の中に
+/// あります。平面側の `planar_point_clear_of_holes` も、前から境界を
+/// 8点で標本しています。
+///
+/// **面積や体積を積むのに使ってはいけません。** 細分を外すと曲面の面積が
+/// 相対 6e-5 動きます（`ZENITH_NO_TRIM_REFINE` の注記）。境界を粗く取れば
+/// 領域そのものが変わります。
+///
+/// 実測（4-160）: 45ケースの uv 三角形 8,994,423 枚のうち **8,745,591 枚
+/// （97%）が、点を1つ選ぶために作られていました**
+/// （`representative_face_point` と `spread_face_points`）。**重いのは
+/// 細分ではなく earcut のほう**で、1回あたり約2万枚——境界を「1点も
+/// 落とさない」精度で標本していたためです。
+pub fn face_uv_triangulation_for_point_picking(
+    face: &Face,
+    params: &TessellationParams,
+) -> UvTriangulation {
+    let result = face_uv_triangulation_inner(face, params, false);
+    zenith_geom::work_counter::count_uv_triangulation(result.triangles.len());
+    if std::env::var_os("ZENITH_UVWHY").is_some() {
+        eprintln!("UVWHY 点を選ぶ {} u{} v{}", result.triangles.len(), params.u_divisions, params.v_divisions);
+    }
+    result
+}
+
+fn face_uv_triangulation_inner(
+    face: &Face,
+    params: &TessellationParams,
+    refine: bool,
+) -> UvTriangulation {
     match &face.geometry {
         FaceGeometry::Plane(_) => {
             let trimmed = planar_uv_triangulation(face, params);
@@ -145,7 +180,14 @@ fn face_uv_triangulation_inner(face: &Face, params: &TessellationParams) -> UvTr
                 return aligned;
             }
             // 面積を積む側なので、境界の折れは1つも落とさない。
-            let trimmed = trimmed_uv_triangulation(face, nurbs, params, LoopFidelity::Exact);
+            let fidelity = if refine {
+                // 面積を積む側なので、境界の折れは1つも落とさない。
+                LoopFidelity::Exact
+            } else {
+                // 点を選ぶだけなので、表示用の適応標本で足りる。
+                LoopFidelity::Display
+            };
+            let trimmed = trimmed_uv_triangulation_with(face, nurbs, params, fidelity, refine);
             if trimmed.is_empty() {
                 // ここに来るのは p-curve が導出もできなかった面だけ。全矩形を
                 // 積むので、トリムされた面ならこの値は小さすぎず大きすぎる。
@@ -551,6 +593,16 @@ fn trimmed_uv_triangulation(
     params: &TessellationParams,
     fidelity: LoopFidelity,
 ) -> UvTriangulation {
+    trimmed_uv_triangulation_with(face, surface, params, fidelity, true)
+}
+
+fn trimmed_uv_triangulation_with(
+    face: &Face,
+    surface: &impl Surface3,
+    params: &TessellationParams,
+    fidelity: LoopFidelity,
+    refine: bool,
+) -> UvTriangulation {
     let Some(pcurves) = &face.pcurves else {
         return UvTriangulation::default();
     };
@@ -730,8 +782,8 @@ fn trimmed_uv_triangulation(
     // 実測では**要りました**（曲面の面積が相対 6e-5 動き、面分割が 1e-6 の
     // 関門で断られるようになります）。速くするために外す口ではありません。
     let before_refinement = triangles.len();
-    let skip_refinement = std::env::var_os("ZENITH_NO_TRIM_REFINE").is_some();
-    if skip_refinement {
+    let skip_refinement = !refine || std::env::var_os("ZENITH_NO_TRIM_REFINE").is_some();
+    if skip_refinement && refine {
         eprintln!(
             "ZENITH_NO_TRIM_REFINE is set: trimmed faces are integrated on the unrefined \
              triangulation and their areas are WRONG (measured: 6e-5 relative on a cylinder)"

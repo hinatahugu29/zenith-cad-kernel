@@ -445,6 +445,15 @@ fn main() {
     if let Some((name, relative)) = &worst_analytic {
         println!("worst analytic agreement: {relative:.2e}  ({name})");
     }
+    // **面積分は「検算の段」で走ります。** 上の `solve work` は
+    // `boolean_solids_exact_result_unverified` を囲んだ区間だけなので、
+    // ここは入りません（4-156 でそこを取り違えました）。走行全体で
+    // 数え直して、別の行として出します。
+    let whole_run = zenith_geom::work_counter::snapshot();
+    println!(
+        "face integrals: {} calls, {} uv triangulations, {} triangles   (whole run, deterministic)",
+        whole_run.face_integrals, whole_run.uv_triangulations, whole_run.uv_triangles
+    );
     println!(
         "solve work: {} surface evaluations, {} marching Newton iterations, {} marches   (deterministic; compare these across runs, not the seconds)",
         solve_work_total.surface_evaluations,
