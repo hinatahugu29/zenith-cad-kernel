@@ -113,6 +113,22 @@ pub fn find_result_pinch(
     op: BooleanOpType,
     tol: &Tolerance,
 ) -> Option<ContactPinch> {
+    // **測れなかったときに、何が来ていたのかを残します。**
+    //
+    // 実測（4-170）: 円柱どうしが母線で接する和は、ここに**長さ 3e-4 の
+    // 破片が 8本**来ていました。輪の半径は長さの 1/100 なので 3e-6——
+    // 公差の 3倍で、内外の判定が雑音になります。**測らないのが正しい**
+    // ので、閾値は動かしません。稜が短いこと自体が本題です。
+    if std::env::var_os("ZENITH_CONTACT_WHY").is_some() {
+        let lengths: Vec<f64> = edges.iter().map(sampled_length).collect();
+        let shortest = lengths.iter().cloned().fold(f64::INFINITY, f64::min);
+        let longest = lengths.iter().cloned().fold(0.0f64, f64::max);
+        eprintln!(
+            "CONTACTWHY 稜 {} 本、長さ {shortest:.3e}〜{longest:.3e}、輪の半径の下限 {:.3e}",
+            edges.len(),
+            tol.linear * 100.0
+        );
+    }
     edges
         .iter()
         .find_map(|edge| pinch_along_edge(solid_a, solid_b, edge, op, tol))
