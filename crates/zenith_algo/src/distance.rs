@@ -543,7 +543,7 @@ fn support_foot(point: Point3, face: &zenith_topo::Face) -> Option<(Point3, Poin
             ))
         }
         FaceGeometry::Nurbs(surface) => {
-            let projection = ExtremumEngine::point_to_surface(point, surface, 48, 1e-12).ok()?;
+            let projection = { ExtremumEngine::point_to_surface(point, surface, 48, 1e-12).ok()? };
             // **極では `normal` が `None` を返します。** 回転面の軸上にある点は
             // 最近点がちょうど極になるので、そのままだと「この面には足が無い」
             // ことになります（読んだ球の中心線がそれでした）。まわりからの

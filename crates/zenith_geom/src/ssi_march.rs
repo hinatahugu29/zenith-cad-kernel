@@ -245,7 +245,7 @@ impl IntersectionMarcher {
         tol: &Tolerance,
     ) -> Option<[f64; 4]> {
         let point = s1.evaluate(seed_u, seed_v);
-        let projection = ExtremumEngine::point_to_surface(point, s2, 64, 1e-13).ok()?;
+        let projection = { ExtremumEngine::point_to_surface(point, s2, 64, 1e-13).ok()? };
         let mut state = [seed_u, seed_v, projection.u, projection.v];
 
         // 拘束の向きは、いまの位置での接線でよい。落とす間に多少ずれても、
@@ -1492,7 +1492,7 @@ impl IntersectionMarcher {
                     ),
                     // 最初の1点だけは、どこから始めるべきか分からないので
                     // 全域を粗く見る。
-                    None => ExtremumEngine::point_to_surface(sample.point, surface, 64, 1e-13),
+                    None => { ExtremumEngine::point_to_surface(sample.point, surface, 64, 1e-13) },
                 };
                 if let Ok(projection) = projection {
                     worst = worst.max(projection.distance);

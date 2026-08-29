@@ -412,9 +412,14 @@ impl Face {
         }
 
         for (loop_name, points) in loops {
+            // **1点目だけ全域を粗く見て、あとは直前の結果を種にします**
+            // （4-164）。ループが変わったら種は捨てます——別の輪の点は
+            // 遠いことがあるので、悪い出発点になります。
+            let mut seed: Option<Point2> = None;
             for point in points {
                 report.sampled_point_count += 1;
-                let distance = self.distance_to_surface(point);
+                let (distance, landed) = self.distance_to_surface(point, seed, tol.linear);
+                seed = landed;
                 report.max_distance = report.max_distance.max(distance);
                 if distance > tol.linear {
                     report.off_surface_point_count += 1;
@@ -429,17 +434,55 @@ impl Face {
         report
     }
 
-    fn distance_to_surface(&self, point: Point3) -> f64 {
+    /// 点が面からどれだけ離れているか。**着地した `(u, v)` も返します**
+    /// ——次の点の種にするためです（4-164）。
+    ///
+    /// ## 種は、答えが良かったときだけ信じます
+    ///
+    /// 種を渡すと 17x17 の格子を省けますが、**遠い局所解に引きずられる**
+    /// ことがあります。実測（4-164）: 輪に沿って種を渡していったら、
+    /// 境界点が最大 **14.14** 離れていると報告され、45ケースの1件目で
+    /// 落ちました（誤差が 1.83 → 3.75 → 5.71 …と単調に伸びる形）。
+    ///
+    /// **`limit` の中に収まったときだけ採ります。** 収まらなければ全域を
+    /// 見直してから答えます。ここは「面の上にあるか」を判定する段なので、
+    /// **収まっていない点は、どのみち全域で確かめる価値があります**。
+    fn distance_to_surface(
+        &self,
+        point: Point3,
+        seed: Option<Point2>,
+        limit: f64,
+    ) -> (f64, Option<Point2>) {
         match &self.geometry {
-            FaceGeometry::Plane(plane) => (point - plane.origin).dot(&plane.normal).abs(),
-            FaceGeometry::Nurbs(surface) => {
-                ExtremumEngine::point_to_surface(point, surface, 24, 1e-9)
-                    .map(|projection| projection.distance)
-                    .unwrap_or(f64::INFINITY)
+            FaceGeometry::Plane(plane) => {
+                ((point - plane.origin).dot(&plane.normal).abs(), None)
             }
-            FaceGeometry::Coons(surface) => sampled_surface_distance(point, surface, 16),
-            FaceGeometry::Gordon(surface) => sampled_surface_distance(point, surface, 16),
-            FaceGeometry::Triangular(surface) => sampled_surface_distance(point, surface, 16),
+            FaceGeometry::Nurbs(surface) => {
+                if let Some(uv) = seed {
+                    if let Ok(projection) = ExtremumEngine::point_to_surface_seeded(
+                        point, surface, uv.x, uv.y, 24, 1e-9,
+                    ) {
+                        if projection.distance <= limit {
+                            return (
+                                projection.distance,
+                                Some(Point2::new(projection.u, projection.v)),
+                            );
+                        }
+                    }
+                }
+                match ExtremumEngine::point_to_surface(point, surface, 24, 1e-9) {
+                    Ok(projection) => (
+                        projection.distance,
+                        Some(Point2::new(projection.u, projection.v)),
+                    ),
+                    Err(_) => (f64::INFINITY, None),
+                }
+            }
+            FaceGeometry::Coons(surface) => (sampled_surface_distance(point, surface, 16), None),
+            FaceGeometry::Gordon(surface) => (sampled_surface_distance(point, surface, 16), None),
+            FaceGeometry::Triangular(surface) => {
+                (sampled_surface_distance(point, surface, 16), None)
+            }
         }
     }
 }
@@ -850,19 +893,34 @@ fn project_edge_to_nurbs_pcurve(
     let on_surface_limit = tol.linear.max(1e-6) * 10.0;
     let mut max_distance: f64 = 0.0;
 
+    // **種を渡した答えは、面の上に乗っていたときだけ信じます**（4-164）。
+    //
+    // 種を渡すと 17x17 の格子と8段の詰め（曲面評価 353 回）を省けますが、
+    // **継ぎ目のそばでは別の枝へ引きずられます**。実測: 種を無条件に
+    // 信じると `contact_placement_probe` が **81 ok → 75 ok**（6演算が
+    // 断られる）になりました。**テストは全部通っていました。**
+    //
+    // 辺は面の上にあるはずなので、`on_surface_limit` を超えた答えは
+    // 採りません。超えたら全域を見直します——**そこは元の値段に戻るだけ**
+    // で、悪くはなりません。
     let mut project = |t: f64, seed: Option<Point2>| -> Result<Point2, String> {
         let point = edge.evaluate_normalized(t);
-        let projection = match seed {
-            Some(uv) => ExtremumEngine::point_to_surface_seeded(
+        if let Some(uv) = seed {
+            if let Ok(projection) = ExtremumEngine::point_to_surface_seeded(
                 point,
                 surface,
                 uv.x,
                 uv.y,
                 32,
                 tol.parametric,
-            )?,
-            None => ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)?,
-        };
+            ) {
+                if projection.distance <= on_surface_limit {
+                    max_distance = max_distance.max(projection.distance);
+                    return Ok(Point2::new(projection.u, projection.v));
+                }
+            }
+        }
+        let projection = ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)?;
         max_distance = max_distance.max(projection.distance);
         Ok(Point2::new(projection.u, projection.v))
     };
@@ -870,8 +928,20 @@ fn project_edge_to_nurbs_pcurve(
     let start = samples_per_edge.max(4);
     let mut parameters: Vec<f64> = (0..=start).map(|i| i as f64 / start as f64).collect();
     let mut uv_points: Vec<Point2> = Vec::with_capacity(parameters.len());
+    // **1点目だけ全域を粗く見て、あとは直前の結果を種にします**（4-164）。
+    //
+    // 射影は種を渡さないと 17x17 の格子と8段の詰めを払います（1回につき
+    // 曲面評価 353 回）。辺に沿って並ぶ点は互いに近いので、**2点目からは
+    // 直前の (u, v) が良い出発点**です。下の細分ループは前から種を
+    // 渡しています——ここだけ渡していませんでした。
+    //
+    // 実測（4-164、45ケース）: この口が全域を粗く見た回数は 25,227 回で、
+    // 解く段の曲面評価の 2割にあたります。
+    let mut previous: Option<Point2> = None;
     for t in &parameters {
-        uv_points.push(project(*t, None)?);
+        let uv = project(*t, previous)?;
+        previous = Some(uv);
+        uv_points.push(uv);
     }
     settle_seam_parameters(&mut uv_points, surface, tol);
 

@@ -851,7 +851,7 @@ impl<'a> SectionRefiner<'a> {
                 Some((u, v)) => zenith_geom::ExtremumEngine::point_to_surface_seeded(
                     point, surface, u, v, 64, parametric,
                 ),
-                None => zenith_geom::ExtremumEngine::point_to_surface(point, surface, 64, parametric),
+                None => { zenith_geom::ExtremumEngine::point_to_surface(point, surface, 64, parametric) },
             }
             .ok()?;
 

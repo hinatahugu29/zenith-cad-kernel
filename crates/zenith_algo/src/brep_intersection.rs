@@ -2990,8 +2990,10 @@ fn split_patch_face_by_section_edge(
     // 分割線が本当にこの面の上にあるか。曲面の種類を問わず、投影して測る。
     let scale = sampled_edge_extent(split_edge).max(1.0);
     for point in sample_curve_points(&split_edge.curve, 12) {
-        let projection = ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)
-            .map_err(|err| format!("Section edge could not be projected: {err}"))?;
+        let projection = {
+            ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)
+        }
+        .map_err(|err| format!("Section edge could not be projected: {err}"))?;
         if projection.distance > tol.linear * 10.0 * scale {
             return Err(format!(
                 "Section edge leaves the face by {:.3e}",
@@ -7230,7 +7232,7 @@ fn piece_normal_at(
         }
         FaceGeometry::Nurbs(surface) => {
             let projection =
-                ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric).ok()?;
+                { ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric).ok()? };
             // 乗っていなければ、同じ場所の面ではありません。
             let scale = (point - Point3::origin()).norm().max(1.0);
             if projection.distance > tol.linear * 100.0 * scale {
@@ -7981,7 +7983,7 @@ fn face_patch(face: &Face) -> Option<NurbsSurface3> {
 
 /// 点がパッチの上に乗っていれば、その `(u, v)` を返す。
 fn seed_on_patch(patch: &NurbsSurface3, point: Point3, tol: &Tolerance) -> Option<(f64, f64)> {
-    let projection = ExtremumEngine::point_to_surface(point, patch, 64, 1e-13).ok()?;
+    let projection = { ExtremumEngine::point_to_surface(point, patch, 64, 1e-13).ok()? };
     // 辿りの端点は交線の上に丸め誤差ぶんだけ乗っています。実測で 2.4e-5。
     // 公差そのものでは締めすぎるので、辿りの精度に合わせます。
     let limit = (tol.linear * 1000.0).max(1e-4);

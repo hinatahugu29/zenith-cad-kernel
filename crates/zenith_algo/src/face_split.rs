@@ -702,7 +702,7 @@ impl FaceSplitter {
                     (point - plane.origin).dot(&normal).abs()
                 }
                 FaceGeometry::Nurbs(surface) => {
-                    ExtremumEngine::point_to_surface(point, surface, 64, 1e-13)
+                    { ExtremumEngine::point_to_surface(point, surface, 64, 1e-13) }
                         .map_err(|err| format!("could not project onto the face: {err}"))?
                         .distance
                 }
