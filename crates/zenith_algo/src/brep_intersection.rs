@@ -3831,9 +3831,18 @@ fn spread_face_points(face: &Face, want: usize) -> Vec<Point3> {
     }
 
     if let FaceGeometry::Nurbs(surface) = &face.geometry {
-        // **点を選ぶだけなので、細分は掛けません**（4-160）。earcut が出した
-        // 三角形の重心はもう領域の中にあります。実測で、45ケースの uv
-        // 三角形の 97% はここと `representative_face_point` が作っていました。
+        // **三角化しません**（4-161）。p-curve の多角形から直接散らします。
+        if let Some((outer, holes)) = pcurve_uv_polygons(face) {
+            let picked = uv_points_clear_of_holes(&outer, &holes, want);
+            if picked.len() >= 4 {
+                return picked
+                    .into_iter()
+                    .map(|uv| surface.evaluate(uv.x, uv.y))
+                    .collect();
+            }
+        }
+        // 多角形から取れなかったときの受け皿。**点を選ぶだけなので、
+        // 細分は掛けません**（4-160）。
         let domain = zenith_tess::face_uv_triangulation_for_point_picking(
             face,
             &zenith_tess::TessellationParams::default(),
@@ -4367,6 +4376,113 @@ fn points_same_3d(a: Point3, b: Point3, tol: f64) -> bool {
 /// トリム領域を三角形に割り、**いちばん大きい三角形の重心**を UV で取って
 /// 曲面に載せる。三角形は領域の内側にあり、大きいものを選べば境界からも
 /// 離れている。
+/// トリムループを uv の多角形として取り出す。外周と穴。
+///
+/// **三角化しません。** 点を1つ選ぶだけなら多角形で足ります（4-161）。
+fn pcurve_uv_polygons(face: &Face) -> Option<(Vec<Point2>, Vec<Vec<Point2>>)> {
+    const PER_SEGMENT: usize = 24;
+    let pcurves = face.pcurves.as_ref()?;
+    let sample = |loop_ref: &zenith_topo::FacePcurveLoop| -> Vec<Point2> {
+        let mut points = Vec::new();
+        for segment in &loop_ref.segments {
+            let (t_min, t_max) = segment.curve.param_range();
+            if (t_max - t_min).abs() <= f64::EPSILON {
+                continue;
+            }
+            for step in 0..PER_SEGMENT {
+                let t = t_min + (t_max - t_min) * (step as f64 / PER_SEGMENT as f64);
+                points.push(segment.curve.evaluate(t));
+            }
+        }
+        points
+    };
+    let outer = sample(&pcurves.outer_loop);
+    if outer.len() < 3 {
+        return None;
+    }
+    let holes: Vec<Vec<Point2>> = pcurves
+        .inner_loops
+        .iter()
+        .map(sample)
+        .filter(|hole| hole.len() >= 3)
+        .collect();
+    Some((outer, holes))
+}
+
+/// uv の多角形の内側から、縁からいちばん遠い点を格子で探す。
+///
+/// `want` 個返します。**散らして取るために、見つけた点を等間隔に
+/// 間引きます**（固まった点ばかりでは「散らした」ことになりません）。
+///
+/// 平面側の [`planar_point_clear_of_holes`] と同じやり方です。あちらは
+/// 3D の境界点を平面へ射影しますが、曲面は **p-curve が最初から uv に
+/// ある**ので、そのまま使えます。
+fn uv_points_clear_of_holes(
+    outer: &[Point2],
+    holes: &[Vec<Point2>],
+    want: usize,
+) -> Vec<Point2> {
+    const GRID: usize = 24;
+    if want == 0 || outer.len() < 3 {
+        return Vec::new();
+    }
+    let (mut min_u, mut max_u) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut min_v, mut max_v) = (f64::INFINITY, f64::NEG_INFINITY);
+    for uv in outer {
+        min_u = min_u.min(uv.x);
+        max_u = max_u.max(uv.x);
+        min_v = min_v.min(uv.y);
+        max_v = max_v.max(uv.y);
+    }
+    let span = (max_u - min_u).max(max_v - min_v);
+    if !(span > 0.0) {
+        return Vec::new();
+    }
+    let margin = span * 1e-3;
+
+    let mut inside: Vec<(f64, Point2)> = Vec::new();
+    for i in 1..GRID {
+        for j in 1..GRID {
+            let uv = Point2::new(
+                min_u + (max_u - min_u) * (i as f64 / GRID as f64),
+                min_v + (max_v - min_v) * (j as f64 / GRID as f64),
+            );
+            if !point_in_polygon_2d(uv, outer, 0.0) {
+                continue;
+            }
+            if holes.iter().any(|hole| point_in_polygon_2d(uv, hole, 0.0)) {
+                continue;
+            }
+            let clearance = std::iter::once(outer)
+                .chain(holes.iter().map(|hole| hole.as_slice()))
+                .map(|polygon| polygon_min_distance_2d(uv, polygon))
+                .fold(f64::INFINITY, f64::min);
+            if clearance <= margin {
+                continue;
+            }
+            inside.push((clearance, uv));
+        }
+    }
+    if inside.is_empty() {
+        return Vec::new();
+    }
+    if want == 1 {
+        // いちばん縁から遠い点。
+        let best = inside
+            .iter()
+            .max_by(|left, right| left.0.total_cmp(&right.0))
+            .map(|(_, uv)| *uv);
+        return best.into_iter().collect();
+    }
+    if inside.len() <= want {
+        return inside.into_iter().map(|(_, uv)| uv).collect();
+    }
+    let stride = inside.len() as f64 / want as f64;
+    (0..want)
+        .map(|index| inside[((index as f64 + 0.5) * stride) as usize % inside.len()].1)
+        .collect()
+}
+
 fn representative_face_point(face: &Face) -> Point3 {
     if let FaceGeometry::Plane(plane) = &face.geometry {
         if let Some(point) = planar_point_clear_of_holes(face, plane) {
@@ -4375,6 +4491,12 @@ fn representative_face_point(face: &Face) -> Point3 {
     }
 
     if let FaceGeometry::Nurbs(surface) = &face.geometry {
+        // **三角化しません**（4-161）。p-curve の多角形から直接選びます。
+        if let Some((outer, holes)) = pcurve_uv_polygons(face) {
+            if let Some(uv) = uv_points_clear_of_holes(&outer, &holes, 1).first() {
+                return surface.evaluate(uv.x, uv.y);
+            }
+        }
         if let Some((u, v)) = largest_domain_triangle_centroid(face) {
             return surface.evaluate(u, v);
         }
