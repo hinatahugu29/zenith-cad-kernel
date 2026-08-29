@@ -700,25 +700,15 @@ impl SurfaceIntegral {
         true
     }
 
-    /// 円柱の一部である面を、**トリム境界だけで**積む。
+    /// 母線が直線の回転面（**円柱と円錐**）の一部である面を、
+    /// **トリム境界だけで**積む。
     ///
     /// 積めたら `true`。積めなければ何も足さずに `false` を返すので、
     /// 呼び手は従来どおり三角形で積みます。
     ///
-    /// ## 式（導出は HANDOVER 4-154、実装の確認は 4-156）
-    ///
-    /// 軸まわりの角度を `θ`、円の中心を `O`、半径を `r`、母線の長さ / v の
-    /// 幅を `|κ| = r·h/Δv` とすると
-    ///
-    /// ```text
-    /// p_θ × p_v = κ · ρ̂(θ)          ρ̂ = cosθ·e1 + sinθ·e2
-    /// 面積      = |κ| · ∬ dθ dv
-    /// 体積の寄与 = s·ν·|κ|/3 · ∬ (r + O·e1 cosθ + O·e2 sinθ) dθ dv
-    /// ```
-    ///
-    /// `v` が消えるのが効きます——`p·ρ̂` に母線の項が入らないからです
-    /// （`a ⊥ ρ̂`）。`ν` は法線の向きで、**中央で測って**決めます。
-    fn add_cylindrical_face(
+    /// 式は [`loop_ruled_revolution_moments`] に。**半径を一定にすると
+    /// 4-156 の円柱の式にそのまま戻ります**（4-158 で確かめました）。
+    fn add_ruled_revolution_face(
         &mut self,
         face: &Face,
         surface: &impl Surface3,
@@ -727,17 +717,30 @@ impl SurfaceIntegral {
         let Some(pcurves) = face.pcurves.as_ref() else {
             return false;
         };
-        let Some(patch) = recognise_cylindrical_patch(surface) else {
+        let Some(patch) = recognise_ruled_revolution_patch(surface) else {
             return false;
         };
+        let ((_, _), (v_min, v_max)) = surface.param_range();
+        // 角を読む `v` は、半径がいちばん大きい端にします（潰れた端を避ける）。
+        let frame_v = if patch.radius(v_min).abs() >= patch.radius(v_max).abs() {
+            v_min
+        } else {
+            v_max
+        };
 
-        let mut moments = loop_cylindrical_moments(&pcurves.outer_loop, surface, &patch);
+        let Some(mut moments) =
+            loop_ruled_revolution_moments(&pcurves.outer_loop, surface, &patch, frame_v)
+        else {
+            return false;
+        };
         let outer = moments[0];
         if outer.abs() <= f64::EPSILON {
             return false;
         }
         for hole in &pcurves.inner_loops {
-            let part = loop_cylindrical_moments(hole, surface, &patch);
+            let Some(part) = loop_ruled_revolution_moments(hole, surface, &patch, frame_v) else {
+                return false;
+            };
             // 穴は外周と逆符号で効かなければならない（平面の経路と同じ規約）。
             let sign = if part[0].signum() == outer.signum() {
                 -1.0
@@ -754,20 +757,14 @@ impl SurfaceIntegral {
             *moment *= normalisation;
         }
 
-        let [area_moment, cos_moment, sin_moment] = moments;
-        if !(area_moment.is_finite() && cos_moment.is_finite() && sin_moment.is_finite()) {
+        let area = patch.slant_rate() * moments[1];
+        if !(area.is_finite() && area >= 0.0) {
             return false;
         }
-
-        let scale = patch.jacobian_scale;
-        self.area += scale * area_moment;
-        let centre = patch.centre.coords;
-        let radial_integral = patch.radius * area_moment
-            + centre.dot(&patch.e1) * cos_moment
-            + centre.dot(&patch.e2) * sin_moment;
-        self.volume += orientation_sign * patch.normal_sign * scale * radial_integral / 3.0;
+        self.area += area;
+        self.volume += orientation_sign * patch.angle_sign * moments[2] / 3.0;
         if std::env::var_os("ZENITH_INTEGRAL_WHY").is_some() {
-            eprintln!("INTEGRALWHY 円柱（解析。中身を刻まない） 三角形 0");
+            eprintln!("INTEGRALWHY 母線が直線の回転面（解析。中身を刻まない） 三角形 0");
         }
         true
     }
@@ -789,7 +786,7 @@ impl SurfaceIntegral {
         // ありません。
         if self.area_and_volume_only
             && std::env::var_os("ZENITH_NO_ANALYTIC_FACE").is_none()
-            && (self.add_cylindrical_face(face, surface, orientation_sign)
+            && (self.add_ruled_revolution_face(face, surface, orientation_sign)
                 || self.add_revolution_face(face, surface, orientation_sign))
         {
             return;
@@ -1283,30 +1280,53 @@ fn loop_revolution_moments(
     moments.iter().all(|m| m.is_finite()).then_some(moments)
 }
 
-/// 円柱の四半パッチ。**面の中身を刻まずに積むために要る量**だけ持ちます。
-struct CylindricalPatch {
-    /// 円の中心（世界座標）。
-    centre: Point3,
-    radius: f64,
-    /// 円が乗る平面の枠。`e1` は `u` の始点方向、`e2` は `axis × e1`。
+/// 母線が直線の回転面。**円柱と円錐は、これ1つで両方とも入ります。**
+///
+/// 実測（4-158）: 円錐の `u` 等パラメータ線は軸まわりの円で、**半径が `v`
+/// で線形に変わります**（10 → 5 → 0）。母線は直線です。円柱は「半径が
+/// 変わらない円錐」なので、同じ式で書けます。
+///
+/// 式も確かめました——半径を一定にすると、4-156 の円柱の式に**そのまま
+/// 戻ります**。
+struct RuledRevolutionPatch {
+    axis: Vec3,
+    /// `v` の下端における、軸の上の点。
+    origin: Point3,
+    /// 軸に直交する枠。回した角をここで測ります。
     e1: Vec3,
     e2: Vec3,
-    /// 母線の長さ / v の幅。ヤコビアンの大きさ `|κ| = r * h / Δv` に入ります。
-    jacobian_scale: f64,
-    /// `(p_u × p_v)` が `ρ̂` と同じ向きなら +1、逆なら -1。
-    /// **符号は理屈で決めず、中央で測って決めます。**
-    normal_sign: f64,
+    /// `v` の下端の半径と、`v` に対する増分率。
+    radius_at_start: f64,
+    radius_rate: f64,
+    /// 軸に沿った高さの、`v` に対する増分率。下端は 0。
+    axial_rate: f64,
+    /// 回した角の、`u` に対する進む向きの符号。**中央で測って決めます。**
+    angle_sign: f64,
+    /// `v` の下端。
+    v_start: f64,
 }
 
-/// 面が**真の円柱の一部**なら、積むのに要る量を返す。
+impl RuledRevolutionPatch {
+    fn radius(&self, v: f64) -> f64 {
+        self.radius_at_start + self.radius_rate * (v - self.v_start)
+    }
+
+    fn axial(&self, v: f64) -> f64 {
+        self.axial_rate * (v - self.v_start)
+    }
+
+    /// 面素ベクトルの大きさの、半径で割ったぶん。`sqrt(dρ/dv² + dz/dv²)`。
+    fn slant_rate(&self) -> f64 {
+        (self.radius_rate * self.radius_rate + self.axial_rate * self.axial_rate).sqrt()
+    }
+}
+
+/// 面が**母線の直線な回転面**（円柱・円錐）の一部なら、積むのに要る量を返す。
 ///
-/// 4-154 で「45ケースの面積分の 44.8% が真の円柱」と測ったので、ここだけ
-/// 面の中身を刻まずに積めるようにします。
-///
-/// **推測しません。** 3点から円を当て、その円の上に他の標本が乗るか、
-/// 母線が本当に直線で軸に平行か、を全部измер……**測ってから**返します。
-/// 1つでも外れたら `None` を返し、従来どおり三角形で積みます。
-fn recognise_cylindrical_patch(surface: &impl Surface3) -> Option<CylindricalPatch> {
+/// **推測しません。** 等パラメータ線が円か、半径が `v` で線形か、母線が
+/// 直線か、標本がその面に乗るか——全部測ってから返します。1つでも外れたら
+/// `None` を返し、従来どおり三角形で積みます。
+fn recognise_ruled_revolution_patch(surface: &impl Surface3) -> Option<RuledRevolutionPatch> {
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
     let (span_u, span_v) = (u_max - u_min, v_max - v_min);
     if !(span_u.abs() > 0.0 && span_v.abs() > 0.0) {
@@ -1314,133 +1334,221 @@ fn recognise_cylindrical_patch(surface: &impl Surface3) -> Option<CylindricalPat
     }
     let at = |t: f64, w: f64| surface.evaluate(u_min + span_u * t, v_min + span_v * w);
 
-    // 母線（v 方向）が直線で、どの u でも同じベクトルか。
-    let ruling = at(0.0, 1.0) - at(0.0, 0.0);
-    let height = ruling.norm();
-    if height <= 0.0 {
-        return None;
+    // **両端は避けます。** 真の円錐は片方が1点に潰れていて、円が当たりません。
+    let samples = [0.2f64, 0.5, 0.8];
+    let mut fitted = Vec::with_capacity(3);
+    for w in samples {
+        fitted.push(fit_circle(at(0.0, w), at(0.5, w), at(1.0, w))?);
     }
-    let scale = height.max((at(1.0, 0.0) - at(0.0, 0.0)).norm()).max(1.0);
-    for t in [0.25f64, 0.5, 0.75, 1.0] {
-        let there = at(t, 1.0) - at(t, 0.0);
-        if (there - ruling).norm() > scale * 1e-9 {
-            return None;
-        }
-        // 中点が両端の平均か（v 方向に直線か）。
-        let middle = at(t, 0.5);
-        let average = Point3::from((at(t, 0.0).coords + at(t, 1.0).coords) * 0.5);
-        if (middle - average).norm() > scale * 1e-9 {
-            return None;
-        }
-    }
-    let axis = ruling / height;
+    let scale = fitted[0].1.max((at(0.0, 0.0) - at(0.0, 1.0)).norm()).max(1.0);
 
-    // 3点から円を当てる。軸に直交する平面の上にあることも見ます。
-    let (a, b, c) = (at(0.0, 0.0), at(0.5, 0.0), at(1.0, 0.0));
-    let (ab, ac) = (b - a, c - a);
-    let normal = ab.cross(&ac);
-    let normal_norm = normal.norm();
-    if normal_norm <= scale * scale * 1e-12 {
+    // 半径が `w` で線形か。
+    let (r_low, r_mid, r_high) = (fitted[0].1, fitted[1].1, fitted[2].1);
+    if (r_mid - (r_low + r_high) * 0.5).abs() > scale * 1e-9 {
         return None;
     }
-    if 1.0 - (normal / normal_norm).dot(&axis).abs() > 1e-9 {
+    // 中心が一直線に並ぶか。
+    let along = fitted[2].0 - fitted[0].0;
+    let length = along.norm();
+    if length <= scale * 1e-9 {
         return None;
     }
-    // 外心。
-    let denominator = 2.0 * normal_norm * normal_norm;
-    let alpha = ac.norm_squared() * ab.dot(&(ab - ac)) / denominator;
-    let beta = ab.norm_squared() * ac.dot(&(ac - ab)) / denominator;
-    let centre = Point3::from(a.coords + ab * alpha + ac * beta);
-    let radius = (a - centre).norm();
-    if radius <= scale * 1e-9 {
+    let axis = along / length;
+    let middle_offset = fitted[1].0 - fitted[0].0;
+    if (middle_offset - along * 0.5).norm() > scale * 1e-9 {
         return None;
     }
-
-    // 当てた円の上に、他の標本も乗るか。
-    for t in [0.125f64, 0.375, 0.625, 0.875] {
-        let point = at(t, 0.0);
-        if ((point - centre).norm() - radius).abs() > radius * 1e-9 {
-            return None;
-        }
-        if (point - centre).dot(&axis).abs() > scale * 1e-9 {
+    // 等パラメータ線の平面が、軸に直交するか。
+    for (_, _, normal) in &fitted {
+        if 1.0 - normal.dot(&axis).abs() > 1e-9 {
             return None;
         }
     }
 
-    let e1 = (a - centre).try_normalize_safe(1e-12)?;
+    // `w` から実際の `v` へ戻す。
+    let width = samples[2] - samples[0];
+    let radius_rate_w = (r_high - r_low) / width;
+    let axial_rate_w = length / width;
+    let radius_at_start = r_low - radius_rate_w * samples[0];
+    let origin = Point3::from(fitted[0].0.coords - axis * (axial_rate_w * samples[0]));
+
+    // 母線が直線か。中点が両端の平均に乗るか。
+    for t in [0.0f64, 0.25, 0.5, 0.75, 1.0] {
+        let (a, m, b) = (at(t, 0.0), at(t, 0.5), at(t, 1.0));
+        let average = Point3::from((a.coords + b.coords) * 0.5);
+        if (m - average).norm() > scale * 1e-9 {
+            return None;
+        }
+    }
+
+    let candidate = RuledRevolutionPatch {
+        axis,
+        origin,
+        e1: Vec3::new(1.0, 0.0, 0.0),
+        e2: Vec3::new(0.0, 1.0, 0.0),
+        radius_at_start,
+        radius_rate: radius_rate_w / span_v,
+        axial_rate: axial_rate_w / span_v,
+        angle_sign: 1.0,
+        v_start: v_min,
+    };
+
+    // 標本が本当にこの面に乗るか。
+    for t in [0.0f64, 0.125, 0.375, 0.625, 0.875, 1.0] {
+        for w in [0.0f64, 0.25, 0.5, 0.75, 1.0] {
+            let v = v_min + span_v * w;
+            let point = at(t, w);
+            let offset = point - candidate.origin;
+            let axial = offset.dot(&axis);
+            let radial = (offset - axis * axial).norm();
+            if (axial - candidate.axial(v)).abs() > scale * 1e-9 {
+                return None;
+            }
+            if (radial - candidate.radius(v)).abs() > scale * 1e-9 {
+                return None;
+            }
+        }
+    }
+
+    // 枠は、半径がいちばん大きい端で取ります（潰れた端を避けるため）。
+    let frame_v = if candidate.radius(v_min).abs() >= candidate.radius(v_max).abs() {
+        v_min
+    } else {
+        v_max
+    };
+    let reference = surface.evaluate(u_min, frame_v);
+    let offset = reference - candidate.origin;
+    let e1 = (offset - axis * offset.dot(&axis)).try_normalize_safe(1e-12)?;
     let e2 = axis.cross(&e1);
 
-    // 法線の向きは、中央で測って決めます。
-    let middle_uv = (
-        u_min + span_u * 0.5,
-        v_min + span_v * 0.5,
-    );
-    let (point, du, dv) = surface.evaluate_with_derivatives(middle_uv.0, middle_uv.1);
-    let radial = point - centre;
-    let radial = radial - axis * radial.dot(&axis);
-    let radial = radial.try_normalize_safe(1e-12)?;
-    let normal_sign = if du.cross(&dv).dot(&radial) >= 0.0 { 1.0 } else { -1.0 };
+    // 回した角の進む向きは、中央で測って決めます。
+    let angle_of = |u: f64| {
+        let point = surface.evaluate(u, frame_v);
+        let offset = point - candidate.origin;
+        let radial = offset - axis * offset.dot(&axis);
+        radial.dot(&e2).atan2(radial.dot(&e1))
+    };
+    let step = span_u * 1e-6;
+    let middle_u = u_min + span_u * 0.5;
+    let delta = angle_of(middle_u + step) - angle_of(middle_u - step);
+    if delta == 0.0 {
+        return None;
+    }
 
-    Some(CylindricalPatch {
-        centre,
-        radius,
+    Some(RuledRevolutionPatch {
         e1,
         e2,
-        jacobian_scale: radius * height / span_v.abs(),
-        normal_sign,
+        angle_sign: delta.signum(),
+        ..candidate
     })
 }
 
-/// トリム境界だけを回って、`(θ, v)` 平面での領域積分を3つ求める。
+/// トリム境界だけを回って、領域積分を3つ求める。**u 方向には刻みません。**
 ///
-/// グリーンの定理です。`∬ g(θ) dθ dv = ∮ G(θ) dv`（`G' = g`）。
+/// ```text
+/// 面積 = L · ε · ∮ ρ(v)·θ dv                  L = sqrt(dρ/dv² + dz/dv²)
+/// 体積 = s·σ·ε/3 · ∮ [A(v)·θ + B(v)(O·e1 sinθ − O·e2 cosθ)] dv
+/// ```
 ///
-/// - `g = 1`   → `G = θ`
-/// - `g = cosθ` → `G = sinθ`
-/// - `g = sinθ` → `G = -cosθ`
+/// `A(v) = ρ·(−dρ/dv·(O·a + z) + dz/dv·ρ)`、`B(v) = ρ·dz/dv`。
+/// **半径を一定にすると 4-156 の円柱の式に戻ります**（確かめました）。
 ///
-/// **`u` 方向には1回も刻みません。** `θ(u)` は曲面から直に読めるので、
-/// 中身を三角形で埋める必要がありません。残差は境界の標本だけです。
-fn loop_cylindrical_moments(
+/// **輪は自分で閉じます。** p-curve のループは 3D で潰れる辺を落として
+/// 返るので（真の円錐の頂点、球の極。4-157）、隙間は `(u, v)` の直線で
+/// 埋めます。
+fn loop_ruled_revolution_moments(
     pcurve_loop: &FacePcurveLoop,
     surface: &impl Surface3,
-    patch: &CylindricalPatch,
-) -> [f64; 3] {
-    let ((_, _), (v_min, v_max)) = surface.param_range();
-    let span_v = v_max - v_min;
+    patch: &RuledRevolutionPatch,
+    frame_v: f64,
+) -> Option<[f64; 3]> {
+    let origin = patch.origin.coords;
+    let axial_origin = origin.dot(&patch.axis);
+    let (o1, o2) = (origin.dot(&patch.e1), origin.dot(&patch.e2));
     let mut moments = [0.0f64; 3];
+    let mut previous_angle: Option<f64> = None;
 
+    let mut integrate = |uv_at: &dyn Fn(f64) -> Point2,
+                         slope_at: &dyn Fn(f64) -> Point2,
+                         previous_angle: &mut Option<f64>| {
+        for (node, weight) in GAUSS_LEGENDRE_10 {
+            let t = 0.5 * (node + 1.0);
+            let uv = uv_at(t);
+            let slope = slope_at(t);
+
+            // 角は、半径がいちばん大きい端で読みます（潰れた端を避ける）。
+            // 角は `u` だけの関数なので、どの `v` で読んでも同じです。
+            let point = surface.evaluate(uv.x, frame_v);
+            let offset = point - patch.origin;
+            let radial = offset - patch.axis * offset.dot(&patch.axis);
+            let mut theta = radial.dot(&patch.e2).atan2(radial.dot(&patch.e1));
+            if let Some(last) = *previous_angle {
+                let turns = ((theta - last) / std::f64::consts::TAU).round();
+                theta -= turns * std::f64::consts::TAU;
+            }
+            *previous_angle = Some(theta);
+
+            let rho = patch.radius(uv.y);
+            let z = patch.axial(uv.y);
+            let a_term = rho
+                * (-patch.radius_rate * (axial_origin + z) + patch.axial_rate * rho);
+            let b_term = rho * patch.axial_rate;
+
+            // 0.5 は t を [-1,1] から [0,1] へ移したぶん。
+            let scale = 0.5 * weight * slope.y;
+            moments[0] += theta * scale;
+            moments[1] += rho * theta * scale;
+            moments[2] +=
+                (a_term * theta + b_term * (o1 * theta.sin() - o2 * theta.cos())) * scale;
+        }
+    };
+
+    let mut first: Option<Point2> = None;
+    let mut cursor: Option<Point2> = None;
     for segment in &pcurve_loop.segments {
         let (t_min, t_max) = segment.curve.param_range();
         if (t_max - t_min).abs() <= f64::EPSILON {
             continue;
         }
+        let start = segment.curve.evaluate(t_min);
+        if first.is_none() {
+            first = Some(start);
+        }
+        if let Some(previous) = cursor {
+            if (start - previous).norm() > 1e-12 {
+                let step = start - previous;
+                integrate(
+                    &|t| Point2::from(previous.coords + step * t),
+                    &|_| Point2::from(step),
+                    &mut previous_angle,
+                );
+            }
+        }
         for (span_start, span_end) in knot_spans(&segment.curve, t_min, t_max) {
-            let half_span = 0.5 * (span_end - span_start);
-            let midpoint = 0.5 * (span_start + span_end);
-            if half_span.abs() <= f64::EPSILON {
+            let width = span_end - span_start;
+            if width.abs() <= f64::EPSILON {
                 continue;
             }
-            for (node, weight) in GAUSS_LEGENDRE_10 {
-                let t = midpoint + half_span * node;
-                let uv = segment.curve.evaluate(t);
-                let slope = segment.curve.evaluate_derivative(t);
-                let scale = weight * half_span * slope.y;
-
-                // θ は、母線の根元（v_min）で読みます。母線に沿っては
-                // 変わりません。
-                let base = surface.evaluate(uv.x, v_min + span_v * 0.0);
-                let radial = base - patch.centre;
-                let theta = radial.dot(&patch.e2).atan2(radial.dot(&patch.e1));
-
-                moments[0] += theta * scale;
-                moments[1] += theta.sin() * scale;
-                moments[2] += -theta.cos() * scale;
-            }
+            integrate(
+                &|t| segment.curve.evaluate(span_start + width * t),
+                &|t| (segment.curve.evaluate_derivative(span_start + width * t) * width).into(),
+                &mut previous_angle,
+            );
+        }
+        cursor = Some(segment.curve.evaluate(t_max));
+    }
+    if let (Some(start), Some(end)) = (first, cursor) {
+        if (start - end).norm() > 1e-12 {
+            let step = start - end;
+            integrate(
+                &|t| Point2::from(end.coords + step * t),
+                &|_| Point2::from(step),
+                &mut previous_angle,
+            );
         }
     }
 
-    moments
+    moments.iter().all(|m| m.is_finite()).then_some(moments)
 }
 
 fn loop_uv_moments(pcurve_loop: &FacePcurveLoop) -> [f64; 10] {

@@ -255,3 +255,68 @@ fn trimmed_revolution_faces_agree_with_the_tessellated_integral() {
         }
     }
 }
+
+/// 円錐の側面。**閉じた式が書けます**——母線の長さ `√(r² + h²)` に対して
+/// 側面積は `π r √(r² + h²)`。
+#[test]
+fn a_cone_side_matches_the_closed_form() {
+    let cone = PrimitiveBuilder::make_cone(10.0, 0.0, 20.0).expect("cone");
+    let total: f64 = nurbs_faces(&cone)
+        .iter()
+        .map(|face| MassCalculator::compute_face_integral(face, &params()).0)
+        .sum();
+    let slant = (10.0f64 * 10.0 + 20.0 * 20.0).sqrt();
+    let exact = std::f64::consts::PI * 10.0 * slant;
+    assert!(
+        (total - exact).abs() <= exact * 1e-9,
+        "円錐の側面積 {total} は πr√(r²+h²) = {exact} に乗るはず"
+    );
+}
+
+/// 円錐台の側面。`π (r1 + r2) √((r1−r2)² + h²)`。
+#[test]
+fn a_frustum_side_matches_the_closed_form() {
+    let frustum = PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).expect("frustum");
+    let total: f64 = nurbs_faces(&frustum)
+        .iter()
+        .map(|face| MassCalculator::compute_face_integral(face, &params()).0)
+        .sum();
+    let slant = ((10.0f64 - 4.0).powi(2) + 400.0).sqrt();
+    let exact = std::f64::consts::PI * (10.0 + 4.0) * slant;
+    assert!(
+        (total - exact).abs() <= exact * 1e-9,
+        "円錐台の側面積 {total} は π(r1+r2)√((r1-r2)²+h²) = {exact} に乗るはず"
+    );
+}
+
+/// **解析と三角形が一致すること**（円錐・円錐台）。**動かした立体も測ります。**
+#[test]
+fn the_analytic_cone_agrees_with_the_tessellated_integral() {
+    let moved = |solid: &Solid| BrepTransform::translate_solid(solid, Vec3::new(7.0, -3.0, 11.0));
+    let cases = [
+        ("真の円錐", PrimitiveBuilder::make_cone(10.0, 0.0, 20.0).expect("cone")),
+        ("円錐台", PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).expect("frustum")),
+    ];
+    for (label, solid) in cases {
+        for solid in [solid.clone(), moved(&solid)] {
+            for face in nurbs_faces(&solid) {
+                let analytic = MassCalculator::compute_face_integral(face, &params());
+                let tessellated =
+                    without_analytic(|| MassCalculator::compute_face_integral(face, &params()));
+                assert!(
+                    (analytic.0 - tessellated.0).abs() <= tessellated.0.abs() * 1e-9,
+                    "{label}: 面積が食い違う 解析 {} vs 三角形 {}",
+                    analytic.0,
+                    tessellated.0
+                );
+                let slack = tessellated.1.abs() * 1e-9 + tessellated.0.abs() * 1e-9;
+                assert!(
+                    (analytic.1 - tessellated.1).abs() <= slack,
+                    "{label}: 体積が食い違う 解析 {} vs 三角形 {}",
+                    analytic.1,
+                    tessellated.1
+                );
+            }
+        }
+    }
+}
