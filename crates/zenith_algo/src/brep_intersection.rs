@@ -37,6 +37,19 @@ pub struct FaceIntersectionCandidate {
     pub face_a_index: usize,
     pub face_b_index: usize,
     pub kind: FaceIntersectionKind,
+    /// この交線が**解析的に**出たものか。辿って出したものは `false`。
+    ///
+    /// # なぜ旗が要るのか
+    ///
+    /// この文書は「旗を立てず、測る」を通してきました。ここは例外です
+    /// ——**測っても分からないと測った上での**判断です（4-181）。
+    ///
+    /// 接する所の継ぎ目では、辿って出した端も解析的に出した端も、
+    /// **面から `1e-14` の内側**にあります。2e-4 の位置ずれが残差に
+    /// まったく現れません（4-180 の縮退）。だから「どちらが厳密か」は
+    /// 出来上がったものを測っても言えません。**作られ方を覚えておく
+    /// しかありません。**
+    pub analytic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,21 +211,26 @@ impl BrepIntersectionBuilder {
                 ) {
                     continue;
                 }
-                if let Some(kind) = intersect_face_supports(face_a, face_b, tol)
-                    .and_then(|kind| {
+                if let Some((kind, analytic)) = intersect_face_supports(face_a, face_b, tol)
+                    .and_then(|(kind, analytic)| {
                         clip_candidate_to_face_bboxes(
                             kind,
                             bboxes_a[face_a_index].as_ref(),
                             bboxes_b[face_b_index].as_ref(),
                             tol,
                         )
+                        .map(|kind| (kind, analytic))
                     })
-                    .and_then(|kind| clip_candidate_to_planar_trims(kind, face_a, face_b, tol))
+                    .and_then(|(kind, analytic)| {
+                        clip_candidate_to_planar_trims(kind, face_a, face_b, tol)
+                            .map(|kind| (kind, analytic))
+                    })
                 {
                     candidates.push(FaceIntersectionCandidate {
                         face_a_index,
                         face_b_index,
                         kind,
+                        analytic,
                     });
                 }
             }
@@ -229,7 +247,132 @@ impl BrepIntersectionBuilder {
             tol,
         );
 
+        // **接する所の継ぎ目を、解析的な交線から作り直します**（4-182）。
+        Self::rebuild_tangent_joints(faces_a, faces_b, &mut candidates, tol);
+
         candidates
+    }
+
+    /// 辿って出した弧の端を、**隣の解析的な交線と、自分のもう一方の面との
+    /// 交わり**として作り直す。
+    ///
+    /// # なぜ「作る」のか
+    ///
+    /// 接する所の継ぎ目は、**そこにある点から選べません**（4-181）。集まった
+    /// 端はどれも `√ε` ずれていて、**候補の中に正解がありません**。面への
+    /// 距離で選ぼうとすると全部が `1e-14` に見え（4-180 の縮退）、隣の交線
+    /// への距離で選んでも最良が `1.086e-4` で 0 になりません。
+    ///
+    /// 抜け道は1つだけです——**縮退した2面の交わりを先に解析的に持ち、
+    /// それと3枚目の面との交わりとして解く**。
+    ///
+    /// ```text
+    /// 接する円（トーラス × 上面、厳密）  ∩  壁の平面
+    ///   → 1未知数1式、横断的 → 倍精度いっぱい
+    /// ```
+    ///
+    /// 実測（4-179）の狙い値は `10 + √44 = 16.633249581` です。
+    fn rebuild_tangent_joints(
+        faces_a: &[Face],
+        faces_b: &[Face],
+        candidates: &mut Vec<FaceIntersectionCandidate>,
+        tol: &Tolerance,
+    ) {
+        let window = tol.linear * 1000.0;
+        if !(window > 0.0) {
+            return;
+        }
+        let explain = std::env::var_os("ZENITH_JOINT_WHY").is_some();
+
+        // 解析的に出た交線だけを控える。
+        let exact: Vec<(usize, usize, usize, NurbsCurve3)> = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.analytic)
+            .flat_map(|(index, candidate)| {
+                candidate_edges(&candidate.kind)
+                    .into_iter()
+                    .map(|edge| {
+                        (
+                            index,
+                            candidate.face_a_index,
+                            candidate.face_b_index,
+                            edge.curve.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if exact.is_empty() {
+            return;
+        }
+
+        // 動かす先を先に決めてから、まとめて動かす（借用のため）。
+        let mut moves: Vec<(usize, usize, bool, Point3)> = Vec::new();
+        for (index, candidate) in candidates.iter().enumerate() {
+            if candidate.analytic {
+                continue;
+            }
+            for (slot, edge) in candidate_edges(&candidate.kind).iter().enumerate() {
+                for is_start in [true, false] {
+                    let point = if is_start {
+                        edge.start_vertex.point
+                    } else {
+                        edge.end_vertex.point
+                    };
+                    for (_, exact_a, exact_b, curve) in &exact {
+                        // 面をちょうど1枚だけ共有していること。
+                        let shares_a = *exact_a == candidate.face_a_index;
+                        let shares_b = *exact_b == candidate.face_b_index;
+                        if shares_a == shares_b {
+                            continue;
+                        }
+                        // 共有していないほうが「3枚目の面」。
+                        let third = if shares_a {
+                            faces_b.get(candidate.face_b_index)
+                        } else {
+                            faces_a.get(candidate.face_a_index)
+                        };
+                        let Some(third) = third else {
+                            continue;
+                        };
+                        let FaceGeometry::Plane(plane) = &third.geometry else {
+                            // 平面以外はまだ扱いません。**測っていない**ので。
+                            continue;
+                        };
+                        let Ok(nearby) = ExtremumEngine::point_to_curve(point, curve, 64, 1e-13)
+                        else {
+                            continue;
+                        };
+                        if nearby.distance > window {
+                            continue;
+                        }
+                        let normal = oriented_plane_normal(third);
+                        let Some(t) = solve_curve_on_plane(curve, nearby.parameter, plane.origin, normal)
+                        else {
+                            continue;
+                        };
+                        let landed = curve.evaluate(t);
+                        let moved = (landed - point).norm();
+                        if moved <= tol.linear || moved > window {
+                            continue;
+                        }
+                        if explain {
+                            eprintln!(
+                                "JOINTWHY tsukutta ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) ugoki {moved:.3e}",
+                                point.x, point.y, point.z, landed.x, landed.y, landed.z
+                            );
+                        }
+                        moves.push((index, slot, is_start, landed));
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (index, slot, is_start, target) in moves {
+            move_candidate_edge_end(&mut candidates[index], slot, is_start, target, tol);
+        }
     }
 
     fn trace_from_loose_ends_into(
@@ -5703,39 +5846,48 @@ fn point3_is_finite(point: Point3) -> bool {
     point.x.is_finite() && point.y.is_finite() && point.z.is_finite()
 }
 
+/// 面の組の交わりと、**それが解析的に出たかどうか**。
+///
+/// 辿って出したものは `false` です。理由は
+/// [`FaceIntersectionCandidate::analytic`]。
 fn intersect_face_supports(
     face_a: &Face,
     face_b: &Face,
     tol: &Tolerance,
-) -> Option<FaceIntersectionKind> {
+) -> Option<(FaceIntersectionKind, bool)> {
     match (&face_a.geometry, &face_b.geometry) {
-        (FaceGeometry::Plane(plane_a), FaceGeometry::Plane(plane_b)) => Some(intersect_planes(
-            plane_a.origin,
-            oriented_plane_normal(face_a),
-            plane_b.origin,
-            oriented_plane_normal(face_b),
-            tol,
+        (FaceGeometry::Plane(plane_a), FaceGeometry::Plane(plane_b)) => Some((
+            intersect_planes(
+                plane_a.origin,
+                oriented_plane_normal(face_a),
+                plane_b.origin,
+                oriented_plane_normal(face_b),
+                tol,
+            ),
+            true,
         )),
         (FaceGeometry::Plane(plane), FaceGeometry::Nurbs(surface)) => Some(
             match intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_a), surface, tol)
             {
-                FaceIntersectionKind::Unsupported => {
-                    intersect_planar_face_with_patch(face_a, plane, surface, tol)
-                }
-                kind => kind,
+                FaceIntersectionKind::Unsupported => (
+                    intersect_planar_face_with_patch(face_a, plane, surface, tol),
+                    false,
+                ),
+                kind => (kind, true),
             },
         ),
         (FaceGeometry::Nurbs(surface), FaceGeometry::Plane(plane)) => Some(
             match intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_b), surface, tol)
             {
-                FaceIntersectionKind::Unsupported => {
-                    intersect_planar_face_with_patch(face_b, plane, surface, tol)
-                }
-                kind => kind,
+                FaceIntersectionKind::Unsupported => (
+                    intersect_planar_face_with_patch(face_b, plane, surface, tol),
+                    false,
+                ),
+                kind => (kind, true),
             },
         ),
         (FaceGeometry::Nurbs(surface_a), FaceGeometry::Nurbs(surface_b)) => {
-            Some(intersect_nurbs_patches(surface_a, surface_b, tol))
+            Some((intersect_nurbs_patches(surface_a, surface_b, tol), false))
         }
         _ => None,
     }
@@ -7979,6 +8131,7 @@ fn trace_from_loose_ends(
                     face_a_index: index_a,
                     face_b_index: index_b,
                     kind: FaceIntersectionKind::Curve { edge },
+                    analytic: false,
                 });
             }
         }
@@ -8002,6 +8155,94 @@ fn candidate_end_points(kind: &FaceIntersectionKind) -> Vec<Point3> {
         } => vec![*segment_start, *segment_end],
         _ => Vec::new(),
     }
+}
+
+/// 候補が持つ弧を借りる。
+fn candidate_edges(kind: &FaceIntersectionKind) -> Vec<&Edge> {
+    match kind {
+        FaceIntersectionKind::Curve { edge } => vec![edge],
+        FaceIntersectionKind::Curves { edges } => edges.iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// 曲線が平面を横切る媒介変数を、ニュートンで解く。
+///
+/// **1未知数1式です。** 横断的なら二重根にならず、倍精度いっぱいまで
+/// 詰まります（4-180）。
+fn solve_curve_on_plane(
+    curve: &NurbsCurve3,
+    seed: f64,
+    origin: Point3,
+    normal: Vec3,
+) -> Option<f64> {
+    let normal = normal.try_normalize_safe(1e-12)?;
+    let (t_min, t_max) = curve.param_range();
+    let mut t = seed.clamp(t_min, t_max);
+    for _ in 0..40 {
+        let value = (curve.evaluate(t) - origin).dot(&normal);
+        if value.abs() <= 1e-15 * (t_max - t_min).abs().max(1.0) {
+            return Some(t);
+        }
+        let slope = curve.evaluate_derivatives(t, 1)[1].dot(&normal);
+        if slope.abs() <= 1e-14 {
+            // 曲線が平面に接している。ここでは決まりません。
+            return None;
+        }
+        let next = (t - value / slope).clamp(t_min, t_max);
+        if (next - t).abs() <= f64::EPSILON * t.abs().max(1.0) {
+            t = next;
+            break;
+        }
+        t = next;
+    }
+    let value = (curve.evaluate(t) - origin).dot(&normal);
+    value.abs().le(&1e-9).then_some(t)
+}
+
+/// 弧の端を、指定の点へ動かす。
+///
+/// **制御点も動かします。** 頂点だけ動かすと、曲線の端と食い違います。
+/// クランプした NURBS は最初と最後の制御点をそのまま通るので、そこを
+/// 置き換えれば端は厳密にその点になります。**ずれるのは最後の1区間だけ**
+/// で、その幅は動かした距離（実測 2e-4）を超えません——**元からその
+/// くらいずれていた**ところです（4-179）。
+fn move_candidate_edge_end(
+    candidate: &mut FaceIntersectionCandidate,
+    edge_slot: usize,
+    is_start: bool,
+    target: Point3,
+    tol: &Tolerance,
+) {
+    let edge = match &mut candidate.kind {
+        FaceIntersectionKind::Curve { edge } if edge_slot == 0 => edge,
+        FaceIntersectionKind::Curves { edges } => match edges.get_mut(edge_slot) {
+            Some(edge) => edge,
+            None => return,
+        },
+        _ => return,
+    };
+
+    let mut control_points = edge.curve.control_points.clone();
+    if control_points.len() < 2 {
+        return;
+    }
+    let corner = if is_start { 0 } else { control_points.len() - 1 };
+    control_points[corner] = ControlPoint3::new(target, control_points[corner].weight);
+    let Ok(curve) = NurbsCurve3::new(edge.curve.degree, control_points, edge.curve.knots.clone())
+    else {
+        return;
+    };
+
+    let (t_min, t_max) = curve.param_range();
+    let start = if is_start { target } else { curve.evaluate(t_min) };
+    let end = if is_start { curve.evaluate(t_max) } else { target };
+    *edge = Edge::new(
+        curve,
+        Vertex::new(start, tol.linear),
+        Vertex::new(end, tol.linear),
+        tol.linear,
+    );
 }
 
 /// 面をマーチングに渡せるパッチにする。平面は境界が占めるぶんだけの
