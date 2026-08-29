@@ -213,10 +213,12 @@ impl InterferenceChecker {
             tol,
         ) {
             let params = TessellationParams::default();
-            let mass = crate::MassCalculator::compute_from_brep(&intersection_solid, &params);
-            if mass.volume > 0.0 {
-                report.overlap_volume = mass.volume;
-                report.message = format!("Solids overlap by exact {:.6} mm^3 (B-Rep intersection)", mass.volume);
+            // 体積しか読まないので、慣性まで積まない口を使います（4-156）。
+            let overlap =
+                crate::MassCalculator::compute_volume_from_brep(&intersection_solid, &params);
+            if overlap > 0.0 {
+                report.overlap_volume = overlap;
+                report.message = format!("Solids overlap by exact {:.6} mm^3 (B-Rep intersection)", overlap);
                 return (report, Some(intersection_solid));
             }
         }

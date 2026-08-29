@@ -302,7 +302,7 @@ fn main() {
                     let volume: f64 = result
                         .solids
                         .iter()
-                        .map(|s| MassCalculator::compute_from_brep(s, &params).volume)
+                        .map(|s| MassCalculator::compute_volume_from_brep(s, &params))
                         .sum();
 
                     let closed = result
