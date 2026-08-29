@@ -63,6 +63,93 @@ impl IntersectionMarcher {
     /// `s1` の `(u, v)` あたりから交線に乗り、両方向へ辿る。
     ///
     /// `step` は1歩の長さ（3D の距離）。`max_points` は打ち切り。
+    /// 辿り終わった点列の**両端**を、接点へ合わせる。
+    ///
+    /// ## なぜ辿りの中ではなく、終わってからか
+    ///
+    /// 辿りの中で解くと「どこから来たか」で答えが変わります。実測
+    /// （4-168）: 入口の射影を1段変えただけで、1本の弧が接点の **1.5e-3
+    /// 手前**で止まりました。そこの正弦は 1.3e-4 で、`at_edge` の出口の
+    /// しきい値 1e-4 の**すぐ外**です。刻みを5通り触りましたが、どれも
+    /// 止まりませんでした。
+    ///
+    /// **終わってから合わせれば、途中の道筋に依りません。**
+    ///
+    /// ## 端を動かして大丈夫な理由
+    ///
+    /// 曲線は**この点列から後で当てはめられます**（`fit_curve`）。稜の
+    /// 頂点も、当てはめた曲線の端から取ります。**点を直せば曲線の端も
+    /// 一緒に動く**ので、食い違いません。
+    ///
+    /// ## 採る条件（全部測ります）
+    ///
+    /// 1. 端の正弦が小さい（接点のそばにいる）
+    /// 2. 解けた点が領域の中にある
+    /// 3. **そこが本当に接点**（正弦が 1e-9 以下）
+    /// 4. 動いた距離が歩幅の 4 倍以内（別の接点へ飛ばない）
+    fn settle_ends_on_tangency(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        points: &mut [SurfaceIntersectionPoint],
+        step: f64,
+        tol: &Tolerance,
+    ) {
+        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
+        let inside = |state: &[f64; 4]| {
+            let margin = 1e-9;
+            state[0] >= u_min - margin
+                && state[0] <= u_max + margin
+                && state[1] >= v_min - margin
+                && state[1] <= v_max + margin
+                && state[2] >= s_min - margin
+                && state[2] <= s_max + margin
+                && state[3] >= t_min - margin
+                && state[3] <= t_max + margin
+        };
+        if points.len() < 2 {
+            return;
+        }
+        let last = points.len() - 1;
+        for index in [0usize, last] {
+            let sample = points[index];
+            let state = [sample.uv1.0, sample.uv1.1, sample.uv2.0, sample.uv2.1];
+            let Some((_, sine_here)) = Self::tangent(s1, s2, &state) else {
+                continue;
+            };
+            if sine_here >= TANGENCY_SINE_LIMIT * 100.0 {
+                continue;
+            }
+            let mut refined = state;
+            if Self::newton_to_tangency_least_squares(s1, s2, &mut refined, tol).is_none() {
+                continue;
+            }
+            if !inside(&refined) {
+                continue;
+            }
+            // **`tangent` で測ってはいけません。**
+            //
+            // `tangent` は外積を正規化して返すので、**接点ちょうどでは
+            // `None` になります**（外積が 0 だから）。それを「測れなかった」
+            // として弾くと、**当たりだけが落ちます**。実測（4-169）: この
+            // 検査で 8〜12 件すべてが `inf` として弾かれ、合わせは1度も
+            // 走っていませんでした。
+            //
+            // 外積の長さを直に取ります。
+            let landed_sine = Self::normal_cross(s1, s2, &refined)
+                .map(|cross| cross.norm())
+                .unwrap_or(f64::INFINITY);
+            if landed_sine > 1e-9 {
+                continue;
+            }
+            let moved = (s1.evaluate(refined[0], refined[1]) - sample.point).norm();
+            if moved > step.abs() * 4.0 {
+                continue;
+            }
+            points[index] = Self::sample(s1, s2, &refined);
+        }
+    }
+
     pub fn march(
         s1: &NurbsSurface3,
         s2: &NurbsSurface3,
@@ -94,6 +181,9 @@ impl IntersectionMarcher {
         points.reverse();
         points.pop(); // 始点が二重にならないように
         points.append(&mut forward.points);
+
+        // **端を接点へ合わせます**（4-169）。辿り方に依らない位置にします。
+        Self::settle_ends_on_tangency(s1, s2, &mut points, step, tol);
 
         let worst = Self::worst_distance(s1, s2, &points);
         Some(MarchedIntersection {
