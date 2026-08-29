@@ -637,8 +637,17 @@ impl SurfaceIntegral {
         surface: &impl Surface3,
         orientation_sign: f64,
     ) -> bool {
-        let Some(pcurves) = face.pcurves.as_ref() else {
-            return false;
+        // p-curve が無ければ、その場で導出します（上と同じ理由。4-162）。
+        let derived;
+        let pcurves = match face.pcurves.as_ref() {
+            Some(pcurves) => pcurves,
+            None => match face.pcurves(&zenith_math::Tolerance::default()) {
+                Ok(built) => {
+                    derived = built;
+                    &derived
+                }
+                Err(_) => return false,
+            },
         };
         let Some(patch) = recognise_revolution_patch(surface) else {
             return false;
@@ -714,8 +723,21 @@ impl SurfaceIntegral {
         surface: &impl Surface3,
         orientation_sign: f64,
     ) -> bool {
-        let Some(pcurves) = face.pcurves.as_ref() else {
-            return false;
+        // **p-curve が無ければ、その場で導出します。**
+        //
+        // 三角化の経路（`face_uv_triangulation_inner`）は前からそうして
+        // います。ここだけ諦めていたので、45ケースで**解析に乗らなかった
+        // 216 面はすべて「p-curve が無い」**でした（4-162 実測）。
+        let derived;
+        let pcurves = match face.pcurves.as_ref() {
+            Some(pcurves) => pcurves,
+            None => match face.pcurves(&zenith_math::Tolerance::default()) {
+                Ok(built) => {
+                    derived = built;
+                    &derived
+                }
+                Err(_) => return false,
+            },
         };
         let Some(patch) = recognise_ruled_revolution_patch(surface) else {
             return false;
@@ -786,10 +808,26 @@ impl SurfaceIntegral {
         // ありません。
         if self.area_and_volume_only
             && std::env::var_os("ZENITH_NO_ANALYTIC_FACE").is_none()
-            && (self.add_ruled_revolution_face(face, surface, orientation_sign)
-                || self.add_revolution_face(face, surface, orientation_sign))
         {
-            return;
+            if self.add_ruled_revolution_face(face, surface, orientation_sign)
+                || self.add_revolution_face(face, surface, orientation_sign)
+            {
+                return;
+            }
+            if std::env::var_os("ZENITH_ANALYTIC_WHY").is_some() {
+                // **断った理由を1行で。** 解析に乗らない面が残っている
+                // なら、まずここを読んでください。
+                let reason = if face.pcurves.is_none() {
+                    "p-curve が無い"
+                } else if recognise_ruled_revolution_patch(surface).is_some() {
+                    "母線が直線の回転面と認識したが、境界積分が通らなかった"
+                } else if recognise_revolution_patch(surface).is_some() {
+                    "回転面と認識したが、境界積分が通らなかった"
+                } else {
+                    "どちらの形にも認識できなかった"
+                };
+                eprintln!("ANALYTICWHY {reason}");
+            }
         }
 
         let domain = face_uv_triangulation(face, params);
