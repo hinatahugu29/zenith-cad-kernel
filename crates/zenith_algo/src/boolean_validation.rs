@@ -155,11 +155,11 @@ impl BooleanResultVerifier {
         }
 
         // 2. Volume bounds implied by the operation.
-        report.volume_a = MassCalculator::compute_from_brep(solid_a, &params.tessellation).volume;
-        report.volume_b = MassCalculator::compute_from_brep(solid_b, &params.tessellation).volume;
+        report.volume_a = MassCalculator::compute_volume_from_brep(solid_a, &params.tessellation);
+        report.volume_b = MassCalculator::compute_volume_from_brep(solid_b, &params.tessellation);
         let solid_volumes: Vec<f64> = result
             .iter()
-            .map(|s| MassCalculator::compute_from_brep(s, &params.tessellation).volume)
+            .map(|s| MassCalculator::compute_volume_from_brep(s, &params.tessellation))
             .collect();
         report.volume_result = solid_volumes.iter().sum();
 

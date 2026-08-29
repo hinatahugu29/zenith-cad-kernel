@@ -4141,7 +4141,7 @@ fn nest_cavity_shells_into_solids(simple_solids: Vec<Solid>, _tol: &Tolerance) -
     let mut with_volume: Vec<(f64, Solid)> = simple_solids
         .into_iter()
         .map(|solid| {
-            let volume = MassCalculator::compute_from_brep(&solid, &params).volume;
+            let volume = MassCalculator::compute_volume_from_brep(&solid, &params);
             (volume, solid)
         })
         .collect();

@@ -1,5 +1,5 @@
 use zenith_geom::Surface3;
-use zenith_math::{Point2, Point3, Vec3};
+use zenith_math::{Point2, Point3, Vec3, Vec3Ext};
 use zenith_tess::{face_uv_triangulation, TessellationParams, TriangleMesh};
 use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, Shell, Solid};
 
@@ -193,10 +193,36 @@ impl MassCalculator {
         accumulator.finish()
     }
 
+    /// 体積だけを求める。**慣性は計算しません。**
+    ///
+    /// [`Self::compute_from_brep`] は重心と慣性テンソルまで積みます。
+    /// ところが**ブーリアンの検証ゲートは体積しか読みません**
+    /// （`boolean_validation.rs`、`brep_intersection.rs` の並べ替え）。
+    /// 慣性を諦めてよいと分かっていれば、円柱の面は**中身を刻まずに**
+    /// 積めます（4-156）。
+    ///
+    /// 実測（4-156）: 45ケースの面積分の呼び出しは 1,068 回で、うち
+    /// `compute_face_integral` から来るのは 84 回だけでした。**残りは
+    /// ここから来ています。**
+    pub fn compute_volume_from_brep(solid: &Solid, params: &TessellationParams) -> f64 {
+        let mut accumulator = SurfaceIntegral {
+            area_and_volume_only: true,
+            ..Default::default()
+        };
+        accumulator.add_shell(&solid.outer_shell, params, 1.0);
+        for inner in &solid.inner_shells {
+            accumulator.add_shell(inner, params, -1.0);
+        }
+        accumulator.volume
+    }
+
     /// Integrates a single face, returning its area and its contribution to the
     /// enclosed volume.
     pub fn compute_face_integral(face: &Face, params: &TessellationParams) -> (f64, f64) {
-        let mut accumulator = SurfaceIntegral::default();
+        let mut accumulator = SurfaceIntegral {
+            area_and_volume_only: true,
+            ..Default::default()
+        };
         accumulator.add_face(face, params, 1.0);
         (accumulator.area, accumulator.volume)
     }
@@ -417,6 +443,12 @@ fn affine_frame_of(surface: &impl Surface3) -> Option<(Point3, Vec3, Vec3)> {
 /// Running totals of the divergence-theorem surface integrals.
 #[derive(Debug, Default, Clone, Copy)]
 struct SurfaceIntegral {
+    /// **慣性まで要らない呼び出しでは立てます。**
+    ///
+    /// ブーリアンが 90% の時間を使っている面積の検算
+    /// （`compute_face_integral`）は、面積と体積しか読みません。慣性を
+    /// 諦めてよいなら、円柱は**面の中身を刻まずに**積めます（4-156）。
+    area_and_volume_only: bool,
     area: f64,
     volume: f64,
     moment: Vec3,
@@ -588,6 +620,78 @@ impl SurfaceIntegral {
         true
     }
 
+    /// 円柱の一部である面を、**トリム境界だけで**積む。
+    ///
+    /// 積めたら `true`。積めなければ何も足さずに `false` を返すので、
+    /// 呼び手は従来どおり三角形で積みます。
+    ///
+    /// ## 式（導出は HANDOVER 4-154、実装の確認は 4-156）
+    ///
+    /// 軸まわりの角度を `θ`、円の中心を `O`、半径を `r`、母線の長さ / v の
+    /// 幅を `|κ| = r·h/Δv` とすると
+    ///
+    /// ```text
+    /// p_θ × p_v = κ · ρ̂(θ)          ρ̂ = cosθ·e1 + sinθ·e2
+    /// 面積      = |κ| · ∬ dθ dv
+    /// 体積の寄与 = s·ν·|κ|/3 · ∬ (r + O·e1 cosθ + O·e2 sinθ) dθ dv
+    /// ```
+    ///
+    /// `v` が消えるのが効きます——`p·ρ̂` に母線の項が入らないからです
+    /// （`a ⊥ ρ̂`）。`ν` は法線の向きで、**中央で測って**決めます。
+    fn add_cylindrical_face(
+        &mut self,
+        face: &Face,
+        surface: &impl Surface3,
+        orientation_sign: f64,
+    ) -> bool {
+        let Some(pcurves) = face.pcurves.as_ref() else {
+            return false;
+        };
+        let Some(patch) = recognise_cylindrical_patch(surface) else {
+            return false;
+        };
+
+        let mut moments = loop_cylindrical_moments(&pcurves.outer_loop, surface, &patch);
+        let outer = moments[0];
+        if outer.abs() <= f64::EPSILON {
+            return false;
+        }
+        for hole in &pcurves.inner_loops {
+            let part = loop_cylindrical_moments(hole, surface, &patch);
+            // 穴は外周と逆符号で効かなければならない（平面の経路と同じ規約）。
+            let sign = if part[0].signum() == outer.signum() {
+                -1.0
+            } else {
+                1.0
+            };
+            for (total, piece) in moments.iter_mut().zip(part.iter()) {
+                *total += piece * sign;
+            }
+        }
+        // 回り方に依らず、領域積分が正になるよう正規化する。
+        let normalisation = outer.signum();
+        for moment in moments.iter_mut() {
+            *moment *= normalisation;
+        }
+
+        let [area_moment, cos_moment, sin_moment] = moments;
+        if !(area_moment.is_finite() && cos_moment.is_finite() && sin_moment.is_finite()) {
+            return false;
+        }
+
+        let scale = patch.jacobian_scale;
+        self.area += scale * area_moment;
+        let centre = patch.centre.coords;
+        let radial_integral = patch.radius * area_moment
+            + centre.dot(&patch.e1) * cos_moment
+            + centre.dot(&patch.e2) * sin_moment;
+        self.volume += orientation_sign * patch.normal_sign * scale * radial_integral / 3.0;
+        if std::env::var_os("ZENITH_INTEGRAL_WHY").is_some() {
+            eprintln!("INTEGRALWHY 円柱（解析。中身を刻まない） 三角形 0");
+        }
+        true
+    }
+
     fn add_surface(
         &mut self,
         face: &Face,
@@ -595,6 +699,21 @@ impl SurfaceIntegral {
         params: &TessellationParams,
         orientation_sign: f64,
     ) {
+        // **円柱なら、面の中身を刻まずに積みます**（4-156）。
+        //
+        // 面積と体積しか要らない呼び出しに限ります。慣性まで解析で書くのは
+        // 別の仕事で、まだやっていません。
+        //
+        // `ZENITH_NO_ANALYTIC_FACE=1` で止まります。**答えが変わります**——
+        // 解析と三角形を突き合わせるための口で、速くするために外す口では
+        // ありません。
+        if self.area_and_volume_only
+            && std::env::var_os("ZENITH_NO_ANALYTIC_FACE").is_none()
+            && self.add_cylindrical_face(face, surface, orientation_sign)
+        {
+            return;
+        }
+
         let domain = face_uv_triangulation(face, params);
 
         // **面積分の内訳を数える口**（9-1 / 9-3 の「解析曲面を持つか」を
@@ -765,6 +884,166 @@ const fn index_uv(p: usize, q: usize) -> usize {
 ///
 /// Green's theorem gives `∫∫ u^p v^q du dv = ∮ u^(p+1)/(p+1) * v^q dv`, so the
 /// whole set follows from one pass along the loop's p-curves.
+/// 円柱の四半パッチ。**面の中身を刻まずに積むために要る量**だけ持ちます。
+struct CylindricalPatch {
+    /// 円の中心（世界座標）。
+    centre: Point3,
+    radius: f64,
+    /// 円が乗る平面の枠。`e1` は `u` の始点方向、`e2` は `axis × e1`。
+    e1: Vec3,
+    e2: Vec3,
+    /// 母線の長さ / v の幅。ヤコビアンの大きさ `|κ| = r * h / Δv` に入ります。
+    jacobian_scale: f64,
+    /// `(p_u × p_v)` が `ρ̂` と同じ向きなら +1、逆なら -1。
+    /// **符号は理屈で決めず、中央で測って決めます。**
+    normal_sign: f64,
+}
+
+/// 面が**真の円柱の一部**なら、積むのに要る量を返す。
+///
+/// 4-154 で「45ケースの面積分の 44.8% が真の円柱」と測ったので、ここだけ
+/// 面の中身を刻まずに積めるようにします。
+///
+/// **推測しません。** 3点から円を当て、その円の上に他の標本が乗るか、
+/// 母線が本当に直線で軸に平行か、を全部измер……**測ってから**返します。
+/// 1つでも外れたら `None` を返し、従来どおり三角形で積みます。
+fn recognise_cylindrical_patch(surface: &impl Surface3) -> Option<CylindricalPatch> {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let (span_u, span_v) = (u_max - u_min, v_max - v_min);
+    if !(span_u.abs() > 0.0 && span_v.abs() > 0.0) {
+        return None;
+    }
+    let at = |t: f64, w: f64| surface.evaluate(u_min + span_u * t, v_min + span_v * w);
+
+    // 母線（v 方向）が直線で、どの u でも同じベクトルか。
+    let ruling = at(0.0, 1.0) - at(0.0, 0.0);
+    let height = ruling.norm();
+    if height <= 0.0 {
+        return None;
+    }
+    let scale = height.max((at(1.0, 0.0) - at(0.0, 0.0)).norm()).max(1.0);
+    for t in [0.25f64, 0.5, 0.75, 1.0] {
+        let there = at(t, 1.0) - at(t, 0.0);
+        if (there - ruling).norm() > scale * 1e-9 {
+            return None;
+        }
+        // 中点が両端の平均か（v 方向に直線か）。
+        let middle = at(t, 0.5);
+        let average = Point3::from((at(t, 0.0).coords + at(t, 1.0).coords) * 0.5);
+        if (middle - average).norm() > scale * 1e-9 {
+            return None;
+        }
+    }
+    let axis = ruling / height;
+
+    // 3点から円を当てる。軸に直交する平面の上にあることも見ます。
+    let (a, b, c) = (at(0.0, 0.0), at(0.5, 0.0), at(1.0, 0.0));
+    let (ab, ac) = (b - a, c - a);
+    let normal = ab.cross(&ac);
+    let normal_norm = normal.norm();
+    if normal_norm <= scale * scale * 1e-12 {
+        return None;
+    }
+    if 1.0 - (normal / normal_norm).dot(&axis).abs() > 1e-9 {
+        return None;
+    }
+    // 外心。
+    let denominator = 2.0 * normal_norm * normal_norm;
+    let alpha = ac.norm_squared() * ab.dot(&(ab - ac)) / denominator;
+    let beta = ab.norm_squared() * ac.dot(&(ac - ab)) / denominator;
+    let centre = Point3::from(a.coords + ab * alpha + ac * beta);
+    let radius = (a - centre).norm();
+    if radius <= scale * 1e-9 {
+        return None;
+    }
+
+    // 当てた円の上に、他の標本も乗るか。
+    for t in [0.125f64, 0.375, 0.625, 0.875] {
+        let point = at(t, 0.0);
+        if ((point - centre).norm() - radius).abs() > radius * 1e-9 {
+            return None;
+        }
+        if (point - centre).dot(&axis).abs() > scale * 1e-9 {
+            return None;
+        }
+    }
+
+    let e1 = (a - centre).try_normalize_safe(1e-12)?;
+    let e2 = axis.cross(&e1);
+
+    // 法線の向きは、中央で測って決めます。
+    let middle_uv = (
+        u_min + span_u * 0.5,
+        v_min + span_v * 0.5,
+    );
+    let (point, du, dv) = surface.evaluate_with_derivatives(middle_uv.0, middle_uv.1);
+    let radial = point - centre;
+    let radial = radial - axis * radial.dot(&axis);
+    let radial = radial.try_normalize_safe(1e-12)?;
+    let normal_sign = if du.cross(&dv).dot(&radial) >= 0.0 { 1.0 } else { -1.0 };
+
+    Some(CylindricalPatch {
+        centre,
+        radius,
+        e1,
+        e2,
+        jacobian_scale: radius * height / span_v.abs(),
+        normal_sign,
+    })
+}
+
+/// トリム境界だけを回って、`(θ, v)` 平面での領域積分を3つ求める。
+///
+/// グリーンの定理です。`∬ g(θ) dθ dv = ∮ G(θ) dv`（`G' = g`）。
+///
+/// - `g = 1`   → `G = θ`
+/// - `g = cosθ` → `G = sinθ`
+/// - `g = sinθ` → `G = -cosθ`
+///
+/// **`u` 方向には1回も刻みません。** `θ(u)` は曲面から直に読めるので、
+/// 中身を三角形で埋める必要がありません。残差は境界の標本だけです。
+fn loop_cylindrical_moments(
+    pcurve_loop: &FacePcurveLoop,
+    surface: &impl Surface3,
+    patch: &CylindricalPatch,
+) -> [f64; 3] {
+    let ((_, _), (v_min, v_max)) = surface.param_range();
+    let span_v = v_max - v_min;
+    let mut moments = [0.0f64; 3];
+
+    for segment in &pcurve_loop.segments {
+        let (t_min, t_max) = segment.curve.param_range();
+        if (t_max - t_min).abs() <= f64::EPSILON {
+            continue;
+        }
+        for (span_start, span_end) in knot_spans(&segment.curve, t_min, t_max) {
+            let half_span = 0.5 * (span_end - span_start);
+            let midpoint = 0.5 * (span_start + span_end);
+            if half_span.abs() <= f64::EPSILON {
+                continue;
+            }
+            for (node, weight) in GAUSS_LEGENDRE_10 {
+                let t = midpoint + half_span * node;
+                let uv = segment.curve.evaluate(t);
+                let slope = segment.curve.evaluate_derivative(t);
+                let scale = weight * half_span * slope.y;
+
+                // θ は、母線の根元（v_min）で読みます。母線に沿っては
+                // 変わりません。
+                let base = surface.evaluate(uv.x, v_min + span_v * 0.0);
+                let radial = base - patch.centre;
+                let theta = radial.dot(&patch.e2).atan2(radial.dot(&patch.e1));
+
+                moments[0] += theta * scale;
+                moments[1] += theta.sin() * scale;
+                moments[2] += -theta.cos() * scale;
+            }
+        }
+    }
+
+    moments
+}
+
 fn loop_uv_moments(pcurve_loop: &FacePcurveLoop) -> [f64; 10] {
     let mut moments = [0.0; 10];
 
