@@ -786,6 +786,110 @@ impl IntersectionMarcher {
     /// ガウス・ニュートンで解きます。外積の行は中心差分で作ります（ここは
     /// 傾きとしてしか使わないので、桁が半分落ちても収束に効きません。
     /// [`Self::newton_to_bound_extremum`] と同じ理由）。
+    /// 領域の縁で終わった弧の端を、**縁の座標を厳密に固定して解き直す**。
+    ///
+    /// # なぜ要るか
+    ///
+    /// 歩いて縁に乗ったとき、張り付いた座標は `1e-9` の margin で「縁の上」と
+    /// 判定されるだけで、**厳密に縁の値ではありません**。そして残りの座標は、
+    /// その中途半端な位置に合わせて決まっています。
+    ///
+    /// 実測（4-177、箱の上面とトーラスの上端が接する配置）: 壁 `y=0` の上の
+    /// 交線の端が
+    ///
+    /// ```text
+    /// (16.633446254, 0.000000000, 19.999999999)
+    /// ```
+    ///
+    /// で終わっていました。`z` は 1e-9、壁は厳密。しかし接する円（中心
+    /// `(10,10)`、半径 12）から **1.09e-4 外**にいます——**トーラスの上に
+    /// ありません**。あるべき値は `10 + √44 = 16.633249581` です。
+    ///
+    /// 同じ稜を箱側とトーラス側がそれぞれ持ち、**5.9e-5 食い違って**縫合が
+    /// 落ちていました（4-173）。
+    ///
+    /// # やること
+    ///
+    /// 張り付いた座標を**その縁の値そのもの**に置き、残りを `p1 = p2` の
+    /// 3式から解き直します。固定が1つなら未知数3・式3で正方、2つなら
+    /// 最小二乗です。**接している方向を通らない**ので、二重根になりません。
+    ///
+    /// 固定した座標は動かしません（正規方程式のその行と列を単位にします）。
+    fn settle_end_on_bound(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        state: &mut [f64; 4],
+        held: [bool; 4],
+        tol: &Tolerance,
+    ) -> Option<f64> {
+        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
+        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
+        let bounds = [(u_min, u_max), (v_min, v_max), (s_min, s_max), (t_min, t_max)];
+
+        // **まず、縁そのものへ置きます。** 判定の margin ぶんのずれを残さない。
+        for index in 0..4 {
+            if !held[index] {
+                continue;
+            }
+            let (low, high) = bounds[index];
+            state[index] = if (state[index] - low).abs() <= (state[index] - high).abs() {
+                low
+            } else {
+                high
+            };
+        }
+        if held.iter().all(|pinned| *pinned) {
+            // 動かせる向きがありません。縁へ置いただけで返します。
+            let gap = (s1.evaluate(state[0], state[1]) - s2.evaluate(state[2], state[3])).norm();
+            return Some(gap);
+        }
+
+        let limit = tol.linear * 1e-2;
+        for _ in 0..24 {
+            crate::work_counter::count_marching_newton_iteration();
+            let (p1, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
+            let (p2, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
+            let residual = p1 - p2;
+            if residual.norm() <= limit {
+                break;
+            }
+
+            let columns = [du1, dv1, -du2, -dv2];
+            // 正規方程式。固定した座標は、行と列を単位にして外します。
+            let mut matrix = nalgebra::Matrix4::<f64>::zeros();
+            let mut rhs = nalgebra::Vector4::<f64>::zeros();
+            for row in 0..4 {
+                if held[row] {
+                    matrix[(row, row)] = 1.0;
+                    continue;
+                }
+                for column in 0..4 {
+                    if held[column] {
+                        continue;
+                    }
+                    matrix[(row, column)] = columns[row].dot(&columns[column]);
+                }
+                rhs[row] = -columns[row].dot(&residual);
+            }
+            let Some(step) = matrix.lu().solve(&rhs) else {
+                return None;
+            };
+            if !(0..4).all(|index| step[index].is_finite()) {
+                return None;
+            }
+            for index in 0..4 {
+                if held[index] {
+                    continue;
+                }
+                let (low, high) = bounds[index];
+                state[index] = (state[index] + step[index]).clamp(low, high);
+            }
+        }
+
+        let gap = (s1.evaluate(state[0], state[1]) - s2.evaluate(state[2], state[3])).norm();
+        (gap <= limit).then_some(gap)
+    }
+
     fn newton_to_tangency_least_squares(
         s1: &NurbsSurface3,
         s2: &NurbsSurface3,
@@ -1217,6 +1321,7 @@ impl IntersectionMarcher {
             }
             if at_edge(&state) {
                 hit_boundary = true;
+                let mut settled_here = false;
                 // **縁に着いたことと、縁のどこに着いたかは別です。**
                 //
                 // 接点のすぐそばでは残差が位置を決めません（4-81）。歩いて
@@ -1287,7 +1392,29 @@ impl IntersectionMarcher {
                             if travel > tol.linear && travel <= step.abs() * 2.0 {
                                 points.pop();
                                 points.push(Self::sample(s1, s2, &refined));
+                                settled_here = true;
                             }
+                        }
+                    }
+                }
+
+                // **接点でなくても、縁に着いたなら解き直します**（4-177）。
+                //
+                // 上の枝は接点のときだけでした。普通の縁抜けでは、張り付いた
+                // 座標が margin ぶんずれたまま残り、そこに合わせて他の座標が
+                // 決まっています。縁へ厳密に置いて残りを解き直します。
+                if !settled_here {
+                    let held = pinned(&state);
+                    let mut refined = state;
+                    if Self::settle_end_on_bound(s1, s2, &mut refined, held, tol).is_some()
+                        && inside(&refined)
+                    {
+                        let here = s1.evaluate(refined[0], refined[1]);
+                        let previous = s1.evaluate(state[0], state[1]);
+                        let travel = (here - previous).norm();
+                        if travel > tol.linear && travel <= step.abs() * 2.0 {
+                            points.pop();
+                            points.push(Self::sample(s1, s2, &refined));
                         }
                     }
                 }
