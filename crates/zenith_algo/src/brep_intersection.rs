@@ -4111,8 +4111,31 @@ fn diagnose_selected_face_stitching(
                 // **どの稜が余ったのかを出す口。** 数だけでは、面片が
                 // 足りないのか、突き合わせ方が違うのかが分かりません。
                 // `ZENITH_SPLIT_WHY` と同じ流儀です。
+                //
+                // **いちばん近い他の稜使用も出します**（4-186）。相手が
+                // 「少しずれた所に居る」のか「そもそも居ない」のかで、
+                // 直す先が変わります——前者は位置の話、後者は選び方の話
+                // です。距離は中点どうしで測ります（端点だけでは、同じ2点を
+                // 結ぶ別の弧と見分けられません。4-65）。
                 if std::env::var_os("ZENITH_STITCH_WHY").is_some() {
                     let use_ = &edge_uses[i];
+                    let nearest = edge_uses
+                        .iter()
+                        .enumerate()
+                        .filter(|(j, _)| *j != i)
+                        .map(|(_, other)| {
+                            (
+                                (other.middle - use_.middle).norm(),
+                                other.operand,
+                                (other.end - other.start).norm(),
+                            )
+                        })
+                        .min_by(|left, right| left.0.total_cmp(&right.0));
+                    if let Some((distance, operand, length)) = nearest {
+                        eprintln!(
+                            "STITCHWHY   いちばん近い相手 {operand:?} 中点まで {distance:.9} 長さ {length:.9}"
+                        );
+                    }
                     eprintln!(
                         "STITCHWHY unmatched {:?} ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9}) len {:.9}",
                         use_.operand,
