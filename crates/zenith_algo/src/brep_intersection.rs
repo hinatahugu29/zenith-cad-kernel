@@ -892,9 +892,18 @@ impl BrepIntersectionBuilder {
     ) -> BooleanShellAssembly {
         let faces_a = all_solid_faces(solid_a);
         let faces_b = all_solid_faces(solid_b);
-        let face_pair_candidates = Self::collect_face_pair_candidates(
+        let mut face_pair_candidates = Self::collect_face_pair_candidates(
             &faces_a,
             &faces_b,
+            tol,
+        );
+        // **接しているだけの線では、面を割りません**（4-184。規約 3-1）。
+        drop_non_bounding_contact_curves(
+            solid_a,
+            solid_b,
+            &faces_a,
+            &faces_b,
+            &mut face_pair_candidates,
             tol,
         );
         let face_pair_candidate_count = face_pair_candidates.len();
@@ -8179,6 +8188,177 @@ fn candidate_end_points(kind: &FaceIntersectionKind) -> Vec<Point3> {
         } => vec![*segment_start, *segment_end],
         _ => Vec::new(),
     }
+}
+
+/// 接しているだけで、**答えの縁になっていない**交線を落とす。
+///
+/// # なぜ
+///
+/// > HANDOVER 3-1: **接触は、それ自体では位相を作らない**
+///
+/// 実測（4-183、箱の上面とトーラスの上端が接する和）: 接する円
+/// （半径 12、`z = 20`）を稜として面を割ったため、**1本の稜に4枚の面片**
+/// （箱の上面 2枚＋トーラス 2枚）が付き、非多様体になっていました。32本
+/// すべてがそれでした。トーラスは箱の上面に内側から触れているだけで、
+/// 和の境界はそこで箱の上面がそのまま続きます。**割ってはいけない線**です。
+///
+/// # 測り方
+///
+/// **推測しません。2つとも測ってから落とします。**
+///
+/// 1. **本当に接しているか。** 交線の上の3点で、両方の面の法線が平行か
+///    （外積が `1e-6` 未満）。横断的に交わる線はここで残ります
+/// 2. **本当に縁でないか。** 交線の両側へ、共通の接平面の中で少しずらした
+///    点を取り、**両側で内外が同じ**なら、その線は面を割っていません
+///
+/// 片方でも外れたら落としません。
+fn drop_non_bounding_contact_curves(
+    solid_a: &Solid,
+    solid_b: &Solid,
+    faces_a: &[Face],
+    faces_b: &[Face],
+    candidates: &mut Vec<FaceIntersectionCandidate>,
+    tol: &Tolerance,
+) {
+    let explain = std::env::var_os("ZENITH_CONTACT_CURVE_WHY").is_some();
+    candidates.retain(|candidate| {
+        let edges = candidate_edges(&candidate.kind);
+        if edges.is_empty() {
+            return true;
+        }
+        let (Some(face_a), Some(face_b)) = (
+            faces_a.get(candidate.face_a_index),
+            faces_b.get(candidate.face_b_index),
+        ) else {
+            return true;
+        };
+        let (Some(patch_a), Some(patch_b)) = (face_patch(face_a), face_patch(face_b)) else {
+            return true;
+        };
+        for edge in edges {
+            if !contact_curve_is_not_bounding(
+                solid_a, solid_b, &patch_a, &patch_b, edge, tol, explain,
+            ) {
+                return true;
+            }
+        }
+        if explain {
+            eprintln!(
+                "CONTACTCURVE 落とす 面A {} 面B {}",
+                candidate.face_a_index, candidate.face_b_index
+            );
+        }
+        false
+    });
+}
+
+/// 1本の弧について、[`drop_non_bounding_contact_curves`] の2つを測る。
+fn contact_curve_is_not_bounding(
+    solid_a: &Solid,
+    solid_b: &Solid,
+    patch_a: &NurbsSurface3,
+    patch_b: &NurbsSurface3,
+    edge: &Edge,
+    tol: &Tolerance,
+    explain: bool,
+) -> bool {
+    let (t_min, t_max) = edge.curve.param_range();
+    if !(t_max > t_min) {
+        return false;
+    }
+    let span = (edge.curve.evaluate(t_max) - edge.curve.evaluate(t_min)).norm();
+    if span <= tol.linear * 100.0 {
+        return false;
+    }
+    let radius = span * 1e-2;
+    if radius <= tol.linear * 100.0 {
+        return false;
+    }
+
+    for fraction in [0.25_f64, 0.5, 0.75] {
+        let t = t_min + (t_max - t_min) * fraction;
+        let point = edge.curve.evaluate(t);
+        let Some(tangent) = edge.curve.evaluate_derivatives(t, 1)[1].try_normalize_safe(1e-12)
+        else {
+            return false;
+        };
+        let (Some(normal_a), Some(normal_b)) = (
+            surface_normal_at(patch_a, point),
+            surface_normal_at(patch_b, point),
+        ) else {
+            return false;
+        };
+        // 1. 本当に接しているか。横断的に交わる線はここで残ります。
+        let sine = normal_a.cross(&normal_b).norm();
+        if sine > 1e-6 {
+            return false;
+        }
+
+        // 2. **一方の材料が、他方に含まれているか。**
+        //
+        // 面の上をずらして測るやり方は駄目でした（4-184）——接している
+        // 向きへ射影が潰れて、**ずらした点が元の線へ戻ります**。同じ縮退
+        // です。
+        //
+        // 代わりに、`contact` と同じ**交線に垂直な輪**で測ります。輪は
+        // どちらの面からも離れているので、内外がちゃんと決まります。
+        // 輪の上で B の材料が A に含まれる（か、その逆）なら、そこで
+        // B は A を切っていません——**答えの縁ではありません**。
+        let (u, v) = frame_across(tangent);
+        let mut a_only = false;
+        let mut b_only = false;
+        let mut decided = 0usize;
+        for step in 0..64 {
+            let angle = std::f64::consts::TAU * step as f64 / 64.0;
+            let probe = point + (u * angle.cos() + v * angle.sin()) * radius;
+            let (Some(in_a), Some(in_b)) = (
+                crate::boolean_validation::exact_inside(probe, solid_a, tol),
+                crate::boolean_validation::exact_inside(probe, solid_b, tol),
+            ) else {
+                continue;
+            };
+            decided += 1;
+            if in_a && !in_b {
+                a_only = true;
+            }
+            if in_b && !in_a {
+                b_only = true;
+            }
+        }
+        if decided < 32 {
+            // 半分も決まらないなら、測れていません。触りません。
+            return false;
+        }
+        if a_only && b_only {
+            if explain {
+                eprintln!("CONTACTCURVE 縁です（正弦 {sine:.3e}、位置 {fraction}）");
+            }
+            return false;
+        }
+    }
+    true
+}
+
+/// 向きに垂直な、正規直交の2本。
+fn frame_across(direction: Vec3) -> (Vec3, Vec3) {
+    let helper = if direction.x.abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u = direction
+        .cross(&helper)
+        .try_normalize_safe(1e-12)
+        .unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+    let v = direction.cross(&u);
+    (u, v)
+}
+
+/// 点が乗っているところでの、面の法線。
+fn surface_normal_at(patch: &NurbsSurface3, point: Point3) -> Option<Vec3> {
+    let projection = ExtremumEngine::point_to_surface(point, patch, 64, 1e-13).ok()?;
+    let (_, du, dv) = patch.evaluate_derivatives_1st(projection.u, projection.v);
+    du.cross(&dv).try_normalize_safe(1e-12)
 }
 
 /// 候補が持つ弧を借りる。
