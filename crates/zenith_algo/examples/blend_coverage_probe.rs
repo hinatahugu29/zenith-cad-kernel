@@ -106,7 +106,75 @@ fn headline(reason: &str) -> String {
     cut.chars().take(72).collect()
 }
 
+/// **1本の稜のまわりを、そのまま出す。** 推測を重ねる前に実物を見るための口。
+///
+/// ```bash
+/// ZENITH_BLEND_DUMP=chamfered_box:14 cargo run --release -p zenith_algo ///   --example blend_coverage_probe
+/// ```
+fn dump(solid: &Solid, edge_id: u64) {
+    let faces = &solid.outer_shell.faces;
+    let mut target: Option<(Point3, Point3)> = None;
+    for face in faces {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                if oriented.edge.id == edge_id {
+                    target = Some((
+                        oriented.edge.start_vertex.point,
+                        oriented.edge.end_vertex.point,
+                    ));
+                }
+            }
+        }
+    }
+    let Some((start, end)) = target else {
+        println!("稜 {edge_id} が見つかりません");
+        return;
+    };
+    println!();
+    println!("稜 {edge_id}: ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})", start.x, start.y, start.z, end.x, end.y, end.z);
+    let dir = (end - start).normalize();
+    println!("向き ({:.4} {:.4} {:.4})", dir.x, dir.y, dir.z);
+    for (label, vertex) in [("始点", start), ("終点", end)] {
+        println!("  {label} に集まる面:");
+        for (index, face) in faces.iter().enumerate() {
+            let ids: Vec<u64> = std::iter::once(&face.outer_wire)
+                .chain(face.inner_wires.iter())
+                .flat_map(|wire| wire.edges.iter())
+                .filter(|oriented| {
+                    (oriented.start_vertex().point - vertex).norm() <= 1e-9
+                        || (oriented.end_vertex().point - vertex).norm() <= 1e-9
+                })
+                .map(|oriented| oriented.edge.id)
+                .collect();
+            if ids.is_empty() {
+                continue;
+            }
+            let kind = match &face.geometry {
+                FaceGeometry::Plane(plane) => format!(
+                    "平面 法線 ({:.4} {:.4} {:.4}) 稜との内積 {:.4}",
+                    plane.normal.x, plane.normal.y, plane.normal.z,
+                    plane.normal.dot(&dir)
+                ),
+                FaceGeometry::Nurbs(_) => "曲面".to_string(),
+                _ => "その他".to_string(),
+            };
+            println!("    面{index:<3} 稜 {ids:?}  {kind}");
+        }
+    }
+}
+
 fn main() {
+    if let Ok(spec) = std::env::var("ZENITH_BLEND_DUMP") {
+        let mut parts = spec.splitn(2, ':');
+        let name = parts.next().unwrap_or("");
+        let id: u64 = parts.next().and_then(|t| t.parse().ok()).unwrap_or(0);
+        if let Some(solid) = load(name) {
+            dump(&solid, id);
+        } else {
+            println!("{name} が読めません");
+        }
+        return;
+    }
     let names = [
         "elliptic_prism",
         "sphere",
