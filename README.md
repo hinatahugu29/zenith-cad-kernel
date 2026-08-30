@@ -3,6 +3,7 @@
 このリポジトリを初めて扱う人・AIは、コードを変更する前に次の順で読んでください。
 
 1. [`HANDOVER.md`](HANDOVER.md) — 現在地点、作業ブランチ、次に着手する候補
+   （**次の方針は 9-H**。段取りと数値目標 H1〜H5 がここにあります）
 2. [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) — 主張を再測定する手順
 3. [`KERNEL_SPECS.md`](KERNEL_SPECS.md) — 現在の仕様と実装範囲
 4. [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) — 機能一覧と制限
@@ -45,3 +46,7 @@ cargo run --release -p zenith_algo --example foreign_cross_pair_probe
 
 現在の具体的なブランチ、コミット、未解決事項は
 [`HANDOVER.md`](HANDOVER.md)の「0. 作業を引き継ぐときの現在地点」を正とします。
+
+**次に何をするかは [`HANDOVER.md`](HANDOVER.md) の 9-H が正です**（2026/08/30
+に置き直しました）。[`ROADMAP.md`](ROADMAP.md) の「今後の実装優先順位」は
+その要約です。
