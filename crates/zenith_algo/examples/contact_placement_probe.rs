@@ -47,6 +47,8 @@
 //! ```
 
 use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, PrimitiveBuilder};
+use std::f64::consts::FRAC_PI_2;
+
 use zenith_math::{Tolerance, Transform3, Vec3};
 use zenith_topo::Solid;
 
@@ -789,6 +791,54 @@ fn cases() -> Vec<Case> {
             "同上",
             "同上",
         ],
+    });
+
+    // **まだ1件も無かった組と、極を通る置き方**（2026/08/31、4-205）。
+    //
+    // 8月30日は「接触配置を5つ足しただけで穴2つとバグ1つ」でした。掃き出しは
+    // 段に入れず回す、という決まりに従って足します。
+    //
+    // 選んだ理由は2つです。
+    //
+    // - **`cone × torus` は、この表に1件もありませんでした**（他の10組は
+    //   すべてあります）
+    // - 交線が**極や頂点を通る**置き方は、今日の別の作業でも3件続けて欠陥が
+    //   出た族です（4-78、4-79、4-80）
+    out.push(Case {
+        name: "cone x torus (apex through the hole)",
+        why: "円錐の頂点をトーラスの穴の中心に置き、軸を揃える。交線は芯の円のまわりを2周する。**この組はこれまで1件も無かった**",
+        a: cone.clone(),
+        b: BrepTransform::translate_solid(&torus, Vec3::new(0.0, 0.0, 10.0)),
+        note: ["この組は初めて測ります", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "cone x torus (rim on the tube)",
+        why: "円錐の底の縁をトーラスの管に当てる。縁の円と管の円が交わる",
+        a: cone.clone(),
+        b: BrepTransform::translate_solid(&torus, Vec3::new(10.0, 0.0, 0.0)),
+        note: ["この組は初めて測ります", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "sphere x cylinder (axis through both poles)",
+        why: "円柱の軸を球の軸に直交させ、中心を通す。**交線が球の極を2つとも通る**（4-78 の族）",
+        a: sphere.clone(),
+        b: BrepTransform::transform_solid(
+            &BrepTransform::translate_solid(&cylinder, Vec3::new(0.0, 0.0, -20.0)),
+            &Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), FRAC_PI_2),
+        )
+        .expect("lay the cylinder down"),
+        note: ["極を通る交線。4-78 の族", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "cone x cylinder (apex on the axis)",
+        why: "円柱を横に倒し、その軸の上に円錐の頂点を置く。**交線が頂点を通る**",
+        a: cone.clone(),
+        b: BrepTransform::transform_solid(
+            &BrepTransform::translate_solid(&cylinder, Vec3::new(0.0, 0.0, -20.0)),
+            &Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), FRAC_PI_2),
+        )
+        .expect("lay the cylinder down"),
+        note: ["頂点を通る交線", "同上", "同上"],
     });
 
     out
