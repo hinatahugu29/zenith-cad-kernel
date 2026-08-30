@@ -6078,7 +6078,12 @@ fn intersect_face_supports(
             ),
             true,
         )),
-        (FaceGeometry::Plane(plane), FaceGeometry::Nurbs(surface)) => Some(
+        (FaceGeometry::Plane(plane), FaceGeometry::Nurbs(surface)) => {
+            // **同一平面の2つの円が接するだけなら、交線はありません**（4-197）。
+            if planar_rim_touches_section_circle(face_a, plane, surface, tol) {
+                return None;
+            }
+            Some(
             match intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_a), surface, tol)
             {
                 FaceIntersectionKind::Unsupported => (
@@ -6087,8 +6092,13 @@ fn intersect_face_supports(
                 ),
                 kind => (kind, true),
             },
-        ),
-        (FaceGeometry::Nurbs(surface), FaceGeometry::Plane(plane)) => Some(
+        )
+        }
+        (FaceGeometry::Nurbs(surface), FaceGeometry::Plane(plane)) => {
+            if planar_rim_touches_section_circle(face_b, plane, surface, tol) {
+                return None;
+            }
+            Some(
             match intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_b), surface, tol)
             {
                 FaceIntersectionKind::Unsupported => (
@@ -6097,7 +6107,8 @@ fn intersect_face_supports(
                 ),
                 kind => (kind, true),
             },
-        ),
+        )
+        }
         (FaceGeometry::Nurbs(surface_a), FaceGeometry::Nurbs(surface_b)) => {
             // **接する母線は、辿らずに解析的に出します**（4-190）。
             //
@@ -6109,6 +6120,14 @@ fn intersect_face_supports(
             //
             // 軸が平行で、軸間距離が半径の和（外接）か差（内接）なら、
             // **接する母線は1本に決まります**。辿る必要がありません。
+            // **1点で触れるだけなら、交線はありません**（4-197。規約 3-1）。
+            //
+            // 測って決めようとした手は4つとも壁に当たりました（4-180、
+            // 4-181、4-195、4-196）——接触では、区別したい量がいつも公差の
+            // 下にあります。**形から決めます。**
+            if revolution_patches_touch_at_a_point(surface_a, surface_b, tol) {
+                return None;
+            }
             match intersect_tangent_cylinder_patches(surface_a, surface_b, tol) {
                 Some(kind) => Some((kind, true)),
                 None => Some((intersect_nurbs_patches(surface_a, surface_b, tol), false)),
@@ -6682,6 +6701,291 @@ fn wrap_signed_angle(angle: f64) -> f64 {
 /// 測ってから返します。1つでも外れたら `None` で、従来どおり辿ります。
 ///
 /// 母線の範囲は、2つのパッチが軸方向で重なるぶんに切ります。
+/// 軸が平行な2つの円柱・円錐面が、**1点だけで触れている**か。
+///
+/// # なぜ形から決めるのか
+///
+/// 接触では、区別したい量がいつも公差の下にあります。実測（4-196）:
+/// 上向きの円錐2本が1点で触れる配置で、辿りが出した破片は相手の面の
+/// **3.5e-9 外**でした——公差 `1e-6` の 1/300 で、内外の検査では
+/// 落とせません。**測って決める手は4つとも外しました**（4-180、4-181、
+/// 4-195、4-196）。
+///
+/// # 形の条件
+///
+/// 半径は軸方向に**線形**です（円柱は一定、円錐は一次）。だから
+///
+/// ```text
+/// 隙間(s) = 軸間距離 − (r_A(s) + r_B(s))     外から触れる場合
+/// ```
+///
+/// も線形で、**符号を変えずに 0 に触れるなら、触れるのは端の1点だけ**です。
+/// 途中で負になるなら本当に交わっていますし、0 が続くなら**線**で接して
+/// います（そちらは [`intersect_tangent_cylinder_patches`] の仕事）。
+///
+/// 内から触れる場合は `軸間距離 − |r_A(s) − r_B(s)|` を同じように見ます。
+///
+/// **最後に、その点が本当に両方の面の上にあるかを測ってから**返します。
+/// 四半パッチなので、触れる場所が両方の角度の範囲に入っているとは限りません。
+/// 平面の面の**縁の円**と、その平面が曲面から切り出す**断面の円**が、
+/// **接するだけ**か。
+///
+/// # なぜ形から決めるのか
+///
+/// 実測（4-193、4-194）: 同一平面で内接する2つの円、外接する2つの円の
+/// どちらでも、接点のまわりに**長さ 3〜5e-4 の破片**が出て、4枚の面片に
+/// 共有されていました。接点は二重根なので `√(2Rδ)` 離れた2点で「交わる」と
+/// 計算されるからです。**測って落とす手は4つとも壁に当たりました**
+/// （4-180、4-181、4-195、4-196）。
+///
+/// # 形の条件
+///
+/// 2つの円が同一平面にあり、中心間距離が
+///
+/// ```text
+/// r1 + r2       外から接する
+/// |r1 - r2|     内から接する
+/// ```
+///
+/// なら、触れるのは**1点だけ**です。規約 3-1 により、そこは位相を作りません。
+///
+/// **推測しません**——縁が本当に円か、断面が本当に円か、同一平面か、
+/// 全部測ってから返します。
+fn planar_rim_touches_section_circle(
+    planar_face: &Face,
+    plane: &PlaneSurface3,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> bool {
+    let Some((rim_center, rim_radius, rim_normal)) = planar_face_rim_circle(planar_face) else {
+        return false;
+    };
+    let Some(patch) = recognize_cylinder_patch(surface, tol) else {
+        return false;
+    };
+    // 断面が円になるのは、平面が軸に垂直なときだけ。
+    let Some(normal) = oriented_plane_normal_of(plane).try_normalize_safe(1e-12) else {
+        return false;
+    };
+    if normal.cross(&patch.axis).norm() > tol.angular {
+        return false;
+    }
+    if rim_normal.cross(&patch.axis).norm() > tol.angular {
+        return false;
+    }
+    // 断面の円は、平面の高さでの半径。
+    let axial = (plane.origin - patch.base_center).dot(&patch.axis);
+    if axial < -tol.linear || axial > patch.height + tol.linear {
+        return false;
+    }
+    let section_radius = patch.radius_at(axial.clamp(0.0, patch.height));
+    let section_center = patch.base_center + patch.axis * axial;
+
+    // 2つの円が同じ平面にあるか。
+    let scale = rim_radius.max(section_radius).max(1.0);
+    let limit = tol.linear * scale;
+    if ((section_center - rim_center).dot(&normal)).abs() > limit {
+        return false;
+    }
+
+    let between = section_center - rim_center;
+    let distance = (between - normal * between.dot(&normal)).norm();
+    let outside = (distance - (rim_radius + section_radius)).abs() <= limit;
+    let inside = (distance - (rim_radius - section_radius).abs()).abs() <= limit;
+    if !(outside || inside) {
+        return false;
+    }
+    if distance <= limit {
+        // 同心。接するのではなく重なります。
+        return false;
+    }
+    if std::env::var_os("ZENITH_POINT_TOUCH_WHY").is_some() {
+        eprintln!(
+            "POINTTOUCH 同一平面の円が{}接する 半径 {rim_radius:.6} と {section_radius:.6}、中心間 {distance:.6}",
+            if outside { "外から" } else { "内から" }
+        );
+    }
+    true
+}
+
+/// 平面の面の外周が**円**なら、その中心・半径・法線。
+fn planar_face_rim_circle(face: &Face) -> Option<(Point3, f64, Vec3)> {
+    let edges = &face.outer_wire.edges;
+    if edges.is_empty() {
+        return None;
+    }
+    let mut samples: Vec<Point3> = Vec::new();
+    for oriented in edges {
+        let curve = &oriented.edge.curve;
+        let (t_min, t_max) = curve.param_range();
+        if !(t_max > t_min) {
+            continue;
+        }
+        for step in 0..4 {
+            samples.push(curve.evaluate(t_min + (t_max - t_min) * (step as f64 / 4.0)));
+        }
+    }
+    if samples.len() < 6 {
+        return None;
+    }
+    let (center, radius, normal) = fit_circle_through(
+        samples[0],
+        samples[samples.len() / 3],
+        samples[2 * samples.len() / 3],
+    )?;
+    // **主張で終わらせません。** 全部の標本がその円に乗るか測ります。
+    let limit = radius.max(1.0) * 1e-9;
+    for point in &samples {
+        let offset = point - center;
+        if offset.dot(&normal).abs() > limit {
+            return None;
+        }
+        if (offset.norm() - radius).abs() > limit {
+            return None;
+        }
+    }
+    Some((center, radius, normal))
+}
+
+/// 3点を通る円。
+fn fit_circle_through(a: Point3, b: Point3, c: Point3) -> Option<(Point3, f64, Vec3)> {
+    let (ab, ac) = (b - a, c - a);
+    let normal = ab.cross(&ac);
+    let norm = normal.norm();
+    let scale = ab.norm().max(ac.norm()).max(1.0);
+    if norm <= scale * scale * 1e-12 {
+        return None;
+    }
+    let normal = normal / norm;
+    let center = a
+        + (ab * ac.dot(&ac) * ab.dot(&ab).recip().recip()).scale(0.0)
+        + {
+            let denominator = 2.0 * norm * norm;
+            let alpha = ac.dot(&ac) * ab.dot(&(ab - ac)) / denominator;
+            let beta = ab.dot(&ab) * ac.dot(&(ac - ab)) / denominator;
+            ab * alpha + ac * beta
+        };
+    let radius = (a - center).norm();
+    Some((center, radius, normal))
+}
+
+/// 平面そのものの法線（面の向きは見ません）。
+fn oriented_plane_normal_of(plane: &PlaneSurface3) -> Vec3 {
+    plane.normal
+}
+
+fn revolution_patches_touch_at_a_point(
+    surface_a: &NurbsSurface3,
+    surface_b: &NurbsSurface3,
+    tol: &Tolerance,
+) -> bool {
+    let (Some(patch_a), Some(patch_b)) = (
+        recognize_cylinder_patch(surface_a, tol),
+        recognize_cylinder_patch(surface_b, tol),
+    ) else {
+        return false;
+    };
+    if patch_a.axis.cross(&patch_b.axis).norm() > tol.angular {
+        return false;
+    }
+    let axis = patch_a.axis;
+    let facing = patch_a.axis.dot(&patch_b.axis).signum();
+
+    let between = patch_b.base_center - patch_a.base_center;
+    let across = between - axis * between.dot(&axis);
+    let distance = across.norm();
+    let scale = patch_a
+        .radius
+        .max(patch_a.top_radius)
+        .max(patch_b.radius)
+        .max(patch_b.top_radius)
+        .max(1.0);
+    let limit = tol.linear * scale;
+    if !(distance > limit) {
+        // 同軸。1点では触れません。
+        return false;
+    }
+
+    // A の底を原点にした軸方向の座標。
+    let b_low = between.dot(&axis).min(between.dot(&axis) + facing * patch_b.height);
+    let b_high = between.dot(&axis).max(between.dot(&axis) + facing * patch_b.height);
+    let low = 0.0f64.max(b_low);
+    let high = patch_a.height.min(b_high);
+    if !(high - low > limit) {
+        return false;
+    }
+
+    let radius_a = |s: f64| patch_a.radius_at(s);
+    let radius_b = |s: f64| {
+        let along = if facing >= 0.0 {
+            s - between.dot(&axis)
+        } else {
+            between.dot(&axis) - s
+        };
+        patch_b.radius_at(along)
+    };
+
+    // 外から触れる隙間と、内から触れる隙間。どちらも `s` について線形です。
+    for inside in [false, true] {
+        let gap = |s: f64| {
+            if inside {
+                distance - (radius_a(s) - radius_b(s)).abs()
+            } else {
+                distance - (radius_a(s) + radius_b(s))
+            }
+        };
+        let (at_low, at_high) = (gap(low), gap(high));
+        // **符号を変えたら、本当に交わっています。**
+        if at_low < -limit && at_high < -limit {
+            continue;
+        }
+        if at_low.min(at_high) < -limit {
+            continue;
+        }
+        // **0 が続くなら線で接しています。** ここでは扱いません。
+        if at_low.abs() <= limit && at_high.abs() <= limit {
+            continue;
+        }
+        // 端のどちらかで 0 に触れているか。
+        let touch = if at_low.abs() <= limit {
+            low
+        } else if at_high.abs() <= limit {
+            high
+        } else {
+            continue;
+        };
+
+        // **触れる点が本当に両方の面の上にあるか、測ります。**
+        let Some(direction) = across.try_normalize_safe(1e-12) else {
+            continue;
+        };
+        let sign = if inside && radius_b(touch) > radius_a(touch) {
+            -1.0
+        } else {
+            1.0
+        };
+        let point = patch_a.base_center + axis * touch + direction * (radius_a(touch) * sign);
+        let on_both = [surface_a, surface_b].iter().all(|surface| {
+            ExtremumEngine::point_to_surface(point, surface, 64, 1e-13)
+                .map(|projection| projection.distance <= limit)
+                .unwrap_or(false)
+        });
+        if on_both {
+            if std::env::var_os("ZENITH_POINT_TOUCH_WHY").is_some() {
+                eprintln!(
+                    "POINTTOUCH 1点で触れる（{}）({:.6} {:.6} {:.6})",
+                    if inside { "内から" } else { "外から" },
+                    point.x,
+                    point.y,
+                    point.z
+                );
+            }
+            return true;
+        }
+    }
+    false
+}
+
 fn intersect_tangent_cylinder_patches(
     surface_a: &NurbsSurface3,
     surface_b: &NurbsSurface3,
