@@ -15,8 +15,21 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 authors = ["Zenith CAD Contributors"]
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/zenith-cad/zenith"
+# **MPL-2.0**（2026/08/30 に決めました）。
+#
+# **ファイル単位の copyleft** です——このリポジトリのファイルを改変したら
+# その部分は公開する、しかし自分のコードと組み合わせて閉じた製品にするのは
+# 自由。**OCCT が LGPL で採用されているのと同じ狙い**です（このカーネルは
+# その代替を目標に置いています。HANDOVER 9-0）。
+#
+# **GPL 互換**なので、将来 Blender のアドオン（GPL）を足しても問題ありません。
+# LGPL を採らなかったのは、あちらが「利用者が改変版へ差し替えられること」を
+# 前提にしていて、**静的リンクが普通の Rust では守り方が厄介**だからです。
+#
+# 締めておいて後で緩める（MPL → MIT）のは簡単ですが、逆はできません。
+# **他人の貢献を受け入れ始めるまでが、決め直せる期間**です。
+license = "MPL-2.0"
+repository = "https://github.com/hinatahugu29/zenith-cad-kernel"
 
 [workspace.dependencies]
 nalgebra = { version = "0.33", default-features = false, features = ["std", "serde-serialize"] }

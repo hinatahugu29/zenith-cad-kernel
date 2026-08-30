@@ -50,3 +50,26 @@ cargo run --release -p zenith_algo --example foreign_cross_pair_probe
 **次に何をするかは [`HANDOVER.md`](HANDOVER.md) の 9-H が正です**（2026/08/30
 に置き直しました）。[`ROADMAP.md`](ROADMAP.md) の「今後の実装優先順位」は
 その要約です。
+
+---
+
+## ライセンス
+
+**Mozilla Public License 2.0**（[`LICENSE`](LICENSE)）。
+
+**ファイル単位の copyleft** です。
+
+- このリポジトリのファイルを**改変したら、その部分は公開**してください
+- **自分のコードと組み合わせて、閉じた製品にするのは自由**です
+
+OCCT が LGPL で広く採用されているのと同じ狙いで選びました——このカーネルは
+その代替を目標に置いているので（[`HANDOVER.md`](HANDOVER.md) の 9-0）、
+**組み込める**ことが要ります。
+
+**GPL 互換**なので、Blender のアドオン（GPL）から呼んで構いません。
+なお、このリポジトリには **Blender の API に触れるコードはありません**
+——`zenith_py` が使うのは PyO3 と Python の C API です。
+
+各ファイルに MPL の見出しは付けていません。MPL 2.0 の Exhibit A が
+「ファイルに書けない・書きたくない場合は `LICENSE` のような場所に
+置いてよい」と定めているためです。

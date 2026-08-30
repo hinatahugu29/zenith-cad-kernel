@@ -772,25 +772,40 @@ fn find_cap_face(
         }
     }
 
-    if found.len() != 1 {
+    if found.is_empty() {
         return Err(format!(
-            "The {which} of edge {edge_id} has {} other faces around it; blending needs exactly one",
-            found.len()
+            "The {which} of edge {edge_id} has no other face around it; the blend has nothing to end against"
         ));
     }
 
-    let index = found[0];
-    let FaceGeometry::Plane(plane) = &faces[index].geometry else {
-        return Err(format!(
-            "The face closing the {which} of edge {edge_id} is not planar"
-        ));
-    };
-    if plane.normal.dot(&d).abs() < 1.0 - 1e-9 {
-        return Err(format!(
-            "The face closing the {which} of edge {edge_id} is not perpendicular to it; the blend would need a trimmed end"
-        ));
+    // **端点に集まる面を数えるのではなく、蓋になれる面を数えます**（4-201）。
+    //
+    // 蓋の条件は「平面で、稜に垂直」です。以前は端点まわりの面を**全部**
+    // 数えて「1枚だけ」を求めていました。**それは条件ではなく、たまたま
+    // 素の箱でそうなる数**です。
+    //
+    // 実測（4-201）: 面取り済みの箱は角に面が増えるので、**48稜すべて**が
+    // 「他の面が2枚ある」で断られていました。幾何のほうは対応済みの
+    // 「直線稜×平面2面」です——**数え方だけが止めていました**。
+    let caps: Vec<usize> = found
+        .iter()
+        .copied()
+        .filter(|index| match &faces[*index].geometry {
+            FaceGeometry::Plane(plane) => plane.normal.dot(&d).abs() >= 1.0 - 1e-9,
+            _ => false,
+        })
+        .collect();
+    match caps.len() {
+        1 => Ok(caps[0]),
+        0 => Err(format!(
+            "The {which} of edge {edge_id} has no planar face perpendicular to it; the blend would need a trimmed end"
+        )),
+        // **2枚以上あるなら、どちらへ突き当たるか決められません。**
+        // 推測せずに断ります。
+        count => Err(format!(
+            "The {which} of edge {edge_id} has {count} planar faces perpendicular to it; which one closes the blend is not decided"
+        )),
     }
-    Ok(index)
 }
 
 /// ある面のワイヤで、対象の稜と頂点を共有するもう1本の稜を探す

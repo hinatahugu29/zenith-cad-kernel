@@ -10,11 +10,30 @@
 
 name: gates
 
+# **push では自動で走らせません**（2026/08/30）。
+#
+# このリポジトリは、**手元で全部のゲートを通してからコミットします**
+# （HANDOVER 8章）。CI が回すのはその再実行で、しかも劣化版です——本当の
+# 物差しである OpenCASCADE との突き合わせは CI に入れられません。
+#
+# 実測: 2026/08/30 は 20回 push し、**うち 9回は `.md` だけの変更**でした。
+# それでも毎回フルビルドとテストが走っていました。**Private のリポジトリ
+# では Actions の分数に枠があります**（Public なら無料）。
+#
+# 必要なときは **Actions タブから手で回せます**（`workflow_dispatch`）。
+# 自動で戻したいときは、下の `push:` の3行のコメントを外してください。
 on:
-  push:
-    branches: ["main"]
+  # push:
+  #   branches: ["main"]
   pull_request:
+    paths-ignore:
+      - "**.md"
   workflow_dispatch:
+
+# 続けて push したとき、**古い実行を止めます。** 最後の1回だけ見れば足ります。
+concurrency:
+  group: gates-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
