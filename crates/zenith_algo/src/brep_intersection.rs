@@ -167,6 +167,17 @@ pub struct BooleanShellAssembly {
     pub selection: BooleanFaceSelection,
     pub cap_generation: PlanarCapGeneration,
     pub assembly: BooleanFaceAssembly,
+    /// **接しているだけとして落とした交線**（4-189）。
+    ///
+    /// 空でないなら、その配置は**接触を含みます**。接触は、演算によっては
+    /// 答えを非多様体にします（差では材料の厚みが 0 になる）。落とした線は
+    /// 面を割らないので縫合は通ってしまい、**そのまま返すと誤答になります**。
+    ///
+    /// **本数ではなく線そのものを残します。** 材料を数えるには、数えたい
+    /// 場所——つまり接している線——が要ります。候補から外してしまうと、
+    /// [`crate::contact::find_result_pinch`] は測る場所を失います
+    /// （2026/08/30 に一度そうしました）。
+    pub dropped_contact_curves: Vec<Edge>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -898,7 +909,7 @@ impl BrepIntersectionBuilder {
             tol,
         );
         // **接しているだけの線では、面を割りません**（4-184。規約 3-1）。
-        drop_non_bounding_contact_curves(
+        let dropped_contact_curves = drop_non_bounding_contact_curves(
             solid_a,
             solid_b,
             &faces_a,
@@ -945,6 +956,7 @@ impl BrepIntersectionBuilder {
             selection,
             cap_generation,
             assembly,
+            dropped_contact_curves,
         }
     }
 
@@ -4311,15 +4323,110 @@ fn collect_wire_stitch_edge_uses(
 /// 辺の同一性は端点の座標で見ます。分割された面は同じ稜を別々の `Edge` として
 /// 持つことがあり（`unify_coincident_edges` が一本化するのはこの後です）、
 /// 実体で繋ぐと全部が離れて見えます。
-fn connected_piece_groups(pieces: &[SelectedBooleanFacePiece], tol: &Tolerance) -> Vec<Vec<usize>> {
-    let grid = tol.linear.max(1e-9);
-    let key = |point: Point3| {
+/// 近い点を1つの代表へ寄せる。**丸めと違って、升の境の位置に依りません。**
+///
+/// 升目で引いてから、**まわりの升も見て**公差の内側かを測ります。見つから
+/// なければ新しい代表になります。
+struct PointWelder {
+    grid: f64,
+    limit: f64,
+    cells: BTreeMap<(i64, i64, i64), Vec<usize>>,
+    points: Vec<Point3>,
+}
+
+impl PointWelder {
+    fn new(grid: f64, limit: f64) -> Self {
+        Self {
+            grid,
+            limit,
+            cells: BTreeMap::new(),
+            points: Vec::new(),
+        }
+    }
+
+    fn cell(&self, point: Point3) -> (i64, i64, i64) {
         (
-            (point.x / grid).round() as i64,
-            (point.y / grid).round() as i64,
-            (point.z / grid).round() as i64,
+            (point.x / self.grid).floor() as i64,
+            (point.y / self.grid).floor() as i64,
+            (point.z / self.grid).floor() as i64,
         )
-    };
+    }
+
+    fn representative(&mut self, point: Point3) -> usize {
+        let (cx, cy, cz) = self.cell(point);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(bucket) = self.cells.get(&(cx + dx, cy + dy, cz + dz)) else {
+                        continue;
+                    };
+                    for index in bucket {
+                        if (self.points[*index] - point).norm() <= self.limit {
+                            return *index;
+                        }
+                    }
+                }
+            }
+        }
+        let index = self.points.len();
+        self.points.push(point);
+        self.cells.entry((cx, cy, cz)).or_default().push(index);
+        index
+    }
+
+    fn point(&self, index: usize) -> Point3 {
+        self.points[index]
+    }
+}
+
+fn connected_piece_groups(pieces: &[SelectedBooleanFacePiece], tol: &Tolerance) -> Vec<Vec<usize>> {
+    let groups = connected_piece_groups_inner(pieces, tol);
+    if std::env::var_os("ZENITH_PIECE_WHY").is_some() {
+        let sizes: Vec<String> = groups.iter().map(|g| g.len().to_string()).collect();
+        eprintln!(
+            "PIECEWHY 塊 {} 個: {} 枚（合計 {}）",
+            groups.len(),
+            sizes.join(" / "),
+            pieces.len()
+        );
+    }
+    groups
+}
+
+fn connected_piece_groups_inner(
+    pieces: &[SelectedBooleanFacePiece],
+    tol: &Tolerance,
+) -> Vec<Vec<usize>> {
+    let grid = tol.linear.max(1e-9);
+    // **丸めは公差ではありません**（4-188）。
+    //
+    // ここは長らく「座標を升目の番号に丸めて、同じ番号なら同じ点」と
+    // していました。**升の境をまたぐと、いくら近くても別物になります。**
+    //
+    // 実測（箱の上面とトーラスの上端が接する和）: 同じ弦を、天面の側は
+    //
+    // ```text
+    // (0, 3.366750, 20) - (0, 16.633250, 20)
+    // ```
+    //
+    // 壁の側は
+    //
+    // ```text
+    // (0, 3.366751, 20) - (0, 16.633249, 20)
+    // ```
+    //
+    // と持っていました。真値は `10 ± √44`（3.3667504 / 16.6332496）で、
+    // 2つの版の差は **1.6e-7**——公差 `1e-6` の 1/6 です。それでも
+    // `.5` の境をまたいだので、**升の番号が 1 ずれました**。
+    //
+    // 結果、42枚の面片が**9つの島**に割れ（30 / 1×4 / 2×4）、本体だけを
+    // 立体にしようとして「12本があぶれている」と断っていました。
+    //
+    // **溶接します。** 近くの升も見て、公差の内側にある点は同じ代表へ
+    // 寄せます。丸めと違って、境の位置に依りません。
+    let welder = PointWelder::new(grid, tol.linear);
+    let mut welder = welder;
+    let mut key = |point: Point3| welder.representative(point);
 
     // **端点だけでは、別々の稜が同じものに見えます。**
     //
@@ -4334,10 +4441,7 @@ fn connected_piece_groups(pieces: &[SelectedBooleanFacePiece], tol: &Tolerance) 
     // 二重被覆です。
     //
     // 中点を鍵に足せば、経度の違う稜は別物になります。
-    let mut users: BTreeMap<
-        ((i64, i64, i64), (i64, i64, i64), (i64, i64, i64)),
-        Vec<usize>,
-    > = BTreeMap::new();
+    let mut users: BTreeMap<(usize, usize, usize), Vec<usize>> = BTreeMap::new();
     for (index, piece) in pieces.iter().enumerate() {
         let face = &piece.face;
         for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
@@ -4348,6 +4452,21 @@ fn connected_piece_groups(pieces: &[SelectedBooleanFacePiece], tol: &Tolerance) 
                 let middle = key(edge.edge.curve.evaluate((start + end) * 0.5));
                 let pair = if a <= b { (a, b) } else { (b, a) };
                 users.entry((pair.0, pair.1, middle)).or_default().push(index);
+            }
+        }
+    }
+
+    // **繋がらなかった稜を出す口**（4-188）。孤立した面片が、どの稜で
+    // 本体に繋がるはずだったのかを見ます。
+    if std::env::var_os("ZENITH_PIECE_WHY").is_some() {
+        for (ids, sharing) in users.iter() {
+            if sharing.len() == 1 {
+                let point = |id: usize| welder.point(id);
+                let (a, b, m) = (point(ids.0), point(ids.1), point(ids.2));
+                eprintln!(
+                    "PIECEWHY   相手のいない稜 面片{} ({:.7} {:.7} {:.7})-({:.7} {:.7} {:.7}) 中点 ({:.7} {:.7} {:.7})",
+                    sharing[0], a.x, a.y, a.z, b.x, b.y, b.z, m.x, m.y, m.z
+                );
             }
         }
     }
@@ -8279,7 +8398,8 @@ fn drop_non_bounding_contact_curves(
     faces_b: &[Face],
     candidates: &mut Vec<FaceIntersectionCandidate>,
     tol: &Tolerance,
-) {
+) -> Vec<Edge> {
+    let mut dropped: Vec<Edge> = Vec::new();
     let explain = std::env::var_os("ZENITH_CONTACT_CURVE_WHY").is_some();
     candidates.retain(|candidate| {
         let edges = candidate_edges(&candidate.kind);
@@ -8308,8 +8428,12 @@ fn drop_non_bounding_contact_curves(
                 candidate.face_a_index, candidate.face_b_index
             );
         }
+        for edge in candidate_edges(&candidate.kind) {
+            dropped.push(edge.clone());
+        }
         false
     });
+    dropped
 }
 
 /// 1本の弧について、[`drop_non_bounding_contact_curves`] の2つを測る。

@@ -338,6 +338,34 @@ impl BooleanEngine {
         let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
             solid_a, solid_b, op, tol,
         );
+        // **接触を含む配置では、返す前に材料を数えます**（4-189）。
+        //
+        // 接しているだけの線は面を割りません（4-184）。割らないので**縫合は
+        // 通ります**——けれど、演算によっては**答えそのものが非多様体**です。
+        //
+        // 実測: 箱の上面にトーラスの上端が接する差は、接する円のところで
+        // 材料の厚みが 0 になり、2つの塊が曲線1本で繋がった形になります。
+        // ここを置かないと、**それを立体として返してしまいます**——
+        // 2026/08/30 に一度そうなりました。以前は一般経路が通らなかったので、
+        // 最後の受け皿にある同じ検査が拾っていたのです。
+        //
+        // **接触が無い配置では走りません。** `dropped_contact_curve_count`
+        // が 0 のときは、この検査は一度も呼ばれません。
+        if !shell_assembly.dropped_contact_curves.is_empty() {
+            if let Some(pinch) = crate::contact::find_result_pinch(
+                solid_a,
+                solid_b,
+                &shell_assembly.dropped_contact_curves,
+                op,
+                tol,
+            ) {
+                return Err(format!(
+                    "Exact B-Rep boolean refuses this placement: {}",
+                    pinch.describe()
+                ));
+            }
+        }
+
         if shell_assembly.selection.stitch_report.is_closed_manifold() {
             return crate::BrepIntersectionBuilder::build_solids_from_selected_face_pieces(
                 &shell_assembly.selection.selected_face_pieces,
