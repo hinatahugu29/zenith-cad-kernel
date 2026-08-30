@@ -823,6 +823,18 @@ impl BrepIntersectionBuilder {
             piece.face = face;
         }
 
+        // **輪の中の「行って戻るだけ」を畳みます**（4-205）。面積を囲む片の
+        // 中に切れ目が1本混ざっていると、4-74 の判定（片ごと丸ごと面積 0 か）
+        // には掛かりません。実測: `cone × torus` の和で、同じ稜を2回使う片が
+        // 2枚残り、縫合が非多様体（8）になっていました。
+        //
+        // **刻み込みの後に置きます。** 前に置くと、切れ目が刻み込みで
+        // 2本に割れたあとの形（実測では7辺の輪）を見られません。
+        for piece in &mut selected_face_pieces {
+            collapse_there_and_back(&mut piece.face, tol);
+        }
+        selected_face_pieces.retain(|piece| piece.face.outer_wire.edges.len() >= 2);
+
         let stitch_report = diagnose_selected_face_stitching(&selected_face_pieces, tol);
 
         BooleanFaceSelection {
@@ -3404,6 +3416,96 @@ fn split_apex_patch_by_section_edge(
 ///
 /// **輪が2本未満になる場合は触りません。** そこまで潰れているなら、
 /// それは輪ではなく別の欠陥なので、隠さずに残します。
+/// 輪の中の「行って戻るだけ」を畳む。
+///
+/// # 何を落とすのか
+///
+/// 隣り合う2本が**同じ弧を逆向きに**辿っているとき、その2本は面積を1つも
+/// 囲みません。**切れ目**です。落としても輪は閉じたままで、面の形も動きま
+/// せん——出て戻るだけなので、前後の稜はもともと繋がっています。
+///
+/// # なぜ要るのか
+///
+/// 4-74 で「面積を囲まない**面片**」を落とすようにしました。それは片ごと
+/// 丸ごとの話で、**面積を囲む片の中に切れ目が1本混ざっている**場合は残り
+/// ます。実測（`cone × torus` の和。4-205）:
+///
+/// ```text
+/// piece #10 (B) outer 7 edges
+///   [3] (-2.800 9.600 0.000) -> (-6.000 0.000 0.000)
+///   [4] (-6.000 0.000 0.000) -> (-2.800 9.600 0.000)   <- 戻っている
+/// ```
+///
+/// この片は面積を囲むので 4-74 の判定には掛からず、**同じ稜を2回使う**まま
+/// 縫合に回って非多様体になっていました（和が「未実装」として断られる）。
+///
+/// 3-1 の規約——**接触は、それ自体では位相を作らない**——がそのまま実装に
+/// なります。
+fn collapse_there_and_back(face: &mut Face, tol: &Tolerance) {
+    let fold = |wire: &mut zenith_topo::Wire| {
+        // 1周のうちに複数あることがあるので、変化が無くなるまで回します。
+        loop {
+            let count = wire.edges.len();
+            if count < 2 {
+                return;
+            }
+            let mut dropped = None;
+            for index in 0..count {
+                let next = (index + 1) % count;
+                let here = &wire.edges[index];
+                let after = &wire.edges[next];
+                // **向きの印でも、媒介変数でも見分けられません。**
+                //
+                // 割った結果は両側が別々の `Edge` の実体を持ちます。向きの印は
+                // 揃っているとは限らず（実測では `Forward` と `Reversed`）、
+                // 曲線の媒介変数の取り方も違うので、同じ t で標本を突き合わせる
+                // `same_edge_geometry` は**同じ弧でも外します**（実測: 中点は
+                // 小数4桁まで一致しているのに一致しないと判定されました）。
+                //
+                // 端点が入れ替わっていて、中点が同じなら、同じ弧を逆に辿って
+                // います。縫合の突き合わせ（`same_undirected_stitch_edge`）と
+                // 同じ見方です。
+                if !points_same_3d(here.end_vertex().point, after.start_vertex().point, tol.linear)
+                    || !points_same_3d(
+                        here.start_vertex().point,
+                        after.end_vertex().point,
+                        tol.linear,
+                    )
+                {
+                    continue;
+                }
+                let middle_here = edge_midpoint(&here.edge);
+                let middle_after = edge_midpoint(&after.edge);
+                if !points_same_3d(middle_here, middle_after, tol.linear * 10.0) {
+                    continue;
+                }
+                dropped = Some((index, next));
+                break;
+            }
+            let Some((first, second)) = dropped else {
+                return;
+            };
+            // 2本落として輪が持たなくなるなら、触りません。面積 0 の片は
+            // 別の判定（4-74）が落とします。
+            if count < 4 {
+                return;
+            }
+            let mut kept = Vec::with_capacity(count - 2);
+            for (index, oriented) in wire.edges.iter().enumerate() {
+                if index == first || index == second {
+                    continue;
+                }
+                kept.push(oriented.clone());
+            }
+            wire.edges = kept;
+        }
+    };
+    fold(&mut face.outer_wire);
+    for wire in &mut face.inner_wires {
+        fold(wire);
+    }
+}
+
 fn remove_degenerate_wire_edges(face: &mut Face, tol: &Tolerance) {
     let prune = |wire: &mut zenith_topo::Wire| {
         let kept: Vec<_> = wire
