@@ -6099,7 +6099,20 @@ fn intersect_face_supports(
             },
         ),
         (FaceGeometry::Nurbs(surface_a), FaceGeometry::Nurbs(surface_b)) => {
-            Some((intersect_nurbs_patches(surface_a, surface_b, tol), false))
+            // **接する母線は、辿らずに解析的に出します**（4-190）。
+            //
+            // 交線まるごとが接している場合、辿りは向きを決められません。
+            // 実測（4-170）: 半径 6 の平行な円柱2本を軸間 12 で接させると、
+            // 本来 40 の直線1本であるべき母線が、**長さ 3e-4 の破片 8本**に
+            // なっていました。短すぎて材料も数えられず（輪の半径が公差の
+            // 3倍）、断り文が「未実装」に落ちていました。
+            //
+            // 軸が平行で、軸間距離が半径の和（外接）か差（内接）なら、
+            // **接する母線は1本に決まります**。辿る必要がありません。
+            match intersect_tangent_cylinder_patches(surface_a, surface_b, tol) {
+                Some(kind) => Some((kind, true)),
+                None => Some((intersect_nurbs_patches(surface_a, surface_b, tol), false)),
+            }
         }
         _ => None,
     }
@@ -6662,6 +6675,92 @@ fn wrap_signed_angle(angle: f64) -> f64 {
 ///
 /// Two cases are recognized so far: a plane perpendicular to the cylinder axis
 /// yields a section arc, and a plane parallel to the axis yields a ruling line.
+/// 接している2つの円柱面の、**接する母線**を解析的に返す。
+///
+/// 軸が平行で、軸間距離が `r1 + r2`（外接）か `|r1 - r2|`（内接）のときだけ。
+/// **推測しません**——両方が円柱と認識でき、軸が平行で、距離が合うことを
+/// 測ってから返します。1つでも外れたら `None` で、従来どおり辿ります。
+///
+/// 母線の範囲は、2つのパッチが軸方向で重なるぶんに切ります。
+fn intersect_tangent_cylinder_patches(
+    surface_a: &NurbsSurface3,
+    surface_b: &NurbsSurface3,
+    tol: &Tolerance,
+) -> Option<FaceIntersectionKind> {
+    let patch_a = recognize_cylinder_patch(surface_a, tol)?;
+    let patch_b = recognize_cylinder_patch(surface_b, tol)?;
+    if !patch_a.is_cylindrical(tol) || !patch_b.is_cylindrical(tol) {
+        return None;
+    }
+    // 軸が平行か。向きは逆でも構いません。
+    if patch_a.axis.cross(&patch_b.axis).norm() > tol.angular {
+        return None;
+    }
+    let axis = patch_a.axis;
+
+    // 軸から軸への、軸に直交する隔たり。
+    let between = patch_b.base_center - patch_a.base_center;
+    let across = between - axis * between.dot(&axis);
+    let distance = across.norm();
+    let (radius_a, radius_b) = (patch_a.radius, patch_b.radius);
+    let scale = radius_a.max(radius_b).max(1.0);
+
+    // 外接か内接か。**どちらでもなければ接していません。**
+    let outside = (distance - (radius_a + radius_b)).abs() <= tol.linear * scale;
+    let inside = (distance - (radius_a - radius_b).abs()).abs() <= tol.linear * scale;
+    if !(outside || inside) {
+        return None;
+    }
+    let direction = across.try_normalize_safe(1e-12)?;
+
+    // 接する点は、A の軸から半径ぶん。内接で B のほうが大きいなら逆向きです。
+    let sign = if outside || radius_a >= radius_b {
+        1.0
+    } else {
+        -1.0
+    };
+    let foot = patch_a.base_center + direction * (radius_a * sign);
+
+    // 軸方向に、2つのパッチが重なるぶんだけ。
+    let axial_of = |point: Point3| (point - foot).dot(&axis);
+    let (a_low, a_high) = {
+        let low = axial_of(patch_a.base_center);
+        (low, low + patch_a.height)
+    };
+    let (b_low, b_high) = {
+        let low = axial_of(patch_b.base_center);
+        (low, low + patch_b.height)
+    };
+    let low = a_low.max(b_low);
+    let high = a_high.min(b_high);
+    if !(high - low > tol.linear * 100.0) {
+        return None;
+    }
+
+    // **主張で終わらせません。** 取り出した線が本当に両方の面に乗るか測ります。
+    let start = foot + axis * low;
+    let end = foot + axis * high;
+    for step in 0..=8 {
+        let point = start + (end - start) * (step as f64 / 8.0);
+        for patch in [surface_a, surface_b] {
+            let Ok(projection) = ExtremumEngine::point_to_surface(point, patch, 64, 1e-13) else {
+                return None;
+            };
+            if projection.distance > tol.linear * scale {
+                return None;
+            }
+        }
+    }
+
+    Some(FaceIntersectionKind::Line {
+        point: start,
+        direction: axis,
+        segment_start: start,
+        segment_end: end,
+    })
+}
+
+
 fn intersect_plane_cylinder_patch(
     plane: &PlaneSurface3,
     plane_normal: Vec3,
