@@ -731,6 +731,43 @@ fn patch_mesh(
             "EARCUTWHY   境界の辺 {total} 本のうち {missing} 本が三角形分割に無い（三角形 {}）",
             triangles.len()
         );
+        // **本数だけでは直せません。** どの辺かを名指しします。
+        for range in &ring_ranges {
+            let count = range.len();
+            for offset in 0..count {
+                let a = range.start + offset;
+                let b = range.start + (offset + 1) % count;
+                if present.contains(&if a < b { (a, b) } else { (b, a) }) {
+                    continue;
+                }
+                let previous = range.start + (offset + count - 1) % count;
+                let following = range.start + (offset + 2) % count;
+                eprintln!(
+                    "EARCUTWHY     欠けた辺 [{a}]->[{b}]  uv ({:.9},{:.9})->({:.9},{:.9})  長さ {:.3e}",
+                    uvs[a].x,
+                    uvs[a].y,
+                    uvs[b].x,
+                    uvs[b].y,
+                    (uvs[b] - uvs[a]).norm()
+                );
+                // 共線かどうかは、その場で見ておきます（earcut が落とすのは
+                // 共線・重複の点なので）。
+                let cross = |p: Point2, q: Point2, r: Point2| {
+                    (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+                };
+                eprintln!(
+                    "EARCUTWHY       前後との外積: 前 {:.3e}、後 {:.3e}",
+                    cross(uvs[previous], uvs[a], uvs[b]),
+                    cross(uvs[a], uvs[b], uvs[following])
+                );
+                if let (Some(pa), Some(pb)) = (fixed[a], fixed[b]) {
+                    eprintln!(
+                        "EARCUTWHY       3D ({:.6},{:.6},{:.6})->({:.6},{:.6},{:.6}) 長さ {:.3e}",
+                        pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, (pb - pa).norm()
+                    );
+                }
+            }
+        }
     }
 
     if let Some(surface) = surface {
