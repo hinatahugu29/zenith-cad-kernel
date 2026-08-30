@@ -13,6 +13,7 @@ pub(crate) mod shoulder_root;
 pub(crate) mod slot_hole_mouth;
 pub(crate) mod slot_rim;
 pub(crate) mod slot_root;
+pub(crate) mod sphere_cap;
 
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, SQRT_2};
 
@@ -366,7 +367,7 @@ impl CircularCylinderRim {
     }
 }
 
-fn effective_plane_normal(face: &Face) -> Vec3 {
+pub(crate) fn effective_plane_normal(face: &Face) -> Vec3 {
     let FaceGeometry::Plane(plane) = &face.geometry else {
         unreachable!("called only for a planar face")
     };
@@ -377,7 +378,7 @@ fn effective_plane_normal(face: &Face) -> Vec3 {
     }
 }
 
-fn circle_from_edge(edge: &Edge) -> Option<(Point3, f64, Vec3)> {
+pub(crate) fn circle_from_edge(edge: &Edge) -> Option<(Point3, f64, Vec3)> {
     let (t_min, t_max) = edge.curve.param_range();
     let parameter = |fraction: f64| t_min + (t_max - t_min) * fraction;
     let a = edge.curve.evaluate(t_min);
@@ -408,7 +409,7 @@ fn circle_from_edge(edge: &Edge) -> Option<(Point3, f64, Vec3)> {
     Some((center, radius, (a - center) / radius))
 }
 
-fn same_edge_geometry(a: &Edge, b: &Edge) -> bool {
+pub(crate) fn same_edge_geometry(a: &Edge, b: &Edge) -> bool {
     let scale = (a.start_vertex.point - a.end_vertex.point)
         .norm()
         .max((b.start_vertex.point - b.end_vertex.point).norm())
