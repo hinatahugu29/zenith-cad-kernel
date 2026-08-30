@@ -45,6 +45,7 @@ pub mod revolve;
 pub mod sew;
 pub mod shell;
 pub mod shelling;
+pub mod sketch_region;
 pub mod sketch_solver;
 pub mod slice;
 pub mod sweep;
@@ -107,9 +108,12 @@ pub use revolve::RevolveBuilder;
 pub use sew::{SewReport, Sewer};
 pub use shell::ShellBuilder;
 pub use shelling::ShellingBuilder;
+pub use sketch_region::{
+    extract_loops, extrude_sketch, loop_to_wire, LoopArc, SketchLoop, WorkPlane,
+};
 pub use sketch_solver::{
-    CircleId, Constraint, LineId, PointId, SketchCircle, SketchConstraintStatus, SketchLine,
-    SketchPoint, SketchSolver,
+    ArcId, CircleId, Constraint, LineId, PointId, SketchArc, SketchCircle,
+    SketchConstraintStatus, SketchLine, SketchPoint, SketchSolver,
 };
 pub use slice::{SectionSliceResult, SectionSlicer};
 pub use sweep::SweepBuilder;

@@ -11,6 +11,9 @@ pub struct LineId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CircleId(pub usize);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ArcId(pub usize);
+
 /// 2D点要素
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SketchPoint {
@@ -34,6 +37,25 @@ pub struct SketchCircle {
     pub id: CircleId,
     pub center: PointId,
     pub radius: f64,
+}
+
+/// 2D円弧要素。
+///
+/// **中心・始点・終点は、どれも普通の点です。** 弧に専用の拘束を足して
+/// いないのは、そうする必要がないからです——半径を揃えたければ中心から
+/// 両端への `Distance` を、端を繋げたければ `Coincident` を掛ければ済みます。
+/// **いまある拘束がそのまま効きます。**
+///
+/// 半径は「中心から始点まで」で決まります。終点がそこから外れていたら、
+/// **推測せずに断ります**（[`crate::extract_loops`]）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SketchArc {
+    pub id: ArcId,
+    pub center: PointId,
+    pub start: PointId,
+    pub end: PointId,
+    /// 始点から終点へ、反時計回りに回るか。
+    pub counterclockwise: bool,
 }
 
 /// 幾何拘束
@@ -71,6 +93,8 @@ pub struct SketchSolver {
     pub points: Vec<SketchPoint>,
     pub lines: Vec<SketchLine>,
     pub circles: Vec<SketchCircle>,
+    #[serde(default)]
+    pub arcs: Vec<SketchArc>,
     pub constraints: Vec<Constraint>,
 }
 
@@ -111,6 +135,25 @@ impl SketchSolver {
     pub fn add_circle(&mut self, center: PointId, radius: f64) -> CircleId {
         let id = CircleId(self.circles.len());
         self.circles.push(SketchCircle { id, center, radius });
+        id
+    }
+
+    /// 円弧を足す。**中心・始点・終点は既にある点**です。
+    pub fn add_arc(
+        &mut self,
+        center: PointId,
+        start: PointId,
+        end: PointId,
+        counterclockwise: bool,
+    ) -> ArcId {
+        let id = ArcId(self.arcs.len());
+        self.arcs.push(SketchArc {
+            id,
+            center,
+            start,
+            end,
+            counterclockwise,
+        });
         id
     }
 
