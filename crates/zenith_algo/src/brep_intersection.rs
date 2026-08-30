@@ -4219,6 +4219,43 @@ fn stitch_report_score(report: &SelectedFaceStitchReport) -> (usize, usize, usiz
 }
 
 fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEdgeUse> {
+    // **選ばれた面片を出す口**（4-187）。
+    //
+    // あぶれた稜の相手が居ないとき、原因は「割れていない」か「割れたが
+    // 選ばれていない」かのどちらかです。**稜の側からは区別できません。**
+    // 面片の側で、どこの面が何枚残ったかを見ます。
+    //
+    // `SelectedBooleanFacePiece` は元の面の番号を持っていないので、
+    // **輪の重心**で見分けます（平面の壁ならこれで足ります）。
+    if std::env::var_os("ZENITH_PIECE_WHY").is_some() {
+        eprintln!("PIECEWHY ==== 面片 {} 枚 ====", pieces.len());
+        for piece in pieces {
+            let points: Vec<Point3> = piece
+                .face
+                .outer_wire
+                .edges
+                .iter()
+                .map(|oriented| oriented.edge.start_vertex.point)
+                .collect();
+            if points.is_empty() {
+                continue;
+            }
+            let mut centre = Vec3::zeros();
+            for point in &points {
+                centre += point.coords;
+            }
+            centre /= points.len() as f64;
+            eprintln!(
+                "PIECEWHY {:?} {:?} 重心 ({:.4} {:.4} {:.4}) 稜 {}",
+                piece.operand,
+                piece.location,
+                centre.x,
+                centre.y,
+                centre.z,
+                piece.face.outer_wire.edges.len()
+            );
+        }
+    }
     let mut edge_uses = Vec::new();
     for piece in pieces {
         collect_wire_stitch_edge_uses(
