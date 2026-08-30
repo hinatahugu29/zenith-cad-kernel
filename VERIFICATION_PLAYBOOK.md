@@ -3,6 +3,16 @@
 **対象ブランチ**: `codex/tess-edge-contract`（未統合の作業ブランチ。基点は `main`）
 
 > **テストを回す。** `cargo test --release --workspace`
+>
+> **wasm で建つかを見る**（2026/08/30 実測: エラー 0・警告 0。4-199）。
+>
+> ```bash
+> cargo build --release --target wasm32-unknown-unknown >   -p zenith_math -p zenith_geom -p zenith_topo >   -p zenith_algo -p zenith_tess -p zenith_io
+> ```
+>
+> **`zenith_py` は入れません**（`pyo3` は wasm 向けではなく、ブラウザからは
+> Python を通しません）。**建つことしか測っていません**——走らせた記録は
+> ありません。
 > はおよそ13分かかります。`cargo test` がテストバイナリを**1本ずつ順に**
 > 走らせるためで（並列になるのは1本の中だけ）、重い数本の合計がそのまま
 > 壁時計になります。
