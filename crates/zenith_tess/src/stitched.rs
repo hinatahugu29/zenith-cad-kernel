@@ -704,6 +704,10 @@ fn patch_mesh(
         // 境界の点は先頭に固めて入っている。その数を渡して、**境界の点
         // どうしを結ぶ辺は連続していなくても割らない**ようにする（4-84）。
         let boundary_vertex_count = uvs.len();
+        // **細分の前後を数える口**（9-H の H5）。earcut が返した枚数と、
+        // たわみを満たすまでに何倍になったかが分かります。膨らむ倍率が
+        // 大きいなら、悪いのは細分ではなく**渡している三角形の形**です。
+        let before_refinement = triangles.len();
         crate::surface_tess::refine_uv_triangulation_protected(
             surface,
             params,
@@ -717,6 +721,13 @@ fn patch_mesh(
             false,
         );
         explain_flat("適応細分後", &triangles, &uvs);
+        if std::env::var_os("ZENITH_PATCH_WHY").is_some() {
+            eprintln!(
+                "PATCHWHY   境界 {boundary_vertex_count} 点、earcut {before_refinement} 枚 -> 細分後 {} 枚（{:.1}倍）",
+                triangles.len(),
+                triangles.len() as f64 / before_refinement.max(1) as f64
+            );
+        }
     }
 
     // **前提を測ります**（4-85 で推論のまま2回外したので）。uv では面積 0 なのに
