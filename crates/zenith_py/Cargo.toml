@@ -16,4 +16,16 @@ zenith_algo = { path = "../zenith_algo" }
 zenith_tess = { path = "../zenith_tess" }
 zenith_io = { path = "../zenith_io" }
 serde_json = { workspace = true }
-pyo3 = { version = "0.23", features = ["extension-module", "abi3-py310"] }
+# `generate-import-lib` は **Windows で Python を入れずに建てるため**です。
+# abi3 なのでインタプリタは要らないはずなのに、リンクだけが `python3.lib` を
+# 探して落ちていました（実測 2026/08/30。`LNK1181`）。この機能が
+# その import ライブラリを生成します。
+#
+# **これが無いと、`--workspace` の試験からこのクレートが外れます**——
+# 実際、2026/08/30 まで `--exclude zenith_py` で回しており、130本/664件は
+# **Blender へ届く経路を1度も測っていませんでした**（9-H の H1）。
+pyo3 = { version = "0.23", features = [
+    "extension-module",
+    "abi3-py310",
+    "generate-import-lib",
+] }

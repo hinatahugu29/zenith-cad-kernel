@@ -2,7 +2,7 @@
 
 **対象ブランチ**: `codex/tess-edge-contract`（未統合の作業ブランチ。基点は `main`）
 
-> **テストを回す。** `cargo test --release --workspace --exclude zenith_py`
+> **テストを回す。** `cargo test --release --workspace`
 > はおよそ13分かかります。`cargo test` がテストバイナリを**1本ずつ順に**
 > 走らせるためで（並列になるのは1本の中だけ）、重い数本の合計がそのまま
 > 壁時計になります。
@@ -84,7 +84,7 @@ FreeCAD が無くても本体のテストは全部通ります。ただし**外�
 ### 1-2. ビルド
 
 ```bash
-cargo test --release --workspace --exclude zenith_py
+cargo test --release --workspace
 ```
 
 `zenith_py` を除外しているのは、`pyo3` が PATH から Python を探すためです。
@@ -103,7 +103,7 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 ### 2-1. テスト
 
 ```bash
-cargo test --release --workspace --exclude zenith_py
+cargo test --release --workspace
 ```
 
 **期待**: 119 テストバイナリ（doctest 込み）、632 テスト、失敗 0、警告 0（2026/08/27 実測）。
@@ -116,7 +116,7 @@ cargo test --release --workspace --exclude zenith_py
 数を数えるなら:
 
 ```bash
-cargo test --release --workspace --exclude zenith_py 2>&1 | grep -E "^test result" | awk -F'[ ;]' '{n++;p+=$4;f+=$6} END{print n" binaries, "p" passed, "f" failed"}'
+cargo test --release --workspace 2>&1 | grep -E "^test result" | awk -F'[ ;]' '{n++;p+=$4;f+=$6} END{print n" binaries, "p" passed, "f" failed"}'
 ```
 
 ### 2-2. ビルダー監査（解析解との一致）
@@ -367,7 +367,7 @@ B-Rep と合うか・3形式が互いに一致するか・glTF の accessor と 
 ### 2-9. まとめて実行する
 
 ```bash
-cargo test --release --workspace --exclude zenith_py \
+cargo test --release --workspace \
   && cargo run --release -q -p zenith_algo --example builder_audit | tail -1 \
   && cargo run --release -q -p zenith_algo --example boolean_envelope | tail -1 \
   && cargo run --release -q -p zenith_algo --example export_validation_suite > /dev/null \

@@ -1,0 +1,18 @@
+# **Python を入れずに `zenith_py` を建てるための設定**（HANDOVER 9-H の H1）。
+#
+# `zenith_py` は `abi3-py310` の拡張モジュールです。abi3 は「特定の Python
+# 版に依らない」ための仕組みなので、**建てるのにインタプリタは要りません**。
+# ただし `pyo3` は、明示しない限りインタプリタを探しに行き、無ければ
+# `no Python 3.x interpreter found` で止まります。
+#
+# 実測（2026/08/30）: これが無いために、通しの試験は長らく
+# `--exclude zenith_py` で回っていました。**130本 / 664件は、Blender へ
+# 届く層を1度も測っていませんでした。**
+#
+# `force` を付けていないので、**環境側で設定してあればそちらが勝ちます**
+# ——特定のインタプリタに合わせて建てたい人の邪魔はしません。
+#
+# Windows でリンクが `python3.lib` を探す件は、`crates/zenith_py/Cargo.toml`
+# の `generate-import-lib` で解決しています。
+[env]
+PYO3_NO_PYTHON = "1"
