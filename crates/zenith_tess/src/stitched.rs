@@ -700,6 +700,10 @@ fn patch_mesh(
         explain_flat("潰れた耳を外して張り直した後", &triangles, &uvs);
     }
 
+    // **境界の辺が抜けている穴を埋めます**（4-207）。挿し戻しと耳の修理を
+    // 通っても、「点は使われているのに辺だけ無い」形が残ります。
+    fill_missing_boundary_edges(&uvs, &ring_ranges, &mut triangles);
+
     // **境界の辺が全部そろっているかを数えます**（`ZENITH_EARCUT_WHY=1`）。
     //
     // リングの連続する2点を結ぶ辺は、三角形分割に必ず現れなければなりません。
@@ -764,6 +768,24 @@ fn patch_mesh(
                     eprintln!(
                         "EARCUTWHY       3D ({:.6},{:.6},{:.6})->({:.6},{:.6},{:.6}) 長さ {:.3e}",
                         pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, (pb - pa).norm()
+                    );
+                }
+                // **その辺を「またいでいる」三角形を出します。**
+                // 直す側は、この三角形を割ることになります。まず現物を
+                // 見てから設計してください（4-85 で推測して悪化させました）。
+                for (index, triangle) in triangles.iter().enumerate() {
+                    let touches_a = triangle.contains(&a);
+                    let touches_b = triangle.contains(&b);
+                    if !touches_a && !touches_b {
+                        continue;
+                    }
+                    eprintln!(
+                        "EARCUTWHY       三角形 {index}: [{}] [{}] [{}]{}{}",
+                        triangle[0],
+                        triangle[1],
+                        triangle[2],
+                        if touches_a { "  <-a" } else { "" },
+                        if touches_b { "  <-b" } else { "" }
                     );
                 }
             }
@@ -1328,6 +1350,114 @@ fn drop_flat_boundary_triangles(
             .any(|range| triangle.iter().all(|vertex| range.contains(vertex)))
     });
     before - triangles.len()
+}
+
+/// 境界の辺が抜けている穴を、共通の隣で埋める。
+///
+/// # 何が起きているのか
+///
+/// earcut は共線・重複の点を自分で落とします（`filterPoints`）。落とされた
+/// 点を挿し戻す段は既にありますが（4-86）、あれは**どの三角形にも使われて
+/// いない点**を探します。**点は使われていて、無いのは辺のほう**という形は
+/// そこを素通りします。
+///
+/// 実測（4-207、`cone × torus` を持ち上げた和、24分割）:
+///
+/// ```text
+/// 欠けた辺 [110]->[111]   前の点との外積 -4.733e-29（共線）
+///   三角形 42:  [109] [110] [121]   <- a を使う唯一の三角形
+///   三角形 141: [120] [121] [111]   <- b を使う
+/// ```
+///
+/// `a` と `b` は**同じ頂点 `[121]` と辺を共有**していて、その間の三角形
+/// `[110][111][121]` だけが無い。境界の辺が1本欠け、隣の面から見て相手の
+/// いない稜になります。
+///
+/// # 何をするのか
+///
+/// 欠けた境界の辺 `(a, b)` について、**`a` とも `b` とも辺を共有している
+/// 頂点 `c`** を探し、三角形 `(a, b, c)` を足します。向きは既にある三角形に
+/// 合わせます。
+///
+/// **点は1つも増えません。** 覆えていなかったところを覆うだけです。
+/// 見つからなければ何もしません（もっともらしい三角形を作るより、
+/// 埋まらないほうが良い）。
+fn fill_missing_boundary_edges(
+    uvs: &[Point2],
+    ring_ranges: &[std::ops::Range<usize>],
+    triangles: &mut Vec<[usize; 3]>,
+) {
+    let signed_area = |t: &[usize; 3]| {
+        let (a, b, c) = (uvs[t[0]], uvs[t[1]], uvs[t[2]]);
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    };
+
+    for _round in 0..8 {
+        let mut edges: std::collections::HashSet<(usize, usize)> = Default::default();
+        let mut neighbours: std::collections::HashMap<usize, std::collections::HashSet<usize>> =
+            std::collections::HashMap::new();
+        for triangle in triangles.iter() {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                edges.insert(if a < b { (a, b) } else { (b, a) });
+                neighbours.entry(a).or_default().insert(b);
+                neighbours.entry(b).or_default().insert(a);
+            }
+        }
+
+        let mut added = false;
+        for range in ring_ranges {
+            let count = range.len();
+            if count < 3 {
+                continue;
+            }
+            for offset in 0..count {
+                let a = range.start + offset;
+                let b = range.start + (offset + 1) % count;
+                if edges.contains(&if a < b { (a, b) } else { (b, a) }) {
+                    continue;
+                }
+                let (Some(from), Some(to)) = (neighbours.get(&a), neighbours.get(&b)) else {
+                    continue;
+                };
+                // 両方と辺を共有している頂点。複数あれば、面積のいちばん
+                // 小さいものを採ります——覆えていない隙間はいちばん狭い
+                // ところなので。
+                let mut best: Option<(f64, [usize; 3])> = None;
+                for candidate in from.intersection(to) {
+                    let candidate = *candidate;
+                    if candidate == a || candidate == b {
+                        continue;
+                    }
+                    let mut triangle = [a, b, candidate];
+                    let area = signed_area(&triangle);
+                    if area == 0.0 {
+                        continue;
+                    }
+                    // 向きは、既にある三角形に合わせます。
+                    let reference = triangles
+                        .iter()
+                        .find(|existing| existing.contains(&a))
+                        .map(|existing| signed_area(existing))
+                        .unwrap_or(area);
+                    if area * reference < 0.0 {
+                        triangle = [b, a, candidate];
+                    }
+                    let size = area.abs();
+                    if best.as_ref().map(|(worst, _)| size < *worst).unwrap_or(true) {
+                        best = Some((size, triangle));
+                    }
+                }
+                if let Some((_, triangle)) = best {
+                    triangles.push(triangle);
+                    added = true;
+                }
+            }
+        }
+        if !added {
+            return;
+        }
+    }
 }
 
 fn reinsert_dropped_boundary_points(
