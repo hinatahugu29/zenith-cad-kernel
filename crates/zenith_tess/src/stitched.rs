@@ -700,6 +700,39 @@ fn patch_mesh(
         explain_flat("潰れた耳を外して張り直した後", &triangles, &uvs);
     }
 
+    // **境界の辺が全部そろっているかを数えます**（`ZENITH_EARCUT_WHY=1`）。
+    //
+    // リングの連続する2点を結ぶ辺は、三角形分割に必ず現れなければなりません。
+    // 現れないと、そこは**隣の面から見て相手のいない稜**になり、メッシュに
+    // 穴が開きます。earcut と、そのあとの挿し戻し・耳の修理（4-85、4-86）が
+    // どこまで効いたかを、推測せずに見るための口です。
+    if std::env::var_os("ZENITH_EARCUT_WHY").is_some() {
+        let mut present: std::collections::HashSet<(usize, usize)> = Default::default();
+        for triangle in &triangles {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                present.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+        let mut missing = 0usize;
+        let mut total = 0usize;
+        for range in &ring_ranges {
+            let count = range.len();
+            for offset in 0..count {
+                let a = range.start + offset;
+                let b = range.start + (offset + 1) % count;
+                total += 1;
+                if !present.contains(&if a < b { (a, b) } else { (b, a) }) {
+                    missing += 1;
+                }
+            }
+        }
+        eprintln!(
+            "EARCUTWHY   境界の辺 {total} 本のうち {missing} 本が三角形分割に無い（三角形 {}）",
+            triangles.len()
+        );
+    }
+
     if let Some(surface) = surface {
         // 境界の点は先頭に固めて入っている。その数を渡して、**境界の点
         // どうしを結ぶ辺は連続していなくても割らない**ようにする（4-84）。

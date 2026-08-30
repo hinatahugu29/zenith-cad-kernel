@@ -841,6 +841,38 @@ fn cases() -> Vec<Case> {
         note: ["頂点を通る交線", "同上", "同上"],
     });
 
+    // **同じ組を、置き方だけ変えて測ります**（2026/08/31、4-207）。
+    //
+    // `cone × torus` は 4-205 で足したばかりの組で、いきなり欠陥を2種類
+    // 出しました。**組が新しいうちは、その組の置き方を変えるのがいちばん
+    // 当たります**——「同じ形を置き方だけ変えて測る」は、今日いちばん効いた
+    // 手です（5章）。
+    let torus_upright_2 = Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), FRAC_PI_2);
+    out.push(Case {
+        name: "cone x torus (tube upright, rim inside)",
+        why: "トーラスを立てて、円錐の底の縁の内側に管を通す。**接している平面が無い**ので、4-205 の配置とは別の当たり方になるはず",
+        a: cone.clone(),
+        b: BrepTransform::translate_solid(
+            &BrepTransform::transform_solid(&torus, &torus_upright_2).expect("upright torus"),
+            Vec3::new(0.0, 0.0, 6.0),
+        ),
+        note: ["置き方だけ変えた組。初めて測ります", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "cone x torus (lifted off the base plane)",
+        why: "4-205 と同じ置き方から、トーラスを z に 3 持ち上げるだけ。**底の平面と赤道が同一平面でなくなる**ので、そこが効いていたのかが分かる",
+        a: cone.clone(),
+        b: BrepTransform::translate_solid(&torus, Vec3::new(10.0, 0.0, 3.0)),
+        note: ["置き方だけ変えた組。初めて測ります", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "cone x torus (cone standing in the hole)",
+        why: "円錐をトーラスの穴の中に立てる。円錐の側面と管の内側が全周で交わる",
+        a: cone.clone(),
+        b: BrepTransform::translate_solid(&torus, Vec3::new(0.0, 0.0, 6.0)),
+        note: ["置き方だけ変えた組。初めて測ります", "同上", "同上"],
+    });
+
     out
 }
 
