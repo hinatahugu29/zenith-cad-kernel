@@ -703,7 +703,7 @@ fn cases() -> Vec<Case> {
         a: torus.clone(),
         b: BrepTransform::transform_solid(&torus, &torus_upright).expect("upright"),
         note: [
-            "実測: 未実装として断られる（交線16本、あぶれ14、非多様体0）。あぶれは端点のずれではなく**相手のいない弧**で、すべて接点 (±16,0,0)/(±8,0,0) に接している（4-132。未解決）",
+            "実測: 立体を返す（和 1つ、差・積は 2つずつ。恒等式が閉じる）。**4-132 の「相手のいない弧」は解消しました**——2026/08/30 時点で落とした接触線 0、断りも 0",
             "同上",
             "同上",
         ],
@@ -718,6 +718,23 @@ fn sphere_of(radius: f64) -> Solid {
     PrimitiveBuilder::make_sphere(radius).expect("sphere")
 }
 
+/// 立体の体積の合計。面積分は解析的なので、刻みに依りません。
+fn total_volume(solids: &[Solid]) -> f64 {
+    solids
+        .iter()
+        .map(|solid| {
+            zenith_algo::MassCalculator::compute_from_brep(
+                solid,
+                &zenith_tess::TessellationParams {
+                    u_divisions: 32,
+                    v_divisions: 32,
+                },
+            )
+            .volume
+        })
+        .sum()
+}
+
 fn main() {
     let tol = Tolerance::default();
     let case_filter = std::env::var("ZENITH_CONTACT_FILTER").ok();
@@ -727,6 +744,9 @@ fn main() {
     let mut refused = 0usize;
     let mut mesh_broken = 0usize;
     let mut swap_mismatch = 0usize;
+    let mut identity_broken = 0usize;
+    let mut identity_worst = 0.0f64;
+    let mut identity_checked = 0usize;
 
     println!("接触している配置（規約: 接触は、それ自体では位相を作らない）");
     println!();
@@ -742,6 +762,22 @@ fn main() {
             .map(|needle| case.name.contains(needle))
             .unwrap_or(true)
     }) {
+        // **恒等式で測ります**（4-191）。
+        //
+        // 多様体かどうかは「壊れていないか」しか見ません。**答えが正しいか
+        // は見ていません。** 閉じた式の無い接触配置では、恒等式だけが
+        // 誤答を映します（4-142 で、検証ゲートも外部カーネルも通り抜けた
+        // 誤答が、恒等式でだけ見えました）。
+        //
+        // ```text
+        // |A∪B| + |A∩B| = |A| + |B|
+        // |A\B| + |A∩B| = |A|
+        // ```
+        //
+        // 面積分は解析的になったので（4-156〜4-164）、体積は刻みに依らず
+        // 出ます。
+        let mut volumes: [Option<f64>; 3] = [None, None, None];
+
         for (index, (label, op)) in [
             ("union", BooleanOpType::Union),
             ("difference", BooleanOpType::Difference),
@@ -828,6 +864,7 @@ fn main() {
                 }
                 Ok(result) => {
                     returned += 1;
+                    volumes[index] = Some(total_volume(&result.solids));
                     // **返ってきたものを測ります。** 稜がちょうど2枚の三角形に
                     // 共有されていなければ、それは多様体ではありません。
                     let bad: usize = result.solids.iter().map(non_manifold_brep_edges).sum();
@@ -865,6 +902,31 @@ fn main() {
                 verdict
             );
         }
+
+        // **恒等式**（4-191）。3演算とも返ったときだけ測れます。
+        if volumes.iter().all(|volume| volume.is_some()) {
+            let (union, difference, intersection) = (
+                volumes[0].unwrap(),
+                volumes[1].unwrap(),
+                volumes[2].unwrap(),
+            );
+            let (va, vb) = (total_volume(std::slice::from_ref(&case.a)), total_volume(std::slice::from_ref(&case.b)));
+            let scale = (va + vb).abs().max(1.0);
+            let residuals = [
+                ((union + intersection) - (va + vb)).abs() / scale,
+                ((difference + intersection) - va).abs() / scale,
+            ];
+            let worst = residuals[0].max(residuals[1]);
+            identity_checked += 1;
+            identity_worst = identity_worst.max(worst);
+            if worst > 1e-6 {
+                identity_broken += 1;
+                println!(
+                    "{:<30} {:<13} {:>9} {:>7} {:>13}  **恒等式が破れています** 相対 {worst:.3e}（∪ {union:.6}, ∩ {intersection:.6}, ＼ {difference:.6}, |A| {va:.6}, |B| {vb:.6}）",
+                    "", "identity", "WRONG", "-", "-"
+                );
+            }
+        }
         println!("{:<30} {}", "", case.why);
         println!();
     }
@@ -876,15 +938,29 @@ fn main() {
     println!(
         "{returned} 件が立体を返し、{refused} 件が断られました。**B-Rep が非多様体だったもの {wrong} 件**、メッシュが非多様体だったもの {mesh_broken} 件。"
     );
+    println!(
+        "**恒等式**: {identity_checked} 配置で測り、破れ {identity_broken} 件、残差の最悪 {identity_worst:.3e}。"
+    );
+    println!();
+    println!("**多様体かどうかは「壊れていないか」しか見ません。** 答えが正しいかは");
+    println!("恒等式が見ます（4-191）。3演算とも返った配置だけ測れます。");
     println!();
     println!("**断られること自体は、ここでは赤にしません。** 断り方は2種類あります——");
     println!("答えが本当に非多様体で断るもの（円柱の接線の差。場所を名指しします）と、");
     println!("まだ実装していないもの（球の極。3-N-1）です。赤にするのは「非多様体を");
     println!("立体として返した」ほうだけです。括弧の中は**実測**です（4-74）。");
+    println!();
+    println!("**恒等式の破れも赤にします**（4-191）——返ってきたのに答えが合わない");
+    println!("のは、非多様体を返すのと同じ重さです。");
 
     // B-Rep が非多様体だった場合は絶対に許容しない（即座に赤にする）。
     if wrong > 0 {
         eprintln!("GATE ERROR: B-Rep non-manifold edges detected: {wrong} cases");
+        std::process::exit(1);
+    }
+    // **恒等式の破れも同じ重さです**（4-191）。返ってきたのに答えが合わない。
+    if identity_broken > 0 {
+        eprintln!("GATE ERROR: identity broken in {identity_broken} placements");
         std::process::exit(1);
     }
 }
