@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use zenith_algo::EdgeBlender;
 use zenith_io::StepImporter;
-use zenith_topo::Solid;
+use zenith_math::{Point3, Vec3, Vec3Ext};
+use zenith_topo::{FaceGeometry, Solid};
 
 fn load(name: &str) -> Option<Solid> {
     let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
@@ -39,6 +40,60 @@ fn edge_ids(solid: &Solid) -> Vec<u64> {
         }
     }
     ids
+}
+
+/// 稜の**二面角**を、面の法線から測る。
+///
+/// # なぜ探針側で測るのか
+///
+/// `blendability` は「直線でない」を二面角より**先に**断ります。だから
+/// 断り文からは、その稜が**接線連続（丸めるものが無い）なのか、丸めたいのに
+/// 届いていないのか**が区別できません。
+///
+/// **その区別が H4 の意味を決めます**——既に丸めた箱（`filleted_box`）は、
+/// 稜が全部なめらかなら **0 で当然**です。守備範囲の穴ではありません。
+fn dihedral_at(solid: &Solid, edge_id: u64) -> Option<f64> {
+    let faces = &solid.outer_shell.faces;
+    let mut sides: Vec<(usize, Point3)> = Vec::new();
+    for (index, face) in faces.iter().enumerate() {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                if oriented.edge.id != edge_id {
+                    continue;
+                }
+                let (t_min, t_max) = oriented.edge.curve.param_range();
+                let middle = oriented.edge.curve.evaluate((t_min + t_max) * 0.5);
+                if !sides.iter().any(|(other, _)| *other == index) {
+                    sides.push((index, middle));
+                }
+            }
+        }
+    }
+    if sides.len() != 2 {
+        return None;
+    }
+    let normal_of = |index: usize, point: Point3| -> Option<Vec3> {
+        let face = &faces[index];
+        let normal = match &face.geometry {
+            FaceGeometry::Plane(plane) => plane.normal,
+            FaceGeometry::Nurbs(surface) => {
+                let projection =
+                    zenith_geom::ExtremumEngine::point_to_surface(point, surface, 64, 1e-13)
+                        .ok()?;
+                let (_, du, dv) = surface.evaluate_derivatives_1st(projection.u, projection.v);
+                du.cross(&dv).try_normalize_safe(1e-12)?
+            }
+            _ => return None,
+        };
+        Some(if matches!(face.orientation, zenith_topo::Orientation::Reversed) {
+            -normal
+        } else {
+            normal
+        })
+    };
+    let a = normal_of(sides[0].0, sides[0].1)?;
+    let b = normal_of(sides[1].0, sides[1].1)?;
+    Some(a.dot(&b).clamp(-1.0, 1.0).acos().to_degrees())
 }
 
 /// 断り文から、**数えられる見出し**を作る。長さや角度は落とします。
@@ -67,12 +122,16 @@ fn main() {
 
     println!("フィレット／面取りの守備範囲（断る理由を数えます）");
     println!();
-    println!("{:<20} {:>5} {:>7}  {}", "fixture", "edges", "blendable", "断る理由（多い順）");
+    println!(
+        "{:<20} {:>5} {:>5} {:>7}  {}",
+        "fixture", "edges", "鋭い", "blendable", "断る理由（多い順）"
+    );
     println!("{}", "-".repeat(110));
 
     let mut zero = 0usize;
     let mut read = 0usize;
     let mut all_reasons: BTreeMap<String, usize> = BTreeMap::new();
+    let mut sharp_total: Vec<(&str, usize, usize, usize)> = Vec::new();
 
     for name in names {
         let Some(solid) = load(name) else {
@@ -82,8 +141,23 @@ fn main() {
         read += 1;
         let ids = edge_ids(&solid);
         let mut ok = 0usize;
+        // **丸める意味のある稜**を数えます。二面角が 180 度に近いなら
+        // なめらかに繋がっているので、丸めるものがありません。
+        let mut sharp = 0usize;
         let mut reasons: BTreeMap<String, usize> = BTreeMap::new();
         for id in &ids {
+            // **なめらかな繋ぎでは、両側の法線が一致します（角 0度）。**
+            //
+            // 最初は 180 度と比べていました——**間違いです**。180 度は面が
+            // 折り返している場合で、接線連続ではありません。実測で
+            // `filleted_box` の 48稜すべてを「鋭い」と数えてしまい、そこで
+            // 気づきました。
+            let is_sharp = dihedral_at(&solid, *id)
+                .map(|angle| angle > 1.0)
+                .unwrap_or(false);
+            if is_sharp {
+                sharp += 1;
+            }
             match EdgeBlender::blendability(&solid, *id) {
                 Ok(_) => ok += 1,
                 Err(reason) => {
@@ -93,9 +167,11 @@ fn main() {
                 }
             }
         }
-        if ok == 0 {
+        // **穴と数えるのは「丸める意味のある稜があるのに 0本」**だけです。
+        if ok == 0 && sharp > 0 {
             zero += 1;
         }
+        sharp_total.push((name, ids.len(), sharp, ok));
         let mut sorted: Vec<(&String, &usize)> = reasons.iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(a.1));
         let shown: Vec<String> = sorted
@@ -104,8 +180,9 @@ fn main() {
             .map(|(reason, count)| format!("{count}× {reason}"))
             .collect();
         println!(
-            "{name:<20} {:>5} {:>7}  {}",
+            "{name:<20} {:>5} {:>5} {:>7}  {}",
             ids.len(),
+            sharp,
             ok,
             if shown.is_empty() {
                 "—".to_string()
@@ -117,8 +194,16 @@ fn main() {
 
     println!("{}", "-".repeat(110));
     println!(
-        "{read} 検体を読み、**{zero} 件が対象稜 0** です（9-H の H4 は 3件以下）。"
+        "{read} 検体を読み、**{zero} 件が「丸める稜があるのに 0本」** です（9-H の H4 は 3件以下）。"
     );
+    println!();
+    println!("**「鋭い」が 0 の検体は、0本で当然です。** 稜が無いか、全部");
+    println!("なめらかに繋がっているので、丸めるものがありません:");
+    for (name, edges, sharp, ok) in &sharp_total {
+        if *sharp == 0 {
+            println!("  {name:<20} 稜 {edges:>3}、鋭い 0、丸められた {ok}");
+        }
+    }
     println!();
     println!("断る理由の合計:");
     let mut sorted: Vec<(&String, &usize)> = all_reasons.iter().collect();
@@ -127,6 +212,6 @@ fn main() {
         println!("  {count:>4}  {reason}");
     }
     println!();
-    println!("**稜が無い立体（球・トーラス）は 0 で当然です。** 数えるのは");
-    println!("「稜はあるのに 1本も掛からない」ほうです。");
+    println!("**数えるのは「丸める意味のある稜があるのに、1本も掛からない」ほう**です。");
+    println!("稜が無い立体や、全部なめらかに繋がっている立体は 0 で当然です。");
 }
