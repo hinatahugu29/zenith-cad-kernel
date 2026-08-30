@@ -559,6 +559,58 @@ fn cases() -> Vec<Case> {
         ],
     });
 
+    // 線で触る（**内接**）。細い円柱を太い円柱の中に入れ、側面が内側から
+    // 接するまで寄せる。
+    //
+    // **`intersect_tangent_cylinder_patches` の内接の枝は、書いたのに一度も
+    // 測っていませんでした**（4-190）。外接だけを測って「効く」と言うのは、
+    // 測っていない半分を主張することです。
+    let thin_cylinder = PrimitiveBuilder::make_cylinder(2.0, 30.0).expect("thin cylinder");
+    out.push(Case {
+        name: "cylinder x cylinder (internally tangent)",
+        why: "半径 6 の円柱の中に半径 2 の円柱を入れ、軸を 4 ずらす。母線 x=6, y=0 の1本で内側から触れる（蓋は重ねない）",
+        a: shifted(&cylinder, 0.0, 0.0, -20.0),
+        b: shifted(&thin_cylinder, 4.0, 0.0, -15.0),
+        note: [
+            "実測: A がそのまま返る（B は中に入っている）",
+            "実測: 場所を名指しして断る——接する母線で壁の厚みが 0 になる。**規約どおり**",
+            "実測: B がそのまま返る",
+        ],
+    });
+
+    // **接触を2種類重ねる。** 上のものに、蓋も同一平面という条件を足す。
+    //
+    // 実測（4-192）: 母線だけの接触なら3演算とも正しく振る舞うのに、
+    // **蓋を重ねると和が断られます**（非多様体の稜 16本）。答えは A その
+    // ものなので、これは**穴**です。接する線の扱い（4-184、4-190）は
+    // 効いていて、原因は同一平面の蓋のほうにあります。
+    let tall_thin_cylinder = PrimitiveBuilder::make_cylinder(2.0, 40.0).expect("tall thin cylinder");
+    out.push(Case {
+        name: "cylinder x cylinder (internally tangent, caps coplanar)",
+        why: "上と同じ内接に、**蓋も同一平面**という条件を足す（接触が2種類重なる）",
+        a: shifted(&cylinder, 0.0, 0.0, -20.0),
+        b: shifted(&tall_thin_cylinder, 4.0, 0.0, -20.0),
+        note: [
+            "実測: **断られる（穴）**。答えは A そのものなのに、非多様体の稜 16本で落ちる。蓋を重ねなければ通る（4-192。未解決）",
+            "実測: 場所を名指しして断る——接する母線で壁の厚みが 0 になる。**規約どおり**",
+            "実測: B がそのまま返る",
+        ],
+    });
+
+    // 点で触る（**内接**）。小さい球を大きい球の中に入れ、内側から接するまで寄せる。
+    let small_sphere = PrimitiveBuilder::make_sphere(4.0).expect("small sphere");
+    out.push(Case {
+        name: "sphere x sphere (internally tangent)",
+        why: "半径 10 の球の中に半径 4 の球を入れ、中心を 6 ずらす。(10,0,0) の1点で内側から触れる",
+        a: sphere.clone(),
+        b: shifted(&small_sphere, 6.0, 0.0, 0.0),
+        note: [
+            "実測: A がそのまま返る（B は中に入っている）",
+            "実測: A から B を抜いた殻。接するのは1点だけ",
+            "実測: B がそのまま返る",
+        ],
+    });
+
     // 円で触る（曲面どうし）。球と、同じ半径の同軸円柱。赤道の円で接する。
     // **4-130 のトーラスと同じ「曲線に沿った接触」ですが、相手が平面では
     // なく曲面です。**
@@ -746,6 +798,7 @@ fn main() {
     let mut swap_mismatch = 0usize;
     let mut identity_broken = 0usize;
     let mut identity_worst = 0.0f64;
+    let mut identity_worst_case: &str = "-";
     let mut identity_checked = 0usize;
 
     println!("接触している配置（規約: 接触は、それ自体では位相を作らない）");
@@ -918,7 +971,13 @@ fn main() {
             ];
             let worst = residuals[0].max(residuals[1]);
             identity_checked += 1;
-            identity_worst = identity_worst.max(worst);
+            if worst > identity_worst {
+                identity_worst = worst;
+                identity_worst_case = case.name;
+            }
+            if std::env::var_os("ZENITH_IDENTITY_WHY").is_some() {
+                eprintln!("IDENTITYWHY {:<32} 残差 {worst:.3e}", case.name);
+            }
             if worst > 1e-6 {
                 identity_broken += 1;
                 println!(
@@ -939,7 +998,7 @@ fn main() {
         "{returned} 件が立体を返し、{refused} 件が断られました。**B-Rep が非多様体だったもの {wrong} 件**、メッシュが非多様体だったもの {mesh_broken} 件。"
     );
     println!(
-        "**恒等式**: {identity_checked} 配置で測り、破れ {identity_broken} 件、残差の最悪 {identity_worst:.3e}。"
+        "**恒等式**: {identity_checked} 配置で測り、破れ {identity_broken} 件、残差の最悪 {identity_worst:.3e}（{identity_worst_case}）。"
     );
     println!();
     println!("**多様体かどうかは「壊れていないか」しか見ません。** 答えが正しいかは");

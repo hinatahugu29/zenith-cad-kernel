@@ -8501,7 +8501,7 @@ fn drop_non_bounding_contact_curves(
     let mut dropped: Vec<Edge> = Vec::new();
     let explain = std::env::var_os("ZENITH_CONTACT_CURVE_WHY").is_some();
     candidates.retain(|candidate| {
-        let edges = candidate_edges(&candidate.kind);
+        let edges = candidate_edges_including_lines(&candidate.kind, tol);
         if edges.is_empty() {
             return true;
         }
@@ -8514,7 +8514,7 @@ fn drop_non_bounding_contact_curves(
         let (Some(patch_a), Some(patch_b)) = (face_patch(face_a), face_patch(face_b)) else {
             return true;
         };
-        for edge in edges {
+        for edge in &edges {
             if !contact_curve_is_not_bounding(
                 solid_a, solid_b, &patch_a, &patch_b, edge, tol, explain,
             ) {
@@ -8527,9 +8527,7 @@ fn drop_non_bounding_contact_curves(
                 candidate.face_a_index, candidate.face_b_index
             );
         }
-        for edge in candidate_edges(&candidate.kind) {
-            dropped.push(edge.clone());
-        }
+        dropped.extend(edges);
         false
     });
     dropped
@@ -8642,6 +8640,38 @@ fn surface_normal_at(patch: &NurbsSurface3, point: Point3) -> Option<Vec3> {
     let projection = ExtremumEngine::point_to_surface(point, patch, 64, 1e-13).ok()?;
     let (_, du, dv) = patch.evaluate_derivatives_1st(projection.u, projection.v);
     du.cross(&dv).try_normalize_safe(1e-12)
+}
+
+/// 候補が持つ交線を、**まっすぐな線も含めて**取り出す。
+///
+/// `candidate_edges` は `Curve` / `Curves` しか見ません。`Line` は `Edge` を
+/// 持たないので、そのままでは**接触の判定を素通りします**。
+///
+/// 実測（4-192）: 内側から接する円柱2本の和が、非多様体の稜 16本で
+/// 断られていました。接する母線は 4-190 で `Line` として出るように
+/// なったのに、接触の判定（4-184）はそれを見ていなかったのです。
+/// **答えは A そのもの**（B は中に入っている）なので、断るのは誤りです。
+fn candidate_edges_including_lines(kind: &FaceIntersectionKind, tol: &Tolerance) -> Vec<Edge> {
+    match kind {
+        FaceIntersectionKind::Line {
+            segment_start,
+            segment_end,
+            ..
+        } => {
+            let Ok(curve) =
+                NurbsCurve3::bspline_from_points(1, vec![*segment_start, *segment_end])
+            else {
+                return Vec::new();
+            };
+            vec![Edge::new(
+                curve,
+                Vertex::new(*segment_start, tol.linear),
+                Vertex::new(*segment_end, tol.linear),
+                tol.linear,
+            )]
+        }
+        other => candidate_edges(other).into_iter().cloned().collect(),
+    }
 }
 
 /// 候補が持つ弧を借りる。
