@@ -3096,4 +3096,67 @@ mod tests {
             .sum::<f64>();
         assert!((area - 14.0).abs() < 1e-12, "area was {area}");
     }
+
+    /// 一直線に並んだ境界で、置き去りになった点を挿し戻す（4-209）。
+    ///
+    /// `[1]` は `[0]` と `[2]` を結ぶ辺の上に乗っています。両隣を結ぶ辺
+    /// （`[0]-[2]`）はあるので、そこを割れば `[1]` が使われます。
+    #[test]
+    fn a_boundary_point_left_sitting_on_an_edge_is_split_back_in() {
+        let uvs = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(2.0, 0.0),
+            Point2::new(4.0, 0.0),
+            Point2::new(4.0, 4.0),
+            Point2::new(0.0, 4.0),
+        ];
+        let ranges = vec![0..5];
+        // `[1]` を使っていない三角形分割から始める。
+        let mut triangles = vec![[0, 2, 3], [0, 3, 4]];
+
+        insert_unused_boundary_points_on_straddled_edges(&uvs, &ranges, &mut triangles);
+
+        let used: std::collections::HashSet<usize> =
+            triangles.iter().flat_map(|t| t.iter().copied()).collect();
+        assert!(used.contains(&1), "置き去りの点が挿し戻されていない");
+        assert_eq!(boundary_missing(&triangles, &ranges), 0);
+        // 面積は変わらない（点を足していないので、覆う範囲は同じ）。
+        let area = triangles
+            .iter()
+            .map(|triangle| {
+                let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+                ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5
+            })
+            .sum::<f64>();
+        assert!((area - 16.0).abs() < 1e-12, "area was {area}");
+    }
+
+    /// 入れ替えは**境界の辺に触れず**、覆う範囲も変えない（4-209）。
+    #[test]
+    fn flipping_keeps_every_boundary_edge_and_the_area() {
+        // 細長い四角形を、悪いほうの対角線で切ってある。
+        let uvs = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(4.0, 0.0),
+            Point2::new(4.0, 1.0),
+            Point2::new(0.0, 1.0),
+        ];
+        let ranges = vec![0..4];
+        let protected: std::collections::HashSet<(usize, usize)> =
+            [(0, 1), (1, 2), (2, 3), (0, 3)].into_iter().collect();
+        let mut triangles = vec![[0, 1, 2], [0, 2, 3]];
+
+        delaunay_flip_interior_edges(&uvs, &ranges, &protected, &mut triangles);
+
+        assert_eq!(triangles.len(), 2, "枚数は変わらない");
+        assert_eq!(boundary_missing(&triangles, &ranges), 0, "境界の辺が消えた");
+        let area = triangles
+            .iter()
+            .map(|triangle| {
+                let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+                ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5
+            })
+            .sum::<f64>();
+        assert!((area - 4.0).abs() < 1e-12, "area was {area}");
+    }
 }
