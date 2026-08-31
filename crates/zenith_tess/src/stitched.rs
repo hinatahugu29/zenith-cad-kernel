@@ -1015,12 +1015,14 @@ fn patch_mesh(
     }
 
     let forward = orientation.is_forward();
+    let why = std::env::var_os("ZENITH_TESS_WHY").is_some();
     for triangle in triangles {
         push_with_uv_winding(
             &mut mesh,
             [triangle[0] as u32, triangle[1] as u32, triangle[2] as u32],
             &uvs,
             forward,
+            why,
         );
     }
     if std::env::var_os("ZENITH_TESS_WHY").is_some() {
@@ -1060,12 +1062,15 @@ fn push_with_uv_winding(
     triangle: [u32; 3],
     uvs: &[Point2],
     forward: bool,
+    // **診断を出すかどうかは、呼ぶ側が1回だけ調べて渡します。**
+    // ここは三角形1枚ごとに呼ばれるので、環境変数を引く場所ではありません。
+    why: bool,
 ) {
     let p0 = mesh.positions[triangle[0] as usize];
     let p1 = mesh.positions[triangle[1] as usize];
     let p2 = mesh.positions[triangle[2] as usize];
     if (p1 - p0).cross(&(p2 - p0)).norm() <= 1e-18 {
-        if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+        if why {
             eprintln!("TESSWHY   EMITDROP 3d-zero");
         }
         return;
@@ -1076,7 +1081,7 @@ fn push_with_uv_winding(
     let c = uvs[triangle[2] as usize];
     let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
     if signed == 0.0 {
-        if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+        if why {
             eprintln!("TESSWHY   EMITDROP uv-zero");
         }
         return;
@@ -2973,12 +2978,14 @@ fn build_grid_mesh(
         mesh.uvs.push(uv.coords);
     }
     let forward = orientation.is_forward();
+    let why = std::env::var_os("ZENITH_TESS_WHY").is_some();
     for triangle in triangles {
         push_with_uv_winding(
             &mut mesh,
             [triangle[0] as u32, triangle[1] as u32, triangle[2] as u32],
             &uvs,
             forward,
+            why,
         );
     }
     mesh
