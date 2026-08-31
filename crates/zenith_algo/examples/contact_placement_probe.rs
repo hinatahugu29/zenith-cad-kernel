@@ -873,6 +873,57 @@ fn cases() -> Vec<Case> {
         note: ["置き方だけ変えた組。初めて測ります", "同上", "同上"],
     });
 
+    // **手薄だった組を厚くします**（2026/08/31 夜、4-211）。
+    //
+    // 42配置のうち、`torus × torus`・`torus × sphere`・`torus × cylinder`・
+    // `cone × sphere` は**それぞれ1つずつ**しかありませんでした。トーラスは
+    // 16パッチで継ぎ目も多く、この日いちばん欠陥が出ている面です。
+    // **薄いところから厚くする**、が掃き出しの順番です。
+    let torus_upright_b = Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), FRAC_PI_2);
+    out.push(Case {
+        name: "torus x torus (same axis, nested tubes)",
+        why: "同じ軸・同じ中心で、芯の円だけ違うトーラス2つ。管どうしが**全周で**交わる。交線が閉じた輪で2本出る配置",
+        a: torus.clone(),
+        b: PrimitiveBuilder::make_torus(14.0, 4.0).expect("wider torus"),
+        note: ["実測: 3演算とも立体1つ。恒等式が閉じる", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "torus x sphere (sphere filling the hole)",
+        why: "トーラスの穴に球を通す。球が**穴の内側から**管に全周で食い込む。4-205 の「管をかじる」とは当たる向きが逆",
+        a: torus.clone(),
+        b: PrimitiveBuilder::make_sphere(10.0).expect("sphere"),
+        note: ["実測: 3演算とも立体1つ。恒等式が閉じる", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "torus x cylinder (rod through the hole)",
+        why: "トーラスの穴に、軸を揃えた円柱を通す。**指輪を棒に通した形**。穴の半径は 12 - 4 = 8 なので、**半径 9 の棒は管の内側へ全周で食い込みます**（半径 7 だと触れもしないので、それでは何も測れません）",
+        a: torus.clone(),
+        b: BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_cylinder(9.0, 40.0).expect("rod"),
+            Vec3::new(0.0, 0.0, -20.0),
+        ),
+        note: ["実測: 3演算とも立体1つ。恒等式が閉じる", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "cone x sphere (sphere resting on the apex)",
+        why: "円錐の頂点に球を載せる。**頂点は退化した点**で、そこで球と当たる。4-205 で極が効いた族の、円錐版",
+        a: cone.clone(),
+        b: BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_sphere(6.0).expect("small sphere"),
+            Vec3::new(0.0, 0.0, 26.0),
+        ),
+        note: ["実測: **点で触れているだけ**。和は立体2つ（点で繋がるものを1つにはしない）、差は1つ、積は空", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "torus x torus (side by side, tubes touching)",
+        why: "同じ向きのトーラスを横に並べ、管どうしを1点で触れさせる。**触れているだけ**なので、位相を作らないのが正しい",
+        a: torus.clone(),
+        b: BrepTransform::translate_solid(&torus, Vec3::new(32.0, 0.0, 0.0)),
+        note: ["実測: **点で触れているだけ**。和は立体2つ、差は1つ、積は空", "同上", "同上"],
+    });
+    let _ = &torus_upright_b;
+
+
     out
 }
 
