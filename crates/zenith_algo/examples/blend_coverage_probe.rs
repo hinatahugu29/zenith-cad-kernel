@@ -85,11 +85,13 @@ fn dihedral_at(solid: &Solid, edge_id: u64) -> Option<f64> {
             }
             _ => return None,
         };
-        Some(if matches!(face.orientation, zenith_topo::Orientation::Reversed) {
-            -normal
-        } else {
-            normal
-        })
+        Some(
+            if matches!(face.orientation, zenith_topo::Orientation::Reversed) {
+                -normal
+            } else {
+                normal
+            },
+        )
     };
     let a = normal_of(sides[0].0, sides[0].1)?;
     let b = normal_of(sides[1].0, sides[1].1)?;
@@ -131,7 +133,10 @@ fn dump(solid: &Solid, edge_id: u64) {
         return;
     };
     println!();
-    println!("稜 {edge_id}: ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})", start.x, start.y, start.z, end.x, end.y, end.z);
+    println!(
+        "稜 {edge_id}: ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})",
+        start.x, start.y, start.z, end.x, end.y, end.z
+    );
     let dir = (end - start).normalize();
     println!("向き ({:.4} {:.4} {:.4})", dir.x, dir.y, dir.z);
     for (label, vertex) in [("始点", start), ("終点", end)] {
@@ -152,7 +157,9 @@ fn dump(solid: &Solid, edge_id: u64) {
             let kind = match &face.geometry {
                 FaceGeometry::Plane(plane) => format!(
                     "平面 法線 ({:.4} {:.4} {:.4}) 稜との内積 {:.4}",
-                    plane.normal.x, plane.normal.y, plane.normal.z,
+                    plane.normal.x,
+                    plane.normal.y,
+                    plane.normal.z,
                     plane.normal.dot(&dir)
                 ),
                 FaceGeometry::Nurbs(_) => "曲面".to_string(),

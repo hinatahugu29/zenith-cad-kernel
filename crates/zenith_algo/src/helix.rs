@@ -131,7 +131,6 @@ impl HelixBuilder {
 
         let knot_vec = KnotVector::new(knots);
         NurbsCurve3::new(2, control_points, knot_vec)
-
     }
 
     /// 閉断面ワイヤを螺旋パスに沿ってスイープした完全閉B-Repソリッド（スプリング・ネジ等）を生成
@@ -145,8 +144,7 @@ impl HelixBuilder {
         num_sections: usize,
         tol: &Tolerance,
     ) -> Result<Solid, String> {
-        let helix_path =
-            Self::build_helix_curve(radius, pitch, turns, axis_origin, axis_dir, tol)?;
+        let helix_path = Self::build_helix_curve(radius, pitch, turns, axis_origin, axis_dir, tol)?;
         // ステーション数は掃引の精度をそのまま決める。断面の重心が経路の上に
         // あり経路に垂直なら `V = A x L` がきっかり成り立つので、そこからの
         // ずれで測れる。半径10・ピッチ6・2周、2x2 の角断面での実測:
@@ -177,10 +175,12 @@ impl HelixBuilder {
             return Err("Wire radius must be positive".to_string());
         }
         if wire_radius >= radius {
-            return Err("Wire radius must be smaller than helix radius to prevent self-intersection".to_string());
+            return Err(
+                "Wire radius must be smaller than helix radius to prevent self-intersection"
+                    .to_string(),
+            );
         }
-        let helix_path =
-            Self::build_helix_curve(radius, pitch, turns, axis_origin, axis_dir, tol)?;
+        let helix_path = Self::build_helix_curve(radius, pitch, turns, axis_origin, axis_dir, tol)?;
         let sections = (turns * 64.0).ceil().max(32.0) as usize;
         crate::SweepBuilder::sweep_circle_along_curve(&helix_path, wire_radius, sections)
     }

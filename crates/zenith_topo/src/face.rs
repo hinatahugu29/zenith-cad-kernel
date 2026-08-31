@@ -454,9 +454,7 @@ impl Face {
         limit: f64,
     ) -> (f64, Option<Point2>) {
         match &self.geometry {
-            FaceGeometry::Plane(plane) => {
-                ((point - plane.origin).dot(&plane.normal).abs(), None)
-            }
+            FaceGeometry::Plane(plane) => ((point - plane.origin).dot(&plane.normal).abs(), None),
             FaceGeometry::Nurbs(surface) => {
                 if let Some(uv) = seed {
                     if let Ok(projection) = ExtremumEngine::point_to_surface_seeded(
@@ -603,13 +601,12 @@ fn settle_seam_segment_axis(
     let ambiguous: Vec<bool> = segments
         .iter()
         .map(|segment| {
-            let at = |target: f64| {
-                segment
-                    .curve
-                    .control_points
-                    .iter()
-                    .all(|control| (coordinate(&control.point) - target).abs() <= edge_of_domain)
-            };
+            let at =
+                |target: f64| {
+                    segment.curve.control_points.iter().all(|control| {
+                        (coordinate(&control.point) - target).abs() <= edge_of_domain
+                    })
+                };
             at(min) || at(max)
         })
         .collect();
@@ -774,13 +771,12 @@ fn match_affine_patch_pcurve(
         .max(1.0);
     let limit = tol.linear.max(1e-9) * scale;
 
-    let mut control_points: Vec<ControlPoint2> = Vec::with_capacity(
-        edge.edge.curve.control_points.len(),
-    );
+    let mut control_points: Vec<ControlPoint2> =
+        Vec::with_capacity(edge.edge.curve.control_points.len());
     for cp in &edge.edge.curve.control_points {
-        let uv = patch.parameters_of(cp.point, limit).ok_or_else(|| {
-            format!("Edge {} leaves the plane of the patch", edge.edge.id)
-        })?;
+        let uv = patch
+            .parameters_of(cp.point, limit)
+            .ok_or_else(|| format!("Edge {} leaves the plane of the patch", edge.edge.id))?;
         control_points.push(ControlPoint2::new(uv, cp.weight));
     }
 
@@ -1017,7 +1013,14 @@ fn project_edge_to_nurbs_pcurve(
     knots.extend(parameters.iter().copied());
     knots.push(parameters[parameters.len() - 1]);
 
-    NurbsCurve2::new(1, uv_points.into_iter().map(ControlPoint2::unweighted).collect(), KnotVector::new(knots))
+    NurbsCurve2::new(
+        1,
+        uv_points
+            .into_iter()
+            .map(ControlPoint2::unweighted)
+            .collect(),
+        KnotVector::new(knots),
+    )
 }
 
 /// Rewrites parameters that landed on a seam so the run reads as one path.
@@ -1323,6 +1326,5 @@ fn same_edge_geometry(a: &OrientedEdge, b: &OrientedEdge, tol: f64) -> bool {
     let (a_start, a_end) = (a.start_vertex().point, a.end_vertex().point);
     let (b_start, b_end) = (b.start_vertex().point, b.end_vertex().point);
     let close = |left: Point3, right: Point3| (left - right).norm() <= tol;
-    close(a_start, b_start) && close(a_end, b_end)
-        || close(a_start, b_end) && close(a_end, b_start)
+    close(a_start, b_start) && close(a_end, b_end) || close(a_start, b_end) && close(a_end, b_start)
 }

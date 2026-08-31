@@ -38,7 +38,8 @@ fn round_trip(name: &str, solid: &Solid, analytic: Option<f64>) {
     match StepImporter::import_solid_from_str(&step) {
         Ok(imported) => {
             let imported_volume = volume(&imported);
-            let relative = (imported_volume - original_volume).abs() / original_volume.abs().max(1e-12);
+            let relative =
+                (imported_volume - original_volume).abs() / original_volume.abs().max(1e-12);
             let shell_ok = imported.outer_shell.validate_closed(&tol).is_valid();
 
             let analytic_note = analytic
@@ -94,11 +95,16 @@ fn read_foreign(path: &Path) {
                             v_divisions: 64,
                         },
                     );
-                    println!("        face {index}: area {area:.4}, volume share {contribution:.4}");
+                    println!(
+                        "        face {index}: area {area:.4}, volume share {contribution:.4}"
+                    );
                 }
             }
         }
-        Err(err) => println!("{name:<44} FAILED: {}", err.chars().take(400).collect::<String>()),
+        Err(err) => println!(
+            "{name:<44} FAILED: {}",
+            err.chars().take(400).collect::<String>()
+        ),
     }
 }
 

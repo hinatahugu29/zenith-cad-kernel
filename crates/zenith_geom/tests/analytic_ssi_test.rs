@@ -1,6 +1,4 @@
-use zenith_geom::{
-    AnalyticIntersection, AnalyticIntersectionResult, Curve3, PlaneSurface3,
-};
+use zenith_geom::{AnalyticIntersection, AnalyticIntersectionResult, Curve3, PlaneSurface3};
 use zenith_math::{Point3, Tolerance, Vec3};
 
 #[test]
@@ -52,7 +50,8 @@ fn test_plane_sphere_intersection() {
         Vec3::new(0.0, 1.0, 0.0),
     )
     .unwrap();
-    let res_eq = AnalyticIntersection::intersect_plane_sphere(&p_eq, sphere_center, sphere_radius, &tol);
+    let res_eq =
+        AnalyticIntersection::intersect_plane_sphere(&p_eq, sphere_center, sphere_radius, &tol);
     match res_eq {
         AnalyticIntersectionResult::Circle(c) => {
             assert!((c.radius - 10.0).abs() < 1e-12);
@@ -68,7 +67,8 @@ fn test_plane_sphere_intersection() {
         Vec3::new(0.0, 1.0, 0.0),
     )
     .unwrap();
-    let res_z6 = AnalyticIntersection::intersect_plane_sphere(&p_z6, sphere_center, sphere_radius, &tol);
+    let res_z6 =
+        AnalyticIntersection::intersect_plane_sphere(&p_z6, sphere_center, sphere_radius, &tol);
     match res_z6 {
         AnalyticIntersectionResult::Circle(c) => {
             assert!((c.radius - 8.0).abs() < 1e-12);
@@ -84,7 +84,8 @@ fn test_plane_sphere_intersection() {
         Vec3::new(0.0, 1.0, 0.0),
     )
     .unwrap();
-    let res_z15 = AnalyticIntersection::intersect_plane_sphere(&p_z15, sphere_center, sphere_radius, &tol);
+    let res_z15 =
+        AnalyticIntersection::intersect_plane_sphere(&p_z15, sphere_center, sphere_radius, &tol);
     assert_eq!(res_z15, AnalyticIntersectionResult::Empty);
 }
 
@@ -186,7 +187,10 @@ fn test_plane_cylinder_intersection() {
 
                 // 点が円柱面 (x^2 + y^2 = 25) 上にあること (10^-12)
                 let r_cyl = (pt_nurbs.x * pt_nurbs.x + pt_nurbs.y * pt_nurbs.y).sqrt();
-                assert!((r_cyl - 5.0).abs() < 1e-12, "Point must lie exactly on cylinder surface");
+                assert!(
+                    (r_cyl - 5.0).abs() < 1e-12,
+                    "Point must lie exactly on cylinder surface"
+                );
 
                 // 点が平面上にあること (10^-12)
                 let dist_plane = (pt_nurbs - p_diag.origin).dot(&p_diag.normal).abs();

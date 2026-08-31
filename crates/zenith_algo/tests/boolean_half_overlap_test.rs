@@ -16,9 +16,7 @@
 
 use std::f64::consts::PI;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;

@@ -652,7 +652,8 @@ impl SurfaceIntegral {
         let Some(patch) = recognise_revolution_patch(surface) else {
             return false;
         };
-        let Some(mut moments) = loop_revolution_moments(&pcurves.outer_loop, surface, &patch) else {
+        let Some(mut moments) = loop_revolution_moments(&pcurves.outer_loop, surface, &patch)
+        else {
             return false;
         };
         let outer = moments[0];
@@ -683,9 +684,8 @@ impl SurfaceIntegral {
         // 上の `volume_antiderivative` は軸の上の点から見たぶんしか
         // 積んでいないので、差のぶんを面素ベクトルの積分に掛けて足します。
         let origin = patch.origin.coords;
-        let area_vector = patch.e1 * moments[3] * -1.0
-            + patch.e2 * moments[4] * -1.0
-            + patch.axis * moments[5];
+        let area_vector =
+            patch.e1 * moments[3] * -1.0 + patch.e2 * moments[4] * -1.0 + patch.axis * moments[5];
         let volume_moment = moments[2] + origin.dot(&area_vector);
 
         let area = moments[1];
@@ -806,9 +806,7 @@ impl SurfaceIntegral {
         // `ZENITH_NO_ANALYTIC_FACE=1` で止まります。**答えが変わります**——
         // 解析と三角形を突き合わせるための口で、速くするために外す口では
         // ありません。
-        if self.area_and_volume_only
-            && std::env::var_os("ZENITH_NO_ANALYTIC_FACE").is_none()
-        {
+        if self.area_and_volume_only && std::env::var_os("ZENITH_NO_ANALYTIC_FACE").is_none() {
             if self.add_ruled_revolution_face(face, surface, orientation_sign)
                 || self.add_revolution_face(face, surface, orientation_sign)
             {
@@ -870,10 +868,7 @@ impl SurfaceIntegral {
                 FaceGeometry::Plane(_) => "平面（線積分に落ちなかったもの）".to_string(),
                 _ => "その他".to_string(),
             };
-            eprintln!(
-                "INTEGRALWHY {kind} 三角形 {}",
-                domain.triangles.len()
-            );
+            eprintln!("INTEGRALWHY {kind} 三角形 {}", domain.triangles.len());
         }
 
         // 三角形がノット区間をまたいでいたら、そこで割ってから当てる。
@@ -1112,7 +1107,10 @@ fn recognise_revolution_patch(surface: &impl Surface3) -> Option<RevolutionPatch
     }
     let radius = fitted[0].1;
     let scale = radius.max((at(0.0, 0.0) - at(0.0, 1.0)).norm()).max(1.0);
-    if fitted.iter().any(|(_, r, _)| (r - radius).abs() > radius * 1e-9) {
+    if fitted
+        .iter()
+        .any(|(_, r, _)| (r - radius).abs() > radius * 1e-9)
+    {
         return None;
     }
 
@@ -1236,8 +1234,7 @@ fn loop_revolution_moments(
             }
             *previous_psi = Some(psi);
 
-            let (point, _, dv_vector) =
-                surface.evaluate_with_derivatives(patch.reference_u, uv.y);
+            let (point, _, dv_vector) = surface.evaluate_with_derivatives(patch.reference_u, uv.y);
             let offset = point - patch.origin;
             let axial = offset.dot(&patch.axis);
             let radial = offset - patch.axis * axial;
@@ -1378,7 +1375,10 @@ fn recognise_ruled_revolution_patch(surface: &impl Surface3) -> Option<RuledRevo
     for w in samples {
         fitted.push(fit_circle(at(0.0, w), at(0.5, w), at(1.0, w))?);
     }
-    let scale = fitted[0].1.max((at(0.0, 0.0) - at(0.0, 1.0)).norm()).max(1.0);
+    let scale = fitted[0]
+        .1
+        .max((at(0.0, 0.0) - at(0.0, 1.0)).norm())
+        .max(1.0);
 
     // 半径が `w` で線形か。
     let (r_low, r_mid, r_high) = (fitted[0].1, fitted[1].1, fitted[2].1);
@@ -1528,16 +1528,14 @@ fn loop_ruled_revolution_moments(
 
             let rho = patch.radius(uv.y);
             let z = patch.axial(uv.y);
-            let a_term = rho
-                * (-patch.radius_rate * (axial_origin + z) + patch.axial_rate * rho);
+            let a_term = rho * (-patch.radius_rate * (axial_origin + z) + patch.axial_rate * rho);
             let b_term = rho * patch.axial_rate;
 
             // 0.5 は t を [-1,1] から [0,1] へ移したぶん。
             let scale = 0.5 * weight * slope.y;
             moments[0] += theta * scale;
             moments[1] += rho * theta * scale;
-            moments[2] +=
-                (a_term * theta + b_term * (o1 * theta.sin() - o2 * theta.cos())) * scale;
+            moments[2] += (a_term * theta + b_term * (o1 * theta.sin() - o2 * theta.cos())) * scale;
         }
     };
 

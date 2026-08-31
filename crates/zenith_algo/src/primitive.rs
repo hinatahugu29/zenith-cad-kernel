@@ -327,7 +327,17 @@ impl PrimitiveBuilder {
             &tol,
         )?;
 
-        let _ = (surf, profile, p_north, p_eq, p_eq_corner1, p_eq_corner2, p_south, weight, tol);
+        let _ = (
+            surf,
+            profile,
+            p_north,
+            p_eq,
+            p_eq_corner1,
+            p_eq_corner2,
+            p_south,
+            weight,
+            tol,
+        );
         Self::make_sphere_patches(radius)
     }
 
@@ -433,10 +443,7 @@ impl PrimitiveBuilder {
                 for ((s, z), w_meridian) in meridian_rows {
                     grid.push(vec![
                         ControlPoint3::new(revolve_point(s, z, theta), w_meridian),
-                        ControlPoint3::new(
-                            revolve_mid(s, z, theta),
-                            w_meridian * quarter_weight,
-                        ),
+                        ControlPoint3::new(revolve_mid(s, z, theta), w_meridian * quarter_weight),
                         ControlPoint3::new(revolve_point(s, z, theta + FRAC_PI_2), w_meridian),
                     ]);
                 }
@@ -771,7 +778,9 @@ impl PrimitiveBuilder {
             ]),
         )?;
 
-        let _ = (&tol, p0, c0, p1, c1, p2, c2, p3, c3, profile, weight, r, r_maj);
+        let _ = (
+            &tol, p0, c0, p1, c1, p2, c2, p3, c3, profile, weight, r, r_maj,
+        );
         Self::make_torus_patches(r_major, r_minor)
     }
 
@@ -800,7 +809,8 @@ impl PrimitiveBuilder {
         };
 
         // 大円（主軸まわり）を4分割したときの点と接線交点。
-        let revolve_point = |s: f64, z: f64, theta: f64| Point3::new(s * theta.cos(), s * theta.sin(), z);
+        let revolve_point =
+            |s: f64, z: f64, theta: f64| Point3::new(s * theta.cos(), s * theta.sin(), z);
         let revolve_mid = |s: f64, z: f64, theta: f64| {
             let mid = theta + FRAC_PI_2 * 0.5;
             Point3::new(sqrt2 * s * mid.cos(), sqrt2 * s * mid.sin(), z)
@@ -891,14 +901,8 @@ impl PrimitiveBuilder {
                 for ((s, z), w_minor) in minor_rows {
                     grid.push(vec![
                         ControlPoint3::new(revolve_point(s, z, theta), w_minor),
-                        ControlPoint3::new(
-                            revolve_mid(s, z, theta),
-                            w_minor * quarter_weight,
-                        ),
-                        ControlPoint3::new(
-                            revolve_point(s, z, theta + FRAC_PI_2),
-                            w_minor,
-                        ),
+                        ControlPoint3::new(revolve_mid(s, z, theta), w_minor * quarter_weight),
+                        ControlPoint3::new(revolve_point(s, z, theta + FRAC_PI_2), w_minor),
                     ]);
                 }
 
@@ -937,7 +941,9 @@ impl PrimitiveBuilder {
     /// `height`: 柱の高さ（Z方向）
     pub fn make_regular_prism(sides: usize, radius: f64, height: f64) -> Result<Solid, String> {
         if sides < 3 {
-            return Err(format!("Regular prism must have at least 3 sides, got {sides}"));
+            return Err(format!(
+                "Regular prism must have at least 3 sides, got {sides}"
+            ));
         }
         if radius <= 1e-9 || height <= 1e-9 {
             return Err(format!(
@@ -1011,7 +1017,10 @@ impl PrimitiveBuilder {
         for i in (0..n).rev() {
             wire_b_edges.push(OrientedEdge::reversed(eb[i].clone()));
         }
-        faces.push(Face::simple(FaceGeometry::Plane(plane_b), Wire::new(wire_b_edges)));
+        faces.push(Face::simple(
+            FaceGeometry::Plane(plane_b),
+            Wire::new(wire_b_edges),
+        ));
 
         // 6. 天面（法線 +Z: CCW は正順 0 -> n-1）
         let plane_t = PlaneSurface3::new(
@@ -1024,7 +1033,10 @@ impl PrimitiveBuilder {
         for i in 0..n {
             wire_t_edges.push(OrientedEdge::forward(et[i].clone()));
         }
-        faces.push(Face::simple(FaceGeometry::Plane(plane_t), Wire::new(wire_t_edges)));
+        faces.push(Face::simple(
+            FaceGeometry::Plane(plane_t),
+            Wire::new(wire_t_edges),
+        ));
 
         crate::validated_solid(Shell::closed(faces))
     }

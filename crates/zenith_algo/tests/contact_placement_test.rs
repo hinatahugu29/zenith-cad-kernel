@@ -118,13 +118,9 @@ fn a_turned_tangent_cylinder_union_has_a_manifold_mesh() {
     let turned = BrepTransform::transform_solid(&cylinder, &spin).expect("turn");
     let placed = BrepTransform::translate_solid(&turned, Vec3::new(6.0, 10.0, -10.0));
 
-    let result = BooleanEngine::boolean_solids_exact_result(
-        &block,
-        &placed,
-        BooleanOpType::Union,
-        &tol,
-    )
-    .expect("the tangent union should be representable");
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&block, &placed, BooleanOpType::Union, &tol)
+            .expect("the tangent union should be representable");
 
     assert_eq!(result.solids.len(), 1);
     assert_eq!(non_manifold_edges(&result.solids[0]), 0);
@@ -184,9 +180,13 @@ fn a_tangent_contact_that_pinches_the_material_is_refused_by_name() {
         Vec3::new(6.0, 10.0, -10.0),
     );
 
-    let refused =
-        BooleanEngine::boolean_solids_exact_result(&boxa, &cylinder, BooleanOpType::Difference, &tol)
-            .expect_err("the difference pinches the wall and cannot be a manifold solid");
+    let refused = BooleanEngine::boolean_solids_exact_result(
+        &boxa,
+        &cylinder,
+        BooleanOpType::Difference,
+        &tol,
+    )
+    .expect_err("the difference pinches the wall and cannot be a manifold solid");
 
     assert!(
         refused.contains("non-manifold"),

@@ -20,14 +20,7 @@ use zenith_tess::TessellationParams;
 /// 皿モミ穴を空けた直方体の体積（解析解）
 ///
 /// 直方体から、貫通下穴の円柱と、皿の円錐台のうち下穴の外側にある分を引く。
-fn expected_volume(
-    w: f64,
-    d: f64,
-    h: f64,
-    hole_r: f64,
-    cs_r: f64,
-    cs_angle_deg: f64,
-) -> f64 {
+fn expected_volume(w: f64, d: f64, h: f64, hole_r: f64, cs_r: f64, cs_angle_deg: f64) -> f64 {
     let tan_half = (cs_angle_deg * 0.5).to_radians().tan();
     let cs_depth = (cs_r - hole_r) / tan_half;
     let frustum = PI / 3.0 * cs_depth * (hole_r * hole_r + hole_r * cs_r + cs_r * cs_r);

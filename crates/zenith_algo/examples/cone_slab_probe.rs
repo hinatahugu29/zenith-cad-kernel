@@ -94,7 +94,8 @@ fn main() {
         println!("  B{index} {:6} {}", kind_name(face), bounds(face));
     }
 
-    let candidates = BrepIntersectionBuilder::collect_face_pair_candidates(&faces_a, &faces_b, &tol);
+    let candidates =
+        BrepIntersectionBuilder::collect_face_pair_candidates(&faces_a, &faces_b, &tol);
     println!("\n{} face pair candidate(s)", candidates.len());
     for candidate in &candidates {
         println!(
@@ -108,9 +109,8 @@ fn main() {
         );
     }
 
-    let edges = BrepIntersectionBuilder::intersection_edge_candidates_from_face_pairs(
-        candidates, &tol,
-    );
+    let edges =
+        BrepIntersectionBuilder::intersection_edge_candidates_from_face_pairs(candidates, &tol);
     println!("\n{} intersection edge(s)", edges.len());
     for edge in &edges {
         let (t0, t1) = edge.edge.curve.param_range();
@@ -121,7 +121,6 @@ fn main() {
             edge.face_a_index, edge.face_b_index, start.x, start.y, start.z, end.x, end.y, end.z
         );
     }
-
 
     println!("\nthrough the verified API:");
     verified_report(&cone, &slab, &tol);

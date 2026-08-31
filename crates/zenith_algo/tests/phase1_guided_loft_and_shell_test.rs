@@ -48,7 +48,11 @@ fn test_guided_loft_solid() {
     // 1. トポロジー閉シェル検証
     assert_eq!(solid.outer_shell.faces.len(), 6);
     let report = solid.outer_shell.validate_closed(&tol);
-    assert!(report.is_valid(), "Guided loft invalid: {:?}", report.errors);
+    assert!(
+        report.is_valid(),
+        "Guided loft invalid: {:?}",
+        report.errors
+    );
 
     // 2. STEPラウンドトリップ
     let step_path = "test_guided_loft_roundtrip.step";
@@ -63,13 +67,17 @@ fn test_guided_loft_solid() {
 fn test_through_hollow_box_tube() {
     let tol = Tolerance::default();
     // 30 x 20 x 40, 肉厚 t=2.0
-    let solid = ShellBuilder::make_through_hollow_box(30.0, 20.0, 40.0, 2.0)
-        .expect("make through tube");
+    let solid =
+        ShellBuilder::make_through_hollow_box(30.0, 20.0, 40.0, 2.0).expect("make through tube");
 
     // 1. トポロジー検証（16面閉シェル）
     assert_eq!(solid.outer_shell.faces.len(), 16);
     let report = solid.outer_shell.validate_closed(&tol);
-    assert!(report.is_valid(), "Through tube invalid: {:?}", report.errors);
+    assert!(
+        report.is_valid(),
+        "Through tube invalid: {:?}",
+        report.errors
+    );
 
     // 2. 解析体積検証: V = (30*20 - 26*16) * 40 = (600 - 416) * 40 = 7360.0 mm^3
     let mesh = tessellate_solid(&solid, &TessellationParams::default());

@@ -229,4 +229,3 @@ impl ChamferBuilder {
         crate::validated_solid(shell)
     }
 }
-

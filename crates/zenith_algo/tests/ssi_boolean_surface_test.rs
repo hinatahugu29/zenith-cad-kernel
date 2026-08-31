@@ -1,11 +1,11 @@
 use std::f64::consts::FRAC_1_SQRT_2;
 
 use zenith_algo::{FaceSplitter, MassCalculator};
-use zenith_tess::TessellationParams;
 use zenith_geom::{
     ControlPoint3, ExtremumEngine, IntersectionMarcher, KnotVector, NurbsCurve3, NurbsSurface3,
 };
 use zenith_math::{Point3, Tolerance};
+use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Vertex, Wire};
 
 fn cylinder_quarter_face(centre: Point3, r: f64, z_low: f64, z_high: f64) -> (NurbsSurface3, Face) {
@@ -116,7 +116,8 @@ fn sphere_octant(r: f64) -> (NurbsSurface3, Face) {
             ControlPoint3::unweighted(p10),
         ],
         KnotVector::clamped_uniform(3, 2),
-    ).unwrap();
+    )
+    .unwrap();
 
     let meridian0 = NurbsCurve3::new(
         2,
@@ -126,7 +127,8 @@ fn sphere_octant(r: f64) -> (NurbsSurface3, Face) {
             ControlPoint3::unweighted(p01),
         ],
         KnotVector::clamped_uniform(3, 2),
-    ).unwrap();
+    )
+    .unwrap();
 
     let meridian1 = NurbsCurve3::new(
         2,
@@ -136,7 +138,8 @@ fn sphere_octant(r: f64) -> (NurbsSurface3, Face) {
             ControlPoint3::unweighted(p01),
         ],
         KnotVector::clamped_uniform(3, 2),
-    ).unwrap();
+    )
+    .unwrap();
 
     let face = Face::new(
         FaceGeometry::Nurbs(surface.clone()),
@@ -174,8 +177,8 @@ fn test_ssi_dual_surface_split_and_trimmed_assembly() {
         Vertex::from_point(curve.evaluate(t1)),
         1e-6,
     );
-    let (cyl_pieces, cyl_report) = FaceSplitter::split_by_curve(&cyl_face, &split_edge, &tol)
-        .expect("cylinder face split");
+    let (cyl_pieces, cyl_report) =
+        FaceSplitter::split_by_curve(&cyl_face, &split_edge, &tol).expect("cylinder face split");
     assert_eq!(cyl_pieces.len(), 2);
     assert!(cyl_report.area_residual < 1e-6);
 
@@ -237,7 +240,10 @@ fn test_ssi_dual_surface_split_and_trimmed_assembly() {
 
     // 球の面は割らないが、受け取ったまま使わないのもやめる。分割の前後で
     // 動いていないことを確かめておく。
-    assert!(area_of(&sphere_face) > 0.0, "the sphere patch must have area");
+    assert!(
+        area_of(&sphere_face) > 0.0,
+        "the sphere patch must have area"
+    );
 }
 
 /// 交線で**両方**の面を割る。

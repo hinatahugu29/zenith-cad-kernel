@@ -66,7 +66,14 @@ fn upright_signature(dx: f64, dy: f64, dz: f64) -> EdgeSignature {
 #[test]
 fn a_history_with_a_boolean_in_it_evaluates_as_one_chain() {
     let mut tree = FeatureTree::new();
-    tree.add_feature("block", FeatureOp::CreateBox { dx: 40.0, dy: 40.0, dz: 20.0 });
+    tree.add_feature(
+        "block",
+        FeatureOp::CreateBox {
+            dx: 40.0,
+            dy: 40.0,
+            dz: 20.0,
+        },
+    );
     tree.add_feature(
         "bore",
         FeatureOp::Boolean {

@@ -157,7 +157,11 @@ fn main() {
     report("rotated boxes", &boxa, &rotated);
 
     let lifted = BrepTransform::translate_solid(&rotated, Vec3::new(0.0, 0.0, 7.0));
-    report("rotated boxes lifted in Z (no coplanar pairs)", &boxa, &lifted);
+    report(
+        "rotated boxes lifted in Z (no coplanar pairs)",
+        &boxa,
+        &lifted,
+    );
 
     // 比較対象: 既に成功している角重なりのボックス同士。
     let corner = BrepTransform::translate_solid(&boxa, Vec3::new(10.0, 10.0, 10.0));

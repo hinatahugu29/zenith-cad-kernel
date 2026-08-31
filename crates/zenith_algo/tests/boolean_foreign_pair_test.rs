@@ -26,9 +26,7 @@
 
 use std::path::PathBuf;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, Regularizer,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, Regularizer};
 use zenith_io::StepImporter;
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
@@ -104,7 +102,9 @@ fn booleans_on_a_solid_with_a_cavity_hold_the_identities() {
         let inclusion = ((union + meet) - (volume_a + volume_b)).abs() / scale;
         let split = ((cut + meet) - volume_a).abs() / scale;
         if inclusion > 1e-5 {
-            failures.push(format!("hollow_box x {name}: 包除が {inclusion:.3e} ずれる"));
+            failures.push(format!(
+                "hollow_box x {name}: 包除が {inclusion:.3e} ずれる"
+            ));
         }
         if split > 1e-5 {
             failures.push(format!("hollow_box x {name}: 分割が {split:.3e} ずれる"));

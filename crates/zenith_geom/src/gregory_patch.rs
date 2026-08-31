@@ -99,7 +99,11 @@ pub struct GregoryPatch4 {
 /// 足りなければ持ち上げる。**近似はしない。** 満たさない曲線を近似で通すと、
 /// 「境界を厳密に通る」という主張が静かに崩れる。
 fn cubic_bezier_points(curve: &NurbsCurve3) -> Option<[Point3; 4]> {
-    if curve.control_points.iter().any(|cp| (cp.weight - 1.0).abs() > 1e-12) {
+    if curve
+        .control_points
+        .iter()
+        .any(|cp| (cp.weight - 1.0).abs() > 1e-12)
+    {
         return None;
     }
     let degree = curve.degree;
@@ -420,10 +424,7 @@ pub struct CornerBlendN {
 
 impl CornerBlendN {
     /// N本の境界曲線（N >= 3）からコーナーブレンドパッチ群を生成
-    pub fn create_n_sided_blend(
-        curves: Vec<NurbsCurve3>,
-        tol: &Tolerance,
-    ) -> Result<Self, String> {
+    pub fn create_n_sided_blend(curves: Vec<NurbsCurve3>, tol: &Tolerance) -> Result<Self, String> {
         let n = curves.len();
         if n < 3 {
             return Err("N-sided corner blend requires at least 3 boundary curves".to_string());

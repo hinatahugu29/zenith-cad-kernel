@@ -116,7 +116,12 @@ impl GearBuilder {
         let tol = zenith_math::Tolerance::default();
         let drill = crate::PrimitiveBuilder::make_cylinder(bore_radius, thickness + 2.0)?;
         let drill = crate::BrepTransform::translate_solid(&drill, Vec3::new(0.0, 0.0, -1.0));
-        crate::BooleanEngine::boolean_solids_exact(&gear, &drill, crate::BooleanOpType::Difference, &tol)
+        crate::BooleanEngine::boolean_solids_exact(
+            &gear,
+            &drill,
+            crate::BooleanOpType::Difference,
+            &tol,
+        )
     }
 
     /// インボリュート歯車の断面積。**閉じた式**である。
@@ -347,8 +352,7 @@ impl RootFilletGeneration {
         let along = u + r * theta;
         let out = r + v;
         let (x, y) = (along * cos - out * sin, along * sin + out * cos);
-        let offset =
-            std::f64::consts::FRAC_PI_2 + std::f64::consts::PI / (2.0 * teeth as f64);
+        let offset = std::f64::consts::FRAC_PI_2 + std::f64::consts::PI / (2.0 * teeth as f64);
         ((x * x + y * y).sqrt(), y.atan2(x) - offset)
     }
 }
@@ -382,9 +386,7 @@ impl GearGeometry {
         if floor > base_radius {
             return Err("The bore leaves no room below the base circle".to_string());
         }
-        let root_radius = (pitch_radius - 1.25 * module)
-            .max(floor)
-            .min(base_radius);
+        let root_radius = (pitch_radius - 1.25 * module).max(floor).min(base_radius);
         if root_radius <= 0.0 {
             return Err("The gear's radii do not make a usable tooth".to_string());
         }
@@ -543,8 +545,8 @@ impl GearGeometry {
             let mut previous = self.root_radius;
             let mut last = theta_deepest;
             for step in 1..=256 {
-                let theta = theta_deepest
-                    + direction * (step as f64 / 256.0) * self.pressure_angle * 2.0;
+                let theta =
+                    theta_deepest + direction * (step as f64 / 256.0) * self.pressure_angle * 2.0;
                 let radius = radius_at(theta);
                 if radius + 1e-12 < previous {
                     return None;
@@ -573,8 +575,7 @@ impl GearGeometry {
 
         let mut out = Vec::with_capacity(samples + 1);
         for step in 0..=samples {
-            let theta =
-                theta_deepest + (theta_form - theta_deepest) * step as f64 / samples as f64;
+            let theta = theta_deepest + (theta_form - theta_deepest) * step as f64 / samples as f64;
             let (x, y) = envelope(theta, sign);
             out.push(((x * x + y * y).sqrt(), y.atan2(x)));
         }
@@ -671,8 +672,7 @@ impl GearGeometry {
     fn root_fillet_generation(&self) -> Result<RootFilletGeneration, String> {
         let rho = self.hob_tip_radius();
         let polar = self.trochoid_fillet_polar(24)?;
-        let offset = std::f64::consts::FRAC_PI_2
-            + std::f64::consts::PI / (2.0 * self.teeth as f64);
+        let offset = std::f64::consts::FRAC_PI_2 + std::f64::consts::PI / (2.0 * self.teeth as f64);
         Ok(RootFilletGeneration {
             pitch_radius: self.pitch_radius,
             base_radius: self.base_radius,
@@ -693,7 +693,10 @@ impl GearGeometry {
     /// 歯車のピッチ点 `(0, r_p)` に触れる置き方をしている。そこは歯の**右歯面**
     /// がピッチ円を通る位置なので、歯の中心は `pi/2 + pi/(2z)` にある。実際の
     /// 歯の中心 `centre` へ移すには、その差だけ回せばよい。
-    fn profile_curves_with_root_fillet(&self, flank_samples: usize) -> Result<Vec<NurbsCurve3>, String> {
+    fn profile_curves_with_root_fillet(
+        &self,
+        flank_samples: usize,
+    ) -> Result<Vec<NurbsCurve3>, String> {
         let z = self.teeth as f64;
         let pitch_angle = 2.0 * std::f64::consts::PI / z;
         let fillet = self.trochoid_fillet_polar(12)?;

@@ -79,12 +79,8 @@ fn test_loft_solid_rectangular_pyramid_frustum() {
     ]);
 
     // 3断面ロフトソリッドの生成
-    let loft_solid = LoftBuilder::loft_solid(
-        &[wire_bottom, wire_mid, wire_top],
-        2,
-        &tol,
-    )
-    .expect("LoftBuilder::loft_solid should succeed");
+    let loft_solid = LoftBuilder::loft_solid(&[wire_bottom, wire_mid, wire_top], 2, &tol)
+        .expect("LoftBuilder::loft_solid should succeed");
 
     // トポロジー検証
     let report = loft_solid.outer_shell.validate_closed(&tol);
@@ -116,7 +112,11 @@ fn test_loft_solid_rectangular_pyramid_frustum() {
         "Rectangular loft volume {} is not the stacked frusta {expected} (relative {error:.3e})",
         mass.volume
     );
-    assert!(mass.surface_area > 0.0, "Surface area must be positive: got {}", mass.surface_area);
+    assert!(
+        mass.surface_area > 0.0,
+        "Surface area must be positive: got {}",
+        mass.surface_area
+    );
 
     // STEP ラウンドトリップ検証
     let step_str = StepExporter::export_solid_to_string(&loft_solid, "ZENITH_LOFT_SOLID");
@@ -138,10 +138,32 @@ fn test_loft_solid_circular_cone_frustum() {
     // 補助関数: 4本の90度有理円弧エッジから円形ワイヤを生成
     let make_circular_wire = |center: Point3, radius: f64| -> Wire {
         let n = Vec3::new(0.0, 0.0, 1.0);
-        let c0 = zenith_geom::Circle3::new(center, radius, n, 0.0, std::f64::consts::FRAC_PI_2).unwrap();
-        let c1 = zenith_geom::Circle3::new(center, radius, n, std::f64::consts::FRAC_PI_2, std::f64::consts::PI).unwrap();
-        let c2 = zenith_geom::Circle3::new(center, radius, n, std::f64::consts::PI, 3.0 * std::f64::consts::FRAC_PI_2).unwrap();
-        let c3 = zenith_geom::Circle3::new(center, radius, n, 3.0 * std::f64::consts::FRAC_PI_2, 2.0 * std::f64::consts::PI).unwrap();
+        let c0 =
+            zenith_geom::Circle3::new(center, radius, n, 0.0, std::f64::consts::FRAC_PI_2).unwrap();
+        let c1 = zenith_geom::Circle3::new(
+            center,
+            radius,
+            n,
+            std::f64::consts::FRAC_PI_2,
+            std::f64::consts::PI,
+        )
+        .unwrap();
+        let c2 = zenith_geom::Circle3::new(
+            center,
+            radius,
+            n,
+            std::f64::consts::PI,
+            3.0 * std::f64::consts::FRAC_PI_2,
+        )
+        .unwrap();
+        let c3 = zenith_geom::Circle3::new(
+            center,
+            radius,
+            n,
+            3.0 * std::f64::consts::FRAC_PI_2,
+            2.0 * std::f64::consts::PI,
+        )
+        .unwrap();
 
         let p0 = c0.evaluate(0.0);
         let p1 = c1.evaluate(std::f64::consts::FRAC_PI_2);
@@ -232,4 +254,3 @@ fn test_loft_solid_circular_cone_frustum() {
         .expect("STEP import of circular loft solid should succeed");
     assert!(imported.outer_shell.validate_closed(&tol).is_valid());
 }
-

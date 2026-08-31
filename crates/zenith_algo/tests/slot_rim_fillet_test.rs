@@ -1,7 +1,5 @@
 use std::f64::consts::PI;
-use zenith_algo::{
-    DirectModeling, EdgeBlender, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{DirectModeling, EdgeBlender, MassCalculator, PrimitiveBuilder};
 use zenith_io::{StepExporter, StepImporter};
 use zenith_math::Tolerance;
 use zenith_tess::{tessellate_solid, TessellationParams};
@@ -23,7 +21,10 @@ fn test_slot_top_rim_fillet_exact_volume_and_watertight() {
     let before_mass = MassCalculator::compute_from_brep(&slot, &params());
 
     let blendable = DirectModeling::list_blendable_edges(&slot);
-    assert!(!blendable.is_empty(), "Should find blendable edges on slot prism rim");
+    assert!(
+        !blendable.is_empty(),
+        "Should find blendable edges on slot prism rim"
+    );
 
     // 天面凸稜（dihedral 90度）を探す
     let rim_edge = blendable

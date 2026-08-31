@@ -17,9 +17,7 @@
 
 use std::f64::consts::PI;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -107,9 +105,12 @@ fn a_solid_combined_with_itself_gives_itself() {
         }
 
         // 差は、返ったときだけ「空」を確かめます。
-        if let Ok(result) =
-            BooleanEngine::boolean_solids_exact_result(&solid, &solid.clone(), BooleanOpType::Difference, &tol)
-        {
+        if let Ok(result) = BooleanEngine::boolean_solids_exact_result(
+            &solid,
+            &solid.clone(),
+            BooleanOpType::Difference,
+            &tol,
+        ) {
             let measured = volume(&result.solids);
             if measured.abs() > expected * 2e-3 {
                 failures.push(format!(

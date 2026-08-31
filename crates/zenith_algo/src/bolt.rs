@@ -20,7 +20,11 @@ impl BoltBuilder {
         shank_radius: f64,
         shank_length: f64,
     ) -> Result<Solid, String> {
-        if across_flats <= 1e-9 || head_thickness <= 1e-9 || shank_radius <= 1e-9 || shank_length <= 1e-9 {
+        if across_flats <= 1e-9
+            || head_thickness <= 1e-9
+            || shank_radius <= 1e-9
+            || shank_length <= 1e-9
+        {
             return Err(format!(
                 "Bolt dimensions must be positive, got across_flats={across_flats}, head_thickness={head_thickness}, shank_radius={shank_radius}, shank_length={shank_length}"
             ));
@@ -41,11 +45,6 @@ impl BoltBuilder {
             Vec3::new(0.0, 0.0, head_thickness - 0.1),
         );
 
-        crate::BooleanEngine::boolean_solids_exact(
-            &head,
-            &shank,
-            crate::BooleanOpType::Union,
-            &tol,
-        )
+        crate::BooleanEngine::boolean_solids_exact(&head, &shank, crate::BooleanOpType::Union, &tol)
     }
 }

@@ -70,7 +70,6 @@ impl PatternBuilder {
             }
         }
         Ok(instances)
-
     }
 
     /// 直線パターンを複合Shape（Compound）として生成

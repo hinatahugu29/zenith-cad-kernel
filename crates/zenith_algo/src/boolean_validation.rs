@@ -148,9 +148,9 @@ impl BooleanResultVerifier {
                 } else {
                     format!("cavity shell {}", shell_index - 1)
                 };
-                report
-                    .errors
-                    .push(format!("result solid {index} has an invalid {label}: {first}"));
+                report.errors.push(format!(
+                    "result solid {index} has an invalid {label}: {first}"
+                ));
             }
         }
 
@@ -172,8 +172,7 @@ impl BooleanResultVerifier {
         // `tol.linear` の3乗より小さい体積は数値的にゼロと見なせるので、
         // そこを床にします。
         let zero_floor = tol.linear.powi(3);
-        let eps =
-            (params.volume_relative_tolerance * va.abs().max(vb.abs())).max(zero_floor);
+        let eps = (params.volume_relative_tolerance * va.abs().max(vb.abs())).max(zero_floor);
 
         // 「体積が正か」を見る閾値は、境界の比較に使う `eps` と**別の量で
         // 正規化しなければなりません**。両方に `eps`（大きいほうの立体で
@@ -287,9 +286,9 @@ impl BooleanResultVerifier {
             }
             BooleanOpType::Difference => {
                 if vr > va + eps {
-                    report
-                        .errors
-                        .push(format!("difference volume {vr:.6} exceeds operand A {va:.6}"));
+                    report.errors.push(format!(
+                        "difference volume {vr:.6} exceeds operand A {va:.6}"
+                    ));
                 }
                 if vr < va - vb - eps {
                     report.errors.push(format!(

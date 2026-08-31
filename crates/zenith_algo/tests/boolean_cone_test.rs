@@ -45,18 +45,13 @@ fn test_a_box_sitting_on_a_cone_unions_to_the_right_volume() {
         Vec3::new(-10.0, -10.0, 10.0),
     );
 
-    let result = BooleanEngine::boolean_solids_exact_result(
-        &cone,
-        &block,
-        BooleanOpType::Union,
-        &tol,
-    )
-    .expect("a box over a cone should union");
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&cone, &block, BooleanOpType::Union, &tol)
+            .expect("a box over a cone should union");
     assert_eq!(result.solids.len(), 1);
 
     // 円錐 + 箱 - 重なり。重なりは z = 10..20 の円錐台（半径 7 から 4）。
-    let expected =
-        frustum_volume(10.0, 4.0, 20.0) + 8000.0 - frustum_volume(7.0, 4.0, 10.0);
+    let expected = frustum_volume(10.0, 4.0, 20.0) + 8000.0 - frustum_volume(7.0, 4.0, 10.0);
     let measured = volume(&result.solids[0]);
     let relative = (measured - expected).abs() / expected;
     assert!(

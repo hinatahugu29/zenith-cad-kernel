@@ -483,7 +483,6 @@ impl NurbsCurve3 {
 
     /// パラメータ有効範囲 [u_min, u_max]
 
-
     pub fn param_range(&self) -> (f64, f64) {
         (
             self.knots.start_param(self.degree),
@@ -571,7 +570,11 @@ impl NurbsCurve3 {
     }
 
     /// 曲線を指定された制御点数と次数で滑らかに再サンプルし、統一されたNURBS曲線を生成
-    pub fn resample_clamped(&self, num_points: usize, target_degree: usize) -> Result<Self, String> {
+    pub fn resample_clamped(
+        &self,
+        num_points: usize,
+        target_degree: usize,
+    ) -> Result<Self, String> {
         let n = num_points.max(target_degree + 1);
         let (u_min, u_max) = self.param_range();
 
@@ -607,7 +610,11 @@ impl NurbsCurve3 {
             return Ok(curves.to_vec());
         }
 
-        let max_degree = curves.iter().map(|c| c.degree).max().unwrap_or(first.degree);
+        let max_degree = curves
+            .iter()
+            .map(|c| c.degree)
+            .max()
+            .unwrap_or(first.degree);
         let max_points = curves
             .iter()
             .map(|c| c.control_points.len())
@@ -626,9 +633,7 @@ impl NurbsCurve3 {
 
         Ok(compatible)
     }
-
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -687,7 +692,10 @@ mod tests {
         let circle = full_circle(10.0);
         let refined = circle.insert_knot(0.375, 1).expect("insert");
 
-        assert_eq!(refined.control_points.len(), circle.control_points.len() + 1);
+        assert_eq!(
+            refined.control_points.len(),
+            circle.control_points.len() + 1
+        );
         assert_eq!(refined.knots.knots.len(), circle.knots.knots.len() + 1);
 
         // 挿入に使った位置と互いに素な標本で測る。構成点の上だけで比べても
@@ -718,7 +726,10 @@ mod tests {
                 off_circle = off_circle.max(((p - Point3::origin()).norm() - r).abs());
             }
             assert!(worst < 1e-12, "split piece drifted by {worst}");
-            assert!(off_circle < 1e-12, "split piece left the circle by {off_circle}");
+            assert!(
+                off_circle < 1e-12,
+                "split piece left the circle by {off_circle}"
+            );
         }
     }
 

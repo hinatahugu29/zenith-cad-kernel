@@ -234,14 +234,8 @@ impl SectionSlicer {
                 // 補正は 0 になり、箱の断面は今までどおり厳密なままになる。
                 match refiner.section_point_between(start, end, plane_origin, normal, tol) {
                     Some(middle) => {
-                        signed_area += quadratic_area_gain(
-                            start,
-                            middle,
-                            end,
-                            plane_origin,
-                            axis_u,
-                            axis_v,
-                        );
+                        signed_area +=
+                            quadratic_area_gain(start, middle, end, plane_origin, axis_u, axis_v);
                         perimeter += quadratic_arc_length(start, middle, end);
                         refined_chord_count += 1;
                     }
@@ -502,7 +496,10 @@ fn triangle_plane_crossing(
             let t = d0 / (d0 - d1);
             let crossing = points[other[0]] + (points[other[1]] - points[other[0]]) * t;
             Some((
-                (points[vertex_index], SectionKey::Vertex(indices[vertex_index])),
+                (
+                    points[vertex_index],
+                    SectionKey::Vertex(indices[vertex_index]),
+                ),
                 (
                     crossing,
                     SectionKey::edge(indices[other[0]], indices[other[1]]),
@@ -851,7 +848,9 @@ impl<'a> SectionRefiner<'a> {
                 Some((u, v)) => zenith_geom::ExtremumEngine::point_to_surface_seeded(
                     point, surface, u, v, 64, parametric,
                 ),
-                None => { zenith_geom::ExtremumEngine::point_to_surface(point, surface, 64, parametric) },
+                None => {
+                    zenith_geom::ExtremumEngine::point_to_surface(point, surface, 64, parametric)
+                }
             }
             .ok()?;
 

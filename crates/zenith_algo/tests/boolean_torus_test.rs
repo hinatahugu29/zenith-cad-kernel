@@ -31,8 +31,7 @@ fn volume(solid: &Solid) -> f64 {
 /// sqrt(r^2 - z^2), so the volume is that integrated.
 fn torus_below(major: f64, minor: f64, height: f64) -> f64 {
     let antiderivative = |z: f64| {
-        0.5 * z * (minor * minor - z * z).sqrt()
-            + 0.5 * minor * minor * (z / minor).asin()
+        0.5 * z * (minor * minor - z * z).sqrt() + 0.5 * minor * minor * (z / minor).asin()
     };
     4.0 * std::f64::consts::PI * major * (antiderivative(height) - antiderivative(-minor))
 }
@@ -115,7 +114,10 @@ fn test_the_union_takes_the_annulus_out_of_the_face_it_comes_through() {
         .collect();
     assert_eq!(at_bottom.len(), 2, "the bottom face should fall into two");
     assert_eq!(
-        at_bottom.iter().filter(|face| !face.inner_wires.is_empty()).count(),
+        at_bottom
+            .iter()
+            .filter(|face| !face.inner_wires.is_empty())
+            .count(),
         1,
         "one of the two carries the hole the torus comes through"
     );

@@ -90,8 +90,10 @@ fn chains() -> Vec<Chain> {
             name: "(cylinder - cylinder) then cut by a box",
             first: || {
                 let upright = PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap();
-                let rotation =
-                    Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), std::f64::consts::FRAC_PI_2);
+                let rotation = Transform3::from_axis_angle(
+                    &Vec3::new(0.0, 1.0, 0.0),
+                    std::f64::consts::FRAC_PI_2,
+                );
                 let lying = BrepTransform::translate_solid(
                     &BrepTransform::transform_solid(
                         &PrimitiveBuilder::make_cylinder(6.0, 40.0).unwrap(),

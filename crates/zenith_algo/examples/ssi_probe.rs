@@ -37,8 +37,7 @@ fn cylinder_patch(
     };
     let corner = {
         let next = angle + std::f64::consts::FRAC_PI_2;
-        origin
-            + (x_axis * (angle.cos() + next.cos()) + y_axis * (angle.sin() + next.sin())) * r
+        origin + (x_axis * (angle.cos() + next.cos()) + y_axis * (angle.sin() + next.sin())) * r
     };
     let ring = [
         (at(angle, 1.0), 1.0),
@@ -83,10 +82,7 @@ fn sphere_patch(r: f64, centre: Point3) -> NurbsSurface3 {
             };
             vec![
                 ControlPoint3::new(centre + Vec3::new(radial, 0.0, height), *weight_u),
-                ControlPoint3::new(
-                    centre + Vec3::new(radial, radial, height),
-                    weight_u * w,
-                ),
+                ControlPoint3::new(centre + Vec3::new(radial, radial, height), weight_u * w),
                 ControlPoint3::new(centre + Vec3::new(0.0, radial, height), *weight_u),
             ]
         })
@@ -292,5 +288,4 @@ fn main() {
     println!("deviation = the fitted curve measured against both surfaces at positions coprime");
     println!("            with the ones it was interpolated through, where it is exact by");
     println!("            construction and would report zero for any curve at all");
-
 }

@@ -11,7 +11,10 @@ fn main() {
     let _p3 = solver1.add_point(0.0, 10.0);
     let (dof1, rank1, rem1) = solver1.degrees_of_freedom();
     let status1 = solver1.constraint_status();
-    println!("Case 1 (4自由点): Total DOF = {}, Rank = {}, Remaining DOF = {}, Status = {:?}", dof1, rank1, rem1, status1);
+    println!(
+        "Case 1 (4自由点): Total DOF = {}, Rank = {}, Remaining DOF = {}, Status = {:?}",
+        dof1, rank1, rem1, status1
+    );
 
     // ケース 2: 原点固定 + 正方形（完全拘束）
     let mut solver2 = SketchSolver::new();
@@ -47,7 +50,10 @@ fn main() {
     solver3.add_constraint(Constraint::TangentLineCircle(line, c));
     let (dof3, rank3, rem3) = solver3.degrees_of_freedom();
     let iters3 = solver3.solve(50, 1e-6).expect("solve tangent");
-    println!("Case 3 (直線-円接線): Total DOF = {}, Rank = {}, Remaining DOF = {}, Iters = {}", dof3, rank3, rem3, iters3);
+    println!(
+        "Case 3 (直線-円接線): Total DOF = {}, Rank = {}, Remaining DOF = {}, Iters = {}",
+        dof3, rank3, rem3, iters3
+    );
 
     // ケース 4: 冗長な拘束（過剰拘束）
     let mut solver4 = SketchSolver::new();
@@ -58,7 +64,10 @@ fn main() {
     solver4.add_constraint(Constraint::HorizontalDistance(p0, p1, 10.0)); // 冗長な拘束
     let (dof4, rank4, rem4) = solver4.degrees_of_freedom();
     let status4 = solver4.constraint_status();
-    println!("Case 4 (冗長拘束): Total DOF = {}, Rank = {}, Remaining DOF = {}, Status = {:?}", dof4, rank4, rem4, status4);
+    println!(
+        "Case 4 (冗長拘束): Total DOF = {}, Rank = {}, Remaining DOF = {}, Status = {:?}",
+        dof4, rank4, rem4, status4
+    );
 
     println!("--------------------------------------------------------------------------------");
     println!("every sketch constraint case evaluated with exact degrees of freedom");

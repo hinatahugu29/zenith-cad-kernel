@@ -751,7 +751,9 @@ impl DirectModeling {
                 ];
                 (b, t)
             }
-            _ => return Err("Edge index must be 0, 1, 2, or 3 for vertical box chamfer".to_string()),
+            _ => {
+                return Err("Edge index must be 0, 1, 2, or 3 for vertical box chamfer".to_string())
+            }
         };
 
         let vb: Vec<Vertex> = pb_pts.into_iter().map(Vertex::from_point).collect();
@@ -825,7 +827,6 @@ impl DirectModeling {
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)
     }
-
 
     /// 複数面の同時オフセット変形（Move / Offset Multiple Faces）
     pub fn offset_multiple_faces(solid: &Solid, offsets: &[(usize, f64)]) -> Result<Solid, String> {

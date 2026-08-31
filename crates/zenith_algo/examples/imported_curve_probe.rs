@@ -14,7 +14,10 @@ use zenith_io::StepImporter;
 fn main() {
     let path = Path::new("target/validation/occ_reference_cylinder_nurbs.step");
     let Ok(content) = std::fs::read_to_string(path) else {
-        println!("missing {}; run tools/occ_reference_export.py", path.display());
+        println!(
+            "missing {}; run tools/occ_reference_export.py",
+            path.display()
+        );
         return;
     };
 
@@ -75,7 +78,12 @@ fn main() {
         );
         println!(
             "    knots {:?}",
-            curve.knots.knots.iter().map(|k| (k * 1000.0).round() / 1000.0).collect::<Vec<_>>()
+            curve
+                .knots
+                .knots
+                .iter()
+                .map(|k| (k * 1000.0).round() / 1000.0)
+                .collect::<Vec<_>>()
         );
         println!(
             "    weights {:?}",
@@ -85,8 +93,6 @@ fn main() {
                 .map(|cp| (cp.weight * 1000.0).round() / 1000.0)
                 .collect::<Vec<_>>()
         );
-        println!(
-            "    length {length:.4}, radius from axis {min_radius:.4} to {max_radius:.4}"
-        );
+        println!("    length {length:.4}, radius from axis {min_radius:.4} to {max_radius:.4}");
     }
 }

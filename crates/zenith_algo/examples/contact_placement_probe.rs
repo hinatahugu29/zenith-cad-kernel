@@ -46,8 +46,8 @@
 //!   cargo run --release -p zenith_algo --example contact_placement_probe
 //! ```
 
-use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, PrimitiveBuilder};
 use std::f64::consts::FRAC_PI_2;
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, PrimitiveBuilder};
 
 use zenith_math::{Tolerance, Transform3, Vec3};
 use zenith_topo::Solid;
@@ -385,11 +385,10 @@ fn cases() -> Vec<Case> {
 
     // 円錐を、軸のまわりにも回してから傾ける。上の `apex tilted 45` は
     // 傾けるだけなので、**継ぎ目は切断平面に対して同じ位置**にあります。
-    let spin_then_tilt = Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), 45f64.to_radians())
-        .compose(&Transform3::from_axis_angle(
-            &Vec3::new(0.0, 0.0, 1.0),
-            37f64.to_radians(),
-        ));
+    let spin_then_tilt =
+        Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), 45f64.to_radians()).compose(
+            &Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), 37f64.to_radians()),
+        );
     out.push(Case {
         name: "box x cone (seam spun then tilted)",
         why: "円錐を軸まわりに 37 度回してから 45 度傾ける。継ぎ目が切断平面から外れる",
@@ -405,11 +404,10 @@ fn cases() -> Vec<Case> {
 
     // トーラスを、穴の軸が箱の稜を向くように回す。上の `inclined 25` は
     // 1軸まわりなので、穴の軸は座標平面の中に残っています。
-    let torus_two_axes = Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), 41f64.to_radians())
-        .compose(&Transform3::from_axis_angle(
-            &Vec3::new(1.0, 0.0, 0.0),
-            33f64.to_radians(),
-        ));
+    let torus_two_axes =
+        Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), 41f64.to_radians()).compose(
+            &Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), 33f64.to_radians()),
+        );
     out.push(Case {
         name: "box x torus (two axes)",
         why: "トーラスを2軸で回す。穴の軸が座標平面から外れ、継ぎ目も切断面から外れる",
@@ -586,7 +584,8 @@ fn cases() -> Vec<Case> {
     // **蓋を重ねると和が断られます**（非多様体の稜 16本）。答えは A その
     // ものなので、これは**穴**です。接する線の扱い（4-184、4-190）は
     // 効いていて、原因は同一平面の蓋のほうにあります。
-    let tall_thin_cylinder = PrimitiveBuilder::make_cylinder(2.0, 40.0).expect("tall thin cylinder");
+    let tall_thin_cylinder =
+        PrimitiveBuilder::make_cylinder(2.0, 40.0).expect("tall thin cylinder");
     out.push(Case {
         name: "cylinder x cylinder (internally tangent, caps coplanar)",
         why: "上と同じ内接に、**蓋も同一平面**という条件を足す（接触が2種類重なる）",
@@ -772,11 +771,7 @@ fn cases() -> Vec<Case> {
         why: "トーラス（芯 12、管 4）の管に、半径 6 の球を食い込ませる。どちらもパッチに割れている",
         a: torus.clone(),
         b: shifted(&sphere_of(6.0), 12.0, 0.0, 0.0),
-        note: [
-            "実測: 3演算とも多様体",
-            "同上",
-            "同上",
-        ],
+        note: ["実測: 3演算とも多様体", "同上", "同上"],
     });
 
     // トーラス2つを、軸を直交させて絡ませる。**いちばんパッチが多い組**です。
@@ -922,7 +917,6 @@ fn cases() -> Vec<Case> {
         note: ["実測: **点で触れているだけ**。和は立体2つ、差は1つ、積は空", "同上", "同上"],
     });
     let _ = &torus_upright_b;
-
 
     out
 }
@@ -1126,7 +1120,10 @@ fn main() {
                 volumes[1].unwrap(),
                 volumes[2].unwrap(),
             );
-            let (va, vb) = (total_volume(std::slice::from_ref(&case.a)), total_volume(std::slice::from_ref(&case.b)));
+            let (va, vb) = (
+                total_volume(std::slice::from_ref(&case.a)),
+                total_volume(std::slice::from_ref(&case.b)),
+            );
             let scale = (va + vb).abs().max(1.0);
             let residuals = [
                 ((union + intersection) - (va + vb)).abs() / scale,

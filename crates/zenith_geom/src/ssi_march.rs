@@ -294,7 +294,10 @@ impl IntersectionMarcher {
         for index in 1..grid_a.len().min(steps + 2) {
             spacing = spacing.max((grid_a[index].2 - grid_a[index - 1].2).norm());
         }
-        if pairs.first().map(|(distance, _, _)| *distance).unwrap_or(f64::INFINITY)
+        if pairs
+            .first()
+            .map(|(distance, _, _)| *distance)
+            .unwrap_or(f64::INFINITY)
             > spacing * 2.0
         {
             return Vec::new();
@@ -524,7 +527,9 @@ impl IntersectionMarcher {
                 }
                 None => {
                     if explain {
-                        eprintln!("LANDWHY(A) index {index} target {target}: extremum did not converge");
+                        eprintln!(
+                            "LANDWHY(A) index {index} target {target}: extremum did not converge"
+                        );
                     }
                 }
             }
@@ -690,12 +695,7 @@ impl IntersectionMarcher {
             }
 
             // 4本目の行は中心差分。刻みはパラメータの幅に合わせる。
-            let spans = [
-                u_max - u_min,
-                v_max - v_min,
-                s_max - s_min,
-                t_max - t_min,
-            ];
+            let spans = [u_max - u_min, v_max - v_min, s_max - s_min, t_max - t_min];
             let mut row = [0.0f64; 4];
             for index in 0..4 {
                 let step = (spans[index].abs().max(1.0)) * 1e-4;
@@ -824,7 +824,12 @@ impl IntersectionMarcher {
     ) -> Option<f64> {
         let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
         let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
-        let bounds = [(u_min, u_max), (v_min, v_max), (s_min, s_max), (t_min, t_max)];
+        let bounds = [
+            (u_min, u_max),
+            (v_min, v_max),
+            (s_min, s_max),
+            (t_min, t_max),
+        ];
 
         // **まず、縁そのものへ置きます。** 判定の margin ぶんのずれを残さない。
         for index in 0..4 {
@@ -936,9 +941,8 @@ impl IntersectionMarcher {
                 jacobian[(5, index)] = slope.z;
             }
 
-            let residual = nalgebra::SVector::<f64, 6>::new(
-                gap.x, gap.y, gap.z, cross.x, cross.y, cross.z,
-            );
+            let residual =
+                nalgebra::SVector::<f64, 6>::new(gap.x, gap.y, gap.z, cross.x, cross.y, cross.z);
             let transposed = jacobian.transpose();
             let normal_matrix = transposed * jacobian;
             let right = -(transposed * residual);
@@ -1314,7 +1318,9 @@ impl IntersectionMarcher {
             points.push(Self::sample(s1, s2, &state));
 
             let here = s1.evaluate(state[0], state[1]);
-            if index > 2 && travelled > step.abs() * 3.0 && (here - start_point).norm() <= step.abs()
+            if index > 2
+                && travelled > step.abs() * 3.0
+                && (here - start_point).norm() <= step.abs()
             {
                 closed = true;
                 break;
@@ -1371,12 +1377,11 @@ impl IntersectionMarcher {
                         // だけの点でも「0」になります。過剰決定系を最小二乗で
                         // 解けば、向きを選ばずに済みます。届かなければ、
                         // 従来どおり接線向きへ落とす解き方に落とします。
-                        let mut solved = Self::newton_to_tangency_least_squares(
-                            s1, s2, &mut refined, tol,
-                        )
-                        .is_some()
-                            && inside(&refined)
-                            && stays(&refined);
+                        let mut solved =
+                            Self::newton_to_tangency_least_squares(s1, s2, &mut refined, tol)
+                                .is_some()
+                                && inside(&refined)
+                                && stays(&refined);
                         if !solved {
                             refined = state;
                             solved = Self::newton_to_tangency(s1, s2, &mut refined, heading, tol)
@@ -1384,8 +1389,7 @@ impl IntersectionMarcher {
                                 && inside(&refined)
                                 && stays(&refined);
                         }
-                        if solved
-                        {
+                        if solved {
                             let here = s1.evaluate(refined[0], refined[1]);
                             let previous = s1.evaluate(state[0], state[1]);
                             let travel = (here - previous).norm();
@@ -1483,7 +1487,11 @@ impl IntersectionMarcher {
     ) -> Option<(crate::nurbs_curve::NurbsCurve3, f64)> {
         let mut points: Vec<Point3> = Vec::with_capacity(marched.points.len());
         for sample in &marched.points {
-            if points.last().map(|p| (*p - sample.point).norm() > 1e-9).unwrap_or(true) {
+            if points
+                .last()
+                .map(|p| (*p - sample.point).norm() > 1e-9)
+                .unwrap_or(true)
+            {
                 points.push(sample.point);
             }
         }
@@ -1504,15 +1512,13 @@ impl IntersectionMarcher {
             // その点列を通るので、答えはすぐ隣にある。粗サンプリングから
             // 始めると1回あたり 16 x 16 の評価が余分に走り、面の組ごとに
             // これを回すブーリアンでは効いてくる。
-            let nearest =
-                ((fraction * (marched.points.len() - 1) as f64).round() as usize)
-                    .min(marched.points.len() - 1);
+            let nearest = ((fraction * (marched.points.len() - 1) as f64).round() as usize)
+                .min(marched.points.len() - 1);
             let seed = &marched.points[nearest];
             for (surface, uv) in [(s1, seed.uv1), (s2, seed.uv2)] {
-                let projection = ExtremumEngine::point_to_surface_seeded(
-                    point, surface, uv.0, uv.1, 64, 1e-13,
-                )
-                .ok()?;
+                let projection =
+                    ExtremumEngine::point_to_surface_seeded(point, surface, uv.0, uv.1, 64, 1e-13)
+                        .ok()?;
                 worst = worst.max(projection.distance);
             }
         }
@@ -1712,7 +1718,7 @@ impl IntersectionMarcher {
                     ),
                     // 最初の1点だけは、どこから始めるべきか分からないので
                     // 全域を粗く見る。
-                    None => { ExtremumEngine::point_to_surface(sample.point, surface, 64, 1e-13) },
+                    None => ExtremumEngine::point_to_surface(sample.point, surface, 64, 1e-13),
                 };
                 if let Ok(projection) = projection {
                     worst = worst.max(projection.distance);
@@ -1741,7 +1747,13 @@ mod tests {
     use zenith_math::{Point3, Tolerance, Vec3};
 
     /// 軸 `axis` まわり、半径 `r` の円柱の四半パッチ。
-    fn cylinder_quarter(r: f64, length: f64, axis: Vec3, x_axis: Vec3, origin: Point3) -> NurbsSurface3 {
+    fn cylinder_quarter(
+        r: f64,
+        length: f64,
+        axis: Vec3,
+        x_axis: Vec3,
+        origin: Point3,
+    ) -> NurbsSurface3 {
         let w = FRAC_1_SQRT_2;
         let y_axis = axis.cross(&x_axis).normalize();
         let ring = [
@@ -1832,9 +1844,18 @@ mod tests {
             worst_first = worst_first.max(((p.x * p.x + p.y * p.y).sqrt() - radius).abs());
             worst_second = worst_second.max(((p.y * p.y + p.z * p.z).sqrt() - radius).abs());
         }
-        assert!(worst_plane < 1e-9, "the curve left the plane z = x by {worst_plane:.3e}");
-        assert!(worst_first < 1e-9, "the curve left the first cylinder by {worst_first:.3e}");
-        assert!(worst_second < 1e-9, "the curve left the second cylinder by {worst_second:.3e}");
+        assert!(
+            worst_plane < 1e-9,
+            "the curve left the plane z = x by {worst_plane:.3e}"
+        );
+        assert!(
+            worst_first < 1e-9,
+            "the curve left the first cylinder by {worst_first:.3e}"
+        );
+        assert!(
+            worst_second < 1e-9,
+            "the curve left the second cylinder by {worst_second:.3e}"
+        );
         assert!(curve.worst_off_surface < 1e-9);
     }
 
@@ -1855,8 +1876,9 @@ mod tests {
             Point3::new(0.0, 0.0, 0.0),
         );
 
-        let curve = IntersectionMarcher::march_from_best_seed(&sphere, &cylinder, 16, 0.3, 4096, &tol)
-            .expect("the sphere and the cylinder do meet");
+        let curve =
+            IntersectionMarcher::march_from_best_seed(&sphere, &cylinder, 16, 0.3, 4096, &tol)
+                .expect("the sphere and the cylinder do meet");
 
         let mut worst_height: f64 = 0.0;
         let mut worst_radius: f64 = 0.0;

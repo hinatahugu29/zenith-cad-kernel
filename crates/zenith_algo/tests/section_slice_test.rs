@@ -292,9 +292,8 @@ fn test_curved_sections_land_on_the_analytic_value_not_merely_near_it() {
     ];
 
     for (name, solid, origin, expected_area, expected_perimeter) in cases {
-        let result =
-            SectionSlicer::slice_solid(&solid, origin, Vec3::new(0.0, 0.0, 1.0), &tol)
-                .unwrap_or_else(|err| panic!("{name} section: {err}"));
+        let result = SectionSlicer::slice_solid(&solid, origin, Vec3::new(0.0, 0.0, 1.0), &tol)
+            .unwrap_or_else(|err| panic!("{name} section: {err}"));
 
         let area_error = relative_error(result.total_area, expected_area);
         let perimeter_error = relative_error(result.total_perimeter, expected_perimeter);
@@ -440,8 +439,8 @@ fn a_plane_grazing_a_face_is_refused_by_name() {
 
     // 直方体の座標には丸め誤差が無いので、公差ぶん手前で切っても分類は
     // 割れない。**ここが断られたら、締めすぎ。**
-    let just_above = slice_at(tol.linear)
-        .expect("exact coordinates do not split, so this is still answerable");
+    let just_above =
+        slice_at(tol.linear).expect("exact coordinates do not split, so this is still answerable");
     assert!(
         (just_above.total_area - 600.0).abs() < 1e-9,
         "got {}",

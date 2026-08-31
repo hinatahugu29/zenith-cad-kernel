@@ -36,7 +36,6 @@ impl std::fmt::Display for SolidValidationError {
     }
 }
 
-
 impl std::error::Error for SolidValidationError {}
 
 impl Solid {

@@ -78,9 +78,13 @@ fn a_sliver_of_overlap_is_still_removed() {
 fn the_matching_intersection_is_the_sliver() {
     let tol = Tolerance::default();
     let (cone, block) = cone_and_corner_block();
-    let result =
-        BooleanEngine::boolean_solids_exact_result(&cone, &block, BooleanOpType::Intersection, &tol)
-            .expect("the intersection must be produced");
+    let result = BooleanEngine::boolean_solids_exact_result(
+        &cone,
+        &block,
+        BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("the intersection must be produced");
     let got = volume(&result.solids);
     let relative = (got - OCC_INTERSECTION).abs() / OCC_INTERSECTION;
     assert!(
@@ -98,9 +102,13 @@ fn the_two_halves_add_back_up_to_the_cone() {
     let difference =
         BooleanEngine::boolean_solids_exact_result(&cone, &block, BooleanOpType::Difference, &tol)
             .expect("difference");
-    let intersection =
-        BooleanEngine::boolean_solids_exact_result(&cone, &block, BooleanOpType::Intersection, &tol)
-            .expect("intersection");
+    let intersection = BooleanEngine::boolean_solids_exact_result(
+        &cone,
+        &block,
+        BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("intersection");
 
     let total = volume(&difference.solids) + volume(&intersection.solids);
     let relative = (total - CONE_VOLUME).abs() / CONE_VOLUME;
@@ -120,13 +128,9 @@ fn a_block_that_misses_entirely_leaves_the_cone_alone() {
         &PrimitiveBuilder::make_box(9.0, 9.0, 9.0).expect("block"),
         Vec3::new(50.0, 50.0, 50.0),
     );
-    let result = BooleanEngine::boolean_solids_exact_result(
-        &cone,
-        &far,
-        BooleanOpType::Difference,
-        &tol,
-    )
-    .expect("a difference with a solid that is nowhere near must succeed");
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&cone, &far, BooleanOpType::Difference, &tol)
+            .expect("a difference with a solid that is nowhere near must succeed");
     let got = volume(&result.solids);
     let relative = (got - CONE_VOLUME).abs() / CONE_VOLUME;
     assert!(

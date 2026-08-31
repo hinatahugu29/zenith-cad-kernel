@@ -68,7 +68,9 @@ fn test_sketch_over_constrained_detection() {
 
     let status = solver.constraint_status();
     match status {
-        SketchConstraintStatus::OverConstrained { redundant_constraints } => {
+        SketchConstraintStatus::OverConstrained {
+            redundant_constraints,
+        } => {
             assert_eq!(redundant_constraints, 1);
         }
         _ => panic!("Expected OverConstrained status, got {:?}", status),

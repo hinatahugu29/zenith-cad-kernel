@@ -44,10 +44,7 @@ fn probe(name: &str, solid: &Solid, expected_faces: usize) -> bool {
         Ok((merged, report)) => {
             let after_volume = volume_of(&merged);
             let drift = (after_volume - before_volume).abs() / before_volume.abs().max(1e-12);
-            let valid = merged
-                .outer_shell
-                .validate_closed(&tol)
-                .is_valid();
+            let valid = merged.outer_shell.validate_closed(&tol).is_valid();
             println!(
                 "{name:<34} {:>3} -> {:>3} faces  {:>3} -> {:>3} edges  (want {expected_faces})  volume drift {drift:.2e}  closed {valid}  blendable {} -> {}",
                 solid.outer_shell.faces.len(),
@@ -97,8 +94,8 @@ fn main() {
         &PrimitiveBuilder::make_cylinder(6.0, 20.0).unwrap(),
         Vec3::new(20.0, 20.0, 0.0),
     );
-    let bored =
-        BooleanEngine::boolean_solids_exact(&boxed, &bore, BooleanOpType::Difference, &tol).unwrap();
+    let bored = BooleanEngine::boolean_solids_exact(&boxed, &bore, BooleanOpType::Difference, &tol)
+        .unwrap();
     all_good &= probe("box minus a bore", &bored, 10);
 
     let raised = BrepTransform::translate_solid(

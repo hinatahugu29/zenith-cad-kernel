@@ -20,8 +20,8 @@ fn test_extruded_rounded_rectangle_with_hole() {
 
     let outer_wire = ProfileBuilder::make_rounded_rectangle(w, h, r_corner, center, normal, x_axis)
         .expect("rounded rect wire");
-    let hole_wire = ProfileBuilder::make_circle(r_hole, center, normal, x_axis)
-        .expect("circle hole wire");
+    let hole_wire =
+        ProfileBuilder::make_circle(r_hole, center, normal, x_axis).expect("circle hole wire");
 
     let solid = ExtrudeBuilder::extrude_face_with_holes(
         &outer_wire,

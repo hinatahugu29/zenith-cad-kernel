@@ -37,7 +37,10 @@ fn test_open_box_shelling() {
 
     let step_str = StepExporter::export_solid_to_string(&solid, "OpenBox");
     let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
-    assert!(reimported.outer_shell.validate_closed(&tol).is_valid(), "Reimported solid must be valid closed");
+    assert!(
+        reimported.outer_shell.validate_closed(&tol).is_valid(),
+        "Reimported solid must be valid closed"
+    );
 }
 
 #[test]
@@ -53,8 +56,8 @@ fn test_open_cylinder_shelling() {
         "Open-cylinder validation failed"
     );
 
-    let expected_vol = (PI * radius * radius * height)
-        - (PI * (radius - t) * (radius - t) * (height - t));
+    let expected_vol =
+        (PI * radius * radius * height) - (PI * (radius - t) * (radius - t) * (height - t));
     let params = TessellationParams {
         u_divisions: 48,
         v_divisions: 48,
@@ -73,7 +76,10 @@ fn test_open_cylinder_shelling() {
 
     let step_str = StepExporter::export_solid_to_string(&solid, "OpenCylinder");
     let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
-    assert!(reimported.outer_shell.validate_closed(&tol).is_valid(), "Reimported solid must be valid closed");
+    assert!(
+        reimported.outer_shell.validate_closed(&tol).is_valid(),
+        "Reimported solid must be valid closed"
+    );
 }
 
 #[test]
@@ -84,7 +90,8 @@ fn test_open_slot_prism_shelling() {
     let height = 35.0;
     let t = 2.0;
 
-    let solid = ShellingBuilder::make_open_slot_prism(length, radius, height, t).expect("open slot tray");
+    let solid =
+        ShellingBuilder::make_open_slot_prism(length, radius, height, t).expect("open slot tray");
     assert!(
         solid.outer_shell.validate_closed(&tol).is_valid(),
         "Open-slot-prism validation failed"
@@ -116,5 +123,8 @@ fn test_open_slot_prism_shelling() {
 
     let step_str = StepExporter::export_solid_to_string(&solid, "OpenSlotTray");
     let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
-    assert!(reimported.outer_shell.validate_closed(&tol).is_valid(), "Reimported solid must be valid closed");
+    assert!(
+        reimported.outer_shell.validate_closed(&tol).is_valid(),
+        "Reimported solid must be valid closed"
+    );
 }

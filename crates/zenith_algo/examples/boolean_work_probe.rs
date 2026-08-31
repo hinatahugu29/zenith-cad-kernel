@@ -10,8 +10,10 @@ fn main() {
     let tol = Tolerance::default();
     let upright = PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap();
     // boolean_envelope の "cylinder x cylinder (perpendicular cross)" と同じ配置。
-    let rotation =
-        zenith_math::Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), std::f64::consts::FRAC_PI_2);
+    let rotation = zenith_math::Transform3::from_axis_angle(
+        &Vec3::new(0.0, 1.0, 0.0),
+        std::f64::consts::FRAC_PI_2,
+    );
     let along_x = BrepTransform::transform_solid(
         &PrimitiveBuilder::make_cylinder(6.0, 40.0).unwrap(),
         &rotation,
@@ -31,8 +33,14 @@ fn main() {
 
         let coarse_cost = work.point_surface_coarse_searches * 353;
         let marching_cost = work.marching_newton_iterations * 2;
-        println!("=== crossed cylinders, {name} ({})", if outcome.is_ok() { "ok" } else { "ERROR" });
-        println!("  surface evaluations          {:>12}", work.surface_evaluations);
+        println!(
+            "=== crossed cylinders, {name} ({})",
+            if outcome.is_ok() { "ok" } else { "ERROR" }
+        );
+        println!(
+            "  surface evaluations          {:>12}",
+            work.surface_evaluations
+        );
         println!(
             "    of which coarse searches   {:>12}  ({} searches x 353)",
             coarse_cost, work.point_surface_coarse_searches
@@ -56,8 +64,7 @@ fn main() {
             "  projection Newton {} iterations, {} damping trials ({:.1} trials per iteration)",
             work.projection_newton_iterations,
             work.projection_damping_trials,
-            work.projection_damping_trials as f64
-                / work.projection_newton_iterations.max(1) as f64
+            work.projection_damping_trials as f64 / work.projection_newton_iterations.max(1) as f64
         );
         println!(
             "    those cost about {} evaluations ({} iterations + {} trials)",

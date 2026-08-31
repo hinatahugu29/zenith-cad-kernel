@@ -10,8 +10,8 @@ fn test_slot_prism_exact_volume_and_area() {
     let radius = 5.0;
     let height = 30.0;
 
-    let slot = PrimitiveBuilder::make_slot_prism(length, radius, height)
-        .expect("slot prism should build");
+    let slot =
+        PrimitiveBuilder::make_slot_prism(length, radius, height).expect("slot prism should build");
 
     // 閉多様体検証
     let valid = slot.outer_shell.validate_closed(&tol);
@@ -34,7 +34,10 @@ fn test_slot_prism_exact_volume_and_area() {
         + (2.0 * length + 2.0 * PI * radius) * height;
     let actual_area = mass.surface_area;
     let area_err = (actual_area - expected_area).abs() / expected_area;
-    assert!(area_err < 1e-4, "Area error {area_err:.3e} exceeds 1e-4 (actual {actual_area}, expected {expected_area})");
+    assert!(
+        area_err < 1e-4,
+        "Area error {area_err:.3e} exceeds 1e-4 (actual {actual_area}, expected {expected_area})"
+    );
 
     // メッシュ水密性検証
     let mesh = tessellate_solid(&slot, &params);

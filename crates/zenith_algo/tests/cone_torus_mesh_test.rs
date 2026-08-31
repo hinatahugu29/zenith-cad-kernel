@@ -95,8 +95,8 @@ fn the_gap_between_an_edge_curve_end_and_its_vertex_stays_where_it_was_measured(
                             (0.0, oriented.start_vertex().point),
                             (1.0, oriented.end_vertex().point),
                         ] {
-                            worst = worst
-                                .max((oriented.evaluate_normalized(fraction) - vertex).norm());
+                            worst =
+                                worst.max((oriented.evaluate_normalized(fraction) - vertex).norm());
                         }
                     }
                 }

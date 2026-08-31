@@ -128,8 +128,10 @@ fn main() {
             // 20^3 の箱を半径6の円柱が貫通する。穴の体積は pi*36*20。
             // 円柱は高さ40なので、箱の外に出ている分は pi*36*40 - pi*36*20。
             expected: [
-                Some(8000.0 + std::f64::consts::PI * 36.0 * 40.0
-                    - std::f64::consts::PI * 36.0 * 20.0),
+                Some(
+                    8000.0 + std::f64::consts::PI * 36.0 * 40.0
+                        - std::f64::consts::PI * 36.0 * 20.0,
+                ),
                 Some(8000.0 - std::f64::consts::PI * 36.0 * 20.0),
                 Some(std::f64::consts::PI * 36.0 * 20.0),
             ],
@@ -145,8 +147,10 @@ fn main() {
             },
             // 差 = 8000 - pi*36*10、積 = pi*36*10
             expected: [
-                Some(8000.0 + std::f64::consts::PI * 36.0 * 25.0
-                    - std::f64::consts::PI * 36.0 * 10.0),
+                Some(
+                    8000.0 + std::f64::consts::PI * 36.0 * 25.0
+                        - std::f64::consts::PI * 36.0 * 10.0,
+                ),
                 Some(8000.0 - std::f64::consts::PI * 36.0 * 10.0),
                 Some(std::f64::consts::PI * 36.0 * 10.0),
             ],
@@ -167,8 +171,10 @@ fn main() {
                 shifted(&along_x, -10.0, 10.0, 10.0)
             },
             expected: [
-                Some(8000.0 + std::f64::consts::PI * 25.0 * 40.0
-                    - std::f64::consts::PI * 25.0 * 20.0),
+                Some(
+                    8000.0 + std::f64::consts::PI * 25.0 * 40.0
+                        - std::f64::consts::PI * 25.0 * 20.0,
+                ),
                 Some(8000.0 - std::f64::consts::PI * 25.0 * 20.0),
                 Some(std::f64::consts::PI * 25.0 * 20.0),
             ],
@@ -182,8 +188,10 @@ fn main() {
                 shifted(&drill, 8.0, 12.0, -10.0)
             },
             expected: [
-                Some(8000.0 + std::f64::consts::PI * 25.0 * 40.0
-                    - std::f64::consts::PI * 25.0 * 20.0),
+                Some(
+                    8000.0 + std::f64::consts::PI * 25.0 * 40.0
+                        - std::f64::consts::PI * 25.0 * 20.0,
+                ),
                 Some(8000.0 - std::f64::consts::PI * 25.0 * 20.0),
                 Some(std::f64::consts::PI * 25.0 * 20.0),
             ],
@@ -310,13 +318,8 @@ fn main() {
                         .iter()
                         .all(|s| s.outer_shell.validate_closed(&tol).is_valid());
 
-                    let gate = BooleanResultVerifier::verify(
-                        &case.a,
-                        &case.b,
-                        &result.solids,
-                        *op,
-                        &tol,
-                    );
+                    let gate =
+                        BooleanResultVerifier::verify(&case.a, &case.b, &result.solids, *op, &tol);
 
                     let mut notes = Vec::new();
                     notes.push(format!("{} solid(s)", result.solids.len()));
@@ -325,9 +328,7 @@ fn main() {
                         if gate.is_valid() { "pass" } else { "REJECT" }
                     ));
                     if !gate.is_valid() {
-                        notes.push(
-                            gate.errors[0].chars().take(58).collect::<String>(),
-                        );
+                        notes.push(gate.errors[0].chars().take(58).collect::<String>());
                     }
                     if !closed {
                         notes.push("SHELL NOT VALID".to_string());

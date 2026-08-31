@@ -13,10 +13,10 @@
 use std::f64::consts::FRAC_1_SQRT_2;
 
 use zenith_algo::{FaceSplitter, MassCalculator};
-use zenith_tess::TessellationParams;
 use zenith_geom::{ControlPoint3, IntersectionMarcher, KnotVector, NurbsCurve3, NurbsSurface3};
 use zenith_math::{Point3, Tolerance};
-use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Orientation, Vertex, Wire};
+use zenith_tess::TessellationParams;
+use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Vertex, Wire};
 
 /// z 軸まわり、中心 `centre`、半径 `r`、高さ `z_low..z_high` の円柱の
 /// 四半パッチと、その境界ワイヤ。
@@ -121,8 +121,7 @@ fn sphere_octant(r: f64) -> NurbsSurface3 {
 fn a_cylinder_patch_splits_along_its_intersection_with_a_sphere() {
     let tol = Tolerance::default();
     let sphere = sphere_octant(12.0);
-    let (cylinder, face) =
-        cylinder_quarter_face(Point3::new(3.0, 0.0, 0.0), 5.0, -20.0, 20.0);
+    let (cylinder, face) = cylinder_quarter_face(Point3::new(3.0, 0.0, 0.0), 5.0, -20.0, 20.0);
 
     // 1. 交線を辿り、要求した精度で1本の曲線にする。
     let (curve, marched, deviation) =

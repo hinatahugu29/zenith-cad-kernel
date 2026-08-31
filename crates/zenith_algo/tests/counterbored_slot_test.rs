@@ -18,16 +18,7 @@ fn test_counterbored_slot_box() {
     let cy = 30.0;
 
     let solid = HoleBuilder::make_counterbored_slot_box(
-        box_w,
-        box_d,
-        box_h,
-        slot_l,
-        slot_r,
-        cb_l,
-        cb_r,
-        cb_d,
-        cx,
-        cy,
+        box_w, box_d, box_h, slot_l, slot_r, cb_l, cb_r, cb_d, cx, cy,
     )
     .expect("counterbored slot box");
 

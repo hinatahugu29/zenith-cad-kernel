@@ -160,6 +160,9 @@ fn main() {
     );
     println!();
     println!("distance and overlap are measured on the tessellated surfaces at");
-    println!("{} divisions. A curved surface becomes an inscribed polygon, so the", InterferenceChecker::DEFAULT_DIVISIONS);
+    println!(
+        "{} divisions. A curved surface becomes an inscribed polygon, so the",
+        InterferenceChecker::DEFAULT_DIVISIONS
+    );
     println!("distance reads slightly long and the overlap slightly short.");
 }

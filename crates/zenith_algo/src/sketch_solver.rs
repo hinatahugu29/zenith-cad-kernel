@@ -512,8 +512,9 @@ impl SketchSolver {
             };
         }
 
-        let free_jacobian =
-            DMatrix::from_fn(j.nrows(), total_dof, |row, column| j[(row, free_columns[column])]);
+        let free_jacobian = DMatrix::from_fn(j.nrows(), total_dof, |row, column| {
+            j[(row, free_columns[column])]
+        });
 
         // 自由変数に何も掛けていない式（`add_fixed_point` が入れる FixedPoint の
         // 2本など）は、制限したヤコビアンでは丸ごとゼロ行になる。階数には

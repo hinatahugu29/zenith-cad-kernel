@@ -29,7 +29,10 @@ impl MirrorBuilder {
         let new_solid = Solid::new(mirrored_outer, mirrored_inners);
         let report = new_solid.outer_shell.validate_closed(tol);
         if !report.is_valid() {
-            return Err(format!("Mirrored solid validation failed: {:?}", report.errors));
+            return Err(format!(
+                "Mirrored solid validation failed: {:?}",
+                report.errors
+            ));
         }
         Ok(new_solid)
     }
@@ -205,7 +208,6 @@ impl MirrorBuilder {
                 };
                 Ok(FaceGeometry::Nurbs(s))
             }
-
 
             FaceGeometry::Coons(patch) => {
                 let c0 = Self::mirror_nurbs_curve(&patch.c0, plane_origin, plane_normal);

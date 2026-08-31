@@ -29,9 +29,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
 use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, DirectModeling, EdgeBlender, EdgeKind,
-    FaceMerger, InterferenceChecker, MassCalculator, MirrorBuilder, PrimitiveBuilder, Sewer,
-    StepInterop,
+    BooleanEngine, BooleanOpType, BrepTransform, DirectModeling, EdgeBlender, EdgeKind, FaceMerger,
+    InterferenceChecker, MassCalculator, MirrorBuilder, PrimitiveBuilder, Sewer, StepInterop,
 };
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -449,7 +448,10 @@ impl PySolid {
     /// 共有されていない」箇所の数。ここが 0 でない立体には稜を選ぶ演算が
     /// 掛からない。`sewn()` で直せる。
     pub fn validate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let report = self.solid.outer_shell.validate_closed(&Tolerance::default());
+        let report = self
+            .solid
+            .outer_shell
+            .validate_closed(&Tolerance::default());
         let out = PyDict::new(py);
         out.set_item("valid", report.is_valid())?;
         out.set_item("face_count", report.face_count)?;
@@ -488,8 +490,8 @@ impl PySolid {
 
     /// 整理したら面と稜がいくつになるかを、実際に整理せずに見る
     pub fn simplify_report<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let (_solid, report) = FaceMerger::simplify_solid(&self.solid, &Tolerance::default())
-            .map_err(invalid)?;
+        let (_solid, report) =
+            FaceMerger::simplify_solid(&self.solid, &Tolerance::default()).map_err(invalid)?;
         let out = PyDict::new(py);
         out.set_item("faces_before", report.faces_before)?;
         out.set_item("faces_after", report.faces_after)?;

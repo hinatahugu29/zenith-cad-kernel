@@ -59,8 +59,7 @@ fn probe(name: &str, solid: &Solid) {
         }
 
         println!(
-            "    {divisions:>3} divisions: covered {total_covered:.9} of {total_domain:.9} domain"
-            ,
+            "    {divisions:>3} divisions: covered {total_covered:.9} of {total_domain:.9} domain",
         );
         println!(
             "                  worst face {worst_face} deviates {worst_ratio_error:.3e} from its full domain"
@@ -87,10 +86,7 @@ fn per_face_convergence(name: &str, solid: &Solid) {
             volumes.push(volume);
         }
 
-        let spread = areas
-            .iter()
-            .cloned()
-            .fold(f64::NEG_INFINITY, f64::max)
+        let spread = areas.iter().cloned().fold(f64::NEG_INFINITY, f64::max)
             - areas.iter().cloned().fold(f64::INFINITY, f64::min);
         let kind = match &face.geometry {
             FaceGeometry::Plane(_) => "plane",
@@ -145,6 +141,9 @@ fn main() {
     .unwrap();
     let pipe = SweepBuilder::sweep_circle_along_curve(&path, 3.5, 16).unwrap();
     probe("swept pipe", &pipe);
-    per_face_convergence("cylinder", &PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap());
+    per_face_convergence(
+        "cylinder",
+        &PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
+    );
     per_face_convergence("swept pipe", &pipe);
 }

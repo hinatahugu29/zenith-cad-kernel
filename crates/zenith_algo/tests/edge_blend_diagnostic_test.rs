@@ -203,7 +203,11 @@ fn hybrid_bosses_blendability_diagnostics() {
         })
         .collect();
 
-    assert_eq!(cyl_root_edges.len(), 4, "cylinder boss root should have 4 edges");
+    assert_eq!(
+        cyl_root_edges.len(),
+        4,
+        "cylinder boss root should have 4 edges"
+    );
     for edge in &cyl_root_edges {
         let diag = EdgeBlender::blendability(&solid, edge.id)
             .expect("circular cylinder root must be blendable");
@@ -225,12 +229,17 @@ fn hybrid_bosses_blendability_diagnostics() {
         })
         .collect();
 
-    assert_eq!(rect_root_edges.len(), 4, "rect boss root should have 4 edges");
+    assert_eq!(
+        rect_root_edges.len(),
+        4,
+        "rect boss root should have 4 edges"
+    );
     for edge in &rect_root_edges {
         let err = EdgeBlender::blendability(&solid, edge.id)
             .expect_err("rect boss root must be rejected with diagnostic");
         assert!(
-            err.contains("270.000 deg interior angle") && err.contains("only convex edges are blended"),
+            err.contains("270.000 deg interior angle")
+                && err.contains("only convex edges are blended"),
             "unexpected error for rect root edge {}: {err}",
             edge.id
         );
@@ -253,5 +262,3 @@ fn hybrid_bosses_blendability_diagnostics() {
 
     assert_eq!(solid, before, "blendability must not mutate solid");
 }
-
-

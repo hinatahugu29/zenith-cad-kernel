@@ -1,4 +1,6 @@
-use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, FaceMerger, HoleBuilder, PrimitiveBuilder};
+use zenith_algo::{
+    BooleanEngine, BooleanOpType, BrepTransform, FaceMerger, HoleBuilder, PrimitiveBuilder,
+};
 use zenith_math::{Tolerance, Vec3};
 
 #[test]
@@ -11,8 +13,9 @@ fn test_boolean_solids_exact_simplified_reduces_faces_and_edges() {
     );
 
     // 通常のブーリアン（面片分割のまま）: 14面
-    let raw_l = BooleanEngine::boolean_solids_exact(&block, &corner, BooleanOpType::Difference, &tol)
-        .expect("raw difference");
+    let raw_l =
+        BooleanEngine::boolean_solids_exact(&block, &corner, BooleanOpType::Difference, &tol)
+            .expect("raw difference");
     assert_eq!(raw_l.outer_shell.faces.len(), 14);
 
     // 簡約化ブーリアン（自動FaceMerger統合）: 8面

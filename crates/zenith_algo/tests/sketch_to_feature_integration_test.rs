@@ -1,6 +1,4 @@
-use zenith_algo::{
-    Constraint, FeatureOp, FeatureTree, MassCalculator, SketchSolver,
-};
+use zenith_algo::{Constraint, FeatureOp, FeatureTree, MassCalculator, SketchSolver};
 use zenith_math::Tolerance;
 use zenith_tess::TessellationParams;
 
@@ -15,9 +13,9 @@ fn test_sketch_solver_to_feature_tree_pipeline() {
     // 1. スケッチ拘束ソルバーで長方形断面を定義・解く
     let mut solver = SketchSolver::new();
     let p0 = solver.add_fixed_point(0.0, 0.0);
-    let p1 = solver.add_point(35.0, 2.0);  // 初期値（不正確）
+    let p1 = solver.add_point(35.0, 2.0); // 初期値（不正確）
     let p2 = solver.add_point(38.0, 22.0); // 初期値
-    let p3 = solver.add_point(2.0, 18.0);  // 初期値
+    let p3 = solver.add_point(2.0, 18.0); // 初期値
 
     solver.add_line(p0, p1);
     solver.add_line(p1, p2);
@@ -58,11 +56,14 @@ fn test_sketch_solver_to_feature_tree_pipeline() {
 
     // 3. フィーチャーツリーに投入してドラフト付き押し出しソリッド（高さ30, 抜き勾配3度）を構築
     let mut tree = FeatureTree::new();
-    tree.add_feature("draft_extrude_from_sketch", FeatureOp::ExtrudeDraft {
-        points: sketch_profile_3d.clone(),
-        dir: [0.0, 0.0, 30.0],
-        draft_angle_rad: 3.0_f64.to_radians(),
-    });
+    tree.add_feature(
+        "draft_extrude_from_sketch",
+        FeatureOp::ExtrudeDraft {
+            points: sketch_profile_3d.clone(),
+            dir: [0.0, 0.0, 30.0],
+            draft_angle_rad: 3.0_f64.to_radians(),
+        },
+    );
 
     let solid = tree.recompute().expect("evaluate feature tree from sketch");
 
@@ -103,12 +104,17 @@ fn test_sketch_solver_to_feature_tree_pipeline() {
         [30.0, 0.0, 20.0],
         [10.0, 0.0, 20.0],
     ];
-    tree_revolve.add_feature("revolve_from_sketch", FeatureOp::RevolveSolid {
-        profile_points: revolved_profile,
-        axis_origin: [0.0, 0.0, 0.0],
-        axis_dir: [0.0, 0.0, 1.0],
-    });
-    let solid_revolve = tree_revolve.recompute().expect("evaluate revolve from sketch");
+    tree_revolve.add_feature(
+        "revolve_from_sketch",
+        FeatureOp::RevolveSolid {
+            profile_points: revolved_profile,
+            axis_origin: [0.0, 0.0, 0.0],
+            axis_dir: [0.0, 0.0, 1.0],
+        },
+    );
+    let solid_revolve = tree_revolve
+        .recompute()
+        .expect("evaluate revolve from sketch");
     assert!(solid_revolve.outer_shell.validate_closed(&tol).is_valid());
     let mass_revolve = MassCalculator::compute_from_brep(&solid_revolve, &params);
     let expected_revolve_vol = std::f64::consts::PI * (30.0 * 30.0 - 10.0 * 10.0) * 20.0;

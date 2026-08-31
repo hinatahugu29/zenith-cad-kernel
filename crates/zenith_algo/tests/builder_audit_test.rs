@@ -152,12 +152,8 @@ fn test_extrude_revolve_and_loft_match_their_closed_forms() {
 
     assert_sound(
         "extrusion",
-        &ExtrudeBuilder::extrude_wire(
-            &rect_wire(15.0, 10.0, 0.0),
-            Vec3::new(0.0, 0.0, 25.0),
-            &tol,
-        )
-        .unwrap(),
+        &ExtrudeBuilder::extrude_wire(&rect_wire(15.0, 10.0, 0.0), Vec3::new(0.0, 0.0, 25.0), &tol)
+            .unwrap(),
         Some(30.0 * 20.0 * 25.0),
     );
 

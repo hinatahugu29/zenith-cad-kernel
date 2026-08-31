@@ -105,7 +105,12 @@ pub fn face_uv_triangulation(face: &Face, params: &TessellationParams) -> UvTria
     let result = face_uv_triangulation_inner(face, params, true);
     zenith_geom::work_counter::count_uv_triangulation(result.triangles.len());
     if std::env::var_os("ZENITH_UVWHY").is_some() {
-        eprintln!("UVWHY 細分あり {} u{} v{}", result.triangles.len(), params.u_divisions, params.v_divisions);
+        eprintln!(
+            "UVWHY 細分あり {} u{} v{}",
+            result.triangles.len(),
+            params.u_divisions,
+            params.v_divisions
+        );
     }
     result
 }
@@ -133,7 +138,12 @@ pub fn face_uv_triangulation_for_point_picking(
     let result = face_uv_triangulation_inner(face, params, false);
     zenith_geom::work_counter::count_uv_triangulation(result.triangles.len());
     if std::env::var_os("ZENITH_UVWHY").is_some() {
-        eprintln!("UVWHY 点を選ぶ {} u{} v{}", result.triangles.len(), params.u_divisions, params.v_divisions);
+        eprintln!(
+            "UVWHY 点を選ぶ {} u{} v{}",
+            result.triangles.len(),
+            params.u_divisions,
+            params.v_divisions
+        );
     }
     result
 }
@@ -245,8 +255,20 @@ fn knot_aligned_uv_triangulation(
         }
     }
 
-    let u_lines = span_aligned_lines(&surface.knots_u.knots, surface.degree_u, u_min, u_max, params.u_divisions);
-    let v_lines = span_aligned_lines(&surface.knots_v.knots, surface.degree_v, v_min, v_max, params.v_divisions);
+    let u_lines = span_aligned_lines(
+        &surface.knots_u.knots,
+        surface.degree_u,
+        u_min,
+        u_max,
+        params.u_divisions,
+    );
+    let v_lines = span_aligned_lines(
+        &surface.knots_v.knots,
+        surface.degree_v,
+        v_min,
+        v_max,
+        params.v_divisions,
+    );
 
     let mut uvs = Vec::with_capacity(u_lines.len() * v_lines.len());
     for v in &v_lines {
@@ -269,13 +291,7 @@ fn knot_aligned_uv_triangulation(
 }
 
 /// True when the sampled trim loop is the parameter rectangle itself.
-fn loop_covers_full_domain(
-    uvs: &[Point2],
-    u_min: f64,
-    u_max: f64,
-    v_min: f64,
-    v_max: f64,
-) -> bool {
+fn loop_covers_full_domain(uvs: &[Point2], u_min: f64, u_max: f64, v_min: f64, v_max: f64) -> bool {
     let domain = (u_max - u_min) * (v_max - v_min);
     if domain <= 0.0 {
         return false;
@@ -506,7 +522,8 @@ pub fn tessellate_face(face: &Face, params: &TessellationParams) -> TriangleMesh
             let Ok(pcurves) = face.plane_pcurves() else {
                 return TriangleMesh::new();
             };
-            let outer_uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, params, LoopFidelity::Display);
+            let outer_uvs =
+                sample_pcurve_loop_uv(&pcurves.outer_loop, params, LoopFidelity::Display);
             if outer_uvs.len() < 3 {
                 return TriangleMesh::new();
             }
@@ -690,8 +707,7 @@ fn trimmed_uv_triangulation_with(
     };
 
     let why = std::env::var_os("ZENITH_TRIM_AREA_WHY").is_some();
-    let mut triangle_indices =
-        earcutr::earcut(&flat_coords, &hole_indices, 2).unwrap_or_default();
+    let mut triangle_indices = earcutr::earcut(&flat_coords, &hole_indices, 2).unwrap_or_default();
     let tolerance = wanted_area.abs().max(1e-12) * 1e-9;
 
     if !triangle_indices.is_empty()
@@ -718,8 +734,7 @@ fn trimmed_uv_triangulation_with(
                 rotated_flat.push(uvs[index].y);
                 rotated_uvs.push(uvs[index]);
             }
-            let candidate =
-                earcutr::earcut(&rotated_flat, &hole_indices, 2).unwrap_or_default();
+            let candidate = earcutr::earcut(&rotated_flat, &hole_indices, 2).unwrap_or_default();
             if candidate.is_empty() {
                 continue;
             }
@@ -1149,7 +1164,6 @@ pub(crate) fn refine_uv_triangulation_protected(
             break;
         }
 
-
         let mut refined = Vec::with_capacity(triangles.len());
         let mut refined_settled = Vec::with_capacity(triangles.len());
         for (index, triangle) in triangles.iter().enumerate() {
@@ -1308,13 +1322,7 @@ impl EvaluatedPositions {
         point
     }
 
-    fn midpoint(
-        &mut self,
-        surface: &impl Surface3,
-        uvs: &[Point2],
-        a: usize,
-        b: usize,
-    ) -> Point3 {
+    fn midpoint(&mut self, surface: &impl Surface3, uvs: &[Point2], a: usize, b: usize) -> Point3 {
         let key = edge_key(a, b);
         if let Some(point) = self.midpoints.get(&key) {
             return *point;
@@ -1549,7 +1557,12 @@ fn sample_pcurve_loop_uv(
         let segment_points = if segment.curve.degree == 1
             && (fidelity == LoopFidelity::Exact || segment.curve.control_points.len() == 2)
         {
-            segment.curve.control_points.iter().map(|cp| cp.point).collect()
+            segment
+                .curve
+                .control_points
+                .iter()
+                .map(|cp| cp.point)
+                .collect()
         } else {
             sample_pcurve_segment_adaptive(segment, deflection)
         };

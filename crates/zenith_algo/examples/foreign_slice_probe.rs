@@ -112,11 +112,7 @@ fn cases() -> Vec<Case> {
             file: "sphere",
             what: "tilted, 5 from the centre",
             // 法線 (1,1,1)/sqrt(3) の向きに 5 だけ進んだ所を通る平面。
-            origin: Point3::new(
-                5.0 / 3f64.sqrt(),
-                5.0 / 3f64.sqrt(),
-                5.0 / 3f64.sqrt(),
-            ),
+            origin: Point3::new(5.0 / 3f64.sqrt(), 5.0 / 3f64.sqrt(), 5.0 / 3f64.sqrt()),
             normal: Vec3::new(1.0, 1.0, 1.0),
             area: at,
             perimeter: pt,
@@ -285,7 +281,10 @@ fn main() {
                 format!("縮んでいる（見かけの次数 {order:.1}）")
             } else {
                 failures += 1;
-                format!("縮んでいない（{:.2e} -> {:.2e} -> {:.2e}）", errors[0], errors[1], errors[2])
+                format!(
+                    "縮んでいない（{:.2e} -> {:.2e} -> {:.2e}）",
+                    errors[0], errors[1], errors[2]
+                )
             }
         } else {
             "測れませんでした".to_string()

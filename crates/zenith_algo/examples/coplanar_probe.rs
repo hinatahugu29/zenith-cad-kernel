@@ -129,7 +129,11 @@ fn main() {
     report("rotated boxes (fails)", &boxa, &rotated);
 
     let rotated_lifted = BrepTransform::translate_solid(&rotated, Vec3::new(0.0, 0.0, 7.0));
-    report("rotated boxes lifted in Z (also fails)", &boxa, &rotated_lifted);
+    report(
+        "rotated boxes lifted in Z (also fails)",
+        &boxa,
+        &rotated_lifted,
+    );
 
     let corner = BrepTransform::translate_solid(&boxa, Vec3::new(10.0, 10.0, 10.0));
     report("corner overlap (works)", &boxa, &corner);

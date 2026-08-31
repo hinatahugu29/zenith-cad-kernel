@@ -544,10 +544,13 @@ fn main() {
     let (slot_chamfered, _) = EdgeBlender::blend_edge(
         &slot_prism,
         rim_edge.edge_id,
-        zenith_algo::BlendKind::Chamfer { distance: chamfer_d },
+        zenith_algo::BlendKind::Chamfer {
+            distance: chamfer_d,
+        },
     )
     .expect("slot rim chamfer");
-    let slot_chamfer_removed = slot_l * chamfer_d * chamfer_d + PI * chamfer_d * chamfer_d * (slot_r - chamfer_d / 3.0);
+    let slot_chamfer_removed =
+        slot_l * chamfer_d * chamfer_d + PI * chamfer_d * chamfer_d * (slot_r - chamfer_d / 3.0);
     items.push(Item {
         name: "27_slot_top_rim_chamfer",
         note: "slot top convex rim blended with exact planar and conical chamfer patches",
@@ -564,7 +567,8 @@ fn main() {
     )
     .expect("slot rim fillet");
     let slot_fillet_removed = 2.0 * slot_l * fillet_r * fillet_r * (1.0 - PI * 0.25)
-        + PI * ((slot_r - fillet_r) * fillet_r * fillet_r * (2.0 - PI * 0.5) + fillet_r.powi(3) / 3.0);
+        + PI * ((slot_r - fillet_r) * fillet_r * fillet_r * (2.0 - PI * 0.5)
+            + fillet_r.powi(3) / 3.0);
     items.push(Item {
         name: "28_slot_top_rim_fillet",
         note: "slot top convex rim rounded with exact quarter-cylinder and quarter-torus patches",
@@ -641,10 +645,13 @@ fn main() {
     let (slot_hole_chamfered, _) = EdgeBlender::blend_edge(
         &slotted,
         mouth_edge_id,
-        zenith_algo::BlendKind::Chamfer { distance: chamfer_d },
+        zenith_algo::BlendKind::Chamfer {
+            distance: chamfer_d,
+        },
     )
     .expect("slot hole chamfer");
-    let hole_chamfer_removed = 20.0 * chamfer_d * chamfer_d + PI * chamfer_d * chamfer_d * (8.0 + chamfer_d / 3.0);
+    let hole_chamfer_removed =
+        20.0 * chamfer_d * chamfer_d + PI * chamfer_d * chamfer_d * (8.0 + chamfer_d / 3.0);
     items.push(Item {
         name: "30_slot_hole_chamfer",
         note: "through-slot hole mouth chamfered with exact planar and conical bevel patches",
@@ -664,7 +671,8 @@ fn main() {
         + PI * ((8.0 + fillet_r) * fillet_r * fillet_r * (2.0 - PI * 0.5) - fillet_r.powi(3) / 3.0);
     items.push(Item {
         name: "31_slot_hole_fillet",
-        note: "through-slot hole mouth rounded with exact quarter-cylinder and quarter-torus patches",
+        note:
+            "through-slot hole mouth rounded with exact quarter-cylinder and quarter-torus patches",
         solid: slot_hole_filleted,
         analytic_volume: Some(slotted_net_vol - hole_fillet_removed),
     });
@@ -675,8 +683,10 @@ fn main() {
     let box_dy = 40.0;
     let box_dz = 25.0;
     let box_t = 2.5;
-    let open_box = ShellingBuilder::make_open_box(box_dx, box_dy, box_dz, box_t).expect("open box shell");
-    let open_box_vol = (box_dx * box_dy * box_dz) - ((box_dx - 2.0 * box_t) * (box_dy - 2.0 * box_t) * (box_dz - box_t));
+    let open_box =
+        ShellingBuilder::make_open_box(box_dx, box_dy, box_dz, box_t).expect("open box shell");
+    let open_box_vol = (box_dx * box_dy * box_dz)
+        - ((box_dx - 2.0 * box_t) * (box_dy - 2.0 * box_t) * (box_dz - box_t));
     items.push(Item {
         name: "32_open_box_shell",
         note: "thin-wall hollow box container with open top face and uniform wall thickness",
@@ -688,8 +698,10 @@ fn main() {
     let cyl_r = 20.0;
     let cyl_h = 35.0;
     let cyl_t = 2.0;
-    let open_cyl = ShellingBuilder::make_open_cylinder(cyl_r, cyl_h, cyl_t).expect("open cylinder shell");
-    let open_cyl_vol = (PI * cyl_r * cyl_r * cyl_h) - (PI * (cyl_r - cyl_t) * (cyl_r - cyl_t) * (cyl_h - cyl_t));
+    let open_cyl =
+        ShellingBuilder::make_open_cylinder(cyl_r, cyl_h, cyl_t).expect("open cylinder shell");
+    let open_cyl_vol =
+        (PI * cyl_r * cyl_r * cyl_h) - (PI * (cyl_r - cyl_t) * (cyl_r - cyl_t) * (cyl_h - cyl_t));
     items.push(Item {
         name: "33_open_cylinder_shell",
         note: "thin-wall hollow cylindrical cup with open top rim and exact rational NURBS cavity",
@@ -702,9 +714,11 @@ fn main() {
     let slot_t_r = 12.0;
     let slot_t_h = 20.0;
     let slot_t_t = 2.0;
-    let open_tray = ShellingBuilder::make_open_slot_prism(slot_t_l, slot_t_r, slot_t_h, slot_t_t).expect("open slot tray");
+    let open_tray = ShellingBuilder::make_open_slot_prism(slot_t_l, slot_t_r, slot_t_h, slot_t_t)
+        .expect("open slot tray");
     let v_tray_out = (2.0 * slot_t_l * slot_t_r + PI * slot_t_r * slot_t_r) * slot_t_h;
-    let v_tray_in = (2.0 * slot_t_l * (slot_t_r - slot_t_t) + PI * (slot_t_r - slot_t_t).powi(2)) * (slot_t_h - slot_t_t);
+    let v_tray_in = (2.0 * slot_t_l * (slot_t_r - slot_t_t) + PI * (slot_t_r - slot_t_t).powi(2))
+        * (slot_t_h - slot_t_t);
     items.push(Item {
         name: "34_open_slot_tray_shell",
         note: "thin-wall hollow stadium slot tray with open rim and exact rational NURBS cavity",
@@ -726,20 +740,24 @@ fn main() {
         Point3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 0.0, 1.0),
         Vec3::new(1.0, 0.0, 0.0),
-    ).expect("ext outer wire");
+    )
+    .expect("ext outer wire");
     let ext_hole = ProfileBuilder::make_circle(
         ext_hr,
         Point3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 0.0, 1.0),
         Vec3::new(1.0, 0.0, 0.0),
-    ).expect("ext hole wire");
+    )
+    .expect("ext hole wire");
     let ext_solid = ExtrudeBuilder::extrude_face_with_holes(
         &ext_outer,
         &[ext_hole],
         Vec3::new(0.0, 0.0, ext_dz),
         &tol,
-    ).expect("extrude rounded rect with hole");
-    let ext_area = (ext_w * ext_h) - 4.0 * ext_cr * ext_cr + PI * ext_cr * ext_cr - PI * ext_hr * ext_hr;
+    )
+    .expect("extrude rounded rect with hole");
+    let ext_area =
+        (ext_w * ext_h) - 4.0 * ext_cr * ext_cr + PI * ext_cr * ext_cr - PI * ext_hr * ext_hr;
     items.push(Item {
         name: "35_extruded_rounded_rect_with_hole",
         note: "extruded rounded rectangle with center circular through-hole from exact 2D profile",
@@ -769,7 +787,8 @@ fn main() {
         Point3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 0.0, 1.0),
         &tol,
-    ).expect("revolve flanged cup");
+    )
+    .expect("revolve flanged cup");
     let rev_flange_vol = PI * (28.0 * 28.0 - 12.0 * 12.0) * 6.0;
     let rev_neck_vol = PI * (18.0 * 18.0 - 12.0 * 12.0) * (35.0 - 6.0);
     items.push(Item {
@@ -785,15 +804,14 @@ fn main() {
     let draft_dz = 25.0;
     let draft_angle_deg = 4.0;
     let draft_angle_rad = draft_angle_deg * PI / 180.0;
-    let drafted_block = DraftBuilder::make_drafted_block(
-        draft_dx,
-        draft_dy,
-        draft_dz,
-        draft_angle_rad,
-        &tol,
-    ).expect("drafted block");
+    let drafted_block =
+        DraftBuilder::make_drafted_block(draft_dx, draft_dy, draft_dz, draft_angle_rad, &tol)
+            .expect("drafted block");
     let draft_delta = draft_dz * draft_angle_rad.tan();
-    let draft_vol = draft_dz * (draft_dx * draft_dy + draft_delta * (draft_dx + draft_dy) + (4.0 / 3.0) * draft_delta * draft_delta);
+    let draft_vol = draft_dz
+        * (draft_dx * draft_dy
+            + draft_delta * (draft_dx + draft_dy)
+            + (4.0 / 3.0) * draft_delta * draft_delta);
     items.push(Item {
         name: "37_drafted_taper_block",
         note: "molding drafted block with exact taper angle for mold release",
@@ -807,23 +825,26 @@ fn main() {
         Point3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 0.0, 1.0),
         Vec3::new(1.0, 0.0, 0.0),
-    ).expect("loft circle");
+    )
+    .expect("loft circle");
     let loft_w1 = ProfileBuilder::make_rectangle(
         38.0,
         26.0,
         Point3::new(0.0, 0.0, 30.0),
         Vec3::new(0.0, 0.0, 1.0),
         Vec3::new(1.0, 0.0, 0.0),
-    ).expect("loft rect");
+    )
+    .expect("loft rect");
     let loft_w2 = ProfileBuilder::make_ellipse(
         32.0,
         16.0,
         Point3::new(0.0, 0.0, 60.0),
         Vec3::new(0.0, 0.0, 1.0),
         Vec3::new(1.0, 0.0, 0.0),
-    ).expect("loft ellipse");
-    let loft_solid = LoftBuilder::loft_solid(&[loft_w0, loft_w1, loft_w2], 2, &tol)
-        .expect("loft duct");
+    )
+    .expect("loft ellipse");
+    let loft_solid =
+        LoftBuilder::loft_solid(&[loft_w0, loft_w1, loft_w2], 2, &tol).expect("loft duct");
     items.push(Item {
         name: "38_multi_section_loft_duct",
         note: "transition duct solid lofted smoothly across 3 distinct profiles (circle -> rect -> ellipse)",
@@ -835,8 +856,8 @@ fn main() {
     let rib_l = 40.0;
     let rib_h = 30.0;
     let rib_t = 8.0;
-    let rib_solid = RibBuilder::make_triangular_rib(rib_l, rib_h, rib_t, &tol)
-        .expect("triangular prism rib");
+    let rib_solid =
+        RibBuilder::make_triangular_rib(rib_l, rib_h, rib_t, &tol).expect("triangular prism rib");
     let rib_vol = 0.5 * rib_l * rib_h * rib_t;
     items.push(Item {
         name: "39_triangular_prism_rib",
@@ -863,12 +884,14 @@ fn main() {
         cs_angle_deg,
         cs_cx,
         cs_cy,
-    ).expect("countersink hole box");
+    )
+    .expect("countersink hole box");
     let cs_half_rad: f64 = (cs_angle_deg * 0.5).to_radians();
     let cs_depth = (cs_sink_r - cs_hole_r) / cs_half_rad.tan();
     let cs_v_box = cs_box_w * cs_box_d * cs_box_h;
     let cs_v_drill = PI * cs_hole_r * cs_hole_r * (cs_box_h - cs_depth);
-    let cs_v_cone = (PI * cs_depth / 3.0) * (cs_sink_r * cs_sink_r + cs_sink_r * cs_hole_r + cs_hole_r * cs_hole_r);
+    let cs_v_cone = (PI * cs_depth / 3.0)
+        * (cs_sink_r * cs_sink_r + cs_sink_r * cs_hole_r + cs_hole_r * cs_hole_r);
     items.push(Item {
         name: "40_boolean_countersink_hole",
         note: "countersunk screw through-hole block combining cylindrical drill and conical bevel cavity",
@@ -879,8 +902,7 @@ fn main() {
     // 41_hex_bolt_head
     let hex_s = 32.0; // 二面幅 S=32
     let hex_h = 18.0;
-    let hex_prism = FastenerBuilder::make_hex_prism(hex_s, hex_h, &tol)
-        .expect("hex prism");
+    let hex_prism = FastenerBuilder::make_hex_prism(hex_s, hex_h, &tol).expect("hex prism");
     let hex_vol = (3.0_f64.sqrt() * 0.5) * hex_s * hex_s * hex_h;
     items.push(Item {
         name: "41_hex_bolt_head",
@@ -893,9 +915,10 @@ fn main() {
     let nut_s = 32.0;
     let nut_h = 16.0;
     let nut_r_hole = 8.0; // M16 ナット下穴
-    let nut_solid = FastenerBuilder::make_hex_nut_blank(nut_s, nut_h, nut_r_hole, &tol)
-        .expect("hex nut blank");
-    let nut_vol = (3.0_f64.sqrt() * 0.5) * nut_s * nut_s * nut_h - PI * nut_r_hole * nut_r_hole * nut_h;
+    let nut_solid =
+        FastenerBuilder::make_hex_nut_blank(nut_s, nut_h, nut_r_hole, &tol).expect("hex nut blank");
+    let nut_vol =
+        (3.0_f64.sqrt() * 0.5) * nut_s * nut_s * nut_h - PI * nut_r_hole * nut_r_hole * nut_h;
     items.push(Item {
         name: "42_hex_nut_blank",
         note: "hexagonal fastener nut blank with central clearance through-hole",
@@ -904,16 +927,10 @@ fn main() {
     });
 
     // 43_stepped_shaft_with_keyway
-    let shaft_raw = ShaftBuilder::make_stepped_shaft(&[(16.0, 40.0), (12.0, 30.0)])
-        .expect("stepped shaft");
-    let shaft_keyway = ShaftBuilder::make_shaft_with_keyway(
-        &shaft_raw,
-        12.0,
-        5.0,
-        3.0,
-        20.0,
-        45.0,
-    ).expect("shaft with keyway");
+    let shaft_raw =
+        ShaftBuilder::make_stepped_shaft(&[(16.0, 40.0), (12.0, 30.0)]).expect("stepped shaft");
+    let shaft_keyway = ShaftBuilder::make_shaft_with_keyway(&shaft_raw, 12.0, 5.0, 3.0, 20.0, 45.0)
+        .expect("shaft with keyway");
     items.push(Item {
         name: "43_stepped_shaft_with_keyway",
         note: "power transmission stepped shaft with parallel drive keyway pocket",
@@ -936,7 +953,8 @@ fn main() {
         cap_socket_s,
         cap_socket_d,
         &tol,
-    ).expect("socket head cap screw");
+    )
+    .expect("socket head cap screw");
     let cap_shank_vol = PI * cap_shank_r * cap_shank_r * cap_shank_l;
     let cap_head_vol = PI * cap_head_r * cap_head_r * cap_head_h;
     let cap_socket_vol = (3.0_f64.sqrt() * 0.5) * cap_socket_s * cap_socket_s * cap_socket_d;
@@ -952,13 +970,11 @@ fn main() {
     let washer_inner_r = 4.25; // M8 用平座金
     let washer_outer_r = 8.0;
     let washer_t = 1.6;
-    let washer_solid = FastenerBuilder::make_plain_washer(
-        washer_inner_r,
-        washer_outer_r,
-        washer_t,
-        &tol,
-    ).expect("plain washer");
-    let washer_vol = PI * (washer_outer_r * washer_outer_r - washer_inner_r * washer_inner_r) * washer_t;
+    let washer_solid =
+        FastenerBuilder::make_plain_washer(washer_inner_r, washer_outer_r, washer_t, &tol)
+            .expect("plain washer");
+    let washer_vol =
+        PI * (washer_outer_r * washer_outer_r - washer_inner_r * washer_inner_r) * washer_t;
     items.push(Item {
         name: "45_plain_washer",
         note: "JIS/ISO standard plain flat washer ring solid with annular planar caps",
@@ -988,10 +1004,13 @@ fn main() {
         cb_slot_cb_d,
         cb_slot_cx,
         cb_slot_cy,
-    ).expect("counterbored slot box");
+    )
+    .expect("counterbored slot box");
     let s_thru = cb_slot_l * (2.0 * cb_slot_r) + PI * cb_slot_r * cb_slot_r;
     let s_cb = cb_slot_cb_l * (2.0 * cb_slot_cb_r) + PI * cb_slot_cb_r * cb_slot_cb_r;
-    let cb_slot_vol = (cb_slot_box_w * cb_slot_box_d * cb_slot_box_h) - s_thru * (cb_slot_box_h - cb_slot_cb_d) - s_cb * cb_slot_cb_d;
+    let cb_slot_vol = (cb_slot_box_w * cb_slot_box_d * cb_slot_box_h)
+        - s_thru * (cb_slot_box_h - cb_slot_cb_d)
+        - s_cb * cb_slot_cb_d;
     items.push(Item {
         name: "46_counterbored_slot_hole",
         note: "mounting base plate with stepped counterbored stadium slot hole for position adjustment",
@@ -1014,13 +1033,15 @@ fn main() {
         fl_hex_s,
         fl_hex_h,
         &tol,
-    ).expect("flanged hex bolt");
+    )
+    .expect("flanged hex bolt");
     let fl_bolt_vol = PI * fl_shank_r * fl_shank_r * fl_shank_l
         + PI * fl_flange_r * fl_flange_r * fl_flange_h
         + (3.0_f64.sqrt() * 0.5) * fl_hex_s * fl_hex_s * fl_hex_h;
     items.push(Item {
         name: "47_flanged_hex_bolt",
-        note: "JIS/ISO flanged hexagonal head bolt with cylindrical washer flange and threaded stud",
+        note:
+            "JIS/ISO flanged hexagonal head bolt with cylindrical washer flange and threaded stud",
         solid: fl_bolt,
         analytic_volume: Some(fl_bolt_vol),
     });
@@ -1032,13 +1053,9 @@ fn main() {
     let sp_free_h = 3.5;
     let sp_gap_deg = 20.0;
     let sp_washer = FastenerBuilder::make_spring_washer(
-        sp_inner_r,
-        sp_outer_r,
-        sp_t,
-        sp_free_h,
-        sp_gap_deg,
-        &tol,
-    ).expect("spring washer");
+        sp_inner_r, sp_outer_r, sp_t, sp_free_h, sp_gap_deg, &tol,
+    )
+    .expect("spring washer");
     items.push(Item {
         name: "48_spring_lock_washer",
         note: "JIS/ISO spring lock washer helical split ring solid with rectangular wire cross-section",
@@ -1051,14 +1068,13 @@ fn main() {
     let rr_outer_r = 6.2;
     let rr_t = 1.0;
     let rr_gap_deg = 45.0;
-    let rr_ring = FastenerBuilder::make_retaining_ring(
-        rr_inner_r,
-        rr_outer_r,
-        rr_t,
-        rr_gap_deg,
-        &tol,
-    ).expect("retaining ring");
-    let rr_vol = PI * (rr_outer_r * rr_outer_r - rr_inner_r * rr_inner_r) * rr_t * ((360.0 - rr_gap_deg) / 360.0);
+    let rr_ring =
+        FastenerBuilder::make_retaining_ring(rr_inner_r, rr_outer_r, rr_t, rr_gap_deg, &tol)
+            .expect("retaining ring");
+    let rr_vol = PI
+        * (rr_outer_r * rr_outer_r - rr_inner_r * rr_inner_r)
+        * rr_t
+        * ((360.0 - rr_gap_deg) / 360.0);
     items.push(Item {
         name: "49_retaining_circlip",
         note: "JIS/ISO C-type external retaining snap ring (circlip) with open gap for shaft retention",
@@ -1081,9 +1097,12 @@ fn main() {
         cs_socket_s,
         cs_socket_d,
         &tol,
-    ).expect("countersunk socket screw");
+    )
+    .expect("countersunk socket screw");
     let cs_shank_vol = PI * cs_shank_r * cs_shank_r * cs_shank_l;
-    let cs_head_vol = (PI / 3.0) * cs_head_h * (cs_head_r * cs_head_r + cs_head_r * cs_shank_r + cs_shank_r * cs_shank_r);
+    let cs_head_vol = (PI / 3.0)
+        * cs_head_h
+        * (cs_head_r * cs_head_r + cs_head_r * cs_shank_r + cs_shank_r * cs_shank_r);
     let cs_socket_vol = (3.0_f64.sqrt() * 0.5) * cs_socket_s * cs_socket_s * cs_socket_d;
     let cs_vol = cs_shank_vol + cs_head_vol - cs_socket_vol;
     items.push(Item {
@@ -1112,8 +1131,10 @@ fn main() {
         fl_bolt_r,
         fl_num_bolts,
         &tol,
-    ).expect("weld neck flange");
-    let fl_blank_vol = PI * fl_flange_r * fl_flange_r * fl_flange_t + PI * fl_hub_r * fl_hub_r * fl_hub_h;
+    )
+    .expect("weld neck flange");
+    let fl_blank_vol =
+        PI * fl_flange_r * fl_flange_r * fl_flange_t + PI * fl_hub_r * fl_hub_r * fl_hub_h;
     let fl_pipe_vol = PI * fl_pipe_r * fl_pipe_r * (fl_flange_t + fl_hub_h);
     let fl_bolts_vol = fl_num_bolts as f64 * (PI * fl_bolt_r * fl_bolt_r * fl_flange_t);
     let fl_vol = fl_blank_vol - fl_pipe_vol - fl_bolts_vol;
@@ -1137,8 +1158,11 @@ fn main() {
         tp_socket_s,
         tp_socket_d,
         &tol,
-    ).expect("taper pipe plug");
-    let tp_cone_vol = (PI / 3.0) * tp_h * (tp_r_small * tp_r_small + tp_r_small * tp_r_large + tp_r_large * tp_r_large);
+    )
+    .expect("taper pipe plug");
+    let tp_cone_vol = (PI / 3.0)
+        * tp_h
+        * (tp_r_small * tp_r_small + tp_r_small * tp_r_large + tp_r_large * tp_r_large);
     let tp_socket_vol = (3.0_f64.sqrt() * 0.5) * tp_socket_s * tp_socket_s * tp_socket_d;
     let tp_vol = tp_cone_vol - tp_socket_vol;
     items.push(Item {
@@ -1156,14 +1180,9 @@ fn main() {
     let sb_top_r = 4.0;
     let sb_top_l = 20.0;
     let sb_bolt = FastenerBuilder::make_stud_bolt(
-        sb_bot_r,
-        sb_bot_l,
-        sb_hex_s,
-        sb_hex_h,
-        sb_top_r,
-        sb_top_l,
-        &tol,
-    ).expect("stud bolt");
+        sb_bot_r, sb_bot_l, sb_hex_s, sb_hex_h, sb_top_r, sb_top_l, &tol,
+    )
+    .expect("stud bolt");
     let sb_bot_vol = PI * sb_bot_r * sb_bot_r * sb_bot_l;
     let sb_hex_vol = (3.0_f64.sqrt() * 0.5) * sb_hex_s * sb_hex_s * sb_hex_h;
     let sb_top_vol = PI * sb_top_r * sb_top_r * sb_top_l;
@@ -1180,20 +1199,20 @@ fn main() {
     let bs_r_out = 16.0;
     let bs_t = 0.9;
     let bs_h_cone = 1.25;
-    let bs_spring = FastenerBuilder::make_belleville_spring(
-        bs_r_in,
-        bs_r_out,
-        bs_t,
-        bs_h_cone,
-        &tol,
-    ).expect("belleville spring");
+    let bs_spring =
+        FastenerBuilder::make_belleville_spring(bs_r_in, bs_r_out, bs_t, bs_h_cone, &tol)
+            .expect("belleville spring");
     let bs_r_out_bot = bs_r_out;
     let bs_r_out_top = bs_r_out - 1.5;
     let bs_r_in_bot = bs_r_in;
     let bs_r_in_top = bs_r_in - 1.5;
     let bs_h = bs_h_cone + bs_t;
-    let bs_outer_vol = (PI / 3.0) * bs_h * (bs_r_out_bot * bs_r_out_bot + bs_r_out_bot * bs_r_out_top + bs_r_out_top * bs_r_out_top);
-    let bs_inner_vol = (PI / 3.0) * bs_h * (bs_r_in_bot * bs_r_in_bot + bs_r_in_bot * bs_r_in_top + bs_r_in_top * bs_r_in_top);
+    let bs_outer_vol = (PI / 3.0)
+        * bs_h
+        * (bs_r_out_bot * bs_r_out_bot + bs_r_out_bot * bs_r_out_top + bs_r_out_top * bs_r_out_top);
+    let bs_inner_vol = (PI / 3.0)
+        * bs_h
+        * (bs_r_in_bot * bs_r_in_bot + bs_r_in_bot * bs_r_in_top + bs_r_in_top * bs_r_in_top);
     let bs_vol = bs_outer_vol - bs_inner_vol;
     items.push(Item {
         name: "54_belleville_spring",

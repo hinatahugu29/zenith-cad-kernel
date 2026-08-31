@@ -31,7 +31,10 @@ fn test_slot_boss_root_fillet_exact_volume_and_watertight() {
 
     // 根元エッジの検出
     let blendable = DirectModeling::list_blendable_edges(&boss);
-    assert!(!blendable.is_empty(), "Should find blendable edges on slot boss root");
+    assert!(
+        !blendable.is_empty(),
+        "Should find blendable edges on slot boss root"
+    );
 
     // スロット根元エッジ（dihedral 270度）を探す
     let root_edge = blendable

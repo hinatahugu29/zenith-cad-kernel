@@ -1,14 +1,14 @@
 //! Zenith Algo: CADモデリングアルゴリズムライブラリ
 
+pub mod bolt;
 pub mod boolean;
 pub mod boolean_validation;
-pub mod bolt;
 pub mod brep_intersection;
 pub mod brep_transform;
 pub mod cap;
 pub mod chamfer;
-pub mod contact;
 mod circular_fillet;
+pub mod contact;
 mod cylinder_boolean;
 pub mod direct_edit;
 pub mod distance;
@@ -40,7 +40,6 @@ pub mod regularize;
 pub mod rib;
 pub mod shaft;
 
-
 pub mod revolve;
 pub mod sew;
 pub mod shell;
@@ -54,13 +53,13 @@ pub mod thicken;
 use zenith_math::Tolerance;
 use zenith_topo::{Shell, Solid};
 
+pub use bolt::BoltBuilder;
 pub use boolean::{
     BooleanEngine, BooleanOpType, ExactBooleanPreparationReport, ExactBooleanResult,
 };
 pub use boolean_validation::{
     exact_inside, BooleanResultReport, BooleanResultVerifier, BooleanVerificationParams,
 };
-pub use bolt::BoltBuilder;
 pub use brep_intersection::{
     BooleanFaceAssembly, BooleanFaceSelection, BooleanOperand, BooleanShellAssembly,
     BrepIntersectionBuilder, ClassifiedFacePiece, ClassifiedPlanarFaceSplitCandidate,
@@ -70,16 +69,17 @@ pub use brep_intersection::{
     PlanarOperandBatchSplits, SelectedBooleanFacePiece, SelectedFaceStitchReport,
 };
 pub use brep_transform::BrepTransform;
-pub use distance::{nearest_boundary_projection, BoundaryProjection, DistanceEngine, DistanceResult};
-pub use face_split::{FaceSplitReport, FaceSplitter, MultiSplitReport};
-pub use regularize::{RegularizeReport, Regularizer, StepInterop};
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;
 pub use contact::{find_result_pinch, pinch_along_edge, ContactPinch};
 pub use direct_edit::{DirectModeling, EdgeInspection, EdgeKind, FaceInspection};
+pub use distance::{
+    nearest_boundary_projection, BoundaryProjection, DistanceEngine, DistanceResult,
+};
 pub use draft::DraftBuilder;
 pub use edge_blend::{BlendKind, BlendableEdge, EdgeBlendReport, EdgeBlender};
 pub use extrude::ExtrudeBuilder;
+pub use face_split::{FaceSplitReport, FaceSplitter, MultiSplitReport};
 pub use fastener::FastenerBuilder;
 pub use feature_tree::{
     edge_signature, match_edge, BooleanKind, FeatureNode, FeatureOp, FeatureTree,
@@ -90,6 +90,7 @@ pub use gear::{GearBuilder, RootFilletGeneration};
 pub use helix::HelixBuilder;
 pub use hole::HoleBuilder;
 pub use interference::{ClashStatus, InterferenceChecker, InterferenceReport};
+pub use regularize::{RegularizeReport, Regularizer, StepInterop};
 
 pub use loft::LoftBuilder;
 pub use mass_properties::{MassCalculator, MassProperties};
@@ -103,7 +104,6 @@ pub use profile::ProfileBuilder;
 pub use rib::RibBuilder;
 pub use shaft::ShaftBuilder;
 
-
 pub use revolve::RevolveBuilder;
 pub use sew::{SewReport, Sewer};
 pub use shell::ShellBuilder;
@@ -112,13 +112,12 @@ pub use sketch_region::{
     extract_loops, extrude_sketch, loop_to_wire, LoopArc, SketchLoop, WorkPlane,
 };
 pub use sketch_solver::{
-    ArcId, CircleId, Constraint, LineId, PointId, SketchArc, SketchCircle,
-    SketchConstraintStatus, SketchLine, SketchPoint, SketchSolver,
+    ArcId, CircleId, Constraint, LineId, PointId, SketchArc, SketchCircle, SketchConstraintStatus,
+    SketchLine, SketchPoint, SketchSolver,
 };
 pub use slice::{SectionSliceResult, SectionSlicer};
 pub use sweep::SweepBuilder;
 pub use thicken::ThickenBuilder;
-
 
 /// ビルダーの共通出口。
 ///

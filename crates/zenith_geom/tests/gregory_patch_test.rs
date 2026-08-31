@@ -1,15 +1,15 @@
-use zenith_geom::{ControlPoint3, CornerBlendN, CrossRibbon, GregoryPatch4, KnotVector, NurbsCurve3, Surface3};
+use zenith_geom::{
+    ControlPoint3, CornerBlendN, CrossRibbon, GregoryPatch4, KnotVector, NurbsCurve3, Surface3,
+};
 use zenith_math::{Point3, Tolerance, Vec3};
 
 fn make_line_curve(p0: Point3, p1: Point3) -> NurbsCurve3 {
     NurbsCurve3::new(
         1,
-        vec![
-            ControlPoint3::unweighted(p0),
-            ControlPoint3::unweighted(p1),
-        ],
+        vec![ControlPoint3::unweighted(p0), ControlPoint3::unweighted(p1)],
         KnotVector::clamped_uniform(2, 1),
-    ).unwrap()
+    )
+    .unwrap()
 }
 
 #[test]
@@ -56,8 +56,8 @@ fn test_n_sided_corner_blend_creation() {
     let c1 = make_line_curve(p1, p2);
     let c2 = make_line_curve(p2, p0);
 
-    let blend = CornerBlendN::create_n_sided_blend(vec![c0, c1, c2], &tol)
-        .expect("3-sided corner blend");
+    let blend =
+        CornerBlendN::create_n_sided_blend(vec![c0, c1, c2], &tol).expect("3-sided corner blend");
 
     assert_eq!(blend.boundary_curves.len(), 3);
     assert!((blend.center_point.x - 3.333).abs() < 0.1);
@@ -274,7 +274,6 @@ fn test_neighbouring_cells_share_a_tangent_plane_on_their_rib() {
     // 位置が一致することを確かめる（接平面の一致はリボンの作り方が担う）。
     let mut worst_gap: f64 = 0.0;
     for i in 0..n {
-
         for step in 0..=16 {
             let s = step as f64 / 16.0;
             // セル i の v=0 辺は rib(i)、セル i-1 の u=0 辺も rib(i)。

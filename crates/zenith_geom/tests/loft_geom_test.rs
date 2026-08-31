@@ -10,7 +10,9 @@ fn test_circle3_to_nurbs_accuracy() {
 
     // 1. 90度円弧 (0 -> PI/2)
     let circle_90 = Circle3::new(center, radius, normal, 0.0, FRAC_PI_2).unwrap();
-    let nurbs_90 = circle_90.to_nurbs().expect("Failed to convert circle to NURBS");
+    let nurbs_90 = circle_90
+        .to_nurbs()
+        .expect("Failed to convert circle to NURBS");
 
     let (u_min, u_max) = nurbs_90.param_range();
     let steps = 50;
@@ -43,7 +45,9 @@ fn test_circle3_to_nurbs_accuracy() {
 
     // 2. 360度完全真円 (0 -> 2*PI)
     let circle_360 = Circle3::new(center, radius, normal, 0.0, 2.0 * PI).unwrap();
-    let nurbs_360 = circle_360.to_nurbs().expect("Failed to convert full circle to NURBS");
+    let nurbs_360 = circle_360
+        .to_nurbs()
+        .expect("Failed to convert full circle to NURBS");
 
     let (u_min360, u_max360) = nurbs_360.param_range();
     for i in 0..=100 {
@@ -61,7 +65,9 @@ fn test_circle3_to_nurbs_accuracy() {
     // 3. 傾いた平面上の円弧
     let tilted_normal = Vec3::new(1.0, 2.0, 3.0).normalize();
     let circle_tilted = Circle3::new(center, radius, tilted_normal, 0.5, 3.8).unwrap();
-    let nurbs_tilted = circle_tilted.to_nurbs().expect("Failed to convert tilted circle");
+    let nurbs_tilted = circle_tilted
+        .to_nurbs()
+        .expect("Failed to convert tilted circle");
 
     let (u_mint, u_maxt) = nurbs_tilted.param_range();
     for i in 0..=60 {
@@ -88,10 +94,7 @@ fn test_nurbs_curve_make_compatible() {
     // 異なる次数・制御点数を持つ3本の曲線を定義
     let c1 = zenith_geom::NurbsCurve3::bspline_from_points(
         1,
-        vec![
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(10.0, 0.0, 0.0),
-        ],
+        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 0.0, 0.0)],
     )
     .unwrap();
 
@@ -118,8 +121,9 @@ fn test_nurbs_curve_make_compatible() {
     .unwrap();
 
     // 互換化
-    let compatible = zenith_geom::NurbsCurve3::make_compatible(&[c1.clone(), c2.clone(), c3.clone()], Some(8))
-        .expect("make_compatible should succeed");
+    let compatible =
+        zenith_geom::NurbsCurve3::make_compatible(&[c1.clone(), c2.clone(), c3.clone()], Some(8))
+            .expect("make_compatible should succeed");
 
     assert_eq!(compatible.len(), 3);
     for curve in &compatible {
@@ -133,5 +137,3 @@ fn test_nurbs_curve_make_compatible() {
     assert!((p_start1 - Point3::new(0.0, 0.0, 0.0)).norm() < 1e-10);
     assert!((p_end1 - Point3::new(10.0, 0.0, 0.0)).norm() < 1e-10);
 }
-
-

@@ -11,9 +11,7 @@
 
 use std::f64::consts::PI;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -113,9 +111,13 @@ fn a_cavity_can_hold_an_island() {
     );
 
     // **島は空洞の中に浮かびます。** 触れていないので、立体は2つです。
-    let with_island =
-        BooleanEngine::boolean_solids_exact_result(&shell.solids[0], &island, BooleanOpType::Union, &tol)
-            .expect("adding an island inside the cavity should work");
+    let with_island = BooleanEngine::boolean_solids_exact_result(
+        &shell.solids[0],
+        &island,
+        BooleanOpType::Union,
+        &tol,
+    )
+    .expect("adding an island inside the cavity should work");
     assert_eq!(
         with_island.solids.len(),
         2,

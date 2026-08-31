@@ -181,11 +181,8 @@ fn the_answer_does_not_depend_on_where_the_workplane_is() {
     );
 
     // 斜めに傾けて、原点からも離します。
-    let tilted = WorkPlane::from_normal(
-        Point3::new(137.0, -91.0, 53.0),
-        Vec3::new(1.0, 2.0, 3.0),
-    )
-    .expect("作業平面が作れません");
+    let tilted = WorkPlane::from_normal(Point3::new(137.0, -91.0, 53.0), Vec3::new(1.0, 2.0, 3.0))
+        .expect("作業平面が作れません");
     let solid = extrude_sketch(&solver, &tilted, 5.0, &tol).expect("押し出せません");
     let there = volume(&solid);
     let residual = (there - expected).abs() / expected;
@@ -358,10 +355,7 @@ fn a_workplane_normal_is_perpendicular_to_its_axes() {
         let made = plane.normal();
         let wanted = normal / normal.norm();
         let sine = made.cross(&wanted).norm();
-        assert!(
-            sine <= 1e-12,
-            "法線が指定と違います（正弦 {sine:.3e}）"
-        );
+        assert!(sine <= 1e-12, "法線が指定と違います（正弦 {sine:.3e}）");
     }
     // 0 ベクトルは断ります。
     assert!(

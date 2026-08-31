@@ -8,19 +8,12 @@ fn test_stepped_shaft_with_keyway() {
     let tol = Tolerance::default();
 
     // 2段シャフト (段1: 半径15, 長さ40 / 段2: 半径10, 長さ30)
-    let shaft = ShaftBuilder::make_stepped_shaft(&[(15.0, 40.0), (10.0, 30.0)])
-        .expect("stepped shaft");
+    let shaft =
+        ShaftBuilder::make_stepped_shaft(&[(15.0, 40.0), (10.0, 30.0)]).expect("stepped shaft");
 
     // 段2 (半径10) に幅4, 深さ2.5, 長さ20のキー溝加工 (z=45〜65)
-    let shaft_with_key = ShaftBuilder::make_shaft_with_keyway(
-        &shaft,
-        10.0,
-        4.0,
-        2.5,
-        20.0,
-        45.0,
-    )
-    .expect("shaft with keyway");
+    let shaft_with_key = ShaftBuilder::make_shaft_with_keyway(&shaft, 10.0, 4.0, 2.5, 20.0, 45.0)
+        .expect("shaft with keyway");
 
     // 1. B-Rep 閉多様体検証
     assert!(
@@ -49,8 +42,7 @@ fn test_stepped_shaft_with_keyway() {
     let r = 10.0_f64;
     let half = 4.0 / 2.0;
     let flat = r - 2.5;
-    let antiderivative =
-        |x: f64| x * 0.5 * (r * r - x * x).sqrt() + (r * r * 0.5) * (x / r).asin();
+    let antiderivative = |x: f64| x * 0.5 * (r * r - x * x).sqrt() + (r * r * 0.5) * (x / r).asin();
     let removed_section = (antiderivative(half) - antiderivative(-half)) - 2.0 * half * flat;
     let expected = shaft_volume - removed_section * 20.0;
 

@@ -256,7 +256,12 @@ impl StepImporter {
             .ok_or_else(|| "unit context has no unit list".to_string())?;
 
         let mut seen: Vec<u64> = Vec::new();
-        for arg in list.trim().trim_start_matches('(').trim_end_matches(')').split(',') {
+        for arg in list
+            .trim()
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .split(',')
+        {
             if let Some(id) = Self::parse_entity_ref(arg) {
                 seen.push(id);
             }
@@ -946,7 +951,6 @@ impl StepImporter {
         .map(Some)
     }
 
-
     /// `AXIS1_PLACEMENT('', #origin, #direction)`
     ///
     /// `AXIS2_PLACEMENT_3D` と違い、横向きの基準方向を持たない。回転面の軸は
@@ -1275,7 +1279,9 @@ impl StepImporter {
         }
         let parts = Self::split_top_level_args(&raw.args);
         let vertex_id = Self::parse_entity_ref(parts.get(1)?)?;
-        Self::get_vertex(ctx, vertex_id).ok().map(|vertex| vertex.point)
+        Self::get_vertex(ctx, vertex_id)
+            .ok()
+            .map(|vertex| vertex.point)
     }
 
     fn get_wire(ctx: &mut ImportContext, loop_id: u64) -> Result<Wire, String> {
@@ -1473,16 +1479,26 @@ impl StepImporter {
             if parts.len() >= 3 {
                 if let Some(axis2_id) = Self::parse_entity_ref(parts[1]) {
                     if let Ok(radius) = parts[2].parse::<f64>().map(|r| r * ctx.length_scale) {
-                        if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
+                        if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id)
+                        {
                             let y_dir = z_dir.cross(&x_dir).normalize();
                             let weight = std::f64::consts::FRAC_1_SQRT_2;
                             // 90度円柱パッチ
                             let p0 = origin + x_dir * radius;
                             let p1 = origin + y_dir * radius;
                             let corner = origin + (x_dir + y_dir) * radius;
-                            let row0 = vec![ControlPoint3::unweighted(p0), ControlPoint3::unweighted(p0 + z_dir)];
-                            let row1 = vec![ControlPoint3::new(corner, weight), ControlPoint3::new(corner + z_dir, weight)];
-                            let row2 = vec![ControlPoint3::unweighted(p1), ControlPoint3::unweighted(p1 + z_dir)];
+                            let row0 = vec![
+                                ControlPoint3::unweighted(p0),
+                                ControlPoint3::unweighted(p0 + z_dir),
+                            ];
+                            let row1 = vec![
+                                ControlPoint3::new(corner, weight),
+                                ControlPoint3::new(corner + z_dir, weight),
+                            ];
+                            let row2 = vec![
+                                ControlPoint3::unweighted(p1),
+                                ControlPoint3::unweighted(p1 + z_dir),
+                            ];
                             if let Ok(nurbs) = NurbsSurface3::new(
                                 2,
                                 1,
@@ -1517,9 +1533,18 @@ impl StepImporter {
                         let p0_t = origin + z_dir + x_dir * r_top;
                         let p1_t = origin + z_dir + y_dir * r_top;
                         let c_t = origin + z_dir + (x_dir + y_dir) * r_top;
-                        let row0 = vec![ControlPoint3::unweighted(p0_b), ControlPoint3::unweighted(p0_t)];
-                        let row1 = vec![ControlPoint3::new(c_b, weight), ControlPoint3::new(c_t, weight)];
-                        let row2 = vec![ControlPoint3::unweighted(p1_b), ControlPoint3::unweighted(p1_t)];
+                        let row0 = vec![
+                            ControlPoint3::unweighted(p0_b),
+                            ControlPoint3::unweighted(p0_t),
+                        ];
+                        let row1 = vec![
+                            ControlPoint3::new(c_b, weight),
+                            ControlPoint3::new(c_t, weight),
+                        ];
+                        let row2 = vec![
+                            ControlPoint3::unweighted(p1_b),
+                            ControlPoint3::unweighted(p1_t),
+                        ];
                         if let Ok(nurbs) = NurbsSurface3::new(
                             2,
                             1,
@@ -1542,16 +1567,26 @@ impl StepImporter {
             if parts.len() >= 3 {
                 if let Some(axis2_id) = Self::parse_entity_ref(parts[1]) {
                     if let Ok(radius) = parts[2].parse::<f64>().map(|r| r * ctx.length_scale) {
-                        if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id) {
+                        if let Ok((origin, z_dir, x_dir)) = Self::get_axis2_placement(ctx, axis2_id)
+                        {
                             let y_dir = z_dir.cross(&x_dir).normalize();
                             let weight = std::f64::consts::FRAC_1_SQRT_2;
                             let p0 = origin + x_dir * radius;
                             let p1 = origin + y_dir * radius;
                             let p_top = origin + z_dir * radius;
                             let c_xy = origin + (x_dir + y_dir) * radius;
-                            let row0 = vec![ControlPoint3::unweighted(p0), ControlPoint3::unweighted(p_top)];
-                            let row1 = vec![ControlPoint3::new(c_xy, weight), ControlPoint3::new(origin + z_dir * radius, weight)];
-                            let row2 = vec![ControlPoint3::unweighted(p1), ControlPoint3::unweighted(p_top)];
+                            let row0 = vec![
+                                ControlPoint3::unweighted(p0),
+                                ControlPoint3::unweighted(p_top),
+                            ];
+                            let row1 = vec![
+                                ControlPoint3::new(c_xy, weight),
+                                ControlPoint3::new(origin + z_dir * radius, weight),
+                            ];
+                            let row2 = vec![
+                                ControlPoint3::unweighted(p1),
+                                ControlPoint3::unweighted(p_top),
+                            ];
                             if let Ok(nurbs) = NurbsSurface3::new(
                                 2,
                                 1,
@@ -1568,7 +1603,6 @@ impl StepImporter {
                 }
             }
         }
-
 
         if raw.name == "TOROIDAL_SURFACE" {
             // TOROIDAL_SURFACE('',#axis2,major_radius,minor_radius)
@@ -1622,7 +1656,6 @@ impl StepImporter {
 
         if raw.name == "B_SPLINE_SURFACE_WITH_KNOTS"
             || raw.args.contains("B_SPLINE_SURFACE_WITH_KNOTS")
-
         {
             if let Some(nurbs) = Self::parse_nurbs_surface(ctx, &raw)? {
                 let geom = FaceGeometry::Nurbs(nurbs);
@@ -1647,7 +1680,6 @@ impl StepImporter {
             raw.name, id
         ))
     }
-
 
     fn parse_nurbs_surface(
         ctx: &mut ImportContext,
@@ -1949,7 +1981,6 @@ impl StepImporter {
     }
 }
 
-
 fn extract_entity_args<'a>(text: &'a str, entity_name: &str) -> Option<&'a str> {
     let mut search_start = 0;
     let open = loop {
@@ -2067,8 +2098,8 @@ fn expand_knot_vector(mult_arg: &str, knot_arg: &str) -> Result<KnotVector, Stri
 #[cfg(test)]
 mod tests {
     use super::{
-        angular_span, cone_patch_for_boundary, sphere_patch_for_boundary,
-        torus_patch_for_boundary, ImportContext, RawEntity, StepImporter,
+        angular_span, cone_patch_for_boundary, sphere_patch_for_boundary, torus_patch_for_boundary,
+        ImportContext, RawEntity, StepImporter,
     };
     use zenith_geom::NurbsSurface3;
     use zenith_math::{Point3, Vec3};
@@ -2594,7 +2625,6 @@ mod tests {
         }
     }
 
-
     fn direction_entity(x: f64, y: f64, z: f64) -> RawEntity {
         RawEntity {
             name: "DIRECTION".to_string(),
@@ -2776,8 +2806,6 @@ mod tests {
     }
 }
 
-
-
 /// Diagonal of a wire's bounding box, as a cheap stand-in for how much of the
 /// face it encloses.
 ///
@@ -2888,7 +2916,8 @@ fn rational_elliptic_arc(
     let span_angle = sweep / span_count as f64;
     let weight = (span_angle * 0.5).cos();
 
-    let point_at = |angle: f64| center + x_axis * (radius * angle.cos()) + y_axis * (radius * angle.sin());
+    let point_at =
+        |angle: f64| center + x_axis * (radius * angle.cos()) + y_axis * (radius * angle.sin());
     // 接線の交点。半径 / cos(half) の距離に、区間の中央方向へ置く。
     let shoulder_at = |angle: f64| {
         let middle = angle + span_angle * 0.5;

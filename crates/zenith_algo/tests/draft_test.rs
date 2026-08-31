@@ -12,8 +12,8 @@ fn test_drafted_block() {
     let angle_deg = 5.0;
     let angle_rad = angle_deg * std::f64::consts::PI / 180.0;
 
-    let solid = DraftBuilder::make_drafted_block(dx, dy, dz, angle_rad, &tol)
-        .expect("drafted block");
+    let solid =
+        DraftBuilder::make_drafted_block(dx, dy, dz, angle_rad, &tol).expect("drafted block");
 
     // 1. B-Rep 閉多様体検証
     assert!(

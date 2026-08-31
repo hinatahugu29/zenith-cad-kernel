@@ -31,11 +31,8 @@ fn bounds(solid: &Solid) -> (Point3, Point3) {
                         oriented.edge.start_vertex.point,
                         oriented.edge.end_vertex.point,
                     ] {
-                        low = Point3::new(
-                            low.x.min(point.x),
-                            low.y.min(point.y),
-                            low.z.min(point.z),
-                        );
+                        low =
+                            Point3::new(low.x.min(point.x), low.y.min(point.y), low.z.min(point.z));
                         high = Point3::new(
                             high.x.max(point.x),
                             high.y.max(point.y),

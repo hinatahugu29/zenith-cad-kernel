@@ -17,10 +17,7 @@ use zenith_topo::{Face, FaceGeometry, Solid, Wire};
 fn line(p0: Point3, p1: Point3) -> NurbsCurve3 {
     NurbsCurve3::new(
         1,
-        vec![
-            ControlPoint3::unweighted(p0),
-            ControlPoint3::unweighted(p1),
-        ],
+        vec![ControlPoint3::unweighted(p0), ControlPoint3::unweighted(p1)],
         KnotVector::clamped_uniform(2, 1),
     )
     .unwrap()
@@ -83,8 +80,12 @@ fn test_every_brep_face_reaches_the_step_file() {
 #[test]
 fn test_the_checked_exporter_agrees_with_the_plain_one() {
     let solid = coons_slab();
-    let checked = StepExporter::export_solids_to_string_checked(std::slice::from_ref(&solid), "COONS_SLAB");
-    assert!(checked.is_ok(), "a Coons-bearing solid must export: {checked:?}");
+    let checked =
+        StepExporter::export_solids_to_string_checked(std::slice::from_ref(&solid), "COONS_SLAB");
+    assert!(
+        checked.is_ok(),
+        "a Coons-bearing solid must export: {checked:?}"
+    );
 }
 
 /// 標本した NURBS が元の曲面からどれだけ離れるか。近似であることを数で残す。
@@ -117,5 +118,4 @@ fn test_sampled_surface_stays_close_to_the_coons_patch() {
         previous = previous.min(deviation);
     }
     assert!(previous.is_finite());
-
 }

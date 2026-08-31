@@ -13,17 +13,14 @@ fn test_counterbore_hole_box_matches_analytic_volume() {
     let cb_radius = 8.0;
     let cb_depth = 5.0;
 
-    let cb_box = HoleBuilder::make_counterbore_hole_box(
-        dx,
-        dy,
-        dz,
-        hole_radius,
-        cb_radius,
-        cb_depth,
-    )
-    .expect("make_counterbore_hole_box");
+    let cb_box =
+        HoleBuilder::make_counterbore_hole_box(dx, dy, dz, hole_radius, cb_radius, cb_depth)
+            .expect("make_counterbore_hole_box");
 
-    assert!(cb_box.is_topologically_valid(&tol), "cb_box must be valid closed solid");
+    assert!(
+        cb_box.is_topologically_valid(&tol),
+        "cb_box must be valid closed solid"
+    );
 
     let params = TessellationParams::default();
     let mass = MassCalculator::compute_from_brep(&cb_box, &params);
@@ -51,18 +48,16 @@ fn test_counterbore_hole_box_shallow_and_deep_cases() {
     let dy = 50.0;
     let dz = 25.0;
 
-    for (hole_radius, cb_radius, cb_depth) in [(3.0, 6.0, 3.0), (5.0, 10.0, 8.0), (2.0, 5.0, 15.0)] {
-        let cb_box = HoleBuilder::make_counterbore_hole_box(
-            dx,
-            dy,
-            dz,
-            hole_radius,
-            cb_radius,
-            cb_depth,
-        )
-        .expect("make_counterbore_hole_box");
+    for (hole_radius, cb_radius, cb_depth) in [(3.0, 6.0, 3.0), (5.0, 10.0, 8.0), (2.0, 5.0, 15.0)]
+    {
+        let cb_box =
+            HoleBuilder::make_counterbore_hole_box(dx, dy, dz, hole_radius, cb_radius, cb_depth)
+                .expect("make_counterbore_hole_box");
 
-        assert!(cb_box.is_topologically_valid(&tol), "cb_box must be valid closed solid");
+        assert!(
+            cb_box.is_topologically_valid(&tol),
+            "cb_box must be valid closed solid"
+        );
 
         let params = TessellationParams::default();
         let mass = MassCalculator::compute_from_brep(&cb_box, &params);
@@ -87,13 +82,16 @@ fn test_counterbore_hole_box_shallow_and_deep_cases() {
 fn test_make_hex_nut_matches_analytic_volume() {
     let tol = Tolerance::default();
     let across_flats = 16.0; // 二面幅 S = 16mm (M10ナット相当)
-    let hole_radius = 4.25;  // 下穴半径 r = 4.25mm
-    let thickness = 8.0;     // 厚み H = 8mm
+    let hole_radius = 4.25; // 下穴半径 r = 4.25mm
+    let thickness = 8.0; // 厚み H = 8mm
 
-    let nut = HoleBuilder::make_hex_nut(across_flats, hole_radius, thickness)
-        .expect("make_hex_nut");
+    let nut =
+        HoleBuilder::make_hex_nut(across_flats, hole_radius, thickness).expect("make_hex_nut");
 
-    assert!(nut.is_topologically_valid(&tol), "hex nut must be valid closed solid");
+    assert!(
+        nut.is_topologically_valid(&tol),
+        "hex nut must be valid closed solid"
+    );
 
     let params = TessellationParams::default();
     let mass = MassCalculator::compute_from_brep(&nut, &params);

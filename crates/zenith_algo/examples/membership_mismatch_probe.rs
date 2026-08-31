@@ -83,7 +83,10 @@ fn main() {
         match BooleanEngine::boolean_solids_exact_result_unverified(&sphere, &block, op, &tol) {
             Ok(result) => result.solids,
             Err(err) => {
-                println!("the boolean refused: {}", err.chars().take(80).collect::<String>());
+                println!(
+                    "the boolean refused: {}",
+                    err.chars().take(80).collect::<String>()
+                );
                 return;
             }
         };
@@ -117,7 +120,13 @@ fn main() {
     println!();
     println!(
         "{:>5} {:>26} {:>9} {:>9} {:>10} {:>10} {}",
-        "index", "point", "|p|-10", "box gap", "to mesh A", "to mesh R", "in a / in b / expected / in r"
+        "index",
+        "point",
+        "|p|-10",
+        "box gap",
+        "to mesh A",
+        "to mesh R",
+        "in a / in b / expected / in r"
     );
     println!("{}", "-".repeat(108));
 

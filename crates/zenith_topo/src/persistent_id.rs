@@ -198,7 +198,11 @@ impl EdgeSignature {
 fn canonical_direction(direction: Vec3) -> Vec3 {
     for component in [direction.x, direction.y, direction.z] {
         if component.abs() > 1e-12 {
-            return if component > 0.0 { direction } else { -direction };
+            return if component > 0.0 {
+                direction
+            } else {
+                -direction
+            };
         }
     }
     direction

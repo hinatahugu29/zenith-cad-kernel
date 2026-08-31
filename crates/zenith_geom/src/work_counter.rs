@@ -116,7 +116,9 @@ impl WorkCounters {
                 .projection_damping_trials
                 .saturating_sub(earlier.projection_damping_trials),
             face_integrals: self.face_integrals.saturating_sub(earlier.face_integrals),
-            uv_triangulations: self.uv_triangulations.saturating_sub(earlier.uv_triangulations),
+            uv_triangulations: self
+                .uv_triangulations
+                .saturating_sub(earlier.uv_triangulations),
             uv_triangles: self.uv_triangles.saturating_sub(earlier.uv_triangles),
             uv_boundary_points: self
                 .uv_boundary_points

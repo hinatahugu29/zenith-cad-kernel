@@ -585,15 +585,11 @@ fn same_undirected_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
 ///
 /// `EdgeUse` は前から `middle` を持っていました。**使っていなかっただけ**です。
 fn same_directed_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
-    points_same(a.start, b.start, tol)
-        && points_same(a.end, b.end, tol)
-        && same_middle(a, b, tol)
+    points_same(a.start, b.start, tol) && points_same(a.end, b.end, tol) && same_middle(a, b, tol)
 }
 
 fn opposite_direction_edge(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
-    points_same(a.start, b.end, tol)
-        && points_same(a.end, b.start, tol)
-        && same_middle(a, b, tol)
+    points_same(a.start, b.end, tol) && points_same(a.end, b.start, tol) && same_middle(a, b, tol)
 }
 
 /// 途中の点が同じか。公差は稜の長さに対する相対で取ります——分割の仕方が

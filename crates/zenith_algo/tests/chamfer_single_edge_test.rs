@@ -40,7 +40,10 @@ fn test_chamfer_box_single_edge_all_four_corners() {
         );
 
         // 3. STEP ラウンドトリップ
-        let step_str = StepExporter::export_solid_to_string(&solid, &format!("ZENITH_CHAMFER_EDGE_{}", edge_idx));
+        let step_str = StepExporter::export_solid_to_string(
+            &solid,
+            &format!("ZENITH_CHAMFER_EDGE_{}", edge_idx),
+        );
         let imported = StepImporter::import_solid_from_str(&step_str)
             .expect("STEP import of chamfer solid should succeed");
         assert!(imported.outer_shell.validate_closed(&tol).is_valid());

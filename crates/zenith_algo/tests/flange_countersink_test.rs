@@ -8,14 +8,17 @@ fn test_make_countersink_hole_box_matches_analytic_volume() {
     let tol = Tolerance::default();
     let (w, d, h) = (40.0, 40.0, 20.0);
     let hole_r = 3.0; // M6下穴 (半径3mm)
-    let cs_r = 6.0;   // 皿モミ上面半径 6mm
+    let cs_r = 6.0; // 皿モミ上面半径 6mm
     let cs_angle_deg = 90.0;
     let (cx, cy) = (20.0, 20.0);
 
     let solid = HoleBuilder::make_countersink_hole_box(w, d, h, hole_r, cs_r, cs_angle_deg, cx, cy)
         .expect("make_countersink_hole_box");
 
-    assert!(solid.is_topologically_valid(&tol), "countersink hole box must be valid closed solid");
+    assert!(
+        solid.is_topologically_valid(&tol),
+        "countersink hole box must be valid closed solid"
+    );
 
     let params = TessellationParams::default();
     let mass = MassCalculator::compute_from_brep(&solid, &params);
@@ -52,23 +55,21 @@ fn test_make_circular_flange_matches_analytic_volume() {
     let num_holes = 4;
     let bolt_r = 3.5;
 
-    let flange = FlangeBuilder::make_circular_flange(
-        outer_r,
-        thickness,
-        center_r,
-        pcd_r,
-        num_holes,
-        bolt_r,
-    )
-    .expect("make_circular_flange");
+    let flange =
+        FlangeBuilder::make_circular_flange(outer_r, thickness, center_r, pcd_r, num_holes, bolt_r)
+            .expect("make_circular_flange");
 
-    assert!(flange.is_topologically_valid(&tol), "circular flange must be valid closed solid");
+    assert!(
+        flange.is_topologically_valid(&tol),
+        "circular flange must be valid closed solid"
+    );
 
     let params = TessellationParams::default();
     let mass = MassCalculator::compute_from_brep(&flange, &params);
 
     // 解析体積: PI * (outer_r^2 - center_r^2 - num_holes * bolt_r^2) * thickness
-    let area = PI * (outer_r * outer_r - center_r * center_r - (num_holes as f64) * bolt_r * bolt_r);
+    let area =
+        PI * (outer_r * outer_r - center_r * center_r - (num_holes as f64) * bolt_r * bolt_r);
     let expected_vol = area * thickness;
 
     let diff = (mass.volume - expected_vol).abs();
@@ -90,8 +91,7 @@ fn test_make_shaft_with_annular_groove_matches_analytic_volume() {
     let groove_depth = 2.5;
     let groove_z = 25.0;
 
-    let base_shaft = ShaftBuilder::make_stepped_shaft(&[(shaft_r, shaft_l)])
-        .expect("base shaft");
+    let base_shaft = ShaftBuilder::make_stepped_shaft(&[(shaft_r, shaft_l)]).expect("base shaft");
 
     let grooved_shaft = ShaftBuilder::make_shaft_with_annular_groove(
         &base_shaft,
@@ -102,7 +102,10 @@ fn test_make_shaft_with_annular_groove_matches_analytic_volume() {
     )
     .expect("make_shaft_with_annular_groove");
 
-    assert!(grooved_shaft.is_topologically_valid(&tol), "grooved shaft must be valid closed solid");
+    assert!(
+        grooved_shaft.is_topologically_valid(&tol),
+        "grooved shaft must be valid closed solid"
+    );
 
     let params = TessellationParams::default();
     let mass = MassCalculator::compute_from_brep(&grooved_shaft, &params);

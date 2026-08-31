@@ -36,17 +36,29 @@ fn the_diagonal_is_measured_about_the_origin_not_the_centre_of_mass() {
         MassCalculator::compute_from_brep(&PrimitiveBuilder::make_box(a, b, c).unwrap(), &params());
 
     assert!(
-        close(measured.inertia_diagonal.x, volume * (b * b + c * c) / 3.0, 1e-12),
+        close(
+            measured.inertia_diagonal.x,
+            volume * (b * b + c * c) / 3.0,
+            1e-12
+        ),
         "Ixx {} is not the value about the origin",
         measured.inertia_diagonal.x
     );
     assert!(
-        close(measured.inertia_diagonal.y, volume * (a * a + c * c) / 3.0, 1e-12),
+        close(
+            measured.inertia_diagonal.y,
+            volume * (a * a + c * c) / 3.0,
+            1e-12
+        ),
         "Iyy {}",
         measured.inertia_diagonal.y
     );
     assert!(
-        close(measured.inertia_diagonal.z, volume * (a * a + b * b) / 3.0, 1e-12),
+        close(
+            measured.inertia_diagonal.z,
+            volume * (a * a + b * b) / 3.0,
+            1e-12
+        ),
         "Izz {}",
         measured.inertia_diagonal.z
     );
@@ -93,11 +105,17 @@ fn a_curved_solid_lands_on_the_closed_form_for_its_inertia() {
     // 球と円柱。曲面の積分が体積だけでなく慣性でも効いているかを見る。
     let radius = 12.0f64;
     let volume = 4.0 / 3.0 * PI * radius.powi(3);
-    let sphere =
-        MassCalculator::compute_from_brep(&PrimitiveBuilder::make_sphere(radius).unwrap(), &params());
+    let sphere = MassCalculator::compute_from_brep(
+        &PrimitiveBuilder::make_sphere(radius).unwrap(),
+        &params(),
+    );
     for axis in 0..3 {
         assert!(
-            close(sphere.inertia_diagonal[axis], 0.4 * volume * radius * radius, 1e-11),
+            close(
+                sphere.inertia_diagonal[axis],
+                0.4 * volume * radius * radius,
+                1e-11
+            ),
             "sphere axis {axis}: {}",
             sphere.inertia_diagonal[axis]
         );
@@ -105,8 +123,10 @@ fn a_curved_solid_lands_on_the_closed_form_for_its_inertia() {
 
     let (r, h) = (10.0f64, 25.0);
     let volume = PI * r * r * h;
-    let cylinder =
-        MassCalculator::compute_from_brep(&PrimitiveBuilder::make_cylinder(r, h).unwrap(), &params());
+    let cylinder = MassCalculator::compute_from_brep(
+        &PrimitiveBuilder::make_cylinder(r, h).unwrap(),
+        &params(),
+    );
     assert!(
         close(cylinder.inertia_diagonal.z, volume * r * r * 0.5, 1e-11),
         "cylinder Izz {}",

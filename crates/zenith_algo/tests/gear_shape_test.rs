@@ -131,11 +131,14 @@ fn the_gear_volume_is_its_involute_area_times_its_thickness() {
         GearBuilder::involute_profile_area(MODULE, TEETH, ANGLE, BORE).expect("area") * THICKNESS;
 
     let error_at = |samples: usize| {
-        let gear =
-            GearBuilder::make_spur_gear_with_samples(MODULE, TEETH, ANGLE, THICKNESS, BORE, samples)
-                .expect("gear");
+        let gear = GearBuilder::make_spur_gear_with_samples(
+            MODULE, TEETH, ANGLE, THICKNESS, BORE, samples,
+        )
+        .expect("gear");
         assert!(
-            gear.outer_shell.validate_closed(&zenith_math::Tolerance::default()).is_valid(),
+            gear.outer_shell
+                .validate_closed(&zenith_math::Tolerance::default())
+                .is_valid(),
             "the gear at {samples} samples is not a closed shell"
         );
         (volume_of(&gear, 48) - expected).abs() / expected
@@ -238,8 +241,7 @@ fn flank_deviation(samples: usize) -> (f64, usize) {
 #[test]
 fn the_flanks_are_no_longer_the_straight_lines_they_used_to_be() {
     let d = dimensions();
-    let gear =
-        GearBuilder::make_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE).expect("gear");
+    let gear = GearBuilder::make_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE).expect("gear");
     let pitch_angle = 2.0 * PI / TEETH as f64;
     let half_tooth = pitch_angle * 0.25;
 
@@ -294,8 +296,7 @@ fn the_flanks_are_no_longer_the_straight_lines_they_used_to_be() {
 #[test]
 fn the_bore_radius_does_not_actually_bore_a_hole() {
     let d = dimensions();
-    let gear =
-        GearBuilder::make_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE).expect("gear");
+    let gear = GearBuilder::make_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE).expect("gear");
 
     // 穴があるなら内周ワイヤか、軸まわりの面が要る。どちらも無い。
     let holes: usize = gear
@@ -335,14 +336,20 @@ fn the_bore_radius_does_not_actually_bore_a_hole() {
 
 #[test]
 fn test_drilled_spur_gear_actually_has_a_bore() {
-    let drilled_gear =
-        GearBuilder::make_drilled_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE).expect("drilled gear");
+    let drilled_gear = GearBuilder::make_drilled_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE)
+        .expect("drilled gear");
     let tol = zenith_math::Tolerance::default();
-    assert!(drilled_gear.is_topologically_valid(&tol), "drilled gear must be valid solid");
+    assert!(
+        drilled_gear.is_topologically_valid(&tol),
+        "drilled gear must be valid solid"
+    );
 
-    let solid_gear = GearBuilder::make_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE).expect("solid gear");
-    let solid_vol = MassCalculator::compute_from_brep(&solid_gear, &TessellationParams::default()).volume;
-    let drilled_vol = MassCalculator::compute_from_brep(&drilled_gear, &TessellationParams::default()).volume;
+    let solid_gear =
+        GearBuilder::make_spur_gear(MODULE, TEETH, ANGLE, THICKNESS, BORE).expect("solid gear");
+    let solid_vol =
+        MassCalculator::compute_from_brep(&solid_gear, &TessellationParams::default()).volume;
+    let drilled_vol =
+        MassCalculator::compute_from_brep(&drilled_gear, &TessellationParams::default()).volume;
 
     let hole_vol = PI * BORE * BORE * THICKNESS;
     let expected_vol = solid_vol - hole_vol;
@@ -364,6 +371,7 @@ fn test_make_spur_gear_with_root_fillet_is_valid_solid() {
         "filleted gear must be valid closed solid"
     );
 
-    let solid_vol = MassCalculator::compute_from_brep(&filleted_gear, &TessellationParams::default()).volume;
+    let solid_vol =
+        MassCalculator::compute_from_brep(&filleted_gear, &TessellationParams::default()).volume;
     assert!(solid_vol > 0.0, "volume must be positive, got {solid_vol}");
 }

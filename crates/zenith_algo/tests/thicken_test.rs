@@ -15,7 +15,7 @@ use zenith_algo::{MassCalculator, ThickenBuilder};
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3};
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::TessellationParams;
-use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Orientation, Vertex, Wire};
+use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Vertex, Wire};
 
 fn cylinder_quarter(r: f64, h: f64) -> Face {
     let w = FRAC_1_SQRT_2;
@@ -135,8 +135,9 @@ fn a_flat_sheet_thickens_to_exactly_its_area_times_its_thickness() {
 fn a_curved_sheet_thickens_to_the_shell_between_two_radii() {
     let tol = Tolerance::default();
     for (radius, height, thickness) in [(10.0, 20.0, 1.0), (10.0, 20.0, 0.2), (6.0, 5.0, 2.0)] {
-        let solid = ThickenBuilder::thicken_face(&cylinder_quarter(radius, height), thickness, &tol)
-            .unwrap_or_else(|err| panic!("a cylinder quarter r{radius} t{thickness}: {err}"));
+        let solid =
+            ThickenBuilder::thicken_face(&cylinder_quarter(radius, height), thickness, &tol)
+                .unwrap_or_else(|err| panic!("a cylinder quarter r{radius} t{thickness}: {err}"));
 
         let report = solid.outer_shell.validate_closed(&tol);
         assert!(
@@ -146,8 +147,7 @@ fn a_curved_sheet_thickens_to_the_shell_between_two_radii() {
         );
 
         // 外へ厚くしたので、半径 r から r + t までの四半シェル。
-        let expected =
-            FRAC_PI_4 * ((radius + thickness).powi(2) - radius * radius) * height;
+        let expected = FRAC_PI_4 * ((radius + thickness).powi(2) - radius * radius) * height;
         let volume = volume_of(&solid);
         assert!(
             (volume - expected).abs() / expected < 1e-4,

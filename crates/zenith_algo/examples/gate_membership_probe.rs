@@ -23,9 +23,9 @@ use zenith_algo::{
     exact_inside, nearest_boundary_projection, BooleanEngine, BooleanOpType, BooleanResultVerifier,
     BrepTransform, PrimitiveBuilder,
 };
-use zenith_tess::TriangleMesh;
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
+use zenith_tess::TriangleMesh;
 use zenith_tess::{tessellate_solid, TessellationParams};
 use zenith_topo::Solid;
 
@@ -84,7 +84,6 @@ fn tilt_about_centre(solid: &Solid, low: &Point3, high: &Point3) -> Result<Solid
     BrepTransform::transform_solid(solid, &transform)
 }
 
-
 /// 検証と同じ Halton 列。同じ標本点を見るために揃えます。
 fn halton(mut index: usize, base: usize) -> f64 {
     let mut result = 0.0;
@@ -116,13 +115,7 @@ fn mesh_bbox(mesh: &TriangleMesh) -> Option<(Point3, Point3)> {
 
 /// 断られた演算の標本を1点ずつ見る。**なぜ厳密判定が決められないのか**を
 /// 名指しするためのもので、`ZENITH_GATE_DETAIL=1` でのみ出します。
-fn detail(
-    solid_a: &Solid,
-    solid_b: &Solid,
-    result: &[Solid],
-    op: BooleanOpType,
-    tol: &Tolerance,
-) {
+fn detail(solid_a: &Solid, solid_b: &Solid, result: &[Solid], op: BooleanOpType, tol: &Tolerance) {
     let tess = TessellationParams {
         u_divisions: 12,
         v_divisions: 12,
@@ -160,15 +153,15 @@ fn detail(
         );
         let ea = exact_inside(point, solid_a, tol);
         let eb = exact_inside(point, solid_b, tol);
-        let er = result
-            .iter()
-            .map(|s| exact_inside(point, s, tol))
-            .fold(Some(false), |acc, side| match (acc, side) {
+        let er = result.iter().map(|s| exact_inside(point, s, tol)).fold(
+            Some(false),
+            |acc, side| match (acc, side) {
                 (Some(true), _) => Some(true),
                 (_, Some(true)) => Some(true),
                 (None, _) | (_, None) => None,
                 (Some(false), Some(false)) => Some(false),
-            });
+            },
+        );
         let expected = match (ea, eb) {
             (Some(a), Some(b)) => Some(match op {
                 BooleanOpType::Union => a || b,
@@ -202,10 +195,7 @@ fn detail(
             format!("{} / {} / {}", show(ea), show(eb), show(er)),
             dist(solid_a),
             dist(solid_b),
-            result
-                .iter()
-                .map(dist)
-                .fold(f64::INFINITY, f64::min),
+            result.iter().map(dist).fold(f64::INFINITY, f64::min),
         );
     }
 }
@@ -259,8 +249,7 @@ fn main() {
                 continue;
             };
 
-            let report =
-                BooleanResultVerifier::verify(sphere, cutter, &result.solids, op, &tol);
+            let report = BooleanResultVerifier::verify(sphere, cutter, &result.solids, op, &tol);
             let passed = report.is_valid();
             if !passed {
                 refused += 1;

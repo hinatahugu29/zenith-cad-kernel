@@ -44,7 +44,11 @@ fn volume(solid: &Solid, divisions: usize) -> f64 {
 #[test]
 fn test_an_elliptic_prism_lands_on_the_closed_form() {
     let solid = read("elliptic_prism");
-    assert_eq!(solid.outer_shell.faces.len(), 3, "two caps and one swept side");
+    assert_eq!(
+        solid.outer_shell.faces.len(),
+        3,
+        "two caps and one swept side"
+    );
 
     // 許容は実測してから決めた。32分割で 4.5e-11、64分割と128分割で 7e-14 台。
     // 刻みを上げると落ちるので、残っているのは求積の粗さであって偏りではない。

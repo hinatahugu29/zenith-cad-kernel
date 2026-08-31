@@ -75,7 +75,10 @@ fn test_every_builder_makes_a_solid_that_is_the_right_way_out() {
             PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
         ),
         ("sphere", PrimitiveBuilder::make_sphere(10.0).unwrap()),
-        ("cone", PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap()),
+        (
+            "cone",
+            PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap(),
+        ),
         ("torus", PrimitiveBuilder::make_torus(12.0, 4.0).unwrap()),
         (
             "extrusion",

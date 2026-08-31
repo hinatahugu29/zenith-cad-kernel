@@ -91,7 +91,10 @@ fn main() {
 
     // 箱が離れている配置。速い経路を通っても距離が閉じた式に乗るか。
     println!("箱が離れている配置での報告距離");
-    println!("{:<34}{:>10}{:>12}{:>14}{:>14}", "case", "gap", "status", "reported", "expected");
+    println!(
+        "{:<34}{:>10}{:>12}{:>14}{:>14}",
+        "case", "gap", "status", "reported", "expected"
+    );
     println!("{}", "-".repeat(84));
     for (name, a, b, expected) in [
         (
@@ -127,7 +130,10 @@ fn main() {
 
     // 離れている側。報告される距離が閉じた式に乗るか。
     println!("離れている配置での報告距離");
-    println!("{:<34}{:>10}{:>12}{:>14}{:>14}", "case", "gap", "status", "reported", "expected");
+    println!(
+        "{:<34}{:>10}{:>12}{:>14}{:>14}",
+        "case", "gap", "status", "reported", "expected"
+    );
     println!("{}", "-".repeat(84));
     for gap in [10.0f64, 1.0, 0.1] {
         let plate = PrimitiveBuilder::make_box(200.0, 200.0, 2.0).unwrap();

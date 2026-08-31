@@ -80,7 +80,8 @@ fn test_the_terminate_record_counts_what_was_written() {
         let start = field * 8;
         let text = &body[start..start + 8];
         assert_eq!(
-            text.as_bytes()[0], prefix as u8,
+            text.as_bytes()[0],
+            prefix as u8,
             "terminate field {field} must start with {prefix}: {text:?}"
         );
         text[1..].trim().parse::<usize>().expect("a count")

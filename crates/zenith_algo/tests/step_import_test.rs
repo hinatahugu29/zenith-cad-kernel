@@ -124,7 +124,11 @@ fn test_a_drilled_block_keeps_its_hole_through_a_round_trip() {
     );
 
     let report = imported.outer_shell.validate_closed(&tol);
-    assert!(report.is_valid(), "imported shell invalid: {:?}", report.errors);
+    assert!(
+        report.is_valid(),
+        "imported shell invalid: {:?}",
+        report.errors
+    );
 }
 
 #[test]

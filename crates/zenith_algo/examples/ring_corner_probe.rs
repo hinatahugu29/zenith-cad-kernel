@@ -68,7 +68,10 @@ fn corner_block() -> Option<Solid> {
 fn report(label: &str, ring: &Solid, block: &Solid) {
     let tol = Tolerance::default();
     let before = volume(std::slice::from_ref(ring));
-    println!("  {label}: V(A) {before:.6}, {} face(s)", ring.outer_shell.faces.len());
+    println!(
+        "  {label}: V(A) {before:.6}, {} face(s)",
+        ring.outer_shell.faces.len()
+    );
     for (name, op) in [
         ("difference", BooleanOpType::Difference),
         ("intersection", BooleanOpType::Intersection),
@@ -82,7 +85,12 @@ fn report(label: &str, ring: &Solid, block: &Solid) {
             ),
             Err(err) => println!(
                 "    {name:<13} refused: {}",
-                err.split(';').next().unwrap_or(&err).chars().take(52).collect::<String>()
+                err.split(';')
+                    .next()
+                    .unwrap_or(&err)
+                    .chars()
+                    .take(52)
+                    .collect::<String>()
             ),
         }
     }

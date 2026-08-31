@@ -1,14 +1,19 @@
 use std::f64::consts::PI;
 
 use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, EdgeBlender, MassCalculator,
-    PrimitiveBuilder,
+    BooleanEngine, BooleanOpType, BrepTransform, EdgeBlender, MassCalculator, PrimitiveBuilder,
 };
 use zenith_io::{StepExporter, StepImporter};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams};
 
-fn make_slotted_plate(plate_w: f64, plate_d: f64, plate_h: f64, slot_l: f64, slot_r: f64) -> (zenith_topo::Solid, u64) {
+fn make_slotted_plate(
+    plate_w: f64,
+    plate_d: f64,
+    plate_h: f64,
+    slot_l: f64,
+    slot_r: f64,
+) -> (zenith_topo::Solid, u64) {
     let tol = Tolerance::default();
     let plate = PrimitiveBuilder::make_box(plate_w, plate_d, plate_h).expect("plate");
     let slot_tool = BrepTransform::translate_solid(
@@ -58,16 +63,26 @@ fn test_slot_hole_mouth_chamfer() {
     let (chamfered, report) = EdgeBlender::blend_edge(
         &plate,
         mouth_edge_id,
-        zenith_algo::BlendKind::Chamfer { distance: chamfer_d },
+        zenith_algo::BlendKind::Chamfer {
+            distance: chamfer_d,
+        },
     )
     .expect("chamfer slot hole mouth");
 
     // 1. 体積検証
-    let expected_removed = slot_l * chamfer_d * chamfer_d + PI * chamfer_d * chamfer_d * (slot_r + chamfer_d / 3.0);
-    let initial_vol = plate_w * plate_d * plate_h - (2.0 * slot_l * slot_r + PI * slot_r * slot_r) * plate_h;
+    let expected_removed =
+        slot_l * chamfer_d * chamfer_d + PI * chamfer_d * chamfer_d * (slot_r + chamfer_d / 3.0);
+    let initial_vol =
+        plate_w * plate_d * plate_h - (2.0 * slot_l * slot_r + PI * slot_r * slot_r) * plate_h;
     let expected_vol = initial_vol - expected_removed;
 
-    let mass = MassCalculator::compute_from_brep(&chamfered, &TessellationParams { u_divisions: 48, v_divisions: 48 });
+    let mass = MassCalculator::compute_from_brep(
+        &chamfered,
+        &TessellationParams {
+            u_divisions: 48,
+            v_divisions: 48,
+        },
+    );
     let rel_err = (mass.volume - expected_vol).abs() / expected_vol;
     assert!(
         rel_err < 1e-3,
@@ -78,14 +93,26 @@ fn test_slot_hole_mouth_chamfer() {
     assert!((report.predicted_removed_volume - expected_removed).abs() < 1e-6);
 
     // 2. B-Rep 閉多様体・メッシュ検証
-    assert!(chamfered.outer_shell.validate_closed(&tol).is_valid(), "Chamfered slotted plate must be closed manifold");
+    assert!(
+        chamfered.outer_shell.validate_closed(&tol).is_valid(),
+        "Chamfered slotted plate must be closed manifold"
+    );
     let mesh = tessellate_solid(&chamfered, &TessellationParams::default());
-    assert!(mesh.num_triangles() > 0, "Chamfered slotted plate mesh must have triangles");
+    assert!(
+        mesh.num_triangles() > 0,
+        "Chamfered slotted plate mesh must have triangles"
+    );
 
     // 3. STEP往復検証
     let step_str = StepExporter::export_solid_to_string(&chamfered, "slot_hole_chamfer");
     let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
-    let reimport_mass = MassCalculator::compute_from_brep(&reimported, &TessellationParams { u_divisions: 48, v_divisions: 48 });
+    let reimport_mass = MassCalculator::compute_from_brep(
+        &reimported,
+        &TessellationParams {
+            u_divisions: 48,
+            v_divisions: 48,
+        },
+    );
     assert!((reimport_mass.volume - mass.volume).abs() / mass.volume < 1e-4);
 }
 
@@ -110,11 +137,19 @@ fn test_slot_hole_mouth_fillet() {
 
     // 1. 体積検証
     let expected_removed = 2.0 * slot_l * fillet_r * fillet_r * (1.0 - PI * 0.25)
-        + PI * (slot_r * fillet_r * fillet_r * (2.0 - PI * 0.5) + fillet_r.powi(3) * (5.0 / 3.0 - PI * 0.5));
-    let initial_vol = plate_w * plate_d * plate_h - (2.0 * slot_l * slot_r + PI * slot_r * slot_r) * plate_h;
+        + PI * (slot_r * fillet_r * fillet_r * (2.0 - PI * 0.5)
+            + fillet_r.powi(3) * (5.0 / 3.0 - PI * 0.5));
+    let initial_vol =
+        plate_w * plate_d * plate_h - (2.0 * slot_l * slot_r + PI * slot_r * slot_r) * plate_h;
     let expected_vol = initial_vol - expected_removed;
 
-    let mass = MassCalculator::compute_from_brep(&filleted, &TessellationParams { u_divisions: 48, v_divisions: 48 });
+    let mass = MassCalculator::compute_from_brep(
+        &filleted,
+        &TessellationParams {
+            u_divisions: 48,
+            v_divisions: 48,
+        },
+    );
     let rel_err = (mass.volume - expected_vol).abs() / expected_vol;
     assert!(
         rel_err < 1e-3,
@@ -125,13 +160,25 @@ fn test_slot_hole_mouth_fillet() {
     assert!((report.predicted_removed_volume - expected_removed).abs() < 1e-6);
 
     // 2. B-Rep 閉多様体・メッシュ検証
-    assert!(filleted.outer_shell.validate_closed(&tol).is_valid(), "Filleted slotted plate must be closed manifold");
+    assert!(
+        filleted.outer_shell.validate_closed(&tol).is_valid(),
+        "Filleted slotted plate must be closed manifold"
+    );
     let mesh = tessellate_solid(&filleted, &TessellationParams::default());
-    assert!(mesh.num_triangles() > 0, "Filleted slotted plate mesh must have triangles");
+    assert!(
+        mesh.num_triangles() > 0,
+        "Filleted slotted plate mesh must have triangles"
+    );
 
     // 3. STEP往復検証
     let step_str = StepExporter::export_solid_to_string(&filleted, "slot_hole_fillet");
     let reimported = StepImporter::import_solid_from_str(&step_str).expect("import STEP");
-    let reimport_mass = MassCalculator::compute_from_brep(&reimported, &TessellationParams { u_divisions: 48, v_divisions: 48 });
+    let reimport_mass = MassCalculator::compute_from_brep(
+        &reimported,
+        &TessellationParams {
+            u_divisions: 48,
+            v_divisions: 48,
+        },
+    );
     assert!((reimport_mass.volume - mass.volume).abs() / mass.volume < 1e-4);
 }

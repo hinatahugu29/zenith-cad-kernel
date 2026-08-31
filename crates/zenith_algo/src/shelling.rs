@@ -21,12 +21,7 @@ fn make_plane_face(
 impl ShellingBuilder {
     /// 直方体ソリッド（dx, dy, dz）から天面開口を除去し、
     /// 肉厚 thickness の薄肉ボックス容器（Open-Top Box）を構築（完全マニホールド閉B-Rep）
-    pub fn make_open_box(
-        dx: f64,
-        dy: f64,
-        dz: f64,
-        thickness: f64,
-    ) -> Result<Solid, String> {
+    pub fn make_open_box(dx: f64, dy: f64, dz: f64, thickness: f64) -> Result<Solid, String> {
         let t = thickness;
         if t <= 1e-6 || dx <= 2.0 * t || dy <= 2.0 * t || dz <= t {
             return Err("Wall thickness is too large for box dimensions".to_string());
@@ -226,30 +221,33 @@ impl ShellingBuilder {
 
         // 5. 天面開口部リム (Top Rim: z=dz, 外側ループ vo4..vo7 と 内側穴ループ vi4..vi7)
         let f_rim = Face::new(
-            FaceGeometry::Plane(PlaneSurface3::new(Point3::new(0.0, 0.0, dz), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)).unwrap()),
+            FaceGeometry::Plane(
+                PlaneSurface3::new(
+                    Point3::new(0.0, 0.0, dz),
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                )
+                .unwrap(),
+            ),
             Wire::new(vec![
                 OrientedEdge::forward(eo_45.clone()),
                 OrientedEdge::forward(eo_56.clone()),
                 OrientedEdge::forward(eo_67.clone()),
                 OrientedEdge::forward(eo_74.clone()),
             ]),
-            vec![
-                Wire::new(vec![
-                    OrientedEdge::reversed(ei_74.clone()),
-                    OrientedEdge::reversed(ei_67.clone()),
-                    OrientedEdge::reversed(ei_56.clone()),
-                    OrientedEdge::reversed(ei_45.clone()),
-                ])
-            ],
+            vec![Wire::new(vec![
+                OrientedEdge::reversed(ei_74.clone()),
+                OrientedEdge::reversed(ei_67.clone()),
+                OrientedEdge::reversed(ei_56.clone()),
+                OrientedEdge::reversed(ei_45.clone()),
+            ])],
             zenith_topo::Orientation::Forward,
             1e-6,
         );
 
         let faces = vec![
-            f_bot, f_in_bot,
-            f_front, f_right, f_back, f_left,
-            f_in_front, f_in_right, f_in_back, f_in_left,
-            f_rim,
+            f_bot, f_in_bot, f_front, f_right, f_back, f_left, f_in_front, f_in_right, f_in_back,
+            f_in_left, f_rim,
         ];
 
         let shell = Shell::closed(faces);
@@ -259,11 +257,7 @@ impl ShellingBuilder {
 
     /// 円柱（radius, height）から天面開口を除去し、
     /// 肉厚 thickness の薄肉円筒カップ容器（Open-Top Cylinder）を構築
-    pub fn make_open_cylinder(
-        radius: f64,
-        height: f64,
-        thickness: f64,
-    ) -> Result<Solid, String> {
+    pub fn make_open_cylinder(radius: f64, height: f64, thickness: f64) -> Result<Solid, String> {
         let t = thickness;
         let r_out = radius;
         let r_in = radius - t;
@@ -314,8 +308,14 @@ impl ShellingBuilder {
         let mut ev_out = Vec::with_capacity(4);
         let mut ev_in = Vec::with_capacity(4);
         for i in 0..4 {
-            ev_out.push(Edge::line_between(v_out_bot[i].clone(), v_out_top[i].clone())?);
-            ev_in.push(Edge::line_between(v_in_bot[i].clone(), v_in_top[i].clone())?);
+            ev_out.push(Edge::line_between(
+                v_out_bot[i].clone(),
+                v_out_top[i].clone(),
+            )?);
+            ev_in.push(Edge::line_between(
+                v_in_bot[i].clone(),
+                v_in_top[i].clone(),
+            )?);
         }
 
         // 外側円弧 & 内側円弧
@@ -472,7 +472,8 @@ impl ShellingBuilder {
             Point3::new(0.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             Vec3::new(1.0, 0.0, 0.0),
-        ).unwrap();
+        )
+        .unwrap();
         let wire_bot = Wire::new(vec![
             OrientedEdge::reversed(e_out_bot[3].clone()),
             OrientedEdge::reversed(e_out_bot[2].clone()),
@@ -486,7 +487,8 @@ impl ShellingBuilder {
             Point3::new(0.0, 0.0, t),
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
-        ).unwrap();
+        )
+        .unwrap();
         let wire_in_bot = Wire::new(vec![
             OrientedEdge::forward(e_in_bot[0].clone()),
             OrientedEdge::forward(e_in_bot[1].clone()),
@@ -500,7 +502,8 @@ impl ShellingBuilder {
             Point3::new(0.0, 0.0, h_out),
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
-        ).unwrap();
+        )
+        .unwrap();
         let outer_rim_wire = Wire::new(vec![
             OrientedEdge::forward(e_out_top[0].clone()),
             OrientedEdge::forward(e_out_top[1].clone()),
@@ -568,10 +571,19 @@ impl ShellingBuilder {
         ];
 
         // 3D 頂点
-        let p_out_bot: Vec<Point3> = loc_out.iter().map(|&(x, y)| Point3::new(x, y, 0.0)).collect();
-        let p_out_top: Vec<Point3> = loc_out.iter().map(|&(x, y)| Point3::new(x, y, h_out)).collect();
+        let p_out_bot: Vec<Point3> = loc_out
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, 0.0))
+            .collect();
+        let p_out_top: Vec<Point3> = loc_out
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, h_out))
+            .collect();
         let p_in_bot: Vec<Point3> = loc_in.iter().map(|&(x, y)| Point3::new(x, y, t)).collect();
-        let p_in_top: Vec<Point3> = loc_in.iter().map(|&(x, y)| Point3::new(x, y, h_out)).collect();
+        let p_in_top: Vec<Point3> = loc_in
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, h_out))
+            .collect();
 
         let v_out_bot: Vec<Vertex> = p_out_bot.iter().map(|p| Vertex::from_point(*p)).collect();
         let v_out_top: Vec<Vertex> = p_out_top.iter().map(|p| Vertex::from_point(*p)).collect();
@@ -582,8 +594,14 @@ impl ShellingBuilder {
         let mut ev_out = Vec::with_capacity(6);
         let mut ev_in = Vec::with_capacity(6);
         for i in 0..6 {
-            ev_out.push(Edge::line_between(v_out_bot[i].clone(), v_out_top[i].clone())?);
-            ev_in.push(Edge::line_between(v_in_bot[i].clone(), v_in_top[i].clone())?);
+            ev_out.push(Edge::line_between(
+                v_out_bot[i].clone(),
+                v_out_top[i].clone(),
+            )?);
+            ev_in.push(Edge::line_between(
+                v_in_bot[i].clone(),
+                v_in_top[i].clone(),
+            )?);
         }
 
         // 周方向エッジ
@@ -784,7 +802,8 @@ impl ShellingBuilder {
             Point3::new(0.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
             Vec3::new(1.0, 0.0, 0.0),
-        ).unwrap();
+        )
+        .unwrap();
         let wire_bot = Wire::new(vec![
             OrientedEdge::reversed(e_out_bot[5].clone()),
             OrientedEdge::reversed(e_out_bot[4].clone()),
@@ -800,7 +819,8 @@ impl ShellingBuilder {
             Point3::new(0.0, 0.0, t),
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
-        ).unwrap();
+        )
+        .unwrap();
         let wire_in_bot = Wire::new(vec![
             OrientedEdge::forward(e_in_bot[0].clone()),
             OrientedEdge::forward(e_in_bot[1].clone()),
@@ -816,7 +836,8 @@ impl ShellingBuilder {
             Point3::new(0.0, 0.0, h_out),
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
-        ).unwrap();
+        )
+        .unwrap();
         let outer_rim_wire = Wire::new(vec![
             OrientedEdge::forward(e_out_top[0].clone()),
             OrientedEdge::forward(e_out_top[1].clone()),

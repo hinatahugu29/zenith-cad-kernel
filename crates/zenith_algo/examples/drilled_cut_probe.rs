@@ -30,12 +30,12 @@ fn main() {
     let drilled = HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).expect("drilled box");
 
     println!("plain box    {:.4}", volume(&plain));
-    println!("drilled box  {:.4}  (hole radius 5 through 15)", volume(&drilled));
-    println!();
     println!(
-        "{:<44} {:<10} {:<10}",
-        "knife", "plain", "drilled"
+        "drilled box  {:.4}  (hole radius 5 through 15)",
+        volume(&drilled)
     );
+    println!();
+    println!("{:<44} {:<10} {:<10}", "knife", "plain", "drilled");
     println!("{}", "-".repeat(70));
 
     let knives: Vec<(&str, Solid)> = vec![
@@ -89,13 +89,24 @@ fn main() {
                     let after: f64 = result.solids.iter().map(volume).sum();
                     format!("{after:.3} ({}s)", result.solids.len())
                 }
-                Err(err) => format!("ERR {}", err.split("; selected").nth(1).unwrap_or("").chars().take(200).collect::<String>()),
+                Err(err) => format!(
+                    "ERR {}",
+                    err.split("; selected")
+                        .nth(1)
+                        .unwrap_or("")
+                        .chars()
+                        .take(200)
+                        .collect::<String>()
+                ),
             };
             cells.push(cell);
         }
-        println!("{name:<44}
+        println!(
+            "{name:<44}
     plain   {}
-    drilled {}", cells[0], cells[1]);
+    drilled {}",
+            cells[0], cells[1]
+        );
     }
 
     println!();

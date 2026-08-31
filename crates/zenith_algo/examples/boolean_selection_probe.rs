@@ -18,7 +18,9 @@ fn main() {
     let tol = Tolerance::default();
 
     // 既定は穴あけ。引数 "rotated" で回転ボックスの和集合を見る。
-    let case = std::env::args().nth(1).unwrap_or_else(|| "drill".to_string());
+    let case = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "drill".to_string());
 
     let (solid_a, solid_b, op) = if case == "lifted" {
         let boxa = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).unwrap();
@@ -54,11 +56,13 @@ fn main() {
     let (block, drill) = (solid_a, solid_b);
     println!("case: {case} ({op:?})");
 
-    let selection = BrepIntersectionBuilder::collect_selected_boolean_face_pieces(
-        &block, &drill, op, &tol,
-    );
+    let selection =
+        BrepIntersectionBuilder::collect_selected_boolean_face_pieces(&block, &drill, op, &tol);
 
-    println!("selected {} face pieces", selection.selected_face_pieces.len());
+    println!(
+        "selected {} face pieces",
+        selection.selected_face_pieces.len()
+    );
     println!(
         "{:<4} {:<8} {:<10} {:<8} {:>12} {:>7} {:>7}",
         "#", "operand", "region", "kind", "area", "outer", "holes"
@@ -95,7 +99,10 @@ fn main() {
     }
 
     println!();
-    println!("batch splits on operand A: {} entries", selection.batch_splits.splits_a.len());
+    println!(
+        "batch splits on operand A: {} entries",
+        selection.batch_splits.splits_a.len()
+    );
     for split in &selection.batch_splits.splits_a {
         println!(
             "    face {} split by {} edge(s) -> {} piece(s), applied {}, skipped {}",
@@ -106,7 +113,10 @@ fn main() {
             split.result.skipped_split_count
         );
     }
-    println!("batch splits on operand B: {} entries", selection.batch_splits.splits_b.len());
+    println!(
+        "batch splits on operand B: {} entries",
+        selection.batch_splits.splits_b.len()
+    );
     for split in &selection.batch_splits.splits_b {
         println!(
             "    face {} split by {} edge(s) -> {} piece(s), applied {}, skipped {}",

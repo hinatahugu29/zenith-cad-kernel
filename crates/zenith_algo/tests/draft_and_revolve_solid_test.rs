@@ -74,10 +74,7 @@ fn test_extrude_wire_with_draft() {
     // 勾配そのものも測る。境界箱の広がりが h·tanα でなければ、面は指定した
     // 角度になっていない。
     let bbox = solid.bounding_box();
-    for (label, reach) in [
-        ("x", bbox.max.x - 15.0),
-        ("y", bbox.max.y - 10.0),
-    ] {
+    for (label, reach) in [("x", bbox.max.x - 15.0), ("y", bbox.max.y - 10.0)] {
         let delivered = (reach / h).atan().to_degrees();
         assert!(
             (delivered - draft_angle.to_degrees()).abs() < 1e-9,

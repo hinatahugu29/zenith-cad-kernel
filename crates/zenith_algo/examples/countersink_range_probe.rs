@@ -29,9 +29,7 @@ fn main() {
         for ratio in [1.5f64, 1.8, 2.0, 2.5] {
             for angle in [60.0f64, 82.0, 90.0, 120.0] {
                 let cs_r = hole_r * ratio;
-                match HoleBuilder::make_countersink_hole_box(
-                    w, d, h, hole_r, cs_r, angle, cx, cy,
-                ) {
+                match HoleBuilder::make_countersink_hole_box(w, d, h, hole_r, cs_r, angle, cx, cy) {
                     Ok(solid) => {
                         let volume = MassCalculator::compute_from_brep(
                             &solid,

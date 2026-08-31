@@ -17,28 +17,89 @@ fn main() {
     let params = TessellationParams::default();
 
     let subjects = [
-        ("occ cone", "target/validation/occ_reference_cone.step", 3267.2563597),
-        ("occ cone_full", "target/validation/occ_reference_cone_full.step", 2094.3951023932),
-        ("occ cylinder", "target/validation/occ_reference_cylinder.step", 12566.3706143592),
-        ("occ cylinder_nurbs", "target/validation/occ_reference_cylinder_nurbs.step", 12566.3706143592),
-        ("occ sphere", "target/validation/occ_reference_sphere.step", 4188.7902047864),
-        ("occ sphere_capped", "target/validation/occ_reference_sphere_capped.step", 2094.3951023932),
-        ("occ torus", "target/validation/occ_reference_torus.step", 3789.9280732),
-        ("occ torus_segment", "target/validation/occ_reference_torus_segment.step", 947.4820183),
+        (
+            "occ cone",
+            "target/validation/occ_reference_cone.step",
+            3267.2563597,
+        ),
+        (
+            "occ cone_full",
+            "target/validation/occ_reference_cone_full.step",
+            2094.3951023932,
+        ),
+        (
+            "occ cylinder",
+            "target/validation/occ_reference_cylinder.step",
+            12566.3706143592,
+        ),
+        (
+            "occ cylinder_nurbs",
+            "target/validation/occ_reference_cylinder_nurbs.step",
+            12566.3706143592,
+        ),
+        (
+            "occ sphere",
+            "target/validation/occ_reference_sphere.step",
+            4188.7902047864,
+        ),
+        (
+            "occ sphere_capped",
+            "target/validation/occ_reference_sphere_capped.step",
+            2094.3951023932,
+        ),
+        (
+            "occ torus",
+            "target/validation/occ_reference_torus.step",
+            3789.9280732,
+        ),
+        (
+            "occ torus_segment",
+            "target/validation/occ_reference_torus_segment.step",
+            947.4820183,
+        ),
         // この3本は検体に足したあと、**この一覧に入っていませんでした**。
         // 正規化はここで一度も測られておらず、`revolved_ring` は組み直すと
         // 位相的に無効な立体になります。測っていない場所に欠陥がある、という
         // このリポジトリの傾向どおりでした。
-        ("occ revolved_ring", "target/validation/occ_reference_revolved_ring.step", 1583.3626967),
-        ("occ elliptic_prism", "target/validation/occ_reference_elliptic_prism.step", 3958.4067435),
-        ("occ extruded_spline", "target/validation/occ_reference_extruded_spline.step", 5220.4352952),
-        ("native cylinder", "target/validation/cylinder_r10_h40.step", 12566.3706143592),
-        ("native sphere", "target/validation/sphere_r10.step", 4188.7902047864),
+        (
+            "occ revolved_ring",
+            "target/validation/occ_reference_revolved_ring.step",
+            1583.3626967,
+        ),
+        (
+            "occ elliptic_prism",
+            "target/validation/occ_reference_elliptic_prism.step",
+            3958.4067435,
+        ),
+        (
+            "occ extruded_spline",
+            "target/validation/occ_reference_extruded_spline.step",
+            5220.4352952,
+        ),
+        (
+            "native cylinder",
+            "target/validation/cylinder_r10_h40.step",
+            12566.3706143592,
+        ),
+        (
+            "native sphere",
+            "target/validation/sphere_r10.step",
+            4188.7902047864,
+        ),
     ];
 
     println!(
         "{:<22} {:>6} {:>6} {:>5} {:>5} {:>16} {:>16} {:>10} {:>8} {:>10}",
-        "subject", "faces", "->", "split", "left", "volume before", "volume after", "rel move", "shell", "usable"
+        "subject",
+        "faces",
+        "->",
+        "split",
+        "left",
+        "volume before",
+        "volume after",
+        "rel move",
+        "shell",
+        "usable"
     );
     println!("{}", "-".repeat(112));
 
@@ -90,7 +151,11 @@ fn main() {
             before.volume,
             after.volume,
             rel,
-            if shell.errors.is_empty() { "valid" } else { "BROKEN" },
+            if shell.errors.is_empty() {
+                "valid"
+            } else {
+                "BROKEN"
+            },
             if usable { "usable" } else { "UNUSABLE" }
         );
         for reason in &report.left_alone_reasons {

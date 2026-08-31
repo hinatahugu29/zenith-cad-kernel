@@ -83,7 +83,11 @@ fn the_three_placements_that_the_flip_used_to_break_stay_manifold() {
     // **A の側も配置ごとに違います**（`box x cylinder (both turned)` は箱も
     // 回します）。掃き出しと同じ置き方でなければ、同じ欠陥を踏みません。
     let cases = [
-        ("box x cone (generatrix in a face)", boxa.clone(), standing_cone),
+        (
+            "box x cone (generatrix in a face)",
+            boxa.clone(),
+            standing_cone,
+        ),
         ("box x cylinder (both turned)", spun_box, turned_cylinder),
         ("box x torus (inclined 25deg)", boxa.clone(), inclined_torus),
     ];

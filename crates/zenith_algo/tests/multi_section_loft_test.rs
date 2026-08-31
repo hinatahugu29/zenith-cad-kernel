@@ -36,8 +36,7 @@ fn test_multi_section_loft_duct() {
     )
     .expect("ellipse wire");
 
-    let solid = LoftBuilder::loft_solid(&[w0, w1, w2], 2, &tol)
-        .expect("loft solid");
+    let solid = LoftBuilder::loft_solid(&[w0, w1, w2], 2, &tol).expect("loft solid");
 
     // 1. B-Rep 閉多様体検証
     assert!(

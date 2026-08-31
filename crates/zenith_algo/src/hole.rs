@@ -123,18 +123,66 @@ impl HoleBuilder {
 
         // 下面穴円弧 (反時計回り CCW: 0->1->2->3->0)
         let arc_hb = [
-            make_arc(p_hb[0], p_hb[1], Point3::new(cx + r, cy + r, 0.0), v_hb[0].clone(), v_hb[1].clone())?,
-            make_arc(p_hb[1], p_hb[2], Point3::new(cx - r, cy + r, 0.0), v_hb[1].clone(), v_hb[2].clone())?,
-            make_arc(p_hb[2], p_hb[3], Point3::new(cx - r, cy - r, 0.0), v_hb[2].clone(), v_hb[3].clone())?,
-            make_arc(p_hb[3], p_hb[0], Point3::new(cx + r, cy - r, 0.0), v_hb[3].clone(), v_hb[0].clone())?,
+            make_arc(
+                p_hb[0],
+                p_hb[1],
+                Point3::new(cx + r, cy + r, 0.0),
+                v_hb[0].clone(),
+                v_hb[1].clone(),
+            )?,
+            make_arc(
+                p_hb[1],
+                p_hb[2],
+                Point3::new(cx - r, cy + r, 0.0),
+                v_hb[1].clone(),
+                v_hb[2].clone(),
+            )?,
+            make_arc(
+                p_hb[2],
+                p_hb[3],
+                Point3::new(cx - r, cy - r, 0.0),
+                v_hb[2].clone(),
+                v_hb[3].clone(),
+            )?,
+            make_arc(
+                p_hb[3],
+                p_hb[0],
+                Point3::new(cx + r, cy - r, 0.0),
+                v_hb[3].clone(),
+                v_hb[0].clone(),
+            )?,
         ];
 
         // 上面穴円弧 (反時計回り CCW: 0->1->2->3->0)
         let arc_ht = [
-            make_arc(p_ht[0], p_ht[1], Point3::new(cx + r, cy + r, dz), v_ht[0].clone(), v_ht[1].clone())?,
-            make_arc(p_ht[1], p_ht[2], Point3::new(cx - r, cy + r, dz), v_ht[1].clone(), v_ht[2].clone())?,
-            make_arc(p_ht[2], p_ht[3], Point3::new(cx - r, cy - r, dz), v_ht[2].clone(), v_ht[3].clone())?,
-            make_arc(p_ht[3], p_ht[0], Point3::new(cx + r, cy - r, dz), v_ht[3].clone(), v_ht[0].clone())?,
+            make_arc(
+                p_ht[0],
+                p_ht[1],
+                Point3::new(cx + r, cy + r, dz),
+                v_ht[0].clone(),
+                v_ht[1].clone(),
+            )?,
+            make_arc(
+                p_ht[1],
+                p_ht[2],
+                Point3::new(cx - r, cy + r, dz),
+                v_ht[1].clone(),
+                v_ht[2].clone(),
+            )?,
+            make_arc(
+                p_ht[2],
+                p_ht[3],
+                Point3::new(cx - r, cy - r, dz),
+                v_ht[2].clone(),
+                v_ht[3].clone(),
+            )?,
+            make_arc(
+                p_ht[3],
+                p_ht[0],
+                Point3::new(cx + r, cy - r, dz),
+                v_ht[3].clone(),
+                v_ht[0].clone(),
+            )?,
         ];
 
         // 穴の垂直エッジ 4本 (v_hb[i] -> v_ht[i])
@@ -167,10 +215,17 @@ impl HoleBuilder {
             let next_i = (i + 1) % 4;
             let p_s = p_b[i];
             let p_e = p_b[next_i];
-            let row0 = vec![ControlPoint3::unweighted(p_s), ControlPoint3::unweighted(p_t[i])];
-            let row1 = vec![ControlPoint3::unweighted(p_e), ControlPoint3::unweighted(p_t[next_i])];
+            let row0 = vec![
+                ControlPoint3::unweighted(p_s),
+                ControlPoint3::unweighted(p_t[i]),
+            ];
+            let row1 = vec![
+                ControlPoint3::unweighted(p_e),
+                ControlPoint3::unweighted(p_t[next_i]),
+            ];
             let s = NurbsSurface3::new(
-                1, 1,
+                1,
+                1,
                 vec![row0, row1],
                 KnotVector::clamped_uniform(2, 1),
                 KnotVector::clamped_uniform(2, 1),
@@ -209,7 +264,8 @@ impl HoleBuilder {
             ];
 
             let s = NurbsSurface3::new(
-                2, 1,
+                2,
+                1,
                 vec![row0, row1, row2],
                 KnotVector::clamped_uniform(3, 2),
                 KnotVector::clamped_uniform(2, 1),
@@ -244,12 +300,17 @@ impl HoleBuilder {
             ];
             let row1 = vec![
                 ControlPoint3::unweighted(p_b[next_i]),
-                ControlPoint3::unweighted(Point3::new((p_b[i].x + p_b[next_i].x)*0.5, (p_b[i].y + p_b[next_i].y)*0.5, 0.0)),
+                ControlPoint3::unweighted(Point3::new(
+                    (p_b[i].x + p_b[next_i].x) * 0.5,
+                    (p_b[i].y + p_b[next_i].y) * 0.5,
+                    0.0,
+                )),
                 ControlPoint3::unweighted(p_b[i]),
             ];
 
             let s = NurbsSurface3::new(
-                1, 2,
+                1,
+                2,
                 vec![row0, row1],
                 KnotVector::clamped_uniform(2, 1),
                 KnotVector::clamped_uniform(3, 2),
@@ -285,17 +346,21 @@ impl HoleBuilder {
             ];
             let row1 = vec![
                 ControlPoint3::unweighted(p_t[i]),
-                ControlPoint3::unweighted(Point3::new((p_t[i].x + p_t[next_i].x)*0.5, (p_t[i].y + p_t[next_i].y)*0.5, dz)),
+                ControlPoint3::unweighted(Point3::new(
+                    (p_t[i].x + p_t[next_i].x) * 0.5,
+                    (p_t[i].y + p_t[next_i].y) * 0.5,
+                    dz,
+                )),
                 ControlPoint3::unweighted(p_t[next_i]),
             ];
 
             let s = NurbsSurface3::new(
-                1, 2,
+                1,
+                2,
                 vec![row0, row1],
                 KnotVector::clamped_uniform(2, 1),
                 KnotVector::clamped_uniform(3, 2),
             )?;
-
 
             // +Z 外向き法線から見てCCW:
             // p_t[i] -> p_t[next_i] -> p_ht[i] -> p_ht[prev_i] -> p_t[i]
@@ -396,10 +461,8 @@ impl HoleBuilder {
 
         // 2. 貫通下穴
         let drill = crate::PrimitiveBuilder::make_cylinder(hole_radius, thickness + 2.0)?;
-        let drill = crate::BrepTransform::translate_solid(
-            &drill,
-            zenith_math::Vec3::new(0.0, 0.0, -1.0),
-        );
+        let drill =
+            crate::BrepTransform::translate_solid(&drill, zenith_math::Vec3::new(0.0, 0.0, -1.0));
 
         crate::BooleanEngine::boolean_solids_exact(
             &hex_body,
@@ -507,7 +570,8 @@ impl HoleBuilder {
         let base_box = crate::PrimitiveBuilder::make_box(box_w, box_d, box_h)?;
 
         // 1. 貫通スロットカッター
-        let thru_slot = crate::PrimitiveBuilder::make_slot_prism(slot_length, slot_radius, box_h + 2.0)?;
+        let thru_slot =
+            crate::PrimitiveBuilder::make_slot_prism(slot_length, slot_radius, box_h + 2.0)?;
         let thru_slot = crate::BrepTransform::translate_solid(
             &thru_slot,
             zenith_math::Vec3::new(center_x, center_y, -1.0),
@@ -521,7 +585,8 @@ impl HoleBuilder {
         )?;
 
         // 2. 座ぐりスロットカッター
-        let cb_slot = crate::PrimitiveBuilder::make_slot_prism(cb_length, cb_radius, cb_depth + 1.0)?;
+        let cb_slot =
+            crate::PrimitiveBuilder::make_slot_prism(cb_length, cb_radius, cb_depth + 1.0)?;
         let cb_slot = crate::BrepTransform::translate_solid(
             &cb_slot,
             zenith_math::Vec3::new(center_x, center_y, box_h - cb_depth),

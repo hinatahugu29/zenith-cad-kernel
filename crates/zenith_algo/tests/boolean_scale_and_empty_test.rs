@@ -35,7 +35,9 @@ fn an_intersection_much_smaller_than_its_operands_is_not_read_as_zero() {
 
     let result =
         BooleanEngine::boolean_solids_exact_result(&big, &small, BooleanOpType::Intersection, &tol)
-            .expect("an intersection six orders smaller than one operand should still be an answer");
+            .expect(
+                "an intersection six orders smaller than one operand should still be an answer",
+            );
 
     let volume: f64 = result
         .solids
@@ -78,9 +80,13 @@ fn a_small_but_correct_intersection_is_not_read_as_zero() {
         Vec3::new(100.0, 100.0, -9.0),
     );
 
-    let result =
-        BooleanEngine::boolean_solids_exact_result(&plate, &needle, BooleanOpType::Intersection, &tol)
-            .expect("a needle through a plate has a small but real intersection");
+    let result = BooleanEngine::boolean_solids_exact_result(
+        &plate,
+        &needle,
+        BooleanOpType::Intersection,
+        &tol,
+    )
+    .expect("a needle through a plate has a small but real intersection");
 
     let volume: f64 = result
         .solids
@@ -150,9 +156,13 @@ fn a_solid_minus_a_copy_moved_by_a_hair_is_still_empty() {
     let solid = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box");
     let nudged = BrepTransform::translate_solid(&solid, Vec3::new(1e-12, 0.0, 0.0));
 
-    let result =
-        BooleanEngine::boolean_solids_exact_result(&solid, &nudged, BooleanOpType::Difference, &tol)
-            .expect("a difference against a copy moved below tolerance is empty, not a failure");
+    let result = BooleanEngine::boolean_solids_exact_result(
+        &solid,
+        &nudged,
+        BooleanOpType::Difference,
+        &tol,
+    )
+    .expect("a difference against a copy moved below tolerance is empty, not a failure");
 
     assert!(
         result.solids.is_empty(),
@@ -180,7 +190,10 @@ fn connected_pieces(solid: &zenith_topo::Solid, grid: f64) -> usize {
                 let (start, end) = edge.edge.curve.param_range();
                 let a = key(edge.edge.curve.evaluate(start));
                 let b = key(edge.edge.curve.evaluate(end));
-                users.entry(if a <= b { (a, b) } else { (b, a) }).or_default().push(index);
+                users
+                    .entry(if a <= b { (a, b) } else { (b, a) })
+                    .or_default()
+                    .push(index);
             }
         }
     }
@@ -326,23 +339,42 @@ fn a_solid_with_a_cavity_carries_the_cavity_through_a_boolean() {
         &PrimitiveBuilder::make_box(60.0, 60.0, 10.0).expect("knife"),
         Vec3::new(-10.0, -10.0, 35.0),
     );
-    let diff = BooleanEngine::boolean_solids_exact(&hollow, &knife, BooleanOpType::Difference, &tol)
-        .expect("difference on hollow solid");
-    assert_eq!(diff.inner_shells.len(), 1, "difference should keep the cavity");
+    let diff =
+        BooleanEngine::boolean_solids_exact(&hollow, &knife, BooleanOpType::Difference, &tol)
+            .expect("difference on hollow solid");
+    assert_eq!(
+        diff.inner_shells.len(),
+        1,
+        "difference should keep the cavity"
+    );
     let diff_vol = MassCalculator::compute_from_brep(&diff, &params()).volume;
-    assert!((diff_vol - 55000.0).abs() < 1e-4, "expected 55000, got {diff_vol}");
+    assert!(
+        (diff_vol - 55000.0).abs() < 1e-4,
+        "expected 55000, got {diff_vol}"
+    );
 
     let union = BooleanEngine::boolean_solids_exact(&hollow, &knife, BooleanOpType::Union, &tol)
         .expect("union on hollow solid");
     assert_eq!(union.inner_shells.len(), 1, "union should keep the cavity");
     let union_vol = MassCalculator::compute_from_brep(&union, &params()).volume;
-    assert!((union_vol - 91000.0).abs() < 1e-4, "expected 91000, got {union_vol}");
+    assert!(
+        (union_vol - 91000.0).abs() < 1e-4,
+        "expected 91000, got {union_vol}"
+    );
 
-    let inter = BooleanEngine::boolean_solids_exact(&hollow, &knife, BooleanOpType::Intersection, &tol)
-        .expect("intersection on hollow solid");
-    assert_eq!(inter.inner_shells.len(), 0, "intersection does not contain cavity");
+    let inter =
+        BooleanEngine::boolean_solids_exact(&hollow, &knife, BooleanOpType::Intersection, &tol)
+            .expect("intersection on hollow solid");
+    assert_eq!(
+        inter.inner_shells.len(),
+        0,
+        "intersection does not contain cavity"
+    );
     let inter_vol = MassCalculator::compute_from_brep(&inter, &params()).volume;
-    assert!((inter_vol - 8000.0).abs() < 1e-4, "expected 8000, got {inter_vol}");
+    assert!(
+        (inter_vol - 8000.0).abs() < 1e-4,
+        "expected 8000, got {inter_vol}"
+    );
 }
 
 #[test]
@@ -354,8 +386,7 @@ fn the_gate_still_refuses_a_result_that_really_is_empty_when_it_should_not_be() 
     let a = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box a");
     let b = BrepTransform::translate_solid(&a, Vec3::new(10.0, 0.0, 0.0));
 
-    let report =
-        BooleanResultVerifier::verify(&a, &b, &[], BooleanOpType::Intersection, &tol);
+    let report = BooleanResultVerifier::verify(&a, &b, &[], BooleanOpType::Intersection, &tol);
     assert!(
         !report.is_valid(),
         "an empty intersection of two overlapping boxes must be refused"

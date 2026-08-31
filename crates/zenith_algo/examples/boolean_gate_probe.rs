@@ -69,9 +69,7 @@ fn main() {
         ("block intersect a ball", &ball, BooleanOpType::Intersection),
         ("block minus a ring", &ring, BooleanOpType::Difference),
     ] {
-        let Ok(result) =
-            BooleanEngine::boolean_solids_exact_result(&block, tool, op, &tol)
-        else {
+        let Ok(result) = BooleanEngine::boolean_solids_exact_result(&block, tool, op, &tol) else {
             continue;
         };
         cases.push(Case {
@@ -121,7 +119,10 @@ fn main() {
         b: far_tool.clone(),
         op: BooleanOpType::Difference,
         // 体積は A と同じ。形だけが違う。
-        result: vec![BrepTransform::translate_solid(&block, Vec3::new(0.0, 0.0, 60.0))],
+        result: vec![BrepTransform::translate_solid(
+            &block,
+            Vec3::new(0.0, 0.0, 60.0),
+        )],
         should_pass: false,
     });
 

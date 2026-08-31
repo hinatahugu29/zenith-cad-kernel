@@ -40,9 +40,7 @@
 
 use std::path::PathBuf;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, Regularizer,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, Regularizer};
 use zenith_io::StepImporter;
 use zenith_math::{Tolerance, Transform3, Vec3};
 use zenith_tess::TessellationParams;
@@ -95,15 +93,16 @@ fn main() {
         .and_then(|value| value.parse().ok());
     // **鏡映してから重ねる軸**（9-G の G1、3本目）。`x` / `y` / `z` /
     // `tilted` で鏡の法線を選びます。既定は鏡映しません。
-    let mirror_normal: Option<Vec3> = std::env::var("ZENITH_PAIR_MIRROR")
-        .ok()
-        .map(|value| match value.trim() {
-            "y" => Vec3::new(0.0, 1.0, 0.0),
-            "z" => Vec3::new(0.0, 0.0, 1.0),
-            // 軸に平行でない鏡。対称な検体でも「同じ形」に戻りません。
-            "tilted" => Vec3::new(1.0, 2.0, 3.0),
-            _ => Vec3::new(1.0, 0.0, 0.0),
-        });
+    let mirror_normal: Option<Vec3> =
+        std::env::var("ZENITH_PAIR_MIRROR")
+            .ok()
+            .map(|value| match value.trim() {
+                "y" => Vec3::new(0.0, 1.0, 0.0),
+                "z" => Vec3::new(0.0, 0.0, 1.0),
+                // 軸に平行でない鏡。対称な検体でも「同じ形」に戻りません。
+                "tilted" => Vec3::new(1.0, 2.0, 3.0),
+                _ => Vec3::new(1.0, 0.0, 0.0),
+            });
 
     // **既定は6検体・15組です**（9-G の G2）。
     //
@@ -167,7 +166,11 @@ fn main() {
                 let size = span.max - span.min;
                 shifted = BrepTransform::translate_solid(
                     b,
-                    Vec3::new(size.x * fraction, size.y * fraction * 0.5, size.z * fraction * 0.25),
+                    Vec3::new(
+                        size.x * fraction,
+                        size.y * fraction * 0.5,
+                        size.z * fraction * 0.25,
+                    ),
                 );
                 &shifted
             } else {

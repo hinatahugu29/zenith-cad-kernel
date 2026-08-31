@@ -9,8 +9,8 @@ pub mod primitives;
 pub mod solid;
 
 pub use mesh::PyMesh;
-pub use solid::PySolid;
 use pyo3::prelude::*;
+pub use solid::PySolid;
 
 /// Zenith CAD Pythonモジュール
 #[pymodule]
@@ -58,11 +58,17 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::slice_box_by_plane, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::compute_box_mass_properties, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::check_boxes_interference, m)?)?;
-    m.add_function(wrap_pyfunction!(modeling::check_exact_boxes_interference, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        modeling::check_exact_boxes_interference,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(modeling::compute_boxes_min_distance, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_countersink_hole_box, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_circular_flange, m)?)?;
-    m.add_function(wrap_pyfunction!(modeling::make_shaft_with_annular_groove, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        modeling::make_shaft_with_annular_groove,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(modeling::export_box_section_dxf, m)?)?;
 
     m.add_function(wrap_pyfunction!(modeling::make_boolean, m)?)?;
@@ -70,9 +76,6 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::make_exact_drill_boolean, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::thicken_surface_patch, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_spur_gear, m)?)?;
-
-
-
 
     // Direct Modeling
     m.add_function(wrap_pyfunction!(direct_edit::fillet_box_single_edge, m)?)?;

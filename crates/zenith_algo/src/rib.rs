@@ -167,9 +167,11 @@ impl RibBuilder {
         let base_plate = crate::primitive::PrimitiveBuilder::make_box(base_dx, base_dy, base_dz)?;
 
         // 2. 垂直背板 (Vertical Wall: wall_thickness x base_dy x wall_height, z=base_dzの上に配置)
-        let wall_box = crate::primitive::PrimitiveBuilder::make_box(wall_thickness, base_dy, wall_height)?;
+        let wall_box =
+            crate::primitive::PrimitiveBuilder::make_box(wall_thickness, base_dy, wall_height)?;
         let wall_transform = Transform3::from_translation(Vec3::new(0.0, 0.0, base_dz));
-        let positioned_wall = crate::brep_transform::BrepTransform::transform_solid(&wall_box, &wall_transform)?;
+        let positioned_wall =
+            crate::brep_transform::BrepTransform::transform_solid(&wall_box, &wall_transform)?;
 
         // L字フレームの結合
         let l_frame = crate::boolean::BooleanEngine::boolean_solids_exact(
@@ -182,8 +184,10 @@ impl RibBuilder {
         // 3. 三角リブ (Triangular Rib)
         let rib = Self::make_triangular_rib(rib_length, rib_height, rib_thickness, tol)?;
         // リブを背板前面（x=wall_thickness）、底板天面（z=base_dz）、Y軸中央（y=base_dy/2）に配置
-        let rib_transform = Transform3::from_translation(Vec3::new(wall_thickness, base_dy * 0.5, base_dz));
-        let positioned_rib = crate::brep_transform::BrepTransform::transform_solid(&rib, &rib_transform)?;
+        let rib_transform =
+            Transform3::from_translation(Vec3::new(wall_thickness, base_dy * 0.5, base_dz));
+        let positioned_rib =
+            crate::brep_transform::BrepTransform::transform_solid(&rib, &rib_transform)?;
 
         // リブをL字フレームに結合
         crate::boolean::BooleanEngine::boolean_solids_exact(

@@ -35,8 +35,16 @@ impl ShaftBuilder {
         for i in 0..n {
             let (r, l) = sections[i];
 
-            let extend_bottom = if i > 0 && r <= sections[i - 1].0 { 0.1 } else { 0.0 };
-            let extend_top = if i + 1 < n && r < sections[i + 1].0 { 0.1 } else { 0.0 };
+            let extend_bottom = if i > 0 && r <= sections[i - 1].0 {
+                0.1
+            } else {
+                0.0
+            };
+            let extend_top = if i + 1 < n && r < sections[i + 1].0 {
+                0.1
+            } else {
+                0.0
+            };
 
             let actual_len = l + extend_bottom + extend_top;
             let cyl = crate::PrimitiveBuilder::make_cylinder(r, actual_len)?;
@@ -99,11 +107,7 @@ impl ShaftBuilder {
         let cutter = crate::PrimitiveBuilder::make_box(key_width, cutter_y_len, key_length)?;
         let cutter = crate::BrepTransform::translate_solid(
             &cutter,
-            Vec3::new(
-                -key_width * 0.5,
-                shaft_radius - key_depth,
-                key_z_pos,
-            ),
+            Vec3::new(-key_width * 0.5, shaft_radius - key_depth, key_z_pos),
         );
 
         crate::BooleanEngine::boolean_solids_exact(
@@ -147,10 +151,8 @@ impl ShaftBuilder {
 
         let outer_cyl = crate::PrimitiveBuilder::make_cylinder(outer_r, groove_width)?;
         let inner_cyl = crate::PrimitiveBuilder::make_cylinder(inner_r, groove_width + 0.2)?;
-        let inner_cyl = crate::BrepTransform::translate_solid(
-            &inner_cyl,
-            Vec3::new(0.0, 0.0, -0.1),
-        );
+        let inner_cyl =
+            crate::BrepTransform::translate_solid(&inner_cyl, Vec3::new(0.0, 0.0, -0.1));
 
         let ring_cutter = crate::BooleanEngine::boolean_solids_exact(
             &outer_cyl,
@@ -159,10 +161,8 @@ impl ShaftBuilder {
             &tol,
         )?;
 
-        let ring_cutter = crate::BrepTransform::translate_solid(
-            &ring_cutter,
-            Vec3::new(0.0, 0.0, groove_z_pos),
-        );
+        let ring_cutter =
+            crate::BrepTransform::translate_solid(&ring_cutter, Vec3::new(0.0, 0.0, groove_z_pos));
 
         crate::BooleanEngine::boolean_solids_exact(
             shaft,

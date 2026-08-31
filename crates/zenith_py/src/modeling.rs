@@ -175,11 +175,8 @@ pub fn make_sweep_wire(
     let mut edges = Vec::with_capacity(k);
     for i in 0..k {
         let next_i = (i + 1) % k;
-        let edge = zenith_topo::Edge::line_between(
-            vertices[i].clone(),
-            vertices[next_i].clone(),
-        )
-        .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+        let edge = zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
+            .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
         edges.push(zenith_topo::OrientedEdge::forward(edge));
     }
     let profile_wire = zenith_topo::Wire::new(edges);
@@ -209,7 +206,6 @@ pub fn make_sweep_wire(
     let mesh = tessellate_solid(&solid, &params);
     Ok(PyMesh { mesh })
 }
-
 
 /// 3次元NURBS曲線の回転体を生成
 #[pyfunction]
@@ -277,8 +273,7 @@ pub fn make_loft(
             .into_iter()
             .map(|p| Point3::new(p[0], p[1], p[2]))
             .collect();
-        let c = NurbsCurve3::bspline_from_points(degree, pts)
-            .map_err(PyValueError::new_err)?;
+        let c = NurbsCurve3::bspline_from_points(degree, pts).map_err(PyValueError::new_err)?;
         curves.push(c);
     }
 
@@ -307,7 +302,9 @@ pub fn make_loft_solid(
     step_path: Option<&str>,
 ) -> PyResult<PyMesh> {
     if sections.len() < 2 {
-        return Err(PyValueError::new_err("Loft solid requires at least 2 sections"));
+        return Err(PyValueError::new_err(
+            "Loft solid requires at least 2 sections",
+        ));
     }
 
     let tol = Tolerance::default();
@@ -329,11 +326,9 @@ pub fn make_loft_solid(
         let mut edges = Vec::with_capacity(n);
         for i in 0..n {
             let next_i = (i + 1) % n;
-            let edge = zenith_topo::Edge::line_between(
-                vertices[i].clone(),
-                vertices[next_i].clone(),
-            )
-            .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+            let edge =
+                zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
+                    .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
             edges.push(zenith_topo::OrientedEdge::forward(edge));
         }
         wires.push(zenith_topo::Wire::new(edges));
@@ -368,7 +363,9 @@ pub fn make_hollow_extrusion(
 ) -> PyResult<PyMesh> {
     let n_out = outer_profile.len();
     if n_out < 3 {
-        return Err(PyValueError::new_err("Outer profile requires at least 3 points"));
+        return Err(PyValueError::new_err(
+            "Outer profile requires at least 3 points",
+        ));
     }
 
     let tol = Tolerance::default();
@@ -382,8 +379,9 @@ pub fn make_hollow_extrusion(
         let mut edges = Vec::with_capacity(n);
         for i in 0..n {
             let next_i = (i + 1) % n;
-            let edge = zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
-                .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+            let edge =
+                zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
+                    .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
             edges.push(zenith_topo::OrientedEdge::forward(edge));
         }
         Ok(zenith_topo::Wire::new(edges))
@@ -393,14 +391,17 @@ pub fn make_hollow_extrusion(
     let mut inner_wires = Vec::with_capacity(inner_profiles.len());
     for hole in &inner_profiles {
         if hole.len() < 3 {
-            return Err(PyValueError::new_err("Each hole profile requires at least 3 points"));
+            return Err(PyValueError::new_err(
+                "Each hole profile requires at least 3 points",
+            ));
         }
         inner_wires.push(make_wire(hole)?);
     }
 
     let dir = Vec3::new(extrude_dir[0], extrude_dir[1], extrude_dir[2]);
-    let solid = zenith_algo::ExtrudeBuilder::extrude_face_with_holes(&outer_wire, &inner_wires, dir, &tol)
-        .map_err(|e| PyValueError::new_err(format!("Hollow extrusion failed: {}", e)))?;
+    let solid =
+        zenith_algo::ExtrudeBuilder::extrude_face_with_holes(&outer_wire, &inner_wires, dir, &tol)
+            .map_err(|e| PyValueError::new_err(format!("Hollow extrusion failed: {}", e)))?;
 
     if let Some(path) = step_path {
         StepExporter::export_solid_to_file(&solid, path, "ZENITH_HOLLOW_EXTRUSION")
@@ -548,8 +549,9 @@ pub fn make_partial_revolve_solid(
     let dir = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
     let angle_rad = angle_deg.to_radians();
 
-    let solid = zenith_algo::RevolveBuilder::revolve_wire_partial_solid(&wire, orig, dir, angle_rad, &tol)
-        .map_err(|e| PyValueError::new_err(format!("Partial revolve solid failed: {}", e)))?;
+    let solid =
+        zenith_algo::RevolveBuilder::revolve_wire_partial_solid(&wire, orig, dir, angle_rad, &tol)
+            .map_err(|e| PyValueError::new_err(format!("Partial revolve solid failed: {}", e)))?;
 
     if let Some(path) = step_path {
         StepExporter::export_solid_to_file(&solid, path, "ZENITH_PARTIAL_REVOLVE_SOLID")
@@ -678,12 +680,14 @@ pub fn make_mirror_compound_casing(
     step_path: Option<&str>,
 ) -> PyResult<PyMesh> {
     let tol = Tolerance::default();
-    
+
     // 1. 原本ソリッドの生成: +X 側に offset_x 離れた位置に配置し、単一エッジに面取りを施した非対称ケーシング
-    let base_box = zenith_algo::DirectModeling::chamfer_box_single_edge(dx, dy, dz, 0, chamfer_dist)
-        .map_err(|e| PyValueError::new_err(format!("Chamfer box failed: {}", e)))?;
-    
-    let base_solid = zenith_algo::BrepTransform::translate_solid(&base_box, Vec3::new(offset_x, 0.0, 0.0));
+    let base_box =
+        zenith_algo::DirectModeling::chamfer_box_single_edge(dx, dy, dz, 0, chamfer_dist)
+            .map_err(|e| PyValueError::new_err(format!("Chamfer box failed: {}", e)))?;
+
+    let base_solid =
+        zenith_algo::BrepTransform::translate_solid(&base_box, Vec3::new(offset_x, 0.0, 0.0));
 
     let orig = Point3::new(plane_origin[0], plane_origin[1], plane_origin[2]);
     let norm = Vec3::new(plane_normal[0], plane_normal[1], plane_normal[2]);
@@ -694,7 +698,8 @@ pub fn make_mirror_compound_casing(
 
     // 3. 原本＋ミラー反転の Compound Shape として STEP 出力
     if let Some(path) = step_path {
-        let compound = zenith_topo::Shape::compound_solids(vec![base_solid.clone(), mirrored_solid.clone()]);
+        let compound =
+            zenith_topo::Shape::compound_solids(vec![base_solid.clone(), mirrored_solid.clone()]);
         StepExporter::export_shape_to_file(&compound, path, "ZENITH_MIRRORED_CASING_PAIR")
             .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
     }
@@ -705,7 +710,7 @@ pub fn make_mirror_compound_casing(
     };
     let mesh1 = tessellate_solid(&base_solid, &params);
     let mesh2 = tessellate_solid(&mirrored_solid, &params);
-    
+
     // 2つのメッシュを合体してプレビュー返却
     let mut combined_pos = mesh1.positions.clone();
     let mut combined_normals = mesh1.normals.clone();
@@ -720,7 +725,6 @@ pub fn make_mirror_compound_casing(
         combined_indices.push([tri[0] + n_v1, tri[1] + n_v1, tri[2] + n_v1]);
     }
 
-
     let mesh = zenith_tess::TriangleMesh {
         positions: combined_pos,
         normals: combined_normals,
@@ -729,7 +733,6 @@ pub fn make_mirror_compound_casing(
     };
 
     Ok(PyMesh { mesh })
-
 }
 
 /// 直方体の両端面（底面・天面）を開口した角パイプ中空ソリッドの生成（STEP対応）
@@ -776,7 +779,9 @@ pub fn make_guided_loft_solid(
         return Err(PyValueError::new_err("Loft requires at least 2 sections"));
     }
     if guide_curves.is_empty() {
-        return Err(PyValueError::new_err("Guided loft requires at least 1 guide curve"));
+        return Err(PyValueError::new_err(
+            "Guided loft requires at least 1 guide curve",
+        ));
     }
 
     let tol = Tolerance::default();
@@ -792,8 +797,9 @@ pub fn make_guided_loft_solid(
         let mut edges = Vec::with_capacity(n);
         for i in 0..n {
             let next_i = (i + 1) % n;
-            let edge = zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
-                .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
+            let edge =
+                zenith_topo::Edge::line_between(vertices[i].clone(), vertices[next_i].clone())
+                    .map_err(|e| PyValueError::new_err(format!("Edge creation failed: {}", e)))?;
             edges.push(zenith_topo::OrientedEdge::forward(edge));
         }
         Ok(zenith_topo::Wire::new(edges))
@@ -808,7 +814,9 @@ pub fn make_guided_loft_solid(
     for g_pts in &guide_curves {
         let n = g_pts.len();
         if n < 2 {
-            return Err(PyValueError::new_err("Guide curve requires at least 2 points"));
+            return Err(PyValueError::new_err(
+                "Guide curve requires at least 2 points",
+            ));
         }
         let degree = (n - 1).min(3);
         let cps = g_pts
@@ -821,8 +829,9 @@ pub fn make_guided_loft_solid(
         guides.push(curve);
     }
 
-    let solid = zenith_algo::LoftBuilder::loft_solid_guided(&section_wires, &guides, degree_v, &tol)
-        .map_err(|e| PyValueError::new_err(format!("Guided loft failed: {}", e)))?;
+    let solid =
+        zenith_algo::LoftBuilder::loft_solid_guided(&section_wires, &guides, degree_v, &tol)
+            .map_err(|e| PyValueError::new_err(format!("Guided loft failed: {}", e)))?;
 
     if let Some(path) = step_path {
         StepExporter::export_solid_to_file(&solid, path, "ZENITH_GUIDED_LOFT")
@@ -838,10 +847,6 @@ pub fn make_guided_loft_solid(
 }
 
 /// シェル化・肉厚中空ソリッド（容器・ケーシング）の生成
-
-
-
-
 
 #[pyfunction]
 #[pyo3(signature = (dx, dy, dz, thickness, open_face_index = 1, u_divisions = 4, v_divisions = 4))]
@@ -959,13 +964,9 @@ pub fn make_polyline_pipe(
         .map(|p| Point3::new(p[0], p[1], p[2]))
         .collect();
 
-    let solid = zenith_algo::PolylineBuilder::sweep_pipe_polyline(
-        &pts,
-        pipe_radius,
-        corner_radius,
-        &tol,
-    )
-    .map_err(|e| PyValueError::new_err(format!("Polyline pipe failed: {}", e)))?;
+    let solid =
+        zenith_algo::PolylineBuilder::sweep_pipe_polyline(&pts, pipe_radius, corner_radius, &tol)
+            .map_err(|e| PyValueError::new_err(format!("Polyline pipe failed: {}", e)))?;
 
     if let Some(path) = step_path {
         StepExporter::export_solid_to_file(&solid, path, "ZENITH_POLYLINE_PIPE")
@@ -1001,13 +1002,9 @@ pub fn make_polyline_sweep(
         .map(|p| Point3::new(p[0], p[1], p[2]))
         .collect();
 
-    let solid = zenith_algo::PolylineBuilder::sweep_wire_polyline(
-        &prof,
-        &path,
-        corner_radius,
-        &tol,
-    )
-    .map_err(|e| PyValueError::new_err(format!("Polyline sweep failed: {}", e)))?;
+    let solid =
+        zenith_algo::PolylineBuilder::sweep_wire_polyline(&prof, &path, corner_radius, &tol)
+            .map_err(|e| PyValueError::new_err(format!("Polyline sweep failed: {}", e)))?;
 
     if let Some(path) = step_path {
         StepExporter::export_solid_to_file(&solid, path, "ZENITH_POLYLINE_SWEEP")
@@ -1101,8 +1098,16 @@ pub fn compute_box_mass_properties(
     };
     let props = zenith_algo::MassCalculator::compute_from_brep(&solid, &params);
 
-    let center = [props.center_of_mass.x, props.center_of_mass.y, props.center_of_mass.z];
-    let inertia = [props.inertia_diagonal.x, props.inertia_diagonal.y, props.inertia_diagonal.z];
+    let center = [
+        props.center_of_mass.x,
+        props.center_of_mass.y,
+        props.center_of_mass.z,
+    ];
+    let inertia = [
+        props.inertia_diagonal.x,
+        props.inertia_diagonal.y,
+        props.inertia_diagonal.z,
+    ];
 
     Ok((props.volume, props.surface_area, center, inertia))
 }
@@ -1111,8 +1116,14 @@ pub fn compute_box_mass_properties(
 #[pyfunction]
 #[pyo3(signature = (dx1, dy1, dz1, offset1, dx2, dy2, dz2, offset2))]
 pub fn check_boxes_interference(
-    dx1: f64, dy1: f64, dz1: f64, offset1: [f64; 3],
-    dx2: f64, dy2: f64, dz2: f64, offset2: [f64; 3],
+    dx1: f64,
+    dy1: f64,
+    dz1: f64,
+    offset1: [f64; 3],
+    dx2: f64,
+    dy2: f64,
+    dz2: f64,
+    offset2: [f64; 3],
 ) -> PyResult<(String, f64, f64, String)> {
     let tol = Tolerance::default();
     let box1 = zenith_algo::PrimitiveBuilder::make_box(dx1, dy1, dz1)
@@ -1121,8 +1132,14 @@ pub fn check_boxes_interference(
         .map_err(|e| PyValueError::new_err(format!("Box2 creation failed: {}", e)))?;
 
     // 移動トランスフォーム適用
-    let s1 = zenith_algo::BrepTransform::translate_solid(&box1, Vec3::new(offset1[0], offset1[1], offset1[2]));
-    let s2 = zenith_algo::BrepTransform::translate_solid(&box2, Vec3::new(offset2[0], offset2[1], offset2[2]));
+    let s1 = zenith_algo::BrepTransform::translate_solid(
+        &box1,
+        Vec3::new(offset1[0], offset1[1], offset1[2]),
+    );
+    let s2 = zenith_algo::BrepTransform::translate_solid(
+        &box2,
+        Vec3::new(offset2[0], offset2[1], offset2[2]),
+    );
 
     let report = zenith_algo::InterferenceChecker::check(&s1, &s2, &tol);
 
@@ -1132,7 +1149,12 @@ pub fn check_boxes_interference(
         zenith_algo::ClashStatus::Clash => "Clash",
     };
 
-    Ok((status_str.to_string(), report.min_distance, report.overlap_volume, report.message))
+    Ok((
+        status_str.to_string(),
+        report.min_distance,
+        report.overlap_volume,
+        report.message,
+    ))
 }
 
 /// インボリュート平歯車（Spur Gear）B-Rep Solid生成（STEP出力対応）
@@ -1177,8 +1199,14 @@ pub fn make_spur_gear(
 #[pyfunction]
 #[pyo3(signature = (dx1, dy1, dz1, offset1, dx2, dy2, dz2, offset2, op_type = 1, u_divisions = 8, v_divisions = 8, step_path = None))]
 pub fn make_exact_box_boolean(
-    dx1: f64, dy1: f64, dz1: f64, offset1: [f64; 3],
-    dx2: f64, dy2: f64, dz2: f64, offset2: [f64; 3],
+    dx1: f64,
+    dy1: f64,
+    dz1: f64,
+    offset1: [f64; 3],
+    dx2: f64,
+    dy2: f64,
+    dz2: f64,
+    offset2: [f64; 3],
     op_type: u8,
     u_divisions: usize,
     v_divisions: usize,
@@ -1190,14 +1218,24 @@ pub fn make_exact_box_boolean(
     let box2 = zenith_algo::PrimitiveBuilder::make_box(dx2, dy2, dz2)
         .map_err(|e| PyValueError::new_err(format!("Box2 creation failed: {}", e)))?;
 
-    let s1 = zenith_algo::BrepTransform::translate_solid(&box1, Vec3::new(offset1[0], offset1[1], offset1[2]));
-    let s2 = zenith_algo::BrepTransform::translate_solid(&box2, Vec3::new(offset2[0], offset2[1], offset2[2]));
+    let s1 = zenith_algo::BrepTransform::translate_solid(
+        &box1,
+        Vec3::new(offset1[0], offset1[1], offset1[2]),
+    );
+    let s2 = zenith_algo::BrepTransform::translate_solid(
+        &box2,
+        Vec3::new(offset2[0], offset2[1], offset2[2]),
+    );
 
     let op = match op_type {
         0 => zenith_algo::BooleanOpType::Union,
         1 => zenith_algo::BooleanOpType::Difference,
         2 => zenith_algo::BooleanOpType::Intersection,
-        _ => return Err(PyValueError::new_err("Invalid op_type: 0=Union, 1=Difference, 2=Intersection")),
+        _ => {
+            return Err(PyValueError::new_err(
+                "Invalid op_type: 0=Union, 1=Difference, 2=Intersection",
+            ))
+        }
     };
 
     let result_solid = zenith_algo::BooleanEngine::boolean_solids_exact(&s1, &s2, op, &tol)
@@ -1273,14 +1311,16 @@ pub fn make_exact_drill_boolean(
                     &Vec3::new(1.0, 0.0, 0.0),
                     std::f64::consts::PI,
                 );
-                zenith_algo::BrepTransform::transform_solid(&drill, &flip)
-                    .map_err(|e| PyValueError::new_err(format!("Drill orientation failed: {}", e)))?
+                zenith_algo::BrepTransform::transform_solid(&drill, &flip).map_err(|e| {
+                    PyValueError::new_err(format!("Drill orientation failed: {}", e))
+                })?
             } else {
                 let rotation_axis = z.cross(&unit);
                 let transform =
                     zenith_math::Transform3::from_axis_angle(&rotation_axis, dot.acos());
-                zenith_algo::BrepTransform::transform_solid(&drill, &transform)
-                    .map_err(|e| PyValueError::new_err(format!("Drill orientation failed: {}", e)))?
+                zenith_algo::BrepTransform::transform_solid(&drill, &transform).map_err(|e| {
+                    PyValueError::new_err(format!("Drill orientation failed: {}", e))
+                })?
             }
         }
     };
@@ -1450,7 +1490,8 @@ pub fn check_exact_boxes_interference(
     );
 
     let tol = Tolerance::default();
-    let (report, _exact_solid) = zenith_algo::InterferenceChecker::check_exact(&box_a, &box_b, &tol);
+    let (report, _exact_solid) =
+        zenith_algo::InterferenceChecker::check_exact(&box_a, &box_b, &tol);
 
     let status_str = match report.status {
         zenith_algo::ClashStatus::Clearance => "Clearance",
@@ -1736,7 +1777,12 @@ pub fn export_box_section_dxf(
     let loops: Vec<Vec<zenith_math::Point3>> = result
         .section_wires
         .iter()
-        .map(|w| w.edges.iter().map(|oe| oe.edge.start_vertex.point).collect())
+        .map(|w| {
+            w.edges
+                .iter()
+                .map(|oe| oe.edge.start_vertex.point)
+                .collect()
+        })
         .collect();
 
     zenith_io::DxfExporter::export_loops_to_file(&loops, dxf_path)
@@ -1744,8 +1790,3 @@ pub fn export_box_section_dxf(
 
     Ok(loops.len())
 }
-
-
-
-
-

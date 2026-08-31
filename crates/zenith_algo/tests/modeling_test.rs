@@ -297,7 +297,6 @@ fn test_exact_brep_boolean_entry_is_separate_from_mesh_preview() {
             "an unsupported case must say so, got: {err}"
         ),
     }
-
 }
 
 #[test]
@@ -1144,7 +1143,10 @@ fn test_a_disjoint_intersection_is_empty_rather_than_a_failure() {
         &tol,
     )
     .expect("a disjoint intersection is empty, not a failure");
-    assert!(result.is_empty(), "the intersection of disjoint solids is empty");
+    assert!(
+        result.is_empty(),
+        "the intersection of disjoint solids is empty"
+    );
 
     // ただし立体を1つ返す API は、返すものが無いので失敗のままでよい。
     assert!(
@@ -4623,8 +4625,6 @@ fn test_sweep_pipe_solid() {
         "Swept pipe volume {volume} is not the tube volume {tube} (relative {error:.3e})"
     );
 
-
-
     let params = TessellationParams {
         u_divisions: 16,
         v_divisions: 16,
@@ -6026,7 +6026,6 @@ fn test_cylinder_step_import_roundtrip_preserves_curved_faces() {
 
     let imported_solid =
         zenith_io::StepImporter::import_solid_from_str(&step).expect("Import failed");
-
 
     assert_eq!(imported_solid.outer_shell.faces.len(), 6);
     assert!(imported_solid.is_topologically_valid(&Tolerance::default()));

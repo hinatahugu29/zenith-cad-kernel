@@ -106,7 +106,10 @@ fn subjects() -> Vec<(&'static str, Result<Solid, String>)> {
         ("sphere", PrimitiveBuilder::make_sphere(10.0)),
         ("cone", PrimitiveBuilder::make_cone(10.0, 4.0, 20.0)),
         ("torus", PrimitiveBuilder::make_torus(12.0, 4.0)),
-        ("drilled box", HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0)),
+        (
+            "drilled box",
+            HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0),
+        ),
         (
             "hollow box (shelled)",
             ShellBuilder::make_hollow_box(30.0, 30.0, 30.0, 2.0, 5),
@@ -122,7 +125,11 @@ fn subjects() -> Vec<(&'static str, Result<Solid, String>)> {
         ),
         (
             "loft between squares",
-            LoftBuilder::loft_solid(&[rect_wire(10.0, 10.0, 0.0), rect_wire(6.0, 6.0, 20.0)], 1, &tol),
+            LoftBuilder::loft_solid(
+                &[rect_wire(10.0, 10.0, 0.0), rect_wire(6.0, 6.0, 20.0)],
+                1,
+                &tol,
+            ),
         ),
         (
             "swept pipe",
@@ -150,7 +157,10 @@ fn subjects() -> Vec<(&'static str, Result<Solid, String>)> {
                 &tol,
             ),
         ),
-        ("spur gear", GearBuilder::make_spur_gear(2.0, 18, 20.0, 8.0, 3.0)),
+        (
+            "spur gear",
+            GearBuilder::make_spur_gear(2.0, 18, 20.0, 8.0, 3.0),
+        ),
         (
             "boolean result (box minus cylinder)",
             PrimitiveBuilder::make_box(30.0, 30.0, 30.0).and_then(|block| {
@@ -219,9 +229,13 @@ fn main() {
                 &PrimitiveBuilder::make_box(4.0, 4.0, 200.0)?,
                 Vec3::new(-2.0, -2.0, -100.0),
             );
-            let result =
-                BooleanEngine::boolean_solids_exact_result(&solid, &knife, BooleanOpType::Difference, &tol)
-                    .map_err(|err| err.to_string())?;
+            let result = BooleanEngine::boolean_solids_exact_result(
+                &solid,
+                &knife,
+                BooleanOpType::Difference,
+                &tol,
+            )
+            .map_err(|err| err.to_string())?;
             let after: f64 = result
                 .solids
                 .iter()

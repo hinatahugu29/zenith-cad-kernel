@@ -174,7 +174,8 @@ fn main() {
     say(&format!("cutter    {} face(s)", b.outer_shell.faces.len()));
 
     let start = Instant::now();
-    let result = BooleanEngine::boolean_solids_exact_result_unverified(a, &b, op, &Tolerance::default());
+    let result =
+        BooleanEngine::boolean_solids_exact_result_unverified(a, &b, op, &Tolerance::default());
     let seconds = start.elapsed().as_secs_f64();
     match result {
         Ok(result) => {

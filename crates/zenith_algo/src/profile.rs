@@ -26,7 +26,10 @@ impl ProfileBuilder {
         let normal = normal
             .try_normalize_safe(1e-12)
             .ok_or("normal cannot be zero")?;
-        let y_axis = normal.cross(&x_axis).try_normalize_safe(1e-12).ok_or("x_axis and normal must not be parallel")?;
+        let y_axis = normal
+            .cross(&x_axis)
+            .try_normalize_safe(1e-12)
+            .ok_or("x_axis and normal must not be parallel")?;
 
         let half_w = width * 0.5;
         let half_h = height * 0.5;
@@ -80,7 +83,10 @@ impl ProfileBuilder {
         let normal = normal
             .try_normalize_safe(1e-12)
             .ok_or("normal cannot be zero")?;
-        let y_axis = normal.cross(&x_axis).try_normalize_safe(1e-12).ok_or("x_axis and normal must not be parallel")?;
+        let y_axis = normal
+            .cross(&x_axis)
+            .try_normalize_safe(1e-12)
+            .ok_or("x_axis and normal must not be parallel")?;
 
         let dx = half_w - r;
         let dy = half_h - r;
@@ -114,7 +120,10 @@ impl ProfileBuilder {
 
         // 4本の直線と4本の有理2次円弧を交互に配置
         // 0: 下辺直線 (-dx,-half_h) -> (dx,-half_h)
-        edges.push(OrientedEdge::forward(Edge::line_between(verts[0].clone(), verts[1].clone())?));
+        edges.push(OrientedEdge::forward(Edge::line_between(
+            verts[0].clone(),
+            verts[1].clone(),
+        )?));
 
         // 1: 右下円弧 (dx,-half_h) -> (half_w,-dy)
         let c0 = center + x_axis * corners_2d[0].0 + y_axis * corners_2d[0].1;
@@ -135,7 +144,10 @@ impl ProfileBuilder {
         edges.push(OrientedEdge::forward(arc0));
 
         // 2: 右辺直線 (half_w,-dy) -> (half_w,dy)
-        edges.push(OrientedEdge::forward(Edge::line_between(verts[2].clone(), verts[3].clone())?));
+        edges.push(OrientedEdge::forward(Edge::line_between(
+            verts[2].clone(),
+            verts[3].clone(),
+        )?));
 
         // 3: 右上円弧 (half_w,dy) -> (dx,half_h)
         let c1 = center + x_axis * corners_2d[1].0 + y_axis * corners_2d[1].1;
@@ -156,7 +168,10 @@ impl ProfileBuilder {
         edges.push(OrientedEdge::forward(arc1));
 
         // 4: 上辺直線 (dx,half_h) -> (-dx,half_h)
-        edges.push(OrientedEdge::forward(Edge::line_between(verts[4].clone(), verts[5].clone())?));
+        edges.push(OrientedEdge::forward(Edge::line_between(
+            verts[4].clone(),
+            verts[5].clone(),
+        )?));
 
         // 5: 左上円弧 (-dx,half_h) -> (-half_w,dy)
         let c2 = center + x_axis * corners_2d[2].0 + y_axis * corners_2d[2].1;
@@ -177,7 +192,10 @@ impl ProfileBuilder {
         edges.push(OrientedEdge::forward(arc2));
 
         // 6: 左辺直線 (-half_w,dy) -> (-half_w,-dy)
-        edges.push(OrientedEdge::forward(Edge::line_between(verts[6].clone(), verts[7].clone())?));
+        edges.push(OrientedEdge::forward(Edge::line_between(
+            verts[6].clone(),
+            verts[7].clone(),
+        )?));
 
         // 7: 左下円弧 (-half_w,-dy) -> (-dx,-half_h)
         let c3 = center + x_axis * corners_2d[3].0 + y_axis * corners_2d[3].1;
@@ -213,7 +231,10 @@ impl ProfileBuilder {
         let normal = normal
             .try_normalize_safe(1e-12)
             .ok_or("normal cannot be zero")?;
-        let y_axis = normal.cross(&x_axis).try_normalize_safe(1e-12).ok_or("x_axis and normal must not be parallel")?;
+        let y_axis = normal
+            .cross(&x_axis)
+            .try_normalize_safe(1e-12)
+            .ok_or("x_axis and normal must not be parallel")?;
 
         let p_pts = [
             center + x_axis * radius,
@@ -267,7 +288,10 @@ impl ProfileBuilder {
         let normal = normal
             .try_normalize_safe(1e-12)
             .ok_or("normal cannot be zero")?;
-        let y_axis = normal.cross(&x_axis).try_normalize_safe(1e-12).ok_or("x_axis and normal must not be parallel")?;
+        let y_axis = normal
+            .cross(&x_axis)
+            .try_normalize_safe(1e-12)
+            .ok_or("x_axis and normal must not be parallel")?;
 
         let l_half = length * 0.5;
         let loc = [
@@ -288,7 +312,10 @@ impl ProfileBuilder {
         let mut edges = Vec::with_capacity(6);
 
         // 0: 下辺直線
-        edges.push(OrientedEdge::forward(Edge::line_between(verts[0].clone(), verts[1].clone())?));
+        edges.push(OrientedEdge::forward(Edge::line_between(
+            verts[0].clone(),
+            verts[1].clone(),
+        )?));
 
         // 1: 右下円弧
         let c1 = center + x_axis * (l_half + radius) - y_axis * radius;
@@ -327,7 +354,10 @@ impl ProfileBuilder {
         edges.push(OrientedEdge::forward(arc2));
 
         // 3: 上辺直線
-        edges.push(OrientedEdge::forward(Edge::line_between(verts[3].clone(), verts[4].clone())?));
+        edges.push(OrientedEdge::forward(Edge::line_between(
+            verts[3].clone(),
+            verts[4].clone(),
+        )?));
 
         // 4: 左上円弧
         let c4 = center - x_axis * (l_half + radius) + y_axis * radius;
@@ -386,7 +416,10 @@ impl ProfileBuilder {
         let normal = normal
             .try_normalize_safe(1e-12)
             .ok_or("normal cannot be zero")?;
-        let y_axis = normal.cross(&x_axis).try_normalize_safe(1e-12).ok_or("x_axis and normal must not be parallel")?;
+        let y_axis = normal
+            .cross(&x_axis)
+            .try_normalize_safe(1e-12)
+            .ok_or("x_axis and normal must not be parallel")?;
 
         let d_theta = (2.0 * PI) / (num_sides as f64);
         let mut pts = Vec::with_capacity(num_sides);
@@ -423,7 +456,10 @@ impl ProfileBuilder {
         let normal = normal
             .try_normalize_safe(1e-12)
             .ok_or("normal cannot be zero")?;
-        let y_axis = normal.cross(&x_axis).try_normalize_safe(1e-12).ok_or("x_axis and normal must not be parallel")?;
+        let y_axis = normal
+            .cross(&x_axis)
+            .try_normalize_safe(1e-12)
+            .ok_or("x_axis and normal must not be parallel")?;
 
         let a = major_radius;
         let b = minor_radius;
@@ -466,4 +502,3 @@ impl ProfileBuilder {
         Ok(Wire::new(edges))
     }
 }
-

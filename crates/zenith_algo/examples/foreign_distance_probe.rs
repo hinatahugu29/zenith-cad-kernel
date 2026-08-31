@@ -117,8 +117,8 @@ fn cone_full_signed(point: Point3) -> f64 {
         ((rho - px).powi(2) + (z - py).powi(2)).sqrt()
     };
 
-    let distance = distance_to_segment(0.0, 0.0, 10.0, 0.0)
-        .min(distance_to_segment(10.0, 0.0, 0.0, 20.0));
+    let distance =
+        distance_to_segment(0.0, 0.0, 10.0, 0.0).min(distance_to_segment(10.0, 0.0, 0.0, 20.0));
     let inside = (0.0..=20.0).contains(&z) && rho <= 10.0 * (1.0 - z / 20.0);
     if inside {
         -distance

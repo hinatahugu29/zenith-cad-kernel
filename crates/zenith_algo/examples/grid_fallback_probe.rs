@@ -182,7 +182,10 @@ fn main() {
         let Some(solid) = read(subject.name) else {
             // 検体が無いのは、このプローブの落ち度ではありません。
             // 名前が変わったのなら気づけるように、行だけ出します。
-            println!("{:<18} 読めませんでした（検体が無いか、読み取りが落ちた）", subject.name);
+            println!(
+                "{:<18} 読めませんでした（検体が無いか、読み取りが落ちた）",
+                subject.name
+            );
             failures += 1;
             continue;
         };

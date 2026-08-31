@@ -3,9 +3,9 @@
 //! 平面・球面・円柱面などの基本代数曲面同士の幾何交差を代数的（閉形式）に直接解き、
 //! 数値マーチング反復なし（O(1) 時間）かつ完全誤差ゼロで交差曲線（直線・円・楕円）を返します。
 
-use std::f64::consts::PI;
 use crate::curve::{Circle3, Ellipse3, Line3};
 use crate::surface::PlaneSurface3;
+use std::f64::consts::PI;
 use zenith_math::{Point3, Tolerance, Vec3, Vec3Ext};
 
 /// 解析的曲面交差の交線結果

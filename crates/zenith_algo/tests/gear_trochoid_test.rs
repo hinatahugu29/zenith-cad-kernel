@@ -99,7 +99,8 @@ fn test_the_fillet_is_the_envelope_of_the_hob_tip_round() {
         let (radius, delta) = g.tip_round_centre_at(theta, TEETH);
         polar_to_xy(radius, delta)
     };
-    let distance = |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+    let distance =
+        |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
 
     // (A) どの転がり角の工具円も、フィレットに食い込まない。
     //

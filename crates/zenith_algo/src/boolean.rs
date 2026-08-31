@@ -212,7 +212,8 @@ impl BooleanEngine {
         }
         let result = ExactBooleanResult::from_solids(sewn_solids);
 
-        let report = crate::BooleanResultVerifier::verify(solid_a, solid_b, &result.solids, op, tol);
+        let report =
+            crate::BooleanResultVerifier::verify(solid_a, solid_b, &result.solids, op, tol);
         if !report.is_valid() {
             return Err(format!(
                 "Exact B-Rep boolean produced a result that fails verification: {}",
@@ -289,7 +290,8 @@ impl BooleanEngine {
         // 境界箱が体積を持って重ならないなら、積は空だと確かめられる。
         // 面が触れているだけの配置はここに落ちる: 交線の候補はあるので
         // 下の経路に入ってしまい、「未実装」と報告されていた。
-        if op == BooleanOpType::Intersection && !Self::bounds_overlap_in_volume(solid_a, solid_b, tol)
+        if op == BooleanOpType::Intersection
+            && !Self::bounds_overlap_in_volume(solid_a, solid_b, tol)
         {
             return Ok(ExactBooleanResult::from_solids(Vec::new()));
         }

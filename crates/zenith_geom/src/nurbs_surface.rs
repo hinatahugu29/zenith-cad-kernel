@@ -204,7 +204,8 @@ impl NurbsSurface3 {
         let mut counted = 0usize;
         for column in 0..columns {
             let strip: Vec<Point3> = (0..rows).map(|row| grid[row][column]).collect();
-            if let Some(parameters) = crate::nurbs_curve::NurbsCurve3::interpolation_parameters(&strip)
+            if let Some(parameters) =
+                crate::nurbs_curve::NurbsCurve3::interpolation_parameters(&strip)
             {
                 for (index, value) in parameters.iter().enumerate() {
                     u_parameters[index] += value;
@@ -222,7 +223,8 @@ impl NurbsSurface3 {
         let mut v_parameters = vec![0.0f64; columns];
         let mut counted = 0usize;
         for row in grid.iter() {
-            if let Some(parameters) = crate::nurbs_curve::NurbsCurve3::interpolation_parameters(row) {
+            if let Some(parameters) = crate::nurbs_curve::NurbsCurve3::interpolation_parameters(row)
+            {
                 for (index, value) in parameters.iter().enumerate() {
                     v_parameters[index] += value;
                 }
@@ -316,9 +318,14 @@ impl NurbsSurface3 {
             let t = i as f64 / (samples - 1) as f64;
             for j in 0..samples {
                 let s = j as f64 / (samples - 1) as f64;
-                let mine = self.evaluate(su_min + (su_max - su_min) * t, sv_min + (sv_max - sv_min) * s);
-                let theirs =
-                    other.evaluate(ou_min + (ou_max - ou_min) * t, ov_min + (ov_max - ov_min) * s);
+                let mine = self.evaluate(
+                    su_min + (su_max - su_min) * t,
+                    sv_min + (sv_max - sv_min) * s,
+                );
+                let theirs = other.evaluate(
+                    ou_min + (ou_max - ou_min) * t,
+                    ov_min + (ov_max - ov_min) * s,
+                );
                 worst = worst.max((mine - theirs).norm());
             }
         }
@@ -337,8 +344,7 @@ impl NurbsSurface3 {
         let mut right_knots = None;
 
         for j in 0..num_v {
-            let column: Vec<ControlPoint3> =
-                self.control_points.iter().map(|row| row[j]).collect();
+            let column: Vec<ControlPoint3> = self.control_points.iter().map(|row| row[j]).collect();
             let curve =
                 crate::nurbs_curve::NurbsCurve3::new(self.degree_u, column, self.knots_u.clone())
                     .ok()?;
@@ -383,9 +389,12 @@ impl NurbsSurface3 {
         let mut right_knots = None;
 
         for row in &self.control_points {
-            let curve =
-                crate::nurbs_curve::NurbsCurve3::new(self.degree_v, row.clone(), self.knots_v.clone())
-                    .ok()?;
+            let curve = crate::nurbs_curve::NurbsCurve3::new(
+                self.degree_v,
+                row.clone(),
+                self.knots_v.clone(),
+            )
+            .ok()?;
             let (left, right) = curve.split_at(v)?;
             left_knots = Some(left.knots.clone());
             right_knots = Some(right.knots.clone());
@@ -714,7 +723,10 @@ mod tests {
                 }
             }
             assert!(worst < 1e-12, "u split moved the surface by {worst}");
-            assert!(off_radius < 1e-12, "u split left the cylinder by {off_radius}");
+            assert!(
+                off_radius < 1e-12,
+                "u split left the cylinder by {off_radius}"
+            );
         }
     }
 

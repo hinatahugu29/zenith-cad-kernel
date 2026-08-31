@@ -4,9 +4,7 @@ use std::io::{Error, ErrorKind, Write};
 use std::path::Path;
 use zenith_geom::{NurbsCurve2, NurbsCurve3, NurbsSurface3};
 use zenith_math::Point3;
-use zenith_topo::{
-    Face, FaceGeometry, Shape, Shell, Solid, Wire,
-};
+use zenith_topo::{Face, FaceGeometry, Shape, Shell, Solid, Wire};
 
 /// ISO 10303-21 (STEP AP214 / AP203 / AP242) 完全共有マニホールド B-Rep エクスポーター
 pub struct StepExporter;
@@ -184,7 +182,6 @@ impl StepExporter {
             length_unit_id
         ));
 
-
         // 複数の型を1つの実体にまとめた「複合エンティティ実体」は、ISO 10303-21
         // では外側の丸括弧が必須である（`#N = ( A(..) B(..) );`）。上の単位定義は
         // 括弧付きで書けていたが、ここだけ抜けていた。OpenCASCADE のパーサは
@@ -210,7 +207,12 @@ impl StepExporter {
         // 4. Shell内の各Faceのエンティティ生成（トポロジー共有）
         let mut manifold_solid_ids = Vec::with_capacity(solids.len());
         for (index, solid) in solids.iter().enumerate() {
-            manifold_solid_ids.push(Self::write_solid_brep(&mut ctx, solid, product_name, index)?);
+            manifold_solid_ids.push(Self::write_solid_brep(
+                &mut ctx,
+                solid,
+                product_name,
+                index,
+            )?);
         }
         let representation_items = manifold_solid_ids
             .iter()
@@ -306,7 +308,6 @@ impl StepExporter {
     /// `pcurve_fidelity_probe` が全標本で 3e-12 以内を見張っているもの——なので、
     /// 3D と 2D の2つの経路が食い違う心配は、その見張りに預けてある。
     fn plan_surfaces_and_pcurves(ctx: &mut StepContext, solids: &[Solid]) {
-
         for solid in solids {
             for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
                 for face in &shell.faces {
@@ -335,8 +336,8 @@ impl StepExporter {
                     let Some(pcurves) = &face.pcurves else {
                         continue;
                     };
-                    for pcurve_loop in std::iter::once(&pcurves.outer_loop)
-                        .chain(pcurves.inner_loops.iter())
+                    for pcurve_loop in
+                        std::iter::once(&pcurves.outer_loop).chain(pcurves.inner_loops.iter())
                     {
                         for segment in &pcurve_loop.segments {
                             ctx.edge_pcurves
@@ -530,7 +531,6 @@ impl StepExporter {
         Self::write_nurbs_curve(ctx, nurbs)
     }
 
-
     fn write_nurbs_curve(ctx: &mut StepContext, nurbs: &NurbsCurve3) -> u64 {
         let mut is_rational = false;
         let mut pt_ids = Vec::with_capacity(nurbs.control_points.len());
@@ -607,7 +607,6 @@ impl StepExporter {
         let edge_list_str = oriented_edge_ids.join(",");
         ctx.add_entity(&format!("EDGE_LOOP('',({}))", edge_list_str))
     }
-
 
     fn write_face(ctx: &mut StepContext, face: &Face) -> Result<u64, String> {
         // 曲面は `plan_surfaces_and_pcurves` が先に書いている。稜が

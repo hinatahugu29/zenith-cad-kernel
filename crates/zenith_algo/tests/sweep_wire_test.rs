@@ -62,8 +62,16 @@ fn test_sweep_rectangular_wire_along_3d_spline_path() {
     assert!(!mesh.indices.is_empty());
 
     let mass = MassCalculator::compute_from_mesh(&mesh);
-    assert!(mass.volume > 0.0, "Sweep solid volume must be positive: got {}", mass.volume);
-    assert!(mass.surface_area > 0.0, "Surface area must be positive: got {}", mass.surface_area);
+    assert!(
+        mass.volume > 0.0,
+        "Sweep solid volume must be positive: got {}",
+        mass.volume
+    );
+    assert!(
+        mass.surface_area > 0.0,
+        "Surface area must be positive: got {}",
+        mass.surface_area
+    );
 
     // 6. STEP ラウンドトリップ検証
     let step_str = StepExporter::export_solid_to_string(&sweep_solid, "ZENITH_SWEEP_WIRE_SOLID");

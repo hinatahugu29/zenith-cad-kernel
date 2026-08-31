@@ -19,7 +19,10 @@ fn test_direct_modeling_blend_edges_on_boolean_solid() {
 
     // ブレンド可能な稜を自動検出
     let blendable = DirectModeling::list_blendable_edges(&l_prism);
-    assert!(!blendable.is_empty(), "L-prism should have blendable vertical convex edges");
+    assert!(
+        !blendable.is_empty(),
+        "L-prism should have blendable vertical convex edges"
+    );
 
     // 最初のブレンド可能凸稜にフィレットを適用
     let target_edge = blendable[0];

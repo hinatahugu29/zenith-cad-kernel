@@ -172,7 +172,10 @@ impl SlotRoot {
         }
 
         let radius = arcs[0].2;
-        if arcs.iter().any(|(_, _, r)| (*r - radius).abs() > 1e-4 * radius.max(1.0)) {
+        if arcs
+            .iter()
+            .any(|(_, _, r)| (*r - radius).abs() > 1e-4 * radius.max(1.0))
+        {
             return None;
         }
 
@@ -220,7 +223,9 @@ impl SlotRoot {
 
         let height = match &side0.geometry {
             FaceGeometry::Plane(p) => p.v_axis.norm(),
-            FaceGeometry::Nurbs(n) => (n.control_points[0][1].point - n.control_points[0][0].point).norm(),
+            FaceGeometry::Nurbs(n) => {
+                (n.control_points[0][1].point - n.control_points[0][0].point).norm()
+            }
             _ => 10.0,
         };
 
@@ -245,7 +250,8 @@ impl SlotRoot {
 
     fn fillet_added_volume(&self, r: f64) -> f64 {
         let straight_vol = 2.0 * self.length * r * r * (1.0 - PI * 0.25);
-        let circular_vol = PI * (self.radius * r * r * (2.0 - PI * 0.5) + r.powi(3) * (5.0 / 3.0 - PI * 0.5));
+        let circular_vol =
+            PI * (self.radius * r * r * (2.0 - PI * 0.5) + r.powi(3) * (5.0 / 3.0 - PI * 0.5));
         straight_vol + circular_vol
     }
 

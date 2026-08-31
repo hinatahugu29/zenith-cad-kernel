@@ -49,11 +49,10 @@ impl FlangeBuilder {
         let outer_cyl = crate::PrimitiveBuilder::make_cylinder(outer_radius, thickness)?;
 
         // 2. 中心穴の差分切削
-        let center_drill = crate::PrimitiveBuilder::make_cylinder(center_hole_radius, thickness + 2.0)?;
-        let center_drill = crate::BrepTransform::translate_solid(
-            &center_drill,
-            Vec3::new(0.0, 0.0, -1.0),
-        );
+        let center_drill =
+            crate::PrimitiveBuilder::make_cylinder(center_hole_radius, thickness + 2.0)?;
+        let center_drill =
+            crate::BrepTransform::translate_solid(&center_drill, Vec3::new(0.0, 0.0, -1.0));
         let base_ring = crate::BooleanEngine::boolean_solids_exact(
             &outer_cyl,
             &center_drill,
@@ -74,11 +73,10 @@ impl FlangeBuilder {
             let cx = pcd_radius * theta.cos();
             let cy = pcd_radius * theta.sin();
 
-            let bolt_cyl = crate::PrimitiveBuilder::make_cylinder(bolt_hole_radius, thickness + 2.0)?;
-            let bolt_cyl = crate::BrepTransform::translate_solid(
-                &bolt_cyl,
-                Vec3::new(cx, cy, -1.0),
-            );
+            let bolt_cyl =
+                crate::PrimitiveBuilder::make_cylinder(bolt_hole_radius, thickness + 2.0)?;
+            let bolt_cyl =
+                crate::BrepTransform::translate_solid(&bolt_cyl, Vec3::new(cx, cy, -1.0));
             bolt_cutters.push(bolt_cyl);
         }
 

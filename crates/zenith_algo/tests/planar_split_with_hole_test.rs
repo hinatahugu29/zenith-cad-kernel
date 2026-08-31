@@ -135,12 +135,8 @@ fn a_cut_that_crosses_the_bore_is_still_refused_or_correct() {
         &PrimitiveBuilder::make_box(30.0, 3.0, 30.0).expect("slab"),
         Vec3::new(-15.0, -1.5, -12.0),
     );
-    match BooleanEngine::boolean_solids_exact_result(
-        &ring,
-        &slab,
-        BooleanOpType::Difference,
-        &tol,
-    ) {
+    match BooleanEngine::boolean_solids_exact_result(&ring, &slab, BooleanOpType::Difference, &tol)
+    {
         // 断るのは正しい挙動です。
         Err(_) => {}
         Ok(result) => {

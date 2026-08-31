@@ -61,14 +61,20 @@ fn main() {
 
     println!("{divisions}分割での、1面あたりの最大枚数（9-H の H5 は 10,000 以下）");
     println!();
-    println!("{:<32}{:<14}{:>8}{:>12}{:>12}  {}", "case", "op", "faces", "worst face", "total", "verdict");
+    println!(
+        "{:<32}{:<14}{:>8}{:>12}{:>12}  {}",
+        "case", "op", "faces", "worst face", "total", "verdict"
+    );
     println!("{}", "-".repeat(92));
 
     let (mut worst_all, mut worst_where) = (0usize, String::from("-"));
     for (name, a, b) in &cases {
         for (label, op) in ops {
             let Ok(result) = BooleanEngine::boolean_solids_exact_result(a, b, op, &tol) else {
-                println!("{:<32}{:<14}{:>8}{:>12}{:>12}  断られた", name, label, "-", "-", "-");
+                println!(
+                    "{:<32}{:<14}{:>8}{:>12}{:>12}  断られた",
+                    name, label, "-", "-", "-"
+                );
                 continue;
             };
             let (mut worst, mut faces, mut total) = (0usize, 0usize, 0usize);
@@ -89,7 +95,11 @@ fn main() {
                 faces,
                 worst,
                 total,
-                if worst <= 10_000 { "ok" } else { "**H5 未達**" }
+                if worst <= 10_000 {
+                    "ok"
+                } else {
+                    "**H5 未達**"
+                }
             );
         }
     }
@@ -103,9 +113,7 @@ fn main() {
     // 余裕があります。**上げるときは、なぜ上げるのかを 9-H に書いてから
     // にしてください。**
     if worst_all > 10_000 {
-        eprintln!(
-            "H5 未達: 1面あたり最大 {worst_all} 枚（{worst_where}）。上限は 10,000 枚です。"
-        );
+        eprintln!("H5 未達: 1面あたり最大 {worst_all} 枚（{worst_where}）。上限は 10,000 枚です。");
         std::process::exit(1);
     }
 }

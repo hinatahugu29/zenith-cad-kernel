@@ -117,14 +117,17 @@ impl Curve3 for Circle3 {
         }
 
         let y_axis = self.normal.cross(&self.x_axis);
-        let num_segments = ((delta.abs() / std::f64::consts::FRAC_PI_2 - 1e-9).ceil() as usize).max(1);
+        let num_segments =
+            ((delta.abs() / std::f64::consts::FRAC_PI_2 - 1e-9).ceil() as usize).max(1);
         let d_theta = delta / num_segments as f64;
         let wm = (d_theta / 2.0).cos();
 
         let mut control_points = Vec::with_capacity(2 * num_segments + 1);
 
         // 始点制御点
-        let p0 = self.center + (self.x_axis * self.start_angle.cos() + y_axis * self.start_angle.sin()) * self.radius;
+        let p0 = self.center
+            + (self.x_axis * self.start_angle.cos() + y_axis * self.start_angle.sin())
+                * self.radius;
         control_points.push(crate::nurbs_curve::ControlPoint3::unweighted(p0));
 
         for seg in 0..num_segments {
@@ -133,11 +136,13 @@ impl Curve3 for Circle3 {
             let theta_end = theta_start + d_theta;
 
             // 中間制御点 (重み wm)
-            let p_mid = self.center + (self.x_axis * theta_mid.cos() + y_axis * theta_mid.sin()) * (self.radius / wm);
+            let p_mid = self.center
+                + (self.x_axis * theta_mid.cos() + y_axis * theta_mid.sin()) * (self.radius / wm);
             control_points.push(crate::nurbs_curve::ControlPoint3::new(p_mid, wm));
 
             // 終点制御点 (重み 1.0)
-            let p_end = self.center + (self.x_axis * theta_end.cos() + y_axis * theta_end.sin()) * self.radius;
+            let p_end = self.center
+                + (self.x_axis * theta_end.cos() + y_axis * theta_end.sin()) * self.radius;
             control_points.push(crate::nurbs_curve::ControlPoint3::unweighted(p_end));
         }
 
@@ -155,7 +160,12 @@ impl Curve3 for Circle3 {
         knots.push(end_k);
         knots.push(end_k);
 
-        NurbsCurve3::new(2, control_points, crate::bspline_basis::KnotVector::new(knots)).ok()
+        NurbsCurve3::new(
+            2,
+            control_points,
+            crate::bspline_basis::KnotVector::new(knots),
+        )
+        .ok()
     }
 }
 
@@ -212,14 +222,17 @@ impl Curve3 for Ellipse3 {
         let minor_axis = self.minor_axis();
         let cos = t.cos();
         let sin = t.sin();
-        self.center + self.major_axis * (self.major_radius * cos) + minor_axis * (self.minor_radius * sin)
+        self.center
+            + self.major_axis * (self.major_radius * cos)
+            + minor_axis * (self.minor_radius * sin)
     }
 
     fn tangent(&self, t: f64) -> Option<Vec3> {
         let minor_axis = self.minor_axis();
         let cos = t.cos();
         let sin = t.sin();
-        (-self.major_axis * (self.major_radius * sin) + minor_axis * (self.minor_radius * cos)).try_normalize_safe(1e-12)
+        (-self.major_axis * (self.major_radius * sin) + minor_axis * (self.minor_radius * cos))
+            .try_normalize_safe(1e-12)
     }
 
     fn to_nurbs(&self) -> Option<NurbsCurve3> {
@@ -229,7 +242,8 @@ impl Curve3 for Ellipse3 {
         }
 
         let minor_axis = self.minor_axis();
-        let num_segments = ((delta.abs() / std::f64::consts::FRAC_PI_2 - 1e-9).ceil() as usize).max(1);
+        let num_segments =
+            ((delta.abs() / std::f64::consts::FRAC_PI_2 - 1e-9).ceil() as usize).max(1);
         let d_theta = delta / num_segments as f64;
         let wm = (d_theta / 2.0).cos();
 
@@ -272,7 +286,11 @@ impl Curve3 for Ellipse3 {
         knots.push(end_k);
         knots.push(end_k);
 
-        NurbsCurve3::new(2, control_points, crate::bspline_basis::KnotVector::new(knots)).ok()
+        NurbsCurve3::new(
+            2,
+            control_points,
+            crate::bspline_basis::KnotVector::new(knots),
+        )
+        .ok()
     }
 }
-

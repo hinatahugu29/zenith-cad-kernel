@@ -111,9 +111,8 @@ fn the_mouth_of_a_drilled_hole_is_convex_and_its_seams_are_smooth() {
     // 法線を面の真ん中で測っていると、この2つが区別できない。
     let drilled = HoleBuilder::make_drilled_box(40.0, 40.0, 20.0, 8.0).unwrap();
 
-    let radius_from_axis = |point: zenith_math::Point3| {
-        ((point.x - 20.0).powi(2) + (point.y - 20.0).powi(2)).sqrt()
-    };
+    let radius_from_axis =
+        |point: zenith_math::Point3| ((point.x - 20.0).powi(2) + (point.y - 20.0).powi(2)).sqrt();
 
     let mut mouth_arcs = 0;
     let mut seams = 0;

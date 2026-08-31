@@ -67,9 +67,8 @@ fn test_two_overlapping_spheres_give_the_closed_form_or_an_error_but_never_one_o
     let b = BrepTransform::translate_solid(&a, Vec3::new(distance, 0.0, 0.0));
 
     let one_sphere = 4.0 / 3.0 * std::f64::consts::PI * radius.powi(3);
-    let lens = std::f64::consts::PI / 12.0
-        * (4.0 * radius + distance)
-        * (2.0 * radius - distance).powi(2);
+    let lens =
+        std::f64::consts::PI / 12.0 * (4.0 * radius + distance) * (2.0 * radius - distance).powi(2);
 
     for (op, expected) in [
         (BooleanOpType::Union, 2.0 * one_sphere - lens),
@@ -147,9 +146,8 @@ fn test_cone_box_difference_and_intersection_now_split_the_cone_correctly() {
     // いまは両方とも正しく求まる。ゲートが弾くことではなく、正しい値が
     // 出ることを固定する。これは以前より強い主張で、3141.593 が戻れば
     // やはり落ちる。
-    let frustum = |r0: f64, r1: f64, h: f64| {
-        std::f64::consts::PI * h / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1)
-    };
+    let frustum =
+        |r0: f64, r1: f64, h: f64| std::f64::consts::PI * h / 3.0 * (r0 * r0 + r0 * r1 + r1 * r1);
     let whole = frustum(10.0, 4.0, 20.0);
     let overlap = frustum(7.0, 4.0, 10.0);
 
@@ -225,13 +223,8 @@ fn test_verifier_rejects_an_operand_passed_through_as_the_union() {
     let b = BrepTransform::translate_solid(&a, Vec3::new(10.0, 10.0, 10.0));
 
     // 検証器そのものを、エンジンを介さずに直接試す。
-    let report = BooleanResultVerifier::verify(
-        &a,
-        &b,
-        std::slice::from_ref(&a),
-        BooleanOpType::Union,
-        &tol,
-    );
+    let report =
+        BooleanResultVerifier::verify(&a, &b, std::slice::from_ref(&a), BooleanOpType::Union, &tol);
 
     assert!(
         !report.is_valid(),
@@ -254,8 +247,7 @@ fn test_verifier_accepts_a_genuine_union_result() {
     let union = BooleanEngine::boolean_solids_exact_result(&a, &b, BooleanOpType::Union, &tol)
         .expect("axis-aligned box union should succeed");
 
-    let report =
-        BooleanResultVerifier::verify(&a, &b, &union.solids, BooleanOpType::Union, &tol);
+    let report = BooleanResultVerifier::verify(&a, &b, &union.solids, BooleanOpType::Union, &tol);
 
     assert!(
         report.is_valid(),

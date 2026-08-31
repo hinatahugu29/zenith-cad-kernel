@@ -14,9 +14,7 @@
 //! - once faces are split, a neighbour's vertex sitting inside an edge has to
 //!   be imprinted, or the two sides of that edge no longer correspond
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Transform3, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -130,8 +128,12 @@ fn test_a_corner_intruding_through_one_face_still_splits_it() {
     let intruder = BrepTransform::translate_solid(&rotated, Vec3::new(20.0, 33.0, -10.0));
 
     let plate_volume = 40.0 * 40.0 * 10.0;
-    let difference =
-        BooleanEngine::boolean_solids_exact_result(&plate, &intruder, BooleanOpType::Difference, &tol);
+    let difference = BooleanEngine::boolean_solids_exact_result(
+        &plate,
+        &intruder,
+        BooleanOpType::Difference,
+        &tol,
+    );
     let intersection = BooleanEngine::boolean_solids_exact_result(
         &plate,
         &intruder,

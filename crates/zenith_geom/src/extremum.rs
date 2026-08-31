@@ -381,8 +381,8 @@ impl ExtremumEngine {
                 let next_v = closed.settle_v(cur_v - step_v * damping, v_min, v_max);
                 let next = distance_sq_at(next_u, next_v);
                 if next < best_dist_sq {
-                    let settled = (next_u - cur_u).abs() < tolerance
-                        && (next_v - cur_v).abs() < tolerance;
+                    let settled =
+                        (next_u - cur_u).abs() < tolerance && (next_v - cur_v).abs() < tolerance;
                     cur_u = next_u;
                     cur_v = next_v;
                     best_dist_sq = next;

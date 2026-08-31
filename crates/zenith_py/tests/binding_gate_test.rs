@@ -157,8 +157,7 @@ fn the_sketch_solver_returns_a_solution_that_satisfies_the_constraints() {
 
     let solved = zenith_cad::payload::solve_2d_sketch(points, constraints)
         .expect("スケッチが解けませんでした");
-    let out: Vec<[f64; 2]> =
-        serde_json::from_str(&solved).expect("返ってきた JSON が読めません");
+    let out: Vec<[f64; 2]> = serde_json::from_str(&solved).expect("返ってきた JSON が読めません");
     assert_eq!(out.len(), 3, "点の数が変わりました: {solved}");
 
     // **返ってきた答えが、拘束を満たしているか測ります。**
@@ -169,14 +168,20 @@ fn the_sketch_solver_returns_a_solution_that_satisfies_the_constraints() {
         out[0]
     );
     let horizontal = (out[1][1] - out[0][1]).abs();
-    assert!(horizontal <= 1e-6, "点0-1 が水平になっていません: {horizontal:.3e}");
+    assert!(
+        horizontal <= 1e-6,
+        "点0-1 が水平になっていません: {horizontal:.3e}"
+    );
     let first = ((out[1][0] - out[0][0]).powi(2) + (out[1][1] - out[0][1]).powi(2)).sqrt();
     assert!(
         (first - 10.0).abs() <= 1e-6,
         "点0-1 の距離が {first:.9} で、指定の 10 と違います"
     );
     let vertical = (out[2][0] - out[1][0]).abs();
-    assert!(vertical <= 1e-6, "点1-2 が鉛直になっていません: {vertical:.3e}");
+    assert!(
+        vertical <= 1e-6,
+        "点1-2 が鉛直になっていません: {vertical:.3e}"
+    );
     let second = ((out[2][0] - out[1][0]).powi(2) + (out[2][1] - out[1][1]).powi(2)).sqrt();
     assert!(
         (second - 5.0).abs() <= 1e-6,

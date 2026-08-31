@@ -16,11 +16,8 @@ use zenith_io::StepImporter;
 use zenith_tess::TessellationParams;
 
 fn fixture(name: &str) -> PathBuf {
-    PathBuf::from(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/units"
-    ))
-    .join(format!("{name}.step"))
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/units"))
+        .join(format!("{name}.step"))
 }
 
 fn volume_of(name: &str) -> f64 {
@@ -70,11 +67,7 @@ fn reads_a_centimetre_file_at_the_right_size() {
 /// 座標に単位を掛けて半径に掛け忘れると、箱は通って円柱だけが壊れます。
 #[test]
 fn scales_the_radius_of_a_curved_surface_too() {
-    assert_size(
-        "cylinder_inch",
-        std::f64::consts::PI * 100.0 * 40.0,
-        25.4,
-    );
+    assert_size("cylinder_inch", std::f64::consts::PI * 100.0 * 40.0, 25.4);
 }
 
 /// 内側のループ（穴）を持つ面も、同じ倍率で動かなければ穴の大きさが変わります。
@@ -95,7 +88,8 @@ fn a_millimetre_file_is_left_alone() {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/occ_reference_cylinder.step"
     ));
-    let solids = StepImporter::import_solids_from_file(&path).expect("read the millimetre cylinder");
+    let solids =
+        StepImporter::import_solids_from_file(&path).expect("read the millimetre cylinder");
     let volume: f64 = solids
         .iter()
         .map(|solid| {

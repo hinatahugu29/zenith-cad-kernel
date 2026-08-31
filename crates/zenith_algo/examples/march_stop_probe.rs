@@ -72,7 +72,8 @@ fn cutter(kind: &str, low: &Point3, high: &Point3) -> Option<Solid> {
     let size = Vec3::new(high.x - low.x, high.y - low.y, high.z - low.z);
     match kind {
         "slab" => {
-            let solid = PrimitiveBuilder::make_box(size.x * 0.6, size.y * 2.0, size.z * 2.0).ok()?;
+            let solid =
+                PrimitiveBuilder::make_box(size.x * 0.6, size.y * 2.0, size.z * 2.0).ok()?;
             Some(BrepTransform::translate_solid(
                 &solid,
                 Vec3::new(
@@ -302,7 +303,10 @@ fn main() {
                     }
                     step *= 0.5;
                 }
-                if best.map(|record| record.5 <= deviation_limit).unwrap_or(false) {
+                if best
+                    .map(|record| record.5 <= deviation_limit)
+                    .unwrap_or(false)
+                {
                     break;
                 }
             }
@@ -350,8 +354,10 @@ fn main() {
         loose_end_report(&faces_a, &faces_b, point);
     }
 
-    println!("
-A branch that neither closes nor reaches a patch edge is half a cut.");
+    println!(
+        "
+A branch that neither closes nor reaches a patch edge is half a cut."
+    );
     println!("Passing it on as an intersection edge is how the loop fails to close.");
 }
 
@@ -362,10 +368,15 @@ A branch that neither closes nor reaches a patch edge is half a cut.");
 /// 端点が実際に隣のパッチに乗っているかどうかは、測らないと分かりません。
 fn loose_end_report(faces_a: &[Face], faces_b: &[Face], point: Point3) {
     use zenith_geom::ExtremumEngine;
-    println!("\n  loose end ({:.4} {:.4} {:.4}) sits on:", point.x, point.y, point.z);
+    println!(
+        "\n  loose end ({:.4} {:.4} {:.4}) sits on:",
+        point.x, point.y, point.z
+    );
     for (label, faces) in [("A", faces_a), ("B", faces_b)] {
         for (index, face) in faces.iter().enumerate() {
-            let Some(patch) = patch_of(face) else { continue };
+            let Some(patch) = patch_of(face) else {
+                continue;
+            };
             let Ok(projection) = ExtremumEngine::point_to_surface(point, &patch, 64, 1e-13) else {
                 continue;
             };

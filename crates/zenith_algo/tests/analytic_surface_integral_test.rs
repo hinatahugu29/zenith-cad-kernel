@@ -9,9 +9,7 @@
 //! - **三角形で積んだ答えと一致すること**（自分の式を自分で検算しない）
 //! - **閉じた式に乗ること**（三角形の側が間違っていても気づけるように）
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::{Face, FaceGeometry, Solid};
@@ -31,7 +29,9 @@ fn params() -> TessellationParams {
 static SWITCH: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn without_analytic<T>(body: impl FnOnce() -> T) -> T {
-    let guard = SWITCH.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let guard = SWITCH
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("ZENITH_NO_ANALYTIC_FACE", "1");
     let value = body();
     std::env::remove_var("ZENITH_NO_ANALYTIC_FACE");
@@ -72,7 +72,8 @@ fn the_analytic_cylinder_agrees_with_the_tessellated_integral() {
     let cylinder = PrimitiveBuilder::make_cylinder(6.0, 40.0).expect("cylinder");
     for face in nurbs_faces(&cylinder) {
         let analytic = MassCalculator::compute_face_integral(face, &params());
-        let tessellated = without_analytic(|| MassCalculator::compute_face_integral(face, &params()));
+        let tessellated =
+            without_analytic(|| MassCalculator::compute_face_integral(face, &params()));
         assert!(
             (analytic.0 - tessellated.0).abs() <= tessellated.0.abs() * 1e-9,
             "面積が食い違う: 解析 {} vs 三角形 {}",
@@ -98,13 +99,9 @@ fn a_trimmed_bore_wall_agrees_with_the_tessellated_integral() {
         &PrimitiveBuilder::make_cylinder(6.0, 40.0).expect("cylinder"),
         Vec3::new(10.0, 10.0, -10.0),
     );
-    let holed = BooleanEngine::boolean_solids_exact_result(
-        &block,
-        &drill,
-        BooleanOpType::Difference,
-        &tol,
-    )
-    .expect("穴あけは通るはず");
+    let holed =
+        BooleanEngine::boolean_solids_exact_result(&block, &drill, BooleanOpType::Difference, &tol)
+            .expect("穴あけは通るはず");
 
     let solid = &holed.solids[0];
     let walls = nurbs_faces(solid);
@@ -114,7 +111,8 @@ fn a_trimmed_bore_wall_agrees_with_the_tessellated_integral() {
     let mut tessellated_total = 0.0;
     for face in &walls {
         let analytic = MassCalculator::compute_face_integral(face, &params());
-        let tessellated = without_analytic(|| MassCalculator::compute_face_integral(face, &params()));
+        let tessellated =
+            without_analytic(|| MassCalculator::compute_face_integral(face, &params()));
         assert!(
             (analytic.0 - tessellated.0).abs() <= tessellated.0.abs() * 1e-9,
             "ボア壁の面積が食い違う: 解析 {} vs 三角形 {}",
@@ -178,7 +176,10 @@ fn the_analytic_revolution_agrees_with_the_tessellated_integral() {
     let moved = |solid: &Solid| BrepTransform::translate_solid(solid, Vec3::new(7.0, -3.0, 11.0));
     let cases = [
         ("球", PrimitiveBuilder::make_sphere(10.0).expect("sphere")),
-        ("トーラス", PrimitiveBuilder::make_torus(12.0, 4.0).expect("torus")),
+        (
+            "トーラス",
+            PrimitiveBuilder::make_torus(12.0, 4.0).expect("torus"),
+        ),
     ];
     for (label, solid) in cases {
         for solid in [solid.clone(), moved(&solid)] {
@@ -294,8 +295,14 @@ fn a_frustum_side_matches_the_closed_form() {
 fn the_analytic_cone_agrees_with_the_tessellated_integral() {
     let moved = |solid: &Solid| BrepTransform::translate_solid(solid, Vec3::new(7.0, -3.0, 11.0));
     let cases = [
-        ("真の円錐", PrimitiveBuilder::make_cone(10.0, 0.0, 20.0).expect("cone")),
-        ("円錐台", PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).expect("frustum")),
+        (
+            "真の円錐",
+            PrimitiveBuilder::make_cone(10.0, 0.0, 20.0).expect("cone"),
+        ),
+        (
+            "円錐台",
+            PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).expect("frustum"),
+        ),
     ];
     for (label, solid) in cases {
         for solid in [solid.clone(), moved(&solid)] {

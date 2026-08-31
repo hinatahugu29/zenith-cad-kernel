@@ -71,7 +71,8 @@ fn cutter(kind: &str, low: &Point3, high: &Point3) -> Option<Solid> {
     let size = Vec3::new(high.x - low.x, high.y - low.y, high.z - low.z);
     match kind {
         "slab" => {
-            let solid = PrimitiveBuilder::make_box(size.x * 0.6, size.y * 2.0, size.z * 2.0).ok()?;
+            let solid =
+                PrimitiveBuilder::make_box(size.x * 0.6, size.y * 2.0, size.z * 2.0).ok()?;
             Some(BrepTransform::translate_solid(
                 &solid,
                 Vec3::new(
@@ -156,9 +157,9 @@ fn main() {
     println!("\n  {} intersection edge(s)", edges.len());
     let mut ends: Vec<(Point3, Point3)> = Vec::new();
     for candidate in &edges {
-    end_distance_report(&faces_a, &faces_b, &edges, &tol);
-    duplicate_curve_report(&edges, &tol);
-    batch_split_report(&faces_a, &faces_b, &edges, &tol);
+        end_distance_report(&faces_a, &faces_b, &edges, &tol);
+        duplicate_curve_report(&edges, &tol);
+        batch_split_report(&faces_a, &faces_b, &edges, &tol);
         let (t0, t1) = candidate.edge.curve.param_range();
         let start = candidate.edge.curve.evaluate(t0);
         let end = candidate.edge.curve.evaluate(t1);
@@ -185,11 +186,7 @@ fn main() {
     chain_report(&faces_a, &faces_b, &edges, &tol);
     println!("\n  endpoints shared by exactly one edge (the loop breaks here):");
     let mut lonely = 0usize;
-    for (index, point) in ends
-        .iter()
-        .flat_map(|(a, b)| [*a, *b])
-        .enumerate()
-    {
+    for (index, point) in ends.iter().flat_map(|(a, b)| [*a, *b]).enumerate() {
         let touching = ends
             .iter()
             .flat_map(|(a, b)| [*a, *b])
@@ -217,11 +214,7 @@ fn main() {
 /// 「交線 N 本」まで来ていても、面が割れていなければ切り口は縫えません。
 /// **どの面が割れ、どの面が割れなかったか**は、段の合計（"applied batch
 /// splits"）では分かりません。
-fn split_report(
-    faces_a: &[zenith_topo::Face],
-    faces_b: &[zenith_topo::Face],
-    tol: &Tolerance,
-) {
+fn split_report(faces_a: &[zenith_topo::Face], faces_b: &[zenith_topo::Face], tol: &Tolerance) {
     let splits = BrepIntersectionBuilder::collect_planar_face_batch_splits(faces_a, faces_b, tol);
     for (label, batch, faces) in [
         ("A", &splits.splits_a, faces_a),
@@ -338,10 +331,30 @@ fn end_distance_report(
     for candidate in edges {
         let (t0, t1) = candidate.edge.curve.param_range();
         for (label, index, face, end) in [
-            ("A", candidate.face_a_index, &faces_a[candidate.face_a_index], t0),
-            ("A", candidate.face_a_index, &faces_a[candidate.face_a_index], t1),
-            ("B", candidate.face_b_index, &faces_b[candidate.face_b_index], t0),
-            ("B", candidate.face_b_index, &faces_b[candidate.face_b_index], t1),
+            (
+                "A",
+                candidate.face_a_index,
+                &faces_a[candidate.face_a_index],
+                t0,
+            ),
+            (
+                "A",
+                candidate.face_a_index,
+                &faces_a[candidate.face_a_index],
+                t1,
+            ),
+            (
+                "B",
+                candidate.face_b_index,
+                &faces_b[candidate.face_b_index],
+                t0,
+            ),
+            (
+                "B",
+                candidate.face_b_index,
+                &faces_b[candidate.face_b_index],
+                t1,
+            ),
         ] {
             let point = candidate.edge.curve.evaluate(end);
             // 境界の広がりから許容を出します（`FaceSplitter` と同じ規則）。

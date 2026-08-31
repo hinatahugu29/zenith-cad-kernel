@@ -24,7 +24,10 @@ use zenith_tess::{TessellationParams, TriangleMesh};
 use zenith_topo::Solid;
 
 /// 座標が一致する頂点を1つに束ねてから、辺の使われ方を数える
-fn edge_use_counts(mesh: &TriangleMesh, tol: f64) -> BTreeMap<(i64, i64, i64, i64, i64, i64), usize> {
+fn edge_use_counts(
+    mesh: &TriangleMesh,
+    tol: f64,
+) -> BTreeMap<(i64, i64, i64, i64, i64, i64), usize> {
     let quantize = |p: Point3| {
         let scale = 1.0 / tol;
         (
@@ -110,15 +113,31 @@ fn main() {
 
     for divisions in [4usize, 6, 8, 10, 12, 16, 20, 24, 32] {
         println!("--- {divisions} divisions per patch");
-        all_closed &= probe("box", &PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap(), divisions);
+        all_closed &= probe(
+            "box",
+            &PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap(),
+            divisions,
+        );
         all_closed &= probe(
             "cylinder",
             &PrimitiveBuilder::make_cylinder(10.0, 25.0).unwrap(),
             divisions,
         );
-        all_closed &= probe("sphere", &PrimitiveBuilder::make_sphere(12.0).unwrap(), divisions);
-        all_closed &= probe("cone", &PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap(), divisions);
-        all_closed &= probe("torus", &PrimitiveBuilder::make_torus(12.0, 4.0).unwrap(), divisions);
+        all_closed &= probe(
+            "sphere",
+            &PrimitiveBuilder::make_sphere(12.0).unwrap(),
+            divisions,
+        );
+        all_closed &= probe(
+            "cone",
+            &PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap(),
+            divisions,
+        );
+        all_closed &= probe(
+            "torus",
+            &PrimitiveBuilder::make_torus(12.0, 4.0).unwrap(),
+            divisions,
+        );
         all_closed &= probe(
             "drilled box",
             &HoleBuilder::make_drilled_box(40.0, 40.0, 20.0, 8.0).unwrap(),

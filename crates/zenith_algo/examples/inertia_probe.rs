@@ -99,10 +99,8 @@ fn main() {
     let (a, b, c) = (10.0f64, 10.0, 10.0);
     let v = a * b * c;
     let shift = Vec3::new(50.0, 0.0, 0.0);
-    let moved = BrepTransform::translate_solid(
-        &PrimitiveBuilder::make_box(a, b, c).unwrap(),
-        shift,
-    );
+    let moved =
+        BrepTransform::translate_solid(&PrimitiveBuilder::make_box(a, b, c).unwrap(), shift);
     // 原点まわり Ixx は動かない（x 方向の移動は y, z を変えない）
     // Iyy, Izz は V d^2 だけ増える（d は重心の x 座標）
     let centre = Point3::new(50.0 + a * 0.5, b * 0.5, c * 0.5);
@@ -233,10 +231,7 @@ fn check_products_and_principal_moments() {
     // ことの一番強い証拠になる。
     let turned = BrepTransform::transform_solid(
         &PrimitiveBuilder::make_box(a, b, c).unwrap(),
-        &zenith_math::Transform3::from_axis_angle(
-            &Vec3::new(1.0, 2.0, 3.0),
-            35.0f64.to_radians(),
-        ),
+        &zenith_math::Transform3::from_axis_angle(&Vec3::new(1.0, 2.0, 3.0), 35.0f64.to_radians()),
     )
     .unwrap();
     let turned_measured = MassCalculator::compute_from_brep(&turned, &params);

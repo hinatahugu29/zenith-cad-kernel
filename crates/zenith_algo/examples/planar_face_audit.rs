@@ -55,7 +55,11 @@ fn audit(name: &str, solid: &Solid) -> usize {
         .count();
     let curved = faces.len() - planes - disguised;
 
-    let flag = if disguised > 0 { " <== flat faces held as NURBS" } else { "" };
+    let flag = if disguised > 0 {
+        " <== flat faces held as NURBS"
+    } else {
+        ""
+    };
     println!(
         "{name:<40} {:>3} faces = {:>3} plane + {:>3} curved + {:>3} disguised{flag}",
         faces.len(),
@@ -70,7 +74,10 @@ fn main() {
     let tol = Tolerance::default();
     let mut disguised = 0;
 
-    disguised += audit("box", &PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap());
+    disguised += audit(
+        "box",
+        &PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap(),
+    );
     disguised += audit(
         "regular_prism 6",
         &PrimitiveBuilder::make_regular_prism(6, 10.0, 25.0).unwrap(),
@@ -79,7 +86,10 @@ fn main() {
         "cylinder",
         &PrimitiveBuilder::make_cylinder(10.0, 25.0).unwrap(),
     );
-    disguised += audit("cone", &PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap());
+    disguised += audit(
+        "cone",
+        &PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap(),
+    );
     disguised += audit("sphere", &PrimitiveBuilder::make_sphere(10.0).unwrap());
     disguised += audit("torus", &PrimitiveBuilder::make_torus(12.0, 4.0).unwrap());
 
@@ -93,7 +103,8 @@ fn main() {
     );
     disguised += audit(
         "hole: countersink",
-        &HoleBuilder::make_countersink_hole_box(40.0, 40.0, 20.0, 3.0, 6.0, 90.0, 20.0, 20.0).unwrap(),
+        &HoleBuilder::make_countersink_hole_box(40.0, 40.0, 20.0, 3.0, 6.0, 90.0, 20.0, 20.0)
+            .unwrap(),
     );
     disguised += audit(
         "hole: hex_nut",

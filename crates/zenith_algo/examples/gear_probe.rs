@@ -70,9 +70,11 @@ fn main() {
         v_divisions: 64,
     };
 
-    for (module, teeth, angle, thickness, bore) in
-        [(2.0, 18, 20.0, 8.0, 5.0), (3.0, 24, 20.0, 10.0, 8.0), (1.5, 40, 14.5, 6.0, 10.0)]
-    {
+    for (module, teeth, angle, thickness, bore) in [
+        (2.0, 18, 20.0, 8.0, 5.0),
+        (3.0, 24, 20.0, 10.0, 8.0),
+        (1.5, 40, 14.5, 6.0, 10.0),
+    ] {
         let area = GearBuilder::involute_profile_area(module, teeth, angle, bore).unwrap();
         let expected = area * thickness;
         println!(

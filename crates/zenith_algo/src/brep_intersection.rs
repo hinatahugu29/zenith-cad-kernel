@@ -2,8 +2,7 @@ use crate::cap::CapBuilder;
 use crate::MassCalculator;
 use std::collections::BTreeMap;
 use zenith_geom::{
-    ControlPoint3, ExtremumEngine, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3,
-    Surface3,
+    ControlPoint3, ExtremumEngine, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3, Surface3,
 };
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance, Vec2, Vec3, Vec3Ext};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
@@ -359,7 +358,8 @@ impl BrepIntersectionBuilder {
                             continue;
                         }
                         let normal = oriented_plane_normal(third);
-                        let Some(t) = solve_curve_on_plane(curve, nearby.parameter, plane.origin, normal)
+                        let Some(t) =
+                            solve_curve_on_plane(curve, nearby.parameter, plane.origin, normal)
                         else {
                             continue;
                         };
@@ -629,34 +629,34 @@ impl BrepIntersectionBuilder {
         let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
 
         splits
-        .into_iter()
-        .map(|candidate| {
-            let split_faces_a = candidate
-                .split_faces_a
-                .into_iter()
-                .map(|face| ClassifiedFacePiece {
-                    location: classify_face_against_mesh(&face, &mesh_b, Some(solid_b), tol),
-                    face,
-                })
-                .collect();
-            let split_faces_b = candidate
-                .split_faces_b
-                .into_iter()
-                .map(|face| ClassifiedFacePiece {
-                    location: classify_face_against_mesh(&face, &mesh_a, Some(solid_a), tol),
-                    face,
-                })
-                .collect();
+            .into_iter()
+            .map(|candidate| {
+                let split_faces_a = candidate
+                    .split_faces_a
+                    .into_iter()
+                    .map(|face| ClassifiedFacePiece {
+                        location: classify_face_against_mesh(&face, &mesh_b, Some(solid_b), tol),
+                        face,
+                    })
+                    .collect();
+                let split_faces_b = candidate
+                    .split_faces_b
+                    .into_iter()
+                    .map(|face| ClassifiedFacePiece {
+                        location: classify_face_against_mesh(&face, &mesh_a, Some(solid_a), tol),
+                        face,
+                    })
+                    .collect();
 
-            ClassifiedPlanarFaceSplitCandidate {
-                face_a_index: candidate.face_a_index,
-                face_b_index: candidate.face_b_index,
-                split_edge: candidate.split_edge,
-                split_faces_a,
-                split_faces_b,
-            }
-        })
-        .collect()
+                ClassifiedPlanarFaceSplitCandidate {
+                    face_a_index: candidate.face_a_index,
+                    face_b_index: candidate.face_b_index,
+                    split_edge: candidate.split_edge,
+                    split_faces_a,
+                    split_faces_b,
+                }
+            })
+            .collect()
     }
 
     pub fn classify_face_against_solid(
@@ -738,12 +738,8 @@ impl BrepIntersectionBuilder {
     ) -> BooleanFaceSelection {
         let faces_a = all_solid_faces(solid_a);
         let faces_b = all_solid_faces(solid_b);
-        let batch_splits = Self::batch_splits_from_candidates(
-            &faces_a,
-            &faces_b,
-            candidates.clone(),
-            tol,
-        );
+        let batch_splits =
+            Self::batch_splits_from_candidates(&faces_a, &faces_b, candidates.clone(), tol);
         let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
         let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
 
@@ -891,9 +887,8 @@ impl BrepIntersectionBuilder {
             //
             // 未整合は「まだ閉じていない」、非多様体は「壊れている」。
             // 減らしてよいのは前者だけで、後者を増やす取引は無い。
-            let closes_without_breaking = best_score.0 < base.0
-                && best_score.1 <= base.1
-                && best_score.2 <= base.2;
+            let closes_without_breaking =
+                best_score.0 < base.0 && best_score.1 <= base.1 && best_score.2 <= base.2;
             if closes_without_breaking {
                 selected_face_pieces.push(best_piece);
             }
@@ -915,11 +910,7 @@ impl BrepIntersectionBuilder {
     ) -> BooleanShellAssembly {
         let faces_a = all_solid_faces(solid_a);
         let faces_b = all_solid_faces(solid_b);
-        let mut face_pair_candidates = Self::collect_face_pair_candidates(
-            &faces_a,
-            &faces_b,
-            tol,
-        );
+        let mut face_pair_candidates = Self::collect_face_pair_candidates(&faces_a, &faces_b, tol);
         // **接しているだけの線では、面を割りません**（4-184。規約 3-1）。
         let dropped_contact_curves = drop_non_bounding_contact_curves(
             solid_a,
@@ -1034,8 +1025,10 @@ impl BrepIntersectionBuilder {
 
         let mut solids = Vec::with_capacity(groups.len());
         for group in groups {
-            let subset: Vec<SelectedBooleanFacePiece> =
-                group.into_iter().map(|index| pieces[index].clone()).collect();
+            let subset: Vec<SelectedBooleanFacePiece> = group
+                .into_iter()
+                .map(|index| pieces[index].clone())
+                .collect();
             solids.push(Self::build_solid_from_selected_face_pieces(&subset, tol)?);
         }
         Ok(nest_cavity_shells_into_solids(solids, tol))
@@ -1343,9 +1336,7 @@ impl BrepIntersectionBuilder {
             .ok_or_else(|| "Split edge end does not lie on the outer boundary".to_string())?;
         // 同じ境界辺の上に両端が乗るのは正当な配置。ただし同じ点に潰れて
         // いるなら切り込みにならない。
-        if start_hit.edge_index == end_hit.edge_index
-            && (start_hit.t - end_hit.t).abs() <= 1e-9
-        {
+        if start_hit.edge_index == end_hit.edge_index && (start_hit.t - end_hit.t).abs() <= 1e-9 {
             return Err("Split edge endpoints collapse to one boundary point".to_string());
         }
 
@@ -1377,33 +1368,37 @@ impl BrepIntersectionBuilder {
     ) -> Result<Vec<Face>, String> {
         match &face.geometry {
             FaceGeometry::Plane(_) => Self::split_planar_face_by_edge(face, split_edge, tol),
-            FaceGeometry::Nurbs(surface) => split_cylinder_side_face_by_horizontal_edge(
-                face, surface, split_edge, tol,
-            )
-            .or_else(|horizontal_error| {
-                split_cylinder_side_face_by_vertical_edge(face, surface, split_edge, tol)
-                    .map_err(|vertical_error| format!("{horizontal_error}; {vertical_error}"))
-            })
-            .or_else(|cylinder_errors| {
-                // 円柱・円錐でない面。断面が面の等パラメータ線になっていれば、
-                // 形が何であれ同じやり方で割れる。トーラスがこれ。
-                split_patch_face_by_section_edge(face, surface, split_edge, tol)
-                    .map_err(|general_error| format!("{cylinder_errors}; {general_error}"))
-            })
-            .or_else(|iso_errors| {
-                // 等パラメータ線でない切り口。境界の巡回を割るだけの一般の
-                // 分割にかける。**面積の和が元に戻ることを測って**から採る。
-                // 閉じたワイヤになっただけでは、領域の取り違えは分からない。
-                let (pieces, report) = crate::FaceSplitter::split_by_curve(face, split_edge, tol)
-                    .map_err(|general_error| format!("{iso_errors}; {general_error}"))?;
-                if report.area_residual > 1e-6 {
-                    return Err(format!(
-                        "{iso_errors}; the general split lost {:.3e} of the face area",
-                        report.area_residual
-                    ));
-                }
-                Ok(pieces)
-            }),
+            FaceGeometry::Nurbs(surface) => {
+                split_cylinder_side_face_by_horizontal_edge(face, surface, split_edge, tol)
+                    .or_else(|horizontal_error| {
+                        split_cylinder_side_face_by_vertical_edge(face, surface, split_edge, tol)
+                            .map_err(|vertical_error| {
+                                format!("{horizontal_error}; {vertical_error}")
+                            })
+                    })
+                    .or_else(|cylinder_errors| {
+                        // 円柱・円錐でない面。断面が面の等パラメータ線になっていれば、
+                        // 形が何であれ同じやり方で割れる。トーラスがこれ。
+                        split_patch_face_by_section_edge(face, surface, split_edge, tol)
+                            .map_err(|general_error| format!("{cylinder_errors}; {general_error}"))
+                    })
+                    .or_else(|iso_errors| {
+                        // 等パラメータ線でない切り口。境界の巡回を割るだけの一般の
+                        // 分割にかける。**面積の和が元に戻ることを測って**から採る。
+                        // 閉じたワイヤになっただけでは、領域の取り違えは分からない。
+                        let (pieces, report) = crate::FaceSplitter::split_by_curve(
+                            face, split_edge, tol,
+                        )
+                        .map_err(|general_error| format!("{iso_errors}; {general_error}"))?;
+                        if report.area_residual > 1e-6 {
+                            return Err(format!(
+                                "{iso_errors}; the general split lost {:.3e} of the face area",
+                                report.area_residual
+                            ));
+                        }
+                        Ok(pieces)
+                    })
+            }
             _ => Err("Face splitting is not implemented for this geometry".to_string()),
         }
     }
@@ -2272,7 +2267,9 @@ fn planar_loop_frame(wire: &Wire) -> Option<(Point3, Vec3)> {
         normal.z += (current.x - next.x) * (current.y + next.y);
     }
 
-    normal.try_normalize_safe(1e-12).map(|normal| (center, normal))
+    normal
+        .try_normalize_safe(1e-12)
+        .map(|normal| (center, normal))
 }
 
 /// Any unit vector lying in the plane with the given normal.
@@ -2410,10 +2407,8 @@ fn select_operand_faces_after_batch_split(
                 // `face_parameter_area` は p-curve から、こちらは
                 // 三角形分割から。食い違えば、経路が違う。
                 let triangulated = {
-                    let uv = zenith_tess::face_uv_triangulation(
-                        face,
-                        &TessellationParams::default(),
-                    );
+                    let uv =
+                        zenith_tess::face_uv_triangulation(face, &TessellationParams::default());
                     let mut sum = 0.0;
                     for triangle in &uv.triangles {
                         let (a, b, c) = (
@@ -2431,10 +2426,8 @@ fn select_operand_faces_after_batch_split(
                 {
                     // **三角形分割が p-curve より広い。** どの三角形が
                     // 余分なのかを、切り欠きの中に重心がある三角形として出す。
-                    let uv = zenith_tess::face_uv_triangulation(
-                        face,
-                        &TessellationParams::default(),
-                    );
+                    let uv =
+                        zenith_tess::face_uv_triangulation(face, &TessellationParams::default());
                     eprintln!(
                         "TRIWHY 三角形 {} 枚、p-curve {from_pcurves:.6} < 三角形 {triangulated:.6}（差 {:.6}）",
                         uv.triangles.len(),
@@ -2467,7 +2460,9 @@ fn select_operand_faces_after_batch_split(
                         "TRIWHY   符号付きの和 {signed:.6}、裏返った三角形 {negative_count} 枚（面積の合計 {negative_area:.6}）"
                     );
                     if let Some((u, v, area)) = worst {
-                        eprintln!("TRIWHY   いちばん大きい裏返り: 重心 ({u:.6},{v:.6}) 面積 {area:.6}");
+                        eprintln!(
+                            "TRIWHY   いちばん大きい裏返り: 重心 ({u:.6},{v:.6}) 面積 {area:.6}"
+                        );
                     }
                 }
                 eprintln!(
@@ -2499,14 +2494,16 @@ fn select_operand_faces_after_batch_split(
                             let (t0, t1) = segment.curve.param_range();
                             for step in 0..=8 {
                                 points.push(
-                                    segment
-                                        .curve
-                                        .evaluate(t0 + (t1 - t0) * step as f64 / 8.0),
+                                    segment.curve.evaluate(t0 + (t1 - t0) * step as f64 / 8.0),
                                 );
                             }
                         }
-                        let (mut u0, mut u1, mut v0, mut v1) =
-                            (f64::INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::NEG_INFINITY);
+                        let (mut u0, mut u1, mut v0, mut v1) = (
+                            f64::INFINITY,
+                            f64::NEG_INFINITY,
+                            f64::INFINITY,
+                            f64::NEG_INFINITY,
+                        );
                         for point in &points {
                             u0 = u0.min(point.x);
                             u1 = u1.max(point.x);
@@ -2549,8 +2546,7 @@ fn select_operand_faces_after_batch_split(
                 // （外側シェルは外向き。4-144）。切り手が空洞を貫くと壁が
                 // 外側の境界に繋がるので、ここで揃えないと縫合が
                 // 「同方向の稜」になります。
-                let from_inner_shell =
-                    inner_shell_flags.get(face_index).copied().unwrap_or(false);
+                let from_inner_shell = inner_shell_flags.get(face_index).copied().unwrap_or(false);
                 let reverse_for_difference =
                     operand == BooleanOperand::B && op == crate::BooleanOpType::Difference;
                 selected.push(SelectedBooleanFacePiece {
@@ -3011,10 +3007,7 @@ fn split_cylinder_side_face_by_horizontal_edge(
         tol,
     ) else {
         if std::env::var_os("ZENITH_SPLIT_WHY").is_some() {
-            let (a, b) = (
-                split_edge.start_vertex.point,
-                split_edge.end_vertex.point,
-            );
+            let (a, b) = (split_edge.start_vertex.point, split_edge.end_vertex.point);
             eprintln!(
                 "CYLWHY 端点が母線に乗らない: 交線 ({:.4} {:.4} {:.4})-({:.4} {:.4} {:.4})",
                 a.x, a.y, a.z, b.x, b.y, b.z
@@ -3060,8 +3053,9 @@ fn split_cylinder_side_face_by_horizontal_edge(
     // 面から取り出した円弧は向きが揃っているとは限らないので、明示的に
     // bottom_start -> bottom_end / top_start -> top_end に向ける。
     let bottom_oriented =
-        orient_edge_for_points(&bounds.bottom_edge, bottom_start, bottom_end, tol)
-            .ok_or_else(|| "Cylinder-side bottom arc does not match the face corners".to_string())?;
+        orient_edge_for_points(&bounds.bottom_edge, bottom_start, bottom_end, tol).ok_or_else(
+            || "Cylinder-side bottom arc does not match the face corners".to_string(),
+        )?;
     let top_oriented = orient_edge_for_points(&bounds.top_edge, top_start, top_end, tol)
         .ok_or_else(|| "Cylinder-side top arc does not match the face corners".to_string())?;
     let left_lower = Edge::line_between(
@@ -3169,10 +3163,8 @@ fn split_patch_face_by_section_edge(
     // 分割線が本当にこの面の上にあるか。曲面の種類を問わず、投影して測る。
     let scale = sampled_edge_extent(split_edge).max(1.0);
     for point in sample_curve_points(&split_edge.curve, 12) {
-        let projection = {
-            ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)
-        }
-        .map_err(|err| format!("Section edge could not be projected: {err}"))?;
+        let projection = { ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric) }
+            .map_err(|err| format!("Section edge could not be projected: {err}"))?;
         if projection.distance > tol.linear * 10.0 * scale {
             return Err(format!(
                 "Section edge leaves the face by {:.3e}",
@@ -3333,11 +3325,11 @@ fn split_apex_patch_by_section_edge(
         return Err("The two sides do not meet at a point".to_string());
     }
 
-    let section_axial = 0.5
-        * (axial(section.start_vertex().point) + axial(section.end_vertex().point));
+    let section_axial =
+        0.5 * (axial(section.start_vertex().point) + axial(section.end_vertex().point));
     let apex_axial = axial(apex);
-    let split_axial = 0.5
-        * (axial(split_edge.start_vertex.point) + axial(split_edge.end_vertex.point));
+    let split_axial =
+        0.5 * (axial(split_edge.start_vertex.point) + axial(split_edge.end_vertex.point));
 
     let margin = tol.linear * scale;
     let (low, high) = if section_axial <= apex_axial {
@@ -3349,14 +3341,14 @@ fn split_apex_patch_by_section_edge(
         return Err("Section edge must cross the face interior".to_string());
     }
 
-    let (point_from, point_to) = if edge_reaches_point(&from_section, split_edge.start_vertex.point, tol)
-    {
-        (split_edge.start_vertex.point, split_edge.end_vertex.point)
-    } else if edge_reaches_point(&from_section, split_edge.end_vertex.point, tol) {
-        (split_edge.end_vertex.point, split_edge.start_vertex.point)
-    } else {
-        return Err("Section endpoints do not land on the face sides".to_string());
-    };
+    let (point_from, point_to) =
+        if edge_reaches_point(&from_section, split_edge.start_vertex.point, tol) {
+            (split_edge.start_vertex.point, split_edge.end_vertex.point)
+        } else if edge_reaches_point(&from_section, split_edge.end_vertex.point, tol) {
+            (split_edge.end_vertex.point, split_edge.start_vertex.point)
+        } else {
+            return Err("Section endpoints do not land on the face sides".to_string());
+        };
     if !edge_reaches_point(&to_section, point_to, tol) {
         return Err("Section endpoints do not land on the face sides".to_string());
     }
@@ -3465,13 +3457,15 @@ fn collapse_there_and_back(face: &mut Face, tol: &Tolerance) {
                 // 端点が入れ替わっていて、中点が同じなら、同じ弧を逆に辿って
                 // います。縫合の突き合わせ（`same_undirected_stitch_edge`）と
                 // 同じ見方です。
-                if !points_same_3d(here.end_vertex().point, after.start_vertex().point, tol.linear)
-                    || !points_same_3d(
-                        here.start_vertex().point,
-                        after.end_vertex().point,
-                        tol.linear,
-                    )
-                {
+                if !points_same_3d(
+                    here.end_vertex().point,
+                    after.start_vertex().point,
+                    tol.linear,
+                ) || !points_same_3d(
+                    here.start_vertex().point,
+                    after.end_vertex().point,
+                    tol.linear,
+                ) {
                     continue;
                 }
                 let middle_here = edge_midpoint(&here.edge);
@@ -3651,7 +3645,8 @@ fn cylinder_face_bounds(
     let (top_start, top_end) = {
         let candidate_start = top.0.start_vertex.point;
         let candidate_end = top.0.end_vertex.point;
-        if on_same_ruling(candidate_start, bottom_start) && on_same_ruling(candidate_end, bottom_end)
+        if on_same_ruling(candidate_start, bottom_start)
+            && on_same_ruling(candidate_end, bottom_end)
         {
             (candidate_start, candidate_end)
         } else if on_same_ruling(candidate_end, bottom_start)
@@ -3686,9 +3681,8 @@ fn ruling_boundary_endpoints(
     patch: &CylinderPatch,
     tol: &Tolerance,
 ) -> Option<(Point3, Point3)> {
-    let on_ruling = |point: Point3, ruling_base: Point3| {
-        patch.on_same_ruling(point, ruling_base, tol)
-    };
+    let on_ruling =
+        |point: Point3, ruling_base: Point3| patch.on_same_ruling(point, ruling_base, tol);
 
     let start = split_edge.start_vertex.point;
     let end = split_edge.end_vertex.point;
@@ -3790,30 +3784,36 @@ fn split_cylinder_side_face_by_vertical_edge(
         Vertex::new(top_end, tol.linear),
     )?;
 
-    let left = hold_piece_like_its_face(Face::new(
-        face.geometry.clone(),
-        Wire::new(vec![
-            OrientedEdge::forward(bottom_left),
-            split_forward,
-            OrientedEdge::reversed(top_left),
-            OrientedEdge::reversed(left_ruling),
-        ]),
-        Vec::new(),
-        face.orientation,
-        face.tolerance,
-    ), tol);
-    let right = hold_piece_like_its_face(Face::new(
-        face.geometry.clone(),
-        Wire::new(vec![
-            OrientedEdge::forward(bottom_right),
-            OrientedEdge::forward(right_ruling),
-            OrientedEdge::reversed(top_right),
-            split_reversed,
-        ]),
-        Vec::new(),
-        face.orientation,
-        face.tolerance,
-    ), tol);
+    let left = hold_piece_like_its_face(
+        Face::new(
+            face.geometry.clone(),
+            Wire::new(vec![
+                OrientedEdge::forward(bottom_left),
+                split_forward,
+                OrientedEdge::reversed(top_left),
+                OrientedEdge::reversed(left_ruling),
+            ]),
+            Vec::new(),
+            face.orientation,
+            face.tolerance,
+        ),
+        tol,
+    );
+    let right = hold_piece_like_its_face(
+        Face::new(
+            face.geometry.clone(),
+            Wire::new(vec![
+                OrientedEdge::forward(bottom_right),
+                OrientedEdge::forward(right_ruling),
+                OrientedEdge::reversed(top_right),
+                split_reversed,
+            ]),
+            Vec::new(),
+            face.orientation,
+            face.tolerance,
+        ),
+        tol,
+    );
 
     for split_face in [&left, &right] {
         if !split_face.outer_wire.is_closed(tol) {
@@ -3994,8 +3994,7 @@ fn classify_face_against_mesh(
         if spread.len() >= 4 {
             let near_count = spread.iter().filter(|point| near(**point)).count();
             if near_count * 2 < spread.len() {
-                let off: Vec<Point3> =
-                    spread.into_iter().filter(|point| !near(*point)).collect();
+                let off: Vec<Point3> = spread.into_iter().filter(|point| !near(*point)).collect();
                 let inside = off
                     .iter()
                     .filter(|point| crate::BooleanEngine::is_point_inside_mesh(**point, mesh))
@@ -4142,8 +4141,7 @@ fn spread_face_points(face: &Face, want: usize) -> Vec<Point3> {
                 let a = domain.uvs[triangle[0]];
                 let b = domain.uvs[triangle[1]];
                 let c = domain.uvs[triangle[2]];
-                let area =
-                    0.5 * ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs();
+                let area = 0.5 * ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs();
                 if area <= 0.0 {
                     return None;
                 }
@@ -4553,7 +4551,10 @@ fn connected_piece_groups_inner(
                 let b = key(edge.edge.curve.evaluate(end));
                 let middle = key(edge.edge.curve.evaluate((start + end) * 0.5));
                 let pair = if a <= b { (a, b) } else { (b, a) };
-                users.entry((pair.0, pair.1, middle)).or_default().push(index);
+                users
+                    .entry((pair.0, pair.1, middle))
+                    .or_default()
+                    .push(index);
             }
         }
     }
@@ -4657,7 +4658,9 @@ fn nest_cavity_shells_into_solids(simple_solids: Vec<Solid>, _tol: &Tolerance) -
     // 内向きの塊が「いちばん小さい」ことになって、入れ子の親子が
     // 取り違えられます。大きさで並べれば向きに依存しません。
     with_volume.sort_by(|(a, _), (b, _)| {
-        b.abs().partial_cmp(&a.abs()).unwrap_or(std::cmp::Ordering::Equal)
+        b.abs()
+            .partial_cmp(&a.abs())
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     let shell_volumes: Vec<f64> = with_volume.iter().map(|(volume, _)| *volume).collect();
     let simple_solids: Vec<Solid> = with_volume.into_iter().map(|(_, solid)| solid).collect();
@@ -4910,11 +4913,7 @@ fn pcurve_uv_polygons(face: &Face) -> Option<(Vec<Point2>, Vec<Vec<Point2>>)> {
 /// 平面側の [`planar_point_clear_of_holes`] と同じやり方です。あちらは
 /// 3D の境界点を平面へ射影しますが、曲面は **p-curve が最初から uv に
 /// ある**ので、そのまま使えます。
-fn uv_points_clear_of_holes(
-    outer: &[Point2],
-    holes: &[Vec<Point2>],
-    want: usize,
-) -> Vec<Point2> {
+fn uv_points_clear_of_holes(outer: &[Point2], holes: &[Vec<Point2>], want: usize) -> Vec<Point2> {
     const GRID: usize = 24;
     if want == 0 || outer.len() < 3 {
         return Vec::new();
@@ -5009,19 +5008,22 @@ fn representative_face_point(face: &Face) -> Point3 {
 /// トリム領域の三角形のうち、いちばん大きいものの重心（UV）。
 fn largest_domain_triangle_centroid(face: &Face) -> Option<(f64, f64)> {
     // **点を選ぶだけなので、細分は掛けません**（4-160）。
-    let domain =
-        zenith_tess::face_uv_triangulation_for_point_picking(face, &zenith_tess::TessellationParams::default());
+    let domain = zenith_tess::face_uv_triangulation_for_point_picking(
+        face,
+        &zenith_tess::TessellationParams::default(),
+    );
     let mut best: Option<(f64, (f64, f64))> = None;
     for triangle in &domain.triangles {
         let a = domain.uvs[triangle[0]];
         let b = domain.uvs[triangle[1]];
         let c = domain.uvs[triangle[2]];
         let area = 0.5 * ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs();
-        let centroid = (
-            (a.x + b.x + c.x) / 3.0,
-            (a.y + b.y + c.y) / 3.0,
-        );
-        if best.as_ref().map(|(found, _)| area > *found).unwrap_or(true) {
+        let centroid = ((a.x + b.x + c.x) / 3.0, (a.y + b.y + c.y) / 3.0);
+        if best
+            .as_ref()
+            .map(|(found, _)| area > *found)
+            .unwrap_or(true)
+        {
             best = Some((area, centroid));
         }
     }
@@ -5310,7 +5312,11 @@ fn extend_by_curve_hull(bbox: &mut BoundingBox3, curve: &zenith_geom::NurbsCurve
 
     // 重みが正でなければ凸包の性質が使えません。そのときだけ標本で妥協します
     // （**標本は上界ではありません**が、生の制御点より実物に近い）。
-    if curve.control_points.iter().any(|control| !(control.weight > 0.0)) {
+    if curve
+        .control_points
+        .iter()
+        .any(|control| !(control.weight > 0.0))
+    {
         let (t0, t1) = curve.param_range();
         for step in 0..=64 {
             let point = curve.evaluate(t0 + (t1 - t0) * step as f64 / 64.0);
@@ -5405,11 +5411,7 @@ fn clip_candidate_to_face_bboxes(
 /// 縫合が止まり、3演算とも断られていました。
 ///
 /// **厚さが 0 の軸だけ広げれば、探すのに足りて、答えは動きません。**
-fn bbox_overlap_where_needed(
-    a: &BoundingBox3,
-    b: &BoundingBox3,
-    tol: f64,
-) -> Option<BoundingBox3> {
+fn bbox_overlap_where_needed(a: &BoundingBox3, b: &BoundingBox3, tol: f64) -> Option<BoundingBox3> {
     let axis = |low_a: f64, high_a: f64, low_b: f64, high_b: f64| {
         let low = low_a.max(low_b);
         let high = high_a.min(high_b);
@@ -5511,9 +5513,7 @@ fn clip_candidate_to_planar_trims(
             let segment_vec = segment_end - segment_start;
             let intervals: Vec<(f64, f64)> = intervals
                 .into_iter()
-                .filter(|(start, end)| {
-                    (segment_vec * (end - start)).norm() > tol.linear
-                })
+                .filter(|(start, end)| (segment_vec * (end - start)).norm() > tol.linear)
                 .collect();
 
             match intervals.len() {
@@ -5608,11 +5608,7 @@ fn clip_curve_to_both_planar_trims(
 ///
 /// `None` は「切る必要が無い、または切れない」で、呼び手は元のまま使う。
 /// 全部が外なら空の `Vec` を返す。
-fn clip_curve_to_planar_face_trim(
-    edge: &Edge,
-    face: &Face,
-    tol: &Tolerance,
-) -> Option<Vec<Edge>> {
+fn clip_curve_to_planar_face_trim(edge: &Edge, face: &Face, tol: &Tolerance) -> Option<Vec<Edge>> {
     let FaceGeometry::Plane(plane) = &face.geometry else {
         return None;
     };
@@ -5650,10 +5646,14 @@ fn clip_curve_to_planar_face_trim(
             return false;
         }
         // 穴の内側は面ではない。
-        !pcurves.inner_loops.iter().zip(holes.iter()).any(|(inner, hole)| {
-            point_inside_pcurve_loop(uv, inner, tol)
-                .unwrap_or_else(|| point_in_polygon_2d(uv, hole, -margin))
-        })
+        !pcurves
+            .inner_loops
+            .iter()
+            .zip(holes.iter())
+            .any(|(inner, hole)| {
+                point_inside_pcurve_loop(uv, inner, tol)
+                    .unwrap_or_else(|| point_in_polygon_2d(uv, hole, -margin))
+            })
     };
 
     const SAMPLES: usize = 257;
@@ -5950,7 +5950,6 @@ fn pcurve_segment_crossings(
     )
 }
 
-
 /// 直線と p-curve の交点を、**曲線そのもの**の上で求める。
 ///
 /// 直線までの符号付き距離 `f(t) = n·(C(t) - start)` は曲線に沿って滑らか
@@ -6186,30 +6185,38 @@ fn intersect_face_supports(
                 return None;
             }
             Some(
-            match intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_a), surface, tol)
-            {
-                FaceIntersectionKind::Unsupported => (
-                    intersect_planar_face_with_patch(face_a, plane, surface, tol),
-                    false,
-                ),
-                kind => (kind, true),
-            },
-        )
+                match intersect_plane_cylinder_patch(
+                    plane,
+                    oriented_plane_normal(face_a),
+                    surface,
+                    tol,
+                ) {
+                    FaceIntersectionKind::Unsupported => (
+                        intersect_planar_face_with_patch(face_a, plane, surface, tol),
+                        false,
+                    ),
+                    kind => (kind, true),
+                },
+            )
         }
         (FaceGeometry::Nurbs(surface), FaceGeometry::Plane(plane)) => {
             if planar_rim_touches_section_circle(face_b, plane, surface, tol) {
                 return None;
             }
             Some(
-            match intersect_plane_cylinder_patch(plane, oriented_plane_normal(face_b), surface, tol)
-            {
-                FaceIntersectionKind::Unsupported => (
-                    intersect_planar_face_with_patch(face_b, plane, surface, tol),
-                    false,
-                ),
-                kind => (kind, true),
-            },
-        )
+                match intersect_plane_cylinder_patch(
+                    plane,
+                    oriented_plane_normal(face_b),
+                    surface,
+                    tol,
+                ) {
+                    FaceIntersectionKind::Unsupported => (
+                        intersect_planar_face_with_patch(face_b, plane, surface, tol),
+                        false,
+                    ),
+                    kind => (kind, true),
+                },
+            )
         }
         (FaceGeometry::Nurbs(surface_a), FaceGeometry::Nurbs(surface_b)) => {
             // **接する母線は、辿らずに解析的に出します**（4-190）。
@@ -6260,10 +6267,7 @@ fn intersect_planar_face_with_patch(
 }
 
 /// 平面の面を、その境界が占める範囲ちょうどの1次×1次パッチにする。
-fn planar_face_as_patch(
-    face: &Face,
-    plane: &zenith_geom::PlaneSurface3,
-) -> Option<NurbsSurface3> {
+fn planar_face_as_patch(face: &Face, plane: &zenith_geom::PlaneSurface3) -> Option<NurbsSurface3> {
     use zenith_geom::{ControlPoint3, KnotVector};
 
     let points = face.outer_wire.sample_points(8);
@@ -6344,7 +6348,10 @@ fn intersect_nurbs_patches(
         // 「境界に届かない」と断られ、しかも本物の切り込みを押しのける。
         if marched_runs_along_a_patch_edge(&marched, surface_a, surface_b) {
             if explain {
-                eprintln!("  dropped: runs along a patch edge ({} points)", marched.points.len());
+                eprintln!(
+                    "  dropped: runs along a patch edge ({} points)",
+                    marched.points.len()
+                );
             }
             continue;
         }
@@ -6364,7 +6371,13 @@ fn intersect_nurbs_patches(
         if explain {
             eprintln!(
                 "  kept: ({:.3} {:.3} {:.3}) -> ({:.3} {:.3} {:.3}), {} marched points",
-                start.x, start.y, start.z, end.x, end.y, end.z, marched.points.len()
+                start.x,
+                start.y,
+                start.z,
+                end.x,
+                end.y,
+                end.z,
+                marched.points.len()
             );
         }
         edges.push(Edge::new(
@@ -6553,10 +6566,7 @@ impl CylinderPatch {
 /// The normal is `None` when the section has collapsed to a point, which is
 /// what the row at a cone's apex does; there is a centre and a zero radius, but
 /// no plane to speak of.
-fn fit_section_circle(
-    curve: &NurbsCurve3,
-    tol: &Tolerance,
-) -> Option<(Point3, f64, Option<Vec3>)> {
+fn fit_section_circle(curve: &NurbsCurve3, tol: &Tolerance) -> Option<(Point3, f64, Option<Vec3>)> {
     let samples = sample_curve_points(curve, 8);
     let origin = samples[0];
     let extent = samples
@@ -6959,14 +6969,12 @@ fn fit_circle_through(a: Point3, b: Point3, c: Point3) -> Option<(Point3, f64, V
         return None;
     }
     let normal = normal / norm;
-    let center = a
-        + (ab * ac.dot(&ac) * ab.dot(&ab).recip().recip()).scale(0.0)
-        + {
-            let denominator = 2.0 * norm * norm;
-            let alpha = ac.dot(&ac) * ab.dot(&(ab - ac)) / denominator;
-            let beta = ab.dot(&ab) * ac.dot(&(ac - ab)) / denominator;
-            ab * alpha + ac * beta
-        };
+    let center = a + (ab * ac.dot(&ac) * ab.dot(&ab).recip().recip()).scale(0.0) + {
+        let denominator = 2.0 * norm * norm;
+        let alpha = ac.dot(&ac) * ab.dot(&(ab - ac)) / denominator;
+        let beta = ab.dot(&ab) * ac.dot(&(ac - ab)) / denominator;
+        ab * alpha + ac * beta
+    };
     let radius = (a - center).norm();
     Some((center, radius, normal))
 }
@@ -7009,8 +7017,12 @@ fn revolution_patches_touch_at_a_point(
     }
 
     // A の底を原点にした軸方向の座標。
-    let b_low = between.dot(&axis).min(between.dot(&axis) + facing * patch_b.height);
-    let b_high = between.dot(&axis).max(between.dot(&axis) + facing * patch_b.height);
+    let b_low = between
+        .dot(&axis)
+        .min(between.dot(&axis) + facing * patch_b.height);
+    let b_high = between
+        .dot(&axis)
+        .max(between.dot(&axis) + facing * patch_b.height);
     let low = 0.0f64.max(b_low);
     let high = patch_a.height.min(b_high);
     if !(high - low > limit) {
@@ -7166,7 +7178,6 @@ fn intersect_tangent_cylinder_patches(
     })
 }
 
-
 fn intersect_plane_cylinder_patch(
     plane: &PlaneSurface3,
     plane_normal: Vec3,
@@ -7316,9 +7327,8 @@ fn iso_section_along(
             surface.evaluate(along, section)
         }
     };
-    let offset_at = |section: f64, along: f64| {
-        (evaluate(section, along) - plane.origin).dot(&plane_normal)
-    };
+    let offset_at =
+        |section: f64, along: f64| (evaluate(section, along) - plane.origin).dot(&plane_normal);
 
     let extent = (surface.evaluate(u_max, v_max) - surface.evaluate(u_min, v_min))
         .norm()
@@ -8297,15 +8307,15 @@ fn split_planar_face_across_holes(
                 if start == end {
                     continue;
                 }
-                arcs.push(Arc { from: start, to: end, path });
+                arcs.push(Arc {
+                    from: start,
+                    to: end,
+                    path,
+                });
             }
             continue;
         }
-        hits.sort_by(|a, b| {
-            a.edge_index
-                .cmp(&b.edge_index)
-                .then(a.t.total_cmp(&b.t))
-        });
+        hits.sort_by(|a, b| a.edge_index.cmp(&b.edge_index).then(a.t.total_cmp(&b.t)));
         hits.dedup_by(|a, b| a.edge_index == b.edge_index && (a.t - b.t).abs() <= 1e-9);
         if hits.len() < 2 {
             return Err("a wire was met by the cut only once".to_string());
@@ -8322,7 +8332,11 @@ fn split_planar_face_across_holes(
             if start == end {
                 continue;
             }
-            arcs.push(Arc { from: start, to: end, path });
+            arcs.push(Arc {
+                from: start,
+                to: end,
+                path,
+            });
         }
     }
 
@@ -8343,7 +8357,11 @@ fn split_planar_face_across_holes(
         } else {
             OrientedEdge::new(cut.clone(), zenith_topo::Orientation::Reversed)
         };
-        arcs.push(Arc { from: start, to: end, path: vec![forward] });
+        arcs.push(Arc {
+            from: start,
+            to: end,
+            path: vec![forward],
+        });
     }
 
     // 弧はすべて両向きに持ちます。巡回はそれを前提にします。
@@ -8482,7 +8500,11 @@ fn split_planar_face_across_holes(
         if !point_in_polygon_2d(inside, &outer_polygon, tol.parametric) {
             continue;
         }
-        regions.push(if face_winding < 0.0 { reversed_wire(&wire) } else { wire });
+        regions.push(if face_winding < 0.0 {
+            reversed_wire(&wire)
+        } else {
+            wire
+        });
         outlines.push(polygon);
         region_nodes.push(touched);
     }
@@ -8602,7 +8624,10 @@ fn oriented_end_point(edge: &OrientedEdge) -> Point3 {
 /// 点が既にある節点と同じならその番号を、無ければ足して新しい番号を返す。
 fn node_index(nodes: &mut Vec<Point3>, point: Point3, tol: &Tolerance) -> usize {
     let limit = tol.linear * 1000.0;
-    if let Some(index) = nodes.iter().position(|node| (*node - point).norm() <= limit) {
+    if let Some(index) = nodes
+        .iter()
+        .position(|node| (*node - point).norm() <= limit)
+    {
         return index;
     }
     nodes.push(point);
@@ -8638,11 +8663,9 @@ fn interior_sample_2d(polygon: &[Point2], holes: &[Vec<Point2>], tol: f64) -> Op
                 .any(|hole| point_in_polygon_2d(candidate, hole, tol))
     };
     let count = polygon.len() as f64;
-    let sum = polygon
-        .iter()
-        .fold(Point2::new(0.0, 0.0), |sum, point| {
-            Point2::new(sum.x + point.x, sum.y + point.y)
-        });
+    let sum = polygon.iter().fold(Point2::new(0.0, 0.0), |sum, point| {
+        Point2::new(sum.x + point.x, sum.y + point.y)
+    });
     let centroid = Point2::new(sum.x / count, sum.y / count);
     if usable(centroid) {
         return Some(centroid);
@@ -9064,8 +9087,7 @@ fn candidate_edges_including_lines(kind: &FaceIntersectionKind, tol: &Tolerance)
             segment_end,
             ..
         } => {
-            let Ok(curve) =
-                NurbsCurve3::bspline_from_points(1, vec![*segment_start, *segment_end])
+            let Ok(curve) = NurbsCurve3::bspline_from_points(1, vec![*segment_start, *segment_end])
             else {
                 return Vec::new();
             };
@@ -9150,7 +9172,11 @@ fn move_candidate_edge_end(
     if control_points.len() < 2 {
         return;
     }
-    let corner = if is_start { 0 } else { control_points.len() - 1 };
+    let corner = if is_start {
+        0
+    } else {
+        control_points.len() - 1
+    };
     control_points[corner] = ControlPoint3::new(target, control_points[corner].weight);
     let Ok(curve) = NurbsCurve3::new(edge.curve.degree, control_points, edge.curve.knots.clone())
     else {
@@ -9158,8 +9184,16 @@ fn move_candidate_edge_end(
     };
 
     let (t_min, t_max) = curve.param_range();
-    let start = if is_start { target } else { curve.evaluate(t_min) };
-    let end = if is_start { curve.evaluate(t_max) } else { target };
+    let start = if is_start {
+        target
+    } else {
+        curve.evaluate(t_min)
+    };
+    let end = if is_start {
+        curve.evaluate(t_max)
+    } else {
+        target
+    };
     *edge = Edge::new(
         curve,
         Vertex::new(start, tol.linear),
@@ -9203,9 +9237,9 @@ fn march_one_branch(
     let mut step = first_step;
     let mut previous: Option<(f64, f64)> = None;
     for _ in 0..8 {
-        let Some(marched) =
-            zenith_geom::IntersectionMarcher::march(patch_a, patch_b, seed.0, seed.1, step, 2048, tol)
-        else {
+        let Some(marched) = zenith_geom::IntersectionMarcher::march(
+            patch_a, patch_b, seed.0, seed.1, step, 2048, tol,
+        ) else {
             step *= 0.5;
             continue;
         };

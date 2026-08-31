@@ -86,6 +86,13 @@ pub struct MultiSplitReport {
     pub cuts_refused: usize,
     /// 入らなかった理由。診断のために残す。
     pub refusals: Vec<String>,
+    /// **`area_residual` が信用できないとき**、その片の添字。
+    ///
+    /// 元は測れたのに片の p-curve が取れないと、面積は 3D の受け皿に落ち、
+    /// そこは**トリムを知らずパラメータ矩形の丸ごと**を積みます（4-214）。
+    /// **そのときの `area_residual` は、割り方の良し悪しを表していません。**
+    /// 呼ぶ側は、残差を読む前にここを見てください。
+    pub unmeasurable_piece: Option<usize>,
 }
 
 /// 割り方を面積で検算した結果。
@@ -99,6 +106,18 @@ struct ParameterAreaCheck {
     /// 極を通る弧で割った片がそれでした（3-N-1）。安いほうで測れないから
     /// といって断るのは筋が違います——**検算は高いほうでもできます。**
     parametric: bool,
+    /// **元は測れたのに、この片だけ測れなかった**ときの添字。
+    ///
+    /// このとき 3D の受け皿は使えません。`compute_face_integral` は p-curve が
+    /// 無ければ**トリムを知らず、パラメータ矩形の丸ごと**を積むからです
+    /// （`face_uv_triangulation` の `grid_uv_triangulation` 経路）。実測
+    /// （4-214）: 正しく割れた2片が**どちらも 628.318530718 = 2π·10·40/4**、
+    /// つまり四半パッチの丸ごとを返し、残差 1.209 で**正しい割り方が捨てられて
+    /// いました**。
+    ///
+    /// **測れないものに数を付けてはいけません。** ここが立っていたら、
+    /// 呼ぶ側は「測れなかった」と言って断ります。
+    unmeasurable_piece: Option<usize>,
 }
 
 /// 面積を囲まない片は、片ではありません。
@@ -117,20 +136,37 @@ const NULL_PIECE_FRACTION: f64 = 1e-9;
 ///
 /// `ZENITH_AREA_CHECK_WHY=1` を付けると、3D 側の残差と1行ずつ並べて出ます。
 ///
-/// どれかの面で p-curve が取れなければ `None`。**そのときは検算できません**
-/// ので、呼ぶ側は割り方を断ってください（黙って通すほうが危ない）。
+/// どれかの面で p-curve が取れなければ 3D の面積に落ちます。**元は測れたのに
+/// 片だけ測れなかったときは、その 3D の数もトリムを知りません**ので、
+/// `unmeasurable_piece` を立てて呼ぶ側に断らせます（4-214、4-215）。
 fn parameter_area_check(face: &Face, pieces: &[Face]) -> ParameterAreaCheck {
     match parameter_areas(face, pieces) {
-        Some((original, areas)) => ParameterAreaCheck::new(original, areas, true),
+        Some((original, areas)) => ParameterAreaCheck::new(original, areas, true, None),
         None => {
-            // **測れないなら、高いほうで測ります。** 断りません。
+            // **測れないなら、高いほうで測ります。**
+            //
+            // **ただし、高いほうも万能ではありません**（4-214）。
+            // `compute_face_integral` は p-curve が無ければ**トリムを知らず**、
+            // パラメータ矩形の丸ごとを積みます。元が測れているのに片だけ
+            // 測れないときは、下の `unmeasurable_piece` が立ち、呼ぶ側が
+            // 「測れなかった」と言って断ります。
             let params = TessellationParams::default();
             let original = MassCalculator::compute_face_integral(face, &params).0;
             let areas = pieces
                 .iter()
                 .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
                 .collect();
-            ParameterAreaCheck::new(original, areas, false)
+            // **どの片が測れなかったか**を控えます。元が測れているのに片だけ
+            // 測れないなら、上の 3D の数は**トリムを知らない数**です
+            // （`unmeasurable_piece` の注記）。
+            let unmeasurable_piece = if zenith_tess::face_parameter_area(face).is_some() {
+                pieces
+                    .iter()
+                    .position(|piece| zenith_tess::face_parameter_area(piece).is_none())
+            } else {
+                None
+            };
+            ParameterAreaCheck::new(original, areas, false, unmeasurable_piece)
         }
     }
 }
@@ -146,7 +182,12 @@ fn parameter_areas(face: &Face, pieces: &[Face]) -> Option<(f64, Vec<f64>)> {
 }
 
 impl ParameterAreaCheck {
-    fn new(original: f64, pieces: Vec<f64>, parametric: bool) -> Self {
+    fn new(
+        original: f64,
+        pieces: Vec<f64>,
+        parametric: bool,
+        unmeasurable_piece: Option<usize>,
+    ) -> Self {
         let summed: f64 = pieces.iter().sum();
         let residual = if original.abs() > 1e-12 {
             (summed - original).abs() / original.abs()
@@ -158,6 +199,7 @@ impl ParameterAreaCheck {
             pieces,
             residual,
             parametric,
+            unmeasurable_piece,
         }
     }
 }
@@ -263,7 +305,7 @@ fn compare_area_checks(label: &str, face: &Face, pieces: &[Face], check: &Parame
     };
 
     let null = null_piece(check);
-    let verdict = if check.residual > 1e-6 || null.is_some() {
+    let verdict = if check.residual > 1e-6 || null.is_some() || check.unmeasurable_piece.is_some() {
         "REFUSE"
     } else {
         "pass"
@@ -275,9 +317,10 @@ fn compare_area_checks(label: &str, face: &Face, pieces: &[Face], check: &Parame
         if check.parametric { "uv" } else { "3d*" },
         check.residual,
         verdict,
-        match null {
-            Some((index, _)) => format!("null piece {index}"),
-            None => String::new(),
+        match (null, check.unmeasurable_piece) {
+            (_, Some(index)) => format!("unmeasurable piece {index}"),
+            (Some((index, _)), None) => format!("null piece {index}"),
+            (None, None) => String::new(),
         },
         residual_3d,
         if (residual_3d > 1e-6) == (verdict == "REFUSE") {
@@ -608,6 +651,18 @@ impl FaceSplitter {
     ) -> Result<ParameterAreaCheck, String> {
         let check = parameter_area_check(face, pieces);
         compare_area_checks(label, face, pieces, &check);
+        // **測れなかったなら、測れなかったと言います。**（4-214、4-215）
+        //
+        // ここを黙って通すと、受け皿の `compute_face_integral` が**トリムを
+        // 知らない素のパッチ**を積んだ数で「面積が合わない」と断ります。
+        // 断る点は同じでも、**言っていることが嘘になります**——次に読む人が
+        // 「領域の取り方が悪い」と読んで、正しい巡回を疑いに行きます
+        // （4-213 で実際にそうなりました）。
+        if let Some(index) = check.unmeasurable_piece {
+            return Err(format!(
+                "{label}: piece {index} has no readable p-curve, so this split cannot be checked (the 3D fallback would measure the untrimmed patch)"
+            ));
+        }
         if let Some((index, area)) = null_piece(&check) {
             return Err(format!(
                 "{label}: piece {index} encloses no area ({area:.3e} of {:.3e}), so this is not a split",
@@ -631,7 +686,6 @@ impl FaceSplitter {
         splits: &[Edge],
         tol: &Tolerance,
     ) -> Result<(Vec<Face>, MultiSplitReport), String> {
-
         let mut pieces = vec![face.clone()];
         let mut applied = 0usize;
         let mut refusals = Vec::new();
@@ -682,6 +736,7 @@ impl FaceSplitter {
                 cuts_applied: applied,
                 cuts_refused: splits.len() - applied,
                 refusals,
+                unmeasurable_piece: check.unmeasurable_piece,
             },
         ))
     }
@@ -921,8 +976,24 @@ fn boundary_extent(wire: &Wire) -> f64 {
 /// 切り込みの両端を、境界の上の着地点にぴったり合わせた写しを返す。
 ///
 /// クランプされた B-spline は、**端の制御点がそのまま端点**です。そこを
-/// 差し替えれば、曲線の途中は動かさずに端だけを合わせられます。頂点も
-/// 同じ点に置き直します。
+/// 差し替えれば、端をぴったり合わせられます。頂点も同じ点に置き直します。
+///
+/// **ただし「途中は動かない」わけではありません**（4-215 の実測）。動くのは
+/// 端の1区間ぶんで、**曲面からどれだけ浮くかは動かす向きで決まります**。
+/// 円柱の交線で測った値:
+///
+/// | 動かす向き | 動かした量に対する浮き |
+/// | :--- | ---: |
+/// | 線織（母線）に沿って | **0**（1e-15 台） |
+/// | 周方向（曲がっている向き） | **0.25 倍** |
+/// | 曲面から離れる向き | **1 倍** |
+///
+/// ここが下の `limit` と噛み合っていません。`limit` は**面の大きさに比例**
+/// （高さ40の円柱の四半パッチで 2.960e-4）しますが、`Face::pcurves` が
+/// 「曲面に乗っている」と認めるのは**絶対 1e-5** です。**周方向に 4e-5 より
+/// 大きく吸着すると、その片は p-curve が取れなくなります**——そうなると
+/// 面積の検算ができず、`checked_areas` が「測れなかった」と断ります
+/// （4-214、4-215）。`ZENITH_SNAP_WHY=1` で吸着量を1行ずつ出せます。
 ///
 /// 動かす距離が `limit` を超えていたら、それは着地していないということなので
 /// 断ります（呼ぶ側が先に測っていますが、ここでも念のため見ます）。
@@ -963,6 +1034,22 @@ fn move_traversal_end(
         return Err(format!(
             "the splitting curve would have to move {shift:.3e} to meet the boundary, over {limit:.3e}"
         ));
+    }
+    if std::env::var_os("ZENITH_SNAP_WHY").is_some() {
+        // **吸着した量を1行で。**（4-215）
+        //
+        // 端の制御点は曲線の端そのものなので、**動かした量ちょうど曲面から
+        // 浮きます**（実測 1:1）。`Face::pcurves` が乗っていると認めるのは
+        // **絶対 1e-5** までなので、それを超えた吸着は**その片の p-curve を
+        // 取れなくします**。分布を見るための口です。
+        eprintln!(
+            "SNAPWHY {shift:.3e} 許容 {limit:.3e}{}",
+            if shift > 1e-5 {
+                "  **1e-5 超え。この片は p-curve が取れなくなります**"
+            } else {
+                ""
+            }
+        );
     }
     control_points[index].point = target;
 
@@ -1146,7 +1233,7 @@ mod tests {
 
     use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3};
     use zenith_math::{Point3, Tolerance, Vec3};
-    use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Orientation, Vertex, Wire};
+    use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Vertex, Wire};
 
     /// 半径 `r`、高さ `0..h` の円柱側面の四半パッチ。
     fn cylinder_quarter(r: f64, h: f64) -> Face {
@@ -1335,7 +1422,8 @@ mod tests {
             Vertex::from_point(Point3::new(0.0, 10.0, 0.0)),
         )
         .unwrap();
-        let (pieces, report) = FaceSplitter::split_by_curve(&face, &split, &tol).expect("corner cut");
+        let (pieces, report) =
+            FaceSplitter::split_by_curve(&face, &split, &tol).expect("corner cut");
         assert!(report.area_residual < 1e-14);
         for area in &areas_3d(&pieces) {
             assert!(

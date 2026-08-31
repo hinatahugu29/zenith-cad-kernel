@@ -136,8 +136,7 @@ fn a_larger_corner_radius_shortens_the_path_and_the_pipe() {
 
     let mut previous = f64::INFINITY;
     for corner in [2.0, 6.0, 12.0] {
-        let solid =
-            PolylineBuilder::sweep_pipe_polyline(&points, 3.0, corner, &tol).expect("pipe");
+        let solid = PolylineBuilder::sweep_pipe_polyline(&points, 3.0, corner, &tol).expect("pipe");
         let volume = volume_of(&solid);
         let expected = PI * 9.0 * filleted_path_length(&points, corner);
         assert!(

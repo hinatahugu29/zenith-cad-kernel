@@ -94,13 +94,7 @@ fn test_socket_head_cap_screw() {
     let socket_d = 4.0;
 
     let solid = FastenerBuilder::make_socket_head_cap_screw(
-        shank_r,
-        shank_l,
-        head_r,
-        head_h,
-        socket_s,
-        socket_d,
-        &tol,
+        shank_r, shank_l, head_r, head_h, socket_s, socket_d, &tol,
     )
     .expect("socket head cap screw");
 
@@ -143,7 +137,7 @@ fn test_socket_head_cap_screw() {
 fn test_plain_washer() {
     let tol = Tolerance::default();
     let inner_r = 4.25; // M8用平座金 (内径8.5mm相当)
-    let outer_r = 8.0;  // 外径16mm相当
+    let outer_r = 8.0; // 外径16mm相当
     let thickness = 1.6;
 
     let solid = FastenerBuilder::make_plain_washer(inner_r, outer_r, thickness, &tol)
@@ -192,13 +186,7 @@ fn test_flanged_hex_bolt() {
     let hex_h = 6.0;
 
     let solid = FastenerBuilder::make_flanged_hex_bolt(
-        shank_r,
-        shank_l,
-        flange_r,
-        flange_h,
-        hex_s,
-        hex_h,
-        &tol,
+        shank_r, shank_l, flange_r, flange_h, hex_s, hex_h, &tol,
     )
     .expect("flanged hex bolt");
 
@@ -246,15 +234,8 @@ fn test_spring_washer() {
     let free_h = 3.5;
     let gap_deg = 20.0;
 
-    let solid = FastenerBuilder::make_spring_washer(
-        inner_r,
-        outer_r,
-        t,
-        free_h,
-        gap_deg,
-        &tol,
-    )
-    .expect("spring washer");
+    let solid = FastenerBuilder::make_spring_washer(inner_r, outer_r, t, free_h, gap_deg, &tol)
+        .expect("spring washer");
 
     // 1. B-Rep 閉多様体検証
     assert!(
@@ -300,14 +281,8 @@ fn test_retaining_ring() {
     let t = 1.0;
     let gap_deg = 45.0;
 
-    let solid = FastenerBuilder::make_retaining_ring(
-        inner_r,
-        outer_r,
-        t,
-        gap_deg,
-        &tol,
-    )
-    .expect("retaining ring");
+    let solid = FastenerBuilder::make_retaining_ring(inner_r, outer_r, t, gap_deg, &tol)
+        .expect("retaining ring");
 
     // 1. B-Rep 閉多様体検証
     assert!(
@@ -317,7 +292,8 @@ fn test_retaining_ring() {
 
     // 2. 閉形式体積一致検証
     let sweep_fraction = (360.0 - gap_deg) / 360.0;
-    let expected_vol = std::f64::consts::PI * (outer_r * outer_r - inner_r * inner_r) * t * sweep_fraction;
+    let expected_vol =
+        std::f64::consts::PI * (outer_r * outer_r - inner_r * inner_r) * t * sweep_fraction;
 
     let params = TessellationParams {
         u_divisions: 32,
@@ -352,13 +328,7 @@ fn test_countersunk_socket_screw() {
     let socket_d = 2.8;
 
     let solid = FastenerBuilder::make_countersunk_socket_screw(
-        shank_r,
-        shank_l,
-        head_r,
-        head_h,
-        socket_s,
-        socket_d,
-        &tol,
+        shank_r, shank_l, head_r, head_h, socket_s, socket_d, &tol,
     )
     .expect("countersunk socket screw");
 
@@ -410,15 +380,7 @@ fn test_weld_neck_flange() {
     let num_bolts = 4;
 
     let solid = FastenerBuilder::make_weld_neck_flange(
-        flange_r,
-        flange_t,
-        hub_r,
-        hub_h,
-        pipe_r,
-        pcd_r,
-        bolt_r,
-        num_bolts,
-        &tol,
+        flange_r, flange_t, hub_r, hub_h, pipe_r, pcd_r, bolt_r, num_bolts, &tol,
     )
     .expect("weld neck flange");
 
@@ -466,15 +428,9 @@ fn test_taper_pipe_plug() {
     let socket_s = 6.0;
     let socket_d = 5.0;
 
-    let solid = FastenerBuilder::make_taper_pipe_plug(
-        r_small,
-        r_large,
-        h,
-        socket_s,
-        socket_d,
-        &tol,
-    )
-    .expect("taper pipe plug");
+    let solid =
+        FastenerBuilder::make_taper_pipe_plug(r_small, r_large, h, socket_s, socket_d, &tol)
+            .expect("taper pipe plug");
 
     // 1. B-Rep 閉多様体検証
     assert!(
@@ -520,16 +476,8 @@ fn test_stud_bolt() {
     let top_r = 4.0;
     let top_l = 20.0;
 
-    let solid = FastenerBuilder::make_stud_bolt(
-        bot_r,
-        bot_l,
-        hex_s,
-        hex_h,
-        top_r,
-        top_l,
-        &tol,
-    )
-    .expect("stud bolt");
+    let solid = FastenerBuilder::make_stud_bolt(bot_r, bot_l, hex_s, hex_h, top_r, top_l, &tol)
+        .expect("stud bolt");
 
     // 1. B-Rep 閉多様体検証
     assert!(
@@ -574,14 +522,8 @@ fn test_belleville_spring() {
     let t = 0.9;
     let h_cone = 1.25;
 
-    let solid = FastenerBuilder::make_belleville_spring(
-        r_in,
-        r_out,
-        t,
-        h_cone,
-        &tol,
-    )
-    .expect("belleville spring");
+    let solid = FastenerBuilder::make_belleville_spring(r_in, r_out, t, h_cone, &tol)
+        .expect("belleville spring");
 
     // 1. B-Rep 閉多様体検証
     assert!(
@@ -596,8 +538,10 @@ fn test_belleville_spring() {
     let r_in_bot = r_in;
     let r_in_top = r_in - 1.5;
     let h = h_cone + t;
-    let outer_vol = (pi / 3.0) * h * (r_out_bot * r_out_bot + r_out_bot * r_out_top + r_out_top * r_out_top);
-    let inner_vol = (pi / 3.0) * h * (r_in_bot * r_in_bot + r_in_bot * r_in_top + r_in_top * r_in_top);
+    let outer_vol =
+        (pi / 3.0) * h * (r_out_bot * r_out_bot + r_out_bot * r_out_top + r_out_top * r_out_top);
+    let inner_vol =
+        (pi / 3.0) * h * (r_in_bot * r_in_bot + r_in_bot * r_in_top + r_in_top * r_in_top);
     let expected_vol = outer_vol - inner_vol;
 
     let params = TessellationParams {

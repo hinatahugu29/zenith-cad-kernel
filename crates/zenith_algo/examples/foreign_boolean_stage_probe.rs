@@ -48,7 +48,8 @@ fn cutter(kind: &str, low: &Point3, high: &Point3) -> Option<Solid> {
     let size = Vec3::new(high.x - low.x, high.y - low.y, high.z - low.z);
     match kind {
         "slab" => {
-            let solid = PrimitiveBuilder::make_box(size.x * 0.6, size.y * 2.0, size.z * 2.0).ok()?;
+            let solid =
+                PrimitiveBuilder::make_box(size.x * 0.6, size.y * 2.0, size.z * 2.0).ok()?;
             Some(BrepTransform::translate_solid(
                 &solid,
                 Vec3::new(

@@ -433,9 +433,7 @@ fn main() {
         "ok {}   NOCUT {}   refused {}   WRONG {}   PANIC {}   worst identity residual {:.2e}",
         tally[0], tally[4], tally[1], tally[2], tally[3], worst
     );
-    println!(
-        "through the verified API: {gate_passed} of {gate_total} operation(s)"
-    );
+    println!("through the verified API: {gate_passed} of {gate_total} operation(s)");
     println!();
     println!("split     = |V(A-B) + V(A^B) - V(A)| / V(A)");
     println!("incl-excl = |V(AuB) - (V(A) + V(B) - V(A^B))| / V(A)");

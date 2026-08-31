@@ -163,7 +163,12 @@ fn main() {
 
     // 同一平面のペアが存在しない配置。多重切断だけが問題になる純粋な例。
     let lifted = BrepTransform::translate_solid(&rotated, Vec3::new(0.0, 0.0, 7.0));
-    probe("rotated boxes lifted in Z", &boxa, &lifted, BooleanOpType::Union);
+    probe(
+        "rotated boxes lifted in Z",
+        &boxa,
+        &lifted,
+        BooleanOpType::Union,
+    );
     probe(
         "rotated boxes lifted in Z",
         &boxa,

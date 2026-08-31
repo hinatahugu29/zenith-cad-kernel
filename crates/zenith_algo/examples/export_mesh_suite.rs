@@ -175,8 +175,16 @@ fn run() -> Result<(), String> {
         DxfExporter::export_loops_to_file(&loops, &dxf)?;
 
         let bbox = subject.solid.bounding_box();
-        let outer_loops = section.signed_loop_areas.iter().filter(|a| **a > 0.0).count();
-        let hole_loops = section.signed_loop_areas.iter().filter(|a| **a < 0.0).count();
+        let outer_loops = section
+            .signed_loop_areas
+            .iter()
+            .filter(|a| **a > 0.0)
+            .count();
+        let hole_loops = section
+            .signed_loop_areas
+            .iter()
+            .filter(|a| **a < 0.0)
+            .count();
 
         println!(
             "{:<28}{:>9}{:>10}{:>16.6}{:>16.6}",

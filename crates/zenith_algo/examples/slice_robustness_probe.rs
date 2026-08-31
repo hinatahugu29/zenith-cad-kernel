@@ -44,8 +44,8 @@ fn main() {
         &PrimitiveBuilder::make_cylinder(6.0, 40.0).unwrap(),
         Vec3::new(20.0, 20.0, -10.0),
     );
-    let bored =
-        BooleanEngine::boolean_solids_exact(&block, &bore, BooleanOpType::Difference, &tol).unwrap();
+    let bored = BooleanEngine::boolean_solids_exact(&block, &bore, BooleanOpType::Difference, &tol)
+        .unwrap();
 
     let mut subjects = vec![
         Subject {

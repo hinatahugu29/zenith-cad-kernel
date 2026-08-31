@@ -68,7 +68,11 @@ fn main() {
                 }
             }
         }
-        let same: usize = uses.values().filter(|users| users.len() > 1).map(|u| u.len()).sum();
+        let same: usize = uses
+            .values()
+            .filter(|users| users.len() > 1)
+            .map(|u| u.len())
+            .sum();
         let unmatched = uses
             .iter()
             .filter(|((a, b), users)| users.len() == 1 && !uses.contains_key(&(*b, *a)))
@@ -137,7 +141,10 @@ fn main() {
 
     {
         println!("=== the drilled box faces at z = 0 (the bottom quarters)");
-        let params = TessellationParams { u_divisions: 16, v_divisions: 16 };
+        let params = TessellationParams {
+            u_divisions: 16,
+            v_divisions: 16,
+        };
         for (index, face) in drilled.outer_shell.faces.iter().enumerate() {
             // 境界の標本から範囲を出す。
             let mut min = [f64::INFINITY; 3];
@@ -206,7 +213,9 @@ fn main() {
                     .collect::<Vec<_>>()
                     .join(" ")
             );
-            println!("        the surface spans x [{x_min:.3}, {x_max:.3}]  (the cut is at x = 24)");
+            println!(
+                "        the surface spans x [{x_min:.3}, {x_max:.3}]  (the cut is at x = 24)"
+            );
         }
         println!();
     }
@@ -217,10 +226,7 @@ fn main() {
         assembly.cap_generation.cap_faces.len(),
         assembly.cap_generation.failed_loop_count
     );
-    println!(
-        "    intersection edges: {}",
-        assembly.edge_candidates.len()
-    );
+    println!("    intersection edges: {}", assembly.edge_candidates.len());
     {
         let pairs = BrepIntersectionBuilder::collect_face_pair_candidates(
             &drilled.outer_shell.faces,

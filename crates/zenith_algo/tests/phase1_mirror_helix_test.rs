@@ -30,13 +30,16 @@ fn test_mirror_box_and_cylinder() {
     let plane_origin = Point3::new(0.0, 0.0, 0.0);
     let plane_normal = Vec3::new(1.0, 0.0, 0.0);
 
-    let mirrored_box =
-        MirrorBuilder::mirror_solid(&base_box, plane_origin, plane_normal, &tol)
-            .expect("mirror box");
+    let mirrored_box = MirrorBuilder::mirror_solid(&base_box, plane_origin, plane_normal, &tol)
+        .expect("mirror box");
 
     assert_eq!(mirrored_box.outer_shell.faces.len(), 6);
     let report = mirrored_box.outer_shell.validate_closed(&tol);
-    assert!(report.is_valid(), "Mirrored box invalid: {:?}", report.errors);
+    assert!(
+        report.is_valid(),
+        "Mirrored box invalid: {:?}",
+        report.errors
+    );
 
     let mesh_orig = tessellate_solid(&base_box, &TessellationParams::default());
     let mesh_mir = tessellate_solid(&mirrored_box, &TessellationParams::default());
@@ -63,12 +66,14 @@ fn test_mirror_box_and_cylinder() {
     assert!(r_cyl.is_valid(), "Mirrored cyl invalid: {:?}", r_cyl.errors);
 
     // 3. 複合Compound STEPラウンドトリップ
-    let compound_shape = MirrorBuilder::mirror_compound(&base_box, plane_origin, plane_normal, &tol)
-        .expect("mirror compound");
+    let compound_shape =
+        MirrorBuilder::mirror_compound(&base_box, plane_origin, plane_normal, &tol)
+            .expect("mirror compound");
     let step_path = "test_mirror_compound.step";
     StepExporter::export_shape_to_file(&compound_shape, step_path, "MIRROR_COMPOUND")
         .expect("STEP export failed");
-    let imported_shape = StepImporter::import_shape_from_file(step_path).expect("STEP import failed");
+    let imported_shape =
+        StepImporter::import_shape_from_file(step_path).expect("STEP import failed");
     let _ = std::fs::remove_file(step_path);
 
     match imported_shape {
@@ -102,7 +107,11 @@ fn test_helix_spring_solid() {
 
     // 1. トポロジー閉シェル検証
     let report = helix_solid.outer_shell.validate_closed(&tol);
-    assert!(report.is_valid(), "Helix solid invalid: {:?}", report.errors);
+    assert!(
+        report.is_valid(),
+        "Helix solid invalid: {:?}",
+        report.errors
+    );
 
     // 2. 解析体積検証（断面積 4.0 * 螺旋弧長）
     let params = TessellationParams {
@@ -111,7 +120,8 @@ fn test_helix_spring_solid() {
     };
     let mesh = tessellate_solid(&helix_solid, &params);
     let mass = MassCalculator::compute_from_mesh(&mesh);
-    let helix_length = turns * ((2.0 * std::f64::consts::PI * radius).powi(2) + pitch.powi(2)).sqrt();
+    let helix_length =
+        turns * ((2.0 * std::f64::consts::PI * radius).powi(2) + pitch.powi(2)).sqrt();
     let expected_vol = 4.0 * helix_length;
     let rel_err = (mass.volume - expected_vol).abs() / expected_vol;
     assert!(
@@ -127,7 +137,10 @@ fn test_helix_spring_solid() {
         .expect("STEP export failed");
     let imported = StepImporter::import_solid_from_file(step_path).expect("STEP import failed");
     let _ = std::fs::remove_file(step_path);
-    assert_eq!(imported.outer_shell.faces.len(), helix_solid.outer_shell.faces.len());
+    assert_eq!(
+        imported.outer_shell.faces.len(),
+        helix_solid.outer_shell.faces.len()
+    );
 }
 
 /// 組んだ螺旋曲線が、**厳密な螺旋**の上にあるか。
@@ -313,7 +326,10 @@ fn test_round_wire_spring_is_valid_closed_solid_and_matches_analytic_volume() {
     )
     .expect("make_round_wire_spring");
 
-    assert!(spring.is_topologically_valid(&tol), "round wire spring must be valid closed solid");
+    assert!(
+        spring.is_topologically_valid(&tol),
+        "round wire spring must be valid closed solid"
+    );
 
     let params = TessellationParams {
         u_divisions: 16,
@@ -322,7 +338,8 @@ fn test_round_wire_spring_is_valid_closed_solid_and_matches_analytic_volume() {
     let mesh = tessellate_solid(&spring, &params);
     let mass = MassCalculator::compute_from_mesh(&mesh);
 
-    let helix_length = turns * ((2.0 * std::f64::consts::PI * radius).powi(2) + pitch.powi(2)).sqrt();
+    let helix_length =
+        turns * ((2.0 * std::f64::consts::PI * radius).powi(2) + pitch.powi(2)).sqrt();
     let expected_vol = std::f64::consts::PI * wire_radius * wire_radius * helix_length;
     let rel_err = (mass.volume - expected_vol).abs() / expected_vol;
     assert!(

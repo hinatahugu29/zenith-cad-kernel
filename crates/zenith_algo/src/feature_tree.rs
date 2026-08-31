@@ -21,15 +21,37 @@ pub enum FeatureOp {
     /// トーラスプリミティブ
     CreateTorus { major_r: f64, minor_r: f64 },
     /// 単一エッジ・フィレット
-    FilletEdge { dx: f64, dy: f64, dz: f64, edge_index: usize, radius: f64 },
+    FilletEdge {
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        edge_index: usize,
+        radius: f64,
+    },
     /// 単一エッジ・面取り
-    ChamferEdge { dx: f64, dy: f64, dz: f64, edge_index: usize, distance: f64 },
+    ChamferEdge {
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        edge_index: usize,
+        distance: f64,
+    },
     /// 中空ボックス・シェル化（単一面開口）
-    HollowBox { dx: f64, dy: f64, dz: f64, thickness: f64, open_face_index: usize },
+    HollowBox {
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        thickness: f64,
+        open_face_index: usize,
+    },
     /// 両端開口中空角パイプソリッド
-    HollowThroughBox { dx: f64, dy: f64, dz: f64, thickness: f64 },
+    HollowThroughBox {
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        thickness: f64,
+    },
     /// 中空・穴あきプロファイルの押し出し
-
     ExtrudeHollow {
         outer_points: Vec<[f64; 3]>,
         inner_points: Vec<Vec<[f64; 3]>>,
@@ -82,13 +104,11 @@ pub enum FeatureOp {
         corner_radius: f64,
     },
     /// 任意対称平面に対するソリッドの鏡像反転複製
-
     MirrorSolid {
         plane_origin: [f64; 3],
         plane_normal: [f64; 3],
     },
     /// 面 Push-Pull（押し出し移動）
-
     PushPullFace {
         target_signature: GeometricSignature,
         distance: f64,
@@ -125,10 +145,7 @@ pub enum FeatureOp {
     /// 稜は ID ではなく形（中点・向き・長さ・二面角）で指す。寸法を変えて
     /// 作り直しても、同じ稜が最も近いまま残るので選び直せる。似た稜しか
     /// 見つからないときは、黙って別の稜を丸めずに失敗する。
-    FilletSolidEdge {
-        target: EdgeSignature,
-        radius: f64,
-    },
+    FilletSolidEdge { target: EdgeSignature, radius: f64 },
 
     /// 同じく面取り
     ChamferSolidEdge {
@@ -150,10 +167,7 @@ pub enum FeatureOp {
         thickness: f64,
     },
     /// 正六角柱（ボルト頭）
-    HexPrism {
-        across_flats: f64,
-        height: f64,
-    },
+    HexPrism { across_flats: f64, height: f64 },
     /// 六角ナットブランク
     HexNut {
         across_flats: f64,
@@ -382,7 +396,13 @@ impl FeatureTree {
                 FeatureOp::CreateTorus { major_r, minor_r } => {
                     current_solid = Some(PrimitiveBuilder::make_torus(*major_r, *minor_r)?);
                 }
-                FeatureOp::FilletEdge { dx, dy, dz, edge_index, radius } => {
+                FeatureOp::FilletEdge {
+                    dx,
+                    dy,
+                    dz,
+                    edge_index,
+                    radius,
+                } => {
                     current_solid = Some(DirectModeling::fillet_box_single_edge(
                         *dx,
                         *dy,
@@ -391,7 +411,13 @@ impl FeatureTree {
                         *radius,
                     )?);
                 }
-                FeatureOp::ChamferEdge { dx, dy, dz, edge_index, distance } => {
+                FeatureOp::ChamferEdge {
+                    dx,
+                    dy,
+                    dz,
+                    edge_index,
+                    distance,
+                } => {
                     current_solid = Some(DirectModeling::chamfer_box_single_edge(
                         *dx,
                         *dy,
@@ -400,7 +426,13 @@ impl FeatureTree {
                         *distance,
                     )?);
                 }
-                FeatureOp::HollowBox { dx, dy, dz, thickness, open_face_index } => {
+                FeatureOp::HollowBox {
+                    dx,
+                    dy,
+                    dz,
+                    thickness,
+                    open_face_index,
+                } => {
                     current_solid = Some(ShellBuilder::make_hollow_box(
                         *dx,
                         *dy,
@@ -409,16 +441,21 @@ impl FeatureTree {
                         *open_face_index,
                     )?);
                 }
-                FeatureOp::HollowThroughBox { dx, dy, dz, thickness } => {
+                FeatureOp::HollowThroughBox {
+                    dx,
+                    dy,
+                    dz,
+                    thickness,
+                } => {
                     current_solid = Some(ShellBuilder::make_through_hollow_box(
-                        *dx,
-                        *dy,
-                        *dz,
-                        *thickness,
+                        *dx, *dy, *dz, *thickness,
                     )?);
                 }
-                FeatureOp::ExtrudeHollow { outer_points, inner_points, dir } => {
-
+                FeatureOp::ExtrudeHollow {
+                    outer_points,
+                    inner_points,
+                    dir,
+                } => {
                     let outer_wire = make_wire(outer_points)?;
                     let mut inner_wires = Vec::with_capacity(inner_points.len());
                     for hole in inner_points {
@@ -439,7 +476,11 @@ impl FeatureTree {
                     }
                     current_solid = Some(LoftBuilder::loft_solid(&section_wires, *degree_v, &tol)?);
                 }
-                FeatureOp::ExtrudeDraft { points, dir, draft_angle_rad } => {
+                FeatureOp::ExtrudeDraft {
+                    points,
+                    dir,
+                    draft_angle_rad,
+                } => {
                     let wire = make_wire(points)?;
                     let dir_vec = Vec3::new(dir[0], dir[1], dir[2]);
                     current_solid = Some(ExtrudeBuilder::extrude_wire_with_draft(
@@ -449,32 +490,36 @@ impl FeatureTree {
                         &tol,
                     )?);
                 }
-                FeatureOp::RevolveSolid { profile_points, axis_origin, axis_dir } => {
+                FeatureOp::RevolveSolid {
+                    profile_points,
+                    axis_origin,
+                    axis_dir,
+                } => {
                     let wire = make_wire(profile_points)?;
                     let origin = Point3::new(axis_origin[0], axis_origin[1], axis_origin[2]);
                     let dir_vec = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
                     current_solid = Some(crate::RevolveBuilder::revolve_wire_solid(
-                        &wire,
-                        origin,
-                        dir_vec,
-                        &tol,
+                        &wire, origin, dir_vec, &tol,
                     )?);
                 }
-                FeatureOp::RevolvePartialSolid { profile_points, axis_origin, axis_dir, angle_rad } => {
+                FeatureOp::RevolvePartialSolid {
+                    profile_points,
+                    axis_origin,
+                    axis_dir,
+                    angle_rad,
+                } => {
                     let wire = make_wire(profile_points)?;
                     let origin = Point3::new(axis_origin[0], axis_origin[1], axis_origin[2]);
                     let dir_vec = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
                     current_solid = Some(crate::RevolveBuilder::revolve_wire_partial_solid(
-                        &wire,
-                        origin,
-                        dir_vec,
-                        *angle_rad,
-                        &tol,
+                        &wire, origin, dir_vec, *angle_rad, &tol,
                     )?);
                 }
-                FeatureOp::SweepWire { profile_points, path_points, num_sections } => {
-
-
+                FeatureOp::SweepWire {
+                    profile_points,
+                    path_points,
+                    num_sections,
+                } => {
                     let profile_wire = make_wire(profile_points)?;
                     let n_path = path_points.len();
                     let degree = (n_path - 1).min(3);
@@ -514,9 +559,15 @@ impl FeatureTree {
                         &tol,
                     )?);
                 }
-                FeatureOp::PolylinePipe { path_points, pipe_radius, corner_radius } => {
-
-                    let pts: Vec<_> = path_points.iter().map(|p| Point3::new(p[0], p[1], p[2])).collect();
+                FeatureOp::PolylinePipe {
+                    path_points,
+                    pipe_radius,
+                    corner_radius,
+                } => {
+                    let pts: Vec<_> = path_points
+                        .iter()
+                        .map(|p| Point3::new(p[0], p[1], p[2]))
+                        .collect();
                     current_solid = Some(crate::PolylineBuilder::sweep_pipe_polyline(
                         &pts,
                         *pipe_radius,
@@ -532,14 +583,10 @@ impl FeatureTree {
                     let orig = Point3::new(plane_origin[0], plane_origin[1], plane_origin[2]);
                     let norm = Vec3::new(plane_normal[0], plane_normal[1], plane_normal[2]);
                     current_solid = Some(crate::MirrorBuilder::mirror_solid(
-                        &solid,
-                        orig,
-                        norm,
-                        &tol,
+                        &solid, orig, norm, &tol,
                     )?);
                 }
                 FeatureOp::PushPullFace {
-
                     target_signature,
                     distance,
                 } => {
@@ -601,9 +648,8 @@ impl FeatureTree {
                             angle_deg.to_radians(),
                         ))
                         .compose(&zenith_math::Transform3::from_translation(-origin));
-                    current_solid = Some(crate::BrepTransform::transform_solid(
-                        &solid, &transform,
-                    )?);
+                    current_solid =
+                        Some(crate::BrepTransform::transform_solid(&solid, &transform)?);
                 }
                 FeatureOp::Boolean { op, tool } => {
                     let solid = current_solid.ok_or("No base solid for a boolean")?;
@@ -625,10 +671,16 @@ impl FeatureTree {
                 FeatureOp::ChamferSolidEdge { target, distance } => {
                     let solid = current_solid.ok_or("No base solid to chamfer")?;
                     let edge_id = match_edge(&solid, target)?;
-                    current_solid =
-                        Some(crate::EdgeBlender::chamfer_edge(&solid, edge_id, *distance)?);
+                    current_solid = Some(crate::EdgeBlender::chamfer_edge(
+                        &solid, edge_id, *distance,
+                    )?);
                 }
-                FeatureOp::DraftBlock { dx, dy, dz, draft_angle_deg } => {
+                FeatureOp::DraftBlock {
+                    dx,
+                    dy,
+                    dz,
+                    draft_angle_deg,
+                } => {
                     current_solid = Some(crate::DraftBuilder::make_drafted_block(
                         *dx,
                         *dy,
@@ -637,14 +689,36 @@ impl FeatureTree {
                         &tol,
                     )?);
                 }
-                FeatureOp::TriangularRib { length, height, thickness } => {
-                    current_solid = Some(crate::RibBuilder::make_triangular_rib(*length, *height, *thickness, &tol)?);
+                FeatureOp::TriangularRib {
+                    length,
+                    height,
+                    thickness,
+                } => {
+                    current_solid = Some(crate::RibBuilder::make_triangular_rib(
+                        *length, *height, *thickness, &tol,
+                    )?);
                 }
-                FeatureOp::HexPrism { across_flats, height } => {
-                    current_solid = Some(crate::FastenerBuilder::make_hex_prism(*across_flats, *height, &tol)?);
+                FeatureOp::HexPrism {
+                    across_flats,
+                    height,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_hex_prism(
+                        *across_flats,
+                        *height,
+                        &tol,
+                    )?);
                 }
-                FeatureOp::HexNut { across_flats, height, hole_radius } => {
-                    current_solid = Some(crate::FastenerBuilder::make_hex_nut_blank(*across_flats, *height, *hole_radius, &tol)?);
+                FeatureOp::HexNut {
+                    across_flats,
+                    height,
+                    hole_radius,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_hex_nut_blank(
+                        *across_flats,
+                        *height,
+                        *hole_radius,
+                        &tol,
+                    )?);
                 }
                 FeatureOp::SocketHeadCapScrew {
                     shank_radius,
@@ -664,8 +738,17 @@ impl FeatureTree {
                         &tol,
                     )?);
                 }
-                FeatureOp::PlainWasher { inner_radius, outer_radius, thickness } => {
-                    current_solid = Some(crate::FastenerBuilder::make_plain_washer(*inner_radius, *outer_radius, *thickness, &tol)?);
+                FeatureOp::PlainWasher {
+                    inner_radius,
+                    outer_radius,
+                    thickness,
+                } => {
+                    current_solid = Some(crate::FastenerBuilder::make_plain_washer(
+                        *inner_radius,
+                        *outer_radius,
+                        *thickness,
+                        &tol,
+                    )?);
                 }
                 FeatureOp::FlangedHexBolt {
                     shank_radius,

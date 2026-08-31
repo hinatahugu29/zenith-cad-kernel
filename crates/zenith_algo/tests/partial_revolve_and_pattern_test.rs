@@ -30,12 +30,17 @@ fn test_partial_revolve_90_and_180_deg() {
 
     // 1. 90度回転ソリッド（1セグメント x 4エッジ + 2端面 = 6面閉シェル）
     let angle_90 = std::f64::consts::FRAC_PI_2;
-    let solid_90 = RevolveBuilder::revolve_wire_partial_solid(&wire, axis_origin, axis_dir, angle_90, &tol)
-        .expect("90 deg revolve solid");
+    let solid_90 =
+        RevolveBuilder::revolve_wire_partial_solid(&wire, axis_origin, axis_dir, angle_90, &tol)
+            .expect("90 deg revolve solid");
 
     assert_eq!(solid_90.outer_shell.faces.len(), 6);
     let report_90 = solid_90.outer_shell.validate_closed(&tol);
-    assert!(report_90.is_valid(), "90 deg validation errors: {:?}", report_90.errors);
+    assert!(
+        report_90.is_valid(),
+        "90 deg validation errors: {:?}",
+        report_90.errors
+    );
 
     let params = TessellationParams {
         u_divisions: 16,
@@ -61,12 +66,17 @@ fn test_partial_revolve_90_and_180_deg() {
 
     // 2. 180度回転ソリッド（2セグメント x 4エッジ + 2端面 = 10面閉シェル）
     let angle_180 = std::f64::consts::PI;
-    let solid_180 = RevolveBuilder::revolve_wire_partial_solid(&wire, axis_origin, axis_dir, angle_180, &tol)
-        .expect("180 deg revolve solid");
+    let solid_180 =
+        RevolveBuilder::revolve_wire_partial_solid(&wire, axis_origin, axis_dir, angle_180, &tol)
+            .expect("180 deg revolve solid");
 
     assert_eq!(solid_180.outer_shell.faces.len(), 10);
     let report_180 = solid_180.outer_shell.validate_closed(&tol);
-    assert!(report_180.is_valid(), "180 deg validation errors: {:?}", report_180.errors);
+    assert!(
+        report_180.is_valid(),
+        "180 deg validation errors: {:?}",
+        report_180.errors
+    );
 }
 
 #[test]
@@ -76,13 +86,18 @@ fn test_linear_and_circular_pattern() {
 
     // 1. 直線パターン（X方向に間隔 15.0 で 4個）
     let dir = Vec3::new(1.0, 0.0, 0.0);
-    let linear_solids = PatternBuilder::linear_pattern(&base_box, dir, 15.0, 4)
-        .expect("linear pattern");
+    let linear_solids =
+        PatternBuilder::linear_pattern(&base_box, dir, 15.0, 4).expect("linear pattern");
 
     assert_eq!(linear_solids.len(), 4);
     for (i, s) in linear_solids.iter().enumerate() {
         let r = s.outer_shell.validate_closed(&tol);
-        assert!(r.is_valid(), "Linear instance {} invalid: {:?}", i, r.errors);
+        assert!(
+            r.is_valid(),
+            "Linear instance {} invalid: {:?}",
+            i,
+            r.errors
+        );
     }
 
     // 2. 円形パターン（Z軸まわりに 6個 360度等間隔）
@@ -99,7 +114,12 @@ fn test_linear_and_circular_pattern() {
     assert_eq!(circ_solids.len(), 6);
     for (i, s) in circ_solids.iter().enumerate() {
         let r = s.outer_shell.validate_closed(&tol);
-        assert!(r.is_valid(), "Circular instance {} invalid: {:?}", i, r.errors);
+        assert!(
+            r.is_valid(),
+            "Circular instance {} invalid: {:?}",
+            i,
+            r.errors
+        );
     }
 
     // Compound Shape STEP ラウンドトリップ
@@ -115,7 +135,8 @@ fn test_linear_and_circular_pattern() {
     let step_path = "test_pattern_compound.step";
     StepExporter::export_shape_to_file(&compound_shape, step_path, "PATTERN_COMPOUND")
         .expect("STEP compound export");
-    let imported_shape = StepImporter::import_shape_from_file(step_path).expect("STEP compound import");
+    let imported_shape =
+        StepImporter::import_shape_from_file(step_path).expect("STEP compound import");
     let _ = std::fs::remove_file(step_path);
 
     match imported_shape {

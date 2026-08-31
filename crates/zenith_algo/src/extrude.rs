@@ -62,19 +62,19 @@ impl ExtrudeBuilder {
             let curve = &oe.edge.curve;
             // 次数だけでは決められない。次数1でも制御点が3つあれば折れ線で、
             // まっすぐとは限らない。**点の並びを見る。**
-            let straight = curve.control_points.len() == 2
-                || {
-                    // 高次で書かれていても、制御点が始点と終点を結ぶ線分の
-                    // 上に並んでいれば直線。
-                    let start = curve.control_points[0].point;
-                    let end = curve.control_points[curve.control_points.len() - 1].point;
-                    let axis = end - start;
-                    let length = axis.norm();
-                    length > 1e-12
-                        && curve.control_points.iter().all(|cp| {
-                            (cp.point - start).cross(&axis).norm() / length <= tol.linear
-                        })
-                };
+            let straight = curve.control_points.len() == 2 || {
+                // 高次で書かれていても、制御点が始点と終点を結ぶ線分の
+                // 上に並んでいれば直線。
+                let start = curve.control_points[0].point;
+                let end = curve.control_points[curve.control_points.len() - 1].point;
+                let axis = end - start;
+                let length = axis.norm();
+                length > 1e-12
+                    && curve
+                        .control_points
+                        .iter()
+                        .all(|cp| (cp.point - start).cross(&axis).norm() / length <= tol.linear)
+            };
             if !straight {
                 return Err(format!(
                     "Extrude with draft only handles straight edges; edge {index} of the profile is curved"
@@ -88,8 +88,9 @@ impl ExtrudeBuilder {
             .iter()
             .map(|oe| oe.start_vertex().point)
             .collect();
-        let plane_normal = newell_normal(&corners)
-            .ok_or_else(|| "Extrude with draft requires a planar, non-degenerate profile".to_string())?;
+        let plane_normal = newell_normal(&corners).ok_or_else(|| {
+            "Extrude with draft requires a planar, non-degenerate profile".to_string()
+        })?;
 
         // 3. 各辺の外向き法線。反時計回り（`plane_normal` から見て）の輪郭では
         //    `tangent × normal` が外を向く。
@@ -137,7 +138,8 @@ impl ExtrudeBuilder {
         for index in 0..num_edges {
             let next = (index + 1) % num_edges;
             let before = corners[next] - corners[index];
-            let after = (corners[next] + vertex_offsets[next]) - (corners[index] + vertex_offsets[index]);
+            let after =
+                (corners[next] + vertex_offsets[next]) - (corners[index] + vertex_offsets[index]);
             if before.dot(&after) <= 0.0 {
                 return Err(format!(
                     "A draft of {:.4} deg over a height of {height} turns edge {index} of the profile inside out",
@@ -173,11 +175,8 @@ impl ExtrudeBuilder {
                 let pt = top_start + top_axis * fraction;
                 top_cps.push(ControlPoint3::new(pt, cp.weight));
             }
-            let top_curve = NurbsCurve3::new(
-                bot_edge.curve.degree,
-                top_cps,
-                bot_edge.curve.knots.clone(),
-            )?;
+            let top_curve =
+                NurbsCurve3::new(bot_edge.curve.degree, top_cps, bot_edge.curve.knots.clone())?;
             let edge = Edge::new(top_curve, v_start, v_end, tol.linear);
             top_edges.push(OrientedEdge::forward(edge));
         }
@@ -254,11 +253,13 @@ impl ExtrudeBuilder {
         let shell = Shell::closed(faces);
         let report = shell.validate_closed(tol);
         if !report.is_valid() {
-            return Err(format!("Draft extrude validation failed: {:?}", report.errors));
+            return Err(format!(
+                "Draft extrude validation failed: {:?}",
+                report.errors
+            ));
         }
         crate::validated_solid(shell)
     }
-
 
     /// 外側境界ワイヤと複数の内側境界（穴）ワイヤを持つ平坦なプロファイルから中空・穴あき押し出しSolidを構築
     pub fn extrude_face_with_holes(
@@ -317,7 +318,8 @@ impl ExtrudeBuilder {
         faces.push(bot_face);
 
         // 4. 天面キャップFace（+dir 法線）
-        let top_inner_reversed: Vec<Wire> = top_inner_wires.iter().map(Self::reversed_wire).collect();
+        let top_inner_reversed: Vec<Wire> =
+            top_inner_wires.iter().map(Self::reversed_wire).collect();
         let top_face = Self::make_cap_face_with_holes(
             &top_outer_wire,
             &top_inner_reversed,
@@ -329,7 +331,10 @@ impl ExtrudeBuilder {
         let shell = Shell::closed(faces);
         let report = shell.validate_closed(tol);
         if !report.is_valid() {
-            return Err(format!("Extrude hollow validation failed: {:?}", report.errors));
+            return Err(format!(
+                "Extrude hollow validation failed: {:?}",
+                report.errors
+            ));
         }
         crate::validated_solid(shell)
     }

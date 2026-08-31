@@ -58,7 +58,6 @@ pub fn chamfer_box_single_edge(
     Ok(PyMesh { mesh })
 }
 
-
 /// 直方体の特定面を法線方向にPush-Pull押し出し
 #[pyfunction]
 #[pyo3(signature = (dx, dy, dz, face_index, distance, u_divisions = 4, v_divisions = 4))]

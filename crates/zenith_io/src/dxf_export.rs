@@ -32,10 +32,10 @@ impl DxfLayer {
 
     pub fn color_number(&self) -> i32 {
         match self {
-            DxfLayer::Outline => 7,  // 白/黒
-            DxfLayer::Hole => 4,     // シアン
+            DxfLayer::Outline => 7,    // 白/黒
+            DxfLayer::Hole => 4,       // シアン
             DxfLayer::Centerline => 1, // 赤
-            DxfLayer::Hatch => 3,    // 緑
+            DxfLayer::Hatch => 3,      // 緑
         }
     }
 }
@@ -77,9 +77,18 @@ impl DxfExporter {
 
         // 2. TABLES セクション (レイヤー定義)
         out.push_str("0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n4\n");
-        for layer in [DxfLayer::Outline, DxfLayer::Hole, DxfLayer::Centerline, DxfLayer::Hatch] {
+        for layer in [
+            DxfLayer::Outline,
+            DxfLayer::Hole,
+            DxfLayer::Centerline,
+            DxfLayer::Hatch,
+        ] {
             out.push_str("0\nLAYER\n100\nAcDbSymbolTableRecord\n100\nAcDbLayerTableRecord\n");
-            out.push_str(&format!("2\n{}\n70\n0\n62\n{}\n6\nCONTINUOUS\n", layer.name(), layer.color_number()));
+            out.push_str(&format!(
+                "2\n{}\n70\n0\n62\n{}\n6\nCONTINUOUS\n",
+                layer.name(),
+                layer.color_number()
+            ));
         }
         out.push_str("0\nENDTAB\n0\nENDSEC\n");
 
@@ -112,7 +121,10 @@ impl DxfExporter {
     }
 
     /// 断面ループ群を DXF ファイルに書き出し
-    pub fn export_loops_to_file<P: AsRef<Path>>(loops: &[Vec<Point3>], path: P) -> Result<(), String> {
+    pub fn export_loops_to_file<P: AsRef<Path>>(
+        loops: &[Vec<Point3>],
+        path: P,
+    ) -> Result<(), String> {
         let content = Self::generate_dxf_string(loops);
         let mut file = File::create(path).map_err(|e| format!("Failed to create DXF file: {e}"))?;
         file.write_all(content.as_bytes())

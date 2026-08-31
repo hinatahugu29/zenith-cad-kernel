@@ -117,7 +117,11 @@ fn snap_curve_ends_to_vertices(curve: &mut NurbsCurve3, start: &Vertex, end: &Ve
     let (t_min, t_max) = curve.param_range();
     for (t, target, index) in [
         (t_min, start.point, 0),
-        (t_max, end.point, curve.control_points.len().saturating_sub(1)),
+        (
+            t_max,
+            end.point,
+            curve.control_points.len().saturating_sub(1),
+        ),
     ] {
         let Some(control) = curve.control_points.get(index) else {
             continue;

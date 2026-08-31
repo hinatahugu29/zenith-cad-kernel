@@ -42,8 +42,9 @@ fn test_extrude_hollow_rectangular_tube_solid() {
 
     // 3. 押し出し実行 (高さ 25.0, +Z 方向)
     let dir = Vec3::new(0.0, 0.0, 25.0);
-    let hollow_tube = ExtrudeBuilder::extrude_face_with_holes(&outer_wire, &[inner_wire], dir, &tol)
-        .expect("Extrude hollow tube should succeed");
+    let hollow_tube =
+        ExtrudeBuilder::extrude_face_with_holes(&outer_wire, &[inner_wire], dir, &tol)
+            .expect("Extrude hollow tube should succeed");
 
     // 4. トポロジー検証
     let report = hollow_tube.outer_shell.validate_closed(&tol);

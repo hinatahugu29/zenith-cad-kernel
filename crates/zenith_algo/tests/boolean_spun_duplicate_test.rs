@@ -16,9 +16,7 @@
 
 use std::f64::consts::PI;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Transform3, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -83,9 +81,7 @@ fn spinning_a_duplicate_about_its_own_axis_gives_back_the_same_solid() {
                     match BooleanEngine::boolean_solids_exact_result(&solid, &spun, op, &tol) {
                         Ok(result) => result,
                         Err(err) => {
-                            failures.push(format!(
-                                "{name} / {angle}deg / {label}: refused: {err}"
-                            ));
+                            failures.push(format!("{name} / {angle}deg / {label}: refused: {err}"));
                             continue;
                         }
                     };

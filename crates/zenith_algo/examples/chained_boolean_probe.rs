@@ -9,9 +9,7 @@
 
 use std::f64::consts::PI;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -33,12 +31,7 @@ fn main() {
     // 80 x 60 x 20 の板に、四隅へ半径5の穴を4つ開ける。
     let plate = PrimitiveBuilder::make_box(80.0, 60.0, 20.0).unwrap();
     let hole_radius = 5.0;
-    let centres = [
-        (15.0, 15.0),
-        (65.0, 15.0),
-        (65.0, 45.0),
-        (15.0, 45.0),
-    ];
+    let centres = [(15.0, 15.0), (65.0, 15.0), (65.0, 45.0), (15.0, 45.0)];
 
     let mut current = plate;
     let plate_volume = 80.0 * 60.0 * 20.0;
@@ -167,8 +160,7 @@ fn main() {
         &PrimitiveBuilder::make_cylinder(9.0, 40.0).unwrap(),
         Vec3::new(20.0, 20.0, -34.0),
     );
-    let expected_bottom =
-        40.0 * 40.0 * 20.0 - PI * 25.0 * 20.0 - (PI * 81.0 - PI * 25.0) * 6.0;
+    let expected_bottom = 40.0 * 40.0 * 20.0 - PI * 25.0 * 20.0 - (PI * 81.0 - PI * 25.0) * 6.0;
     match BooleanEngine::boolean_solids_exact_result(
         &drilled,
         &bottom_bore,
@@ -252,12 +244,7 @@ fn main() {
         &PrimitiveBuilder::make_cylinder(5.0, 20.0).unwrap(),
         Vec3::new(20.0, 20.0, 0.0),
     );
-    match BooleanEngine::boolean_solids_exact_result(
-        &drilled,
-        &plug,
-        BooleanOpType::Union,
-        &tol,
-    ) {
+    match BooleanEngine::boolean_solids_exact_result(&drilled, &plug, BooleanOpType::Union, &tol) {
         Ok(result) => {
             let actual = volume(&result.solids[0]);
             println!(

@@ -259,7 +259,12 @@ fn report(label: &str, a: &Solid, b: &Solid, op: BooleanOpType) {
         Ok(result) => println!("      RESULT: {} solid(s)", result.solids.len()),
         Err(err) => println!(
             "      RESULT: {}",
-            err.split(';').next().unwrap_or(&err).chars().take(70).collect::<String>()
+            err.split(';')
+                .next()
+                .unwrap_or(&err)
+                .chars()
+                .take(70)
+                .collect::<String>()
         ),
     }
 }
@@ -269,7 +274,9 @@ fn report(label: &str, a: &Solid, b: &Solid, op: BooleanOpType) {
 /// B-spline 曲面は制御点の凸包に含まれます。制御点が平面上にあるなら、
 /// 曲面はその平面から出られません。標本を見て当てるのではなく、
 /// **制御点だけで決まります**。
-fn plane_of_control_net(surface: &zenith_geom::NurbsSurface3) -> Option<zenith_geom::PlaneSurface3> {
+fn plane_of_control_net(
+    surface: &zenith_geom::NurbsSurface3,
+) -> Option<zenith_geom::PlaneSurface3> {
     let points: Vec<Point3> = surface
         .control_points
         .iter()
@@ -314,11 +321,8 @@ fn plane_of_control_net(surface: &zenith_geom::NurbsSurface3) -> Option<zenith_g
     // 向きは元の曲面から取る。適当に張ると法線が裏返り、面が支持曲面と
     // 食い違って立体そのものが無効になります（実測でそうなりました）。
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
-    let wanted = zenith_geom::Surface3::normal(
-        surface,
-        (u_min + u_max) * 0.5,
-        (v_min + v_max) * 0.5,
-    )?;
+    let wanted =
+        zenith_geom::Surface3::normal(surface, (u_min + u_max) * 0.5, (v_min + v_max) * 0.5)?;
     let normal = if normal.dot(&wanted) >= 0.0 {
         normal
     } else {
@@ -466,7 +470,12 @@ fn main() {
                 report("read", read, &b, *op);
                 report("read, regularized", &regularized, &b, *op);
                 report("read, planar faces recognised", &as_planes, &b, *op);
-                report("read, planes recognised then regularized", &planes_regular, &b, *op);
+                report(
+                    "read, planes recognised then regularized",
+                    &planes_regular,
+                    &b,
+                    *op,
+                );
                 report(
                     "read, p-curves dropped then regularized (structure only)",
                     &stripped_regular,

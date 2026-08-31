@@ -156,8 +156,8 @@ impl LoftBuilder {
             return Err(format!("LOFT_ERR: {}", msg));
         }
 
-
-        Solid::try_simple(shell, tol).map_err(|err| format!("Loft solid validation failed: {}", err))
+        Solid::try_simple(shell, tol)
+            .map_err(|err| format!("Loft solid validation failed: {}", err))
     }
 
     /// ガイドレール曲線群（Guide Curves）に沿った閉断面ワイヤ群のロフト完全閉B-Repソリッド生成
@@ -286,7 +286,6 @@ impl LoftBuilder {
             }
         }
 
-
         // 4. 底面Faceの構築
         let bot_wire = section_wires[0].clone();
         let bot_face = create_cap_face(&bot_wire, true, tol)?;
@@ -300,18 +299,23 @@ impl LoftBuilder {
         let shell = Shell::closed(faces);
         let report = shell.validate_closed(tol);
         if !report.is_valid() {
-            return Err(format!("Guided loft validation failed: {:?}", report.errors));
+            return Err(format!(
+                "Guided loft validation failed: {:?}",
+                report.errors
+            ));
         }
         Solid::try_simple(shell, tol).map_err(|err| format!("Guided loft solid failed: {}", err))
     }
 }
 
-
-
 /// 閉じた平坦ワイヤから端面キャップFaceを生成（is_bottom: true の場合は反転して下向き法線にする）
 fn create_cap_face(wire: &Wire, is_bottom: bool, _tol: &Tolerance) -> Result<Face, String> {
     // 平面パラメータの算出（Newellのアルゴリズムによる平均平面法線）
-    let pts: Vec<Point3> = wire.edges.iter().map(|oe| oe.start_vertex().point).collect();
+    let pts: Vec<Point3> = wire
+        .edges
+        .iter()
+        .map(|oe| oe.start_vertex().point)
+        .collect();
     let n_pts = pts.len();
     if n_pts < 3 {
         return Err("Cap wire has fewer than 3 vertices".to_string());
@@ -350,7 +354,10 @@ fn create_cap_face(wire: &Wire, is_bottom: bool, _tol: &Tolerance) -> Result<Fac
         // 底面は法線を外向き（下向き）にするため逆順ワイヤを構築
         let mut rev_edges = Vec::with_capacity(n_pts);
         for oe in wire.edges.iter().rev() {
-            rev_edges.push(OrientedEdge::new(oe.edge.clone(), oe.orientation.reversed()));
+            rev_edges.push(OrientedEdge::new(
+                oe.edge.clone(),
+                oe.orientation.reversed(),
+            ));
         }
         Wire::new(rev_edges)
     } else {

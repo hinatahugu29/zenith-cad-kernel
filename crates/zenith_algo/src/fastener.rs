@@ -83,7 +83,10 @@ impl FastenerBuilder {
         for i in (0..6).rev() {
             bot_edges.push(OrientedEdge::reversed(eb[i].clone()));
         }
-        faces.push(Face::simple(FaceGeometry::Plane(pl_bot), Wire::new(bot_edges)));
+        faces.push(Face::simple(
+            FaceGeometry::Plane(pl_bot),
+            Wire::new(bot_edges),
+        ));
 
         // 天面 (z=height, 法線 +Z, CCW: vt0 -> vt1 -> ... -> vt5)
         let pl_top = PlaneSurface3::new(
@@ -96,7 +99,10 @@ impl FastenerBuilder {
         for i in 0..6 {
             top_edges.push(OrientedEdge::forward(et[i].clone()));
         }
-        faces.push(Face::simple(FaceGeometry::Plane(pl_top), Wire::new(top_edges)));
+        faces.push(Face::simple(
+            FaceGeometry::Plane(pl_top),
+            Wire::new(top_edges),
+        ));
 
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)
@@ -111,15 +117,15 @@ impl FastenerBuilder {
     ) -> Result<Solid, String> {
         let r_inscribed = across_flats * 0.5;
         if hole_radius >= r_inscribed {
-            return Err("Hole radius must be strictly smaller than inscribed radius of hex".to_string());
+            return Err(
+                "Hole radius must be strictly smaller than inscribed radius of hex".to_string(),
+            );
         }
 
         let hex_body = Self::make_hex_prism(across_flats, height, tol)?;
         let drill = crate::PrimitiveBuilder::make_cylinder(hole_radius, height + 2.0)?;
-        let positioned_drill = crate::BrepTransform::translate_solid(
-            &drill,
-            Vec3::new(0.0, 0.0, -1.0),
-        );
+        let positioned_drill =
+            crate::BrepTransform::translate_solid(&drill, Vec3::new(0.0, 0.0, -1.0));
 
         crate::boolean::BooleanEngine::boolean_solids_exact(
             &hex_body,
@@ -352,7 +358,12 @@ impl FastenerBuilder {
                 ],
                 zenith_geom::KnotVector::clamped_uniform(3, 2),
             )?;
-            let edge = zenith_topo::Edge::new(arc_curve, outer_v[i].clone(), outer_v[i + 1].clone(), tol.linear);
+            let edge = zenith_topo::Edge::new(
+                arc_curve,
+                outer_v[i].clone(),
+                outer_v[i + 1].clone(),
+                tol.linear,
+            );
             edges.push(zenith_topo::OrientedEdge::forward(edge));
         }
 
@@ -393,15 +404,17 @@ impl FastenerBuilder {
                 ],
                 zenith_geom::KnotVector::clamped_uniform(3, 2),
             )?;
-            let edge = zenith_topo::Edge::new(arc_curve, inner_v[i + 1].clone(), inner_v[i].clone(), tol.linear);
+            let edge = zenith_topo::Edge::new(
+                arc_curve,
+                inner_v[i + 1].clone(),
+                inner_v[i].clone(),
+                tol.linear,
+            );
             edges.push(zenith_topo::OrientedEdge::forward(edge));
         }
 
         // 4. 始端直線エッジ (内径 start_angle -> 外径 start_angle)
-        let start_line = zenith_topo::Edge::line_between(
-            inner_v[0].clone(),
-            outer_v[0].clone(),
-        )?;
+        let start_line = zenith_topo::Edge::line_between(inner_v[0].clone(), outer_v[0].clone())?;
         edges.push(zenith_topo::OrientedEdge::forward(start_line));
 
         let bottom_wire = zenith_topo::Wire::new(edges);
@@ -441,10 +454,8 @@ impl FastenerBuilder {
 
         // 2. 皿頭円錐台（小径 shank_radius -> 大径 head_radius）
         let head_cone = crate::PrimitiveBuilder::make_cone(shank_radius, head_radius, head_height)?;
-        let head_cone = crate::BrepTransform::translate_solid(
-            &head_cone,
-            Vec3::new(0.0, 0.0, shank_length),
-        );
+        let head_cone =
+            crate::BrepTransform::translate_solid(&head_cone, Vec3::new(0.0, 0.0, shank_length));
 
         let blank = crate::boolean::BooleanEngine::boolean_solids_exact(
             &shank,
@@ -492,7 +503,9 @@ impl FastenerBuilder {
         if flange_radius <= hub_radius || hub_radius <= pipe_radius || flange_thickness <= 1e-6 {
             return Err("Invalid flange dimensions: flange > hub > pipe required".to_string());
         }
-        if pcd_radius + bolt_hole_radius >= flange_radius || pcd_radius - bolt_hole_radius <= hub_radius {
+        if pcd_radius + bolt_hole_radius >= flange_radius
+            || pcd_radius - bolt_hole_radius <= hub_radius
+        {
             return Err("Bolt holes must fit inside flange outer rim outside hub".to_string());
         }
         if num_bolt_holes == 0 {
@@ -508,7 +521,8 @@ impl FastenerBuilder {
         // 2. 中央パイプ貫通穴
         let total_h = flange_thickness + hub_height;
         let pipe_cutter = crate::PrimitiveBuilder::make_cylinder(pipe_radius, total_h + 2.0)?;
-        let pipe_cutter = crate::BrepTransform::translate_solid(&pipe_cutter, Vec3::new(0.0, 0.0, -1.0));
+        let pipe_cutter =
+            crate::BrepTransform::translate_solid(&pipe_cutter, Vec3::new(0.0, 0.0, -1.0));
         solid = crate::boolean::BooleanEngine::boolean_solids_exact(
             &solid,
             &pipe_cutter,
@@ -523,11 +537,10 @@ impl FastenerBuilder {
             let bx = pcd_radius * theta.cos();
             let by = pcd_radius * theta.sin();
 
-            let bolt_cutter = crate::PrimitiveBuilder::make_cylinder(bolt_hole_radius, flange_thickness + 2.0)?;
-            let bolt_cutter = crate::BrepTransform::translate_solid(
-                &bolt_cutter,
-                Vec3::new(bx, by, -1.0),
-            );
+            let bolt_cutter =
+                crate::PrimitiveBuilder::make_cylinder(bolt_hole_radius, flange_thickness + 2.0)?;
+            let bolt_cutter =
+                crate::BrepTransform::translate_solid(&bolt_cutter, Vec3::new(bx, by, -1.0));
             solid = crate::boolean::BooleanEngine::boolean_solids_exact(
                 &solid,
                 &bolt_cutter,
@@ -616,10 +629,8 @@ impl FastenerBuilder {
         );
 
         // 2. 下部ねじ軸（六角胴内へわずかに 0.1 食い込ませる）
-        let bot_shank = crate::PrimitiveBuilder::make_cylinder(
-            bottom_shank_radius,
-            bottom_shank_length + 0.1,
-        )?;
+        let bot_shank =
+            crate::PrimitiveBuilder::make_cylinder(bottom_shank_radius, bottom_shank_length + 0.1)?;
 
         let solid_part = crate::boolean::BooleanEngine::boolean_solids_exact(
             &hex_body,
@@ -629,10 +640,8 @@ impl FastenerBuilder {
         )?;
 
         // 3. 上部ねじ軸（六角胴内へわずかに 0.1 食い込ませる）
-        let top_shank = crate::PrimitiveBuilder::make_cylinder(
-            top_shank_radius,
-            top_shank_length + 0.1,
-        )?;
+        let top_shank =
+            crate::PrimitiveBuilder::make_cylinder(top_shank_radius, top_shank_length + 0.1)?;
         let top_shank = crate::BrepTransform::translate_solid(
             &top_shank,
             Vec3::new(0.0, 0.0, bottom_shank_length + hex_height - 0.1),
@@ -659,7 +668,11 @@ impl FastenerBuilder {
         cone_height: f64,
         tol: &Tolerance,
     ) -> Result<Solid, String> {
-        if inner_radius >= outer_radius || inner_radius <= 1e-6 || thickness <= 1e-6 || cone_height <= 1e-6 {
+        if inner_radius >= outer_radius
+            || inner_radius <= 1e-6
+            || thickness <= 1e-6
+            || cone_height <= 1e-6
+        {
             return Err("Invalid Belleville spring dimensions".to_string());
         }
 
@@ -675,7 +688,8 @@ impl FastenerBuilder {
         let r_cutter_bot = r_in_bot + 1.0 * k;
         let r_cutter_top = r_in_top - 1.0 * k;
         let inner_cone = crate::PrimitiveBuilder::make_cone(r_cutter_bot, r_cutter_top, h + 2.0)?;
-        let inner_cone = crate::BrepTransform::translate_solid(&inner_cone, Vec3::new(0.0, 0.0, -1.0));
+        let inner_cone =
+            crate::BrepTransform::translate_solid(&inner_cone, Vec3::new(0.0, 0.0, -1.0));
 
         crate::boolean::BooleanEngine::boolean_solids_exact(
             &outer_cone,

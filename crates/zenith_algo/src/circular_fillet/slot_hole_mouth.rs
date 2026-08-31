@@ -167,7 +167,10 @@ impl SlotHoleMouth {
         }
 
         let radius = arcs[0].2;
-        if arcs.iter().any(|(_, _, r)| (*r - radius).abs() > 1e-4 * radius.max(1.0)) {
+        if arcs
+            .iter()
+            .any(|(_, _, r)| (*r - radius).abs() > 1e-4 * radius.max(1.0))
+        {
             return None;
         }
 
@@ -201,18 +204,20 @@ impl SlotHoleMouth {
         let center = (straights[0].1 + straights[1].1.coords) * 0.5;
 
         // 反対側のキャップ面（opposite_cap）の検出
-        let (opposite_cap_index, opposite_inner_index) = faces.iter().enumerate().find_map(|(fi, face)| {
-            if fi == cap_index || !matches!(face.geometry, FaceGeometry::Plane(_)) {
-                return None;
-            }
-            let opp_normal = face_sample_normal(face);
-            if opp_normal.dot(&axis_z) > -0.8 {
-                return None;
-            }
-            face.inner_wires.iter().enumerate().find_map(|(wi, wire)| {
-                (wire.edges.len() == 6).then_some((fi, wi))
-            })
-        })?;
+        let (opposite_cap_index, opposite_inner_index) =
+            faces.iter().enumerate().find_map(|(fi, face)| {
+                if fi == cap_index || !matches!(face.geometry, FaceGeometry::Plane(_)) {
+                    return None;
+                }
+                let opp_normal = face_sample_normal(face);
+                if opp_normal.dot(&axis_z) > -0.8 {
+                    return None;
+                }
+                face.inner_wires
+                    .iter()
+                    .enumerate()
+                    .find_map(|(wi, wire)| (wire.edges.len() == 6).then_some((fi, wi)))
+            })?;
 
         // 穴の正確な深さ（天面から底面までの距離）
         let opp_face = &faces[opposite_cap_index];
@@ -241,7 +246,8 @@ impl SlotHoleMouth {
 
     fn fillet_removed_volume(&self, r: f64) -> f64 {
         let straight_vol = 2.0 * self.length * r * r * (1.0 - PI * 0.25);
-        let circular_vol = PI * (self.radius * r * r * (2.0 - PI * 0.5) + r.powi(3) * (5.0 / 3.0 - PI * 0.5));
+        let circular_vol =
+            PI * (self.radius * r * r * (2.0 - PI * 0.5) + r.powi(3) * (5.0 / 3.0 - PI * 0.5));
         straight_vol + circular_vol
     }
 

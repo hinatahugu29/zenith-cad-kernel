@@ -103,10 +103,7 @@ pub(crate) fn sphere_cap_rim_blendable(solid: &Solid, edge_id: u64) -> Option<Bl
     let max_fillet = (site.r_sphere - site.centre_height) * 0.5 * 0.999;
     // 面取りは、縁を全部食い切る手前まで。平面側は半径方向に、球側は子午線の
     // 弧長で下がるので、効くのは小さいほうです。
-    let max_chamfer = site
-        .rim_radius
-        .min(site.r_sphere * site.polar_span())
-        * 0.999;
+    let max_chamfer = site.rim_radius.min(site.r_sphere * site.polar_span()) * 0.999;
     if !(max_fillet > 1e-6 && max_fillet.is_finite() && max_chamfer > 1e-6) {
         return None;
     }
@@ -265,12 +262,16 @@ impl PureSphereCapRim {
         // 外向き法線どうしのなす角の補角。縁での球の法線は `(rim, 0, -s)/R`、
         // 蓋の法線は `(0, 0, 1)` なので、内積は `-s/R` です。
         // 半球（`s = 0`）なら 90 度になります。
-        PI - (-self.centre_height / self.r_sphere).clamp(-1.0, 1.0).acos()
+        PI - (-self.centre_height / self.r_sphere)
+            .clamp(-1.0, 1.0)
+            .acos()
     }
 
     /// 残っている球面が、極から縁まで張る中心角。
     fn polar_span(&self) -> f64 {
-        PI - (-self.centre_height / self.r_sphere).clamp(-1.0, 1.0).acos()
+        PI - (-self.centre_height / self.r_sphere)
+            .clamp(-1.0, 1.0)
+            .acos()
     }
 
     fn canonical_to_world(&self) -> Transform3 {
@@ -450,10 +451,7 @@ impl SphereCapBlend {
     fn sphere_control(&self) -> ((f64, f64), f64) {
         let pole = (0.0, self.centre_height - self.r_sphere);
         let from = (pole.0, pole.1 - self.centre_height);
-        let to = (
-            self.sphere_radius,
-            self.sphere_height - self.centre_height,
-        );
+        let to = (self.sphere_radius, self.sphere_height - self.centre_height);
         let dot = (from.0 * to.0 + from.1 * to.1) / (self.r_sphere * self.r_sphere);
         let sweep = dot.clamp(-1.0, 1.0).acos();
         let weight = (sweep * 0.5).cos();
@@ -514,8 +512,8 @@ impl SphereCapBlend {
 
         // 元の立体は、球を縁（高さ 0）まで積んだもの。
         let original = sphere_integral(self.centre_height - self.r_sphere, 0.0);
-        let blended =
-            sphere_integral(self.centre_height - self.r_sphere, self.sphere_height) + blend_integral;
+        let blended = sphere_integral(self.centre_height - self.r_sphere, self.sphere_height)
+            + blend_integral;
         PI * (original - blended)
     }
 }
@@ -646,10 +644,7 @@ fn build_blended_sphere_cap(geometry: &SphereCapBlend) -> Result<Solid, String> 
                             angular_control(*radial, *z, angle),
                             *weight * FRAC_1_SQRT_2,
                         ),
-                        _ => ControlPoint3::new(
-                            point(*radial, *z, angle + FRAC_PI_2),
-                            *weight,
-                        ),
+                        _ => ControlPoint3::new(point(*radial, *z, angle + FRAC_PI_2), *weight),
                     })
                     .collect()
             })

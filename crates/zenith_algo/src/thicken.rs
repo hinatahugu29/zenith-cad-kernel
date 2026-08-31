@@ -345,7 +345,6 @@ impl ThickenBuilder {
         tol: &Tolerance,
     ) -> Result<Solid, String> {
         let sample_count = samples;
-        
 
         let ((u_min, u_max), (v_min, v_max)) = nurbs.param_range();
         let at = |i: usize, j: usize| -> (f64, f64) {

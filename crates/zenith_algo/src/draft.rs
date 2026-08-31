@@ -209,7 +209,8 @@ impl DraftBuilder {
         let cz = dz - cavity_depth;
 
         let transform = zenith_math::Transform3::from_translation(Vec3::new(cx, cy, cz));
-        let positioned_cavity = crate::brep_transform::BrepTransform::transform_solid(&cavity_solid, &transform)?;
+        let positioned_cavity =
+            crate::brep_transform::BrepTransform::transform_solid(&cavity_solid, &transform)?;
 
         crate::boolean::BooleanEngine::boolean_solids_exact(
             &outer_box,

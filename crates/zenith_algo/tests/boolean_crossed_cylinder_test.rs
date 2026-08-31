@@ -57,8 +57,14 @@ fn bicylinder_intersection_volume(big: f64, small: f64) -> f64 {
 #[test]
 fn the_elliptic_integrals_match_their_known_values() {
     let (k0, e0) = complete_elliptic_k_e(0.0);
-    assert!((k0 - PI / 2.0).abs() < 1e-14, "K(0) should be pi/2, got {k0}");
-    assert!((e0 - PI / 2.0).abs() < 1e-14, "E(0) should be pi/2, got {e0}");
+    assert!(
+        (k0 - PI / 2.0).abs() < 1e-14,
+        "K(0) should be pi/2, got {k0}"
+    );
+    assert!(
+        (e0 - PI / 2.0).abs() < 1e-14,
+        "E(0) should be pi/2, got {e0}"
+    );
 
     // 半径が等しいときの Steinmetz 立体は 16 R^3 / 3。
     let steinmetz = bicylinder_intersection_volume(10.0, 10.0 - 1e-12);
@@ -76,7 +82,8 @@ fn crossed_cylinders_match_the_closed_form_for_all_three_operations() {
     let height = 40.0f64;
 
     let a = PrimitiveBuilder::make_cylinder(big_radius, height).unwrap();
-    let rotation = Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), std::f64::consts::FRAC_PI_2);
+    let rotation =
+        Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), std::f64::consts::FRAC_PI_2);
     let along_x = BrepTransform::transform_solid(
         &PrimitiveBuilder::make_cylinder(small_radius, height).unwrap(),
         &rotation,

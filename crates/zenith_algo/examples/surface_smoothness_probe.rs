@@ -74,9 +74,7 @@ fn scan(name: &str, solid: &Solid, face_index: usize) {
 
     let expected_step = worst_position_jump; // reported directly for comparison
     println!("{name}, face {face_index}:");
-    println!(
-        "    u range [{u_min}, {u_max}], sampled {samples} steps along v = {v_mid}"
-    );
+    println!("    u range [{u_min}, {u_max}], sampled {samples} steps along v = {v_mid}");
     println!("    largest position step   {expected_step:.9e} near u = {worst_position_u:.6}");
     println!("    largest tangent change  {worst_tangent_jump:.9e} near u = {worst_tangent_u:.6}");
 
@@ -126,7 +124,10 @@ fn main() {
 
     if let FaceGeometry::Nurbs(surface) = &pipe.outer_shell.faces[0].geometry {
         println!("swept pipe side patch:");
-        println!("    degree_u = {}, degree_v = {}", surface.degree_u, surface.degree_v);
+        println!(
+            "    degree_u = {}, degree_v = {}",
+            surface.degree_u, surface.degree_v
+        );
         println!(
             "    control grid {} x {}",
             surface.control_points.len(),

@@ -145,9 +145,7 @@ fn main() {
 
     println!("円柱を斜めの平面で切った断面を、パラメータ面で当てはめる");
     println!();
-    println!(
-        "見立て: v = a·cos(u) + b·sin(u) + c（円柱の u = 角度、v = 軸方向）"
-    );
+    println!("見立て: v = a·cos(u) + b·sin(u) + c（円柱の u = 角度、v = 軸方向）");
     println!(
         "円柱 半径 {radius} 高さ {height}、側面パッチ {} 枚",
         patches.len()

@@ -23,7 +23,10 @@ fn attempt(label: &str, solid: &Solid, index: usize, edges: &[zenith_topo::Edge]
 
     for (edge_index, edge) in edges.iter().enumerate() {
         match BrepIntersectionBuilder::split_face_by_edge(face, edge, tol) {
-            Ok(pieces) => println!("        edge {edge_index}: split into {} piece(s)", pieces.len()),
+            Ok(pieces) => println!(
+                "        edge {edge_index}: split into {} piece(s)",
+                pieces.len()
+            ),
             Err(err) => println!("        edge {edge_index}: {err}"),
         }
     }

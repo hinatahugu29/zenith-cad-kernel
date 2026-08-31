@@ -81,7 +81,12 @@ fn cases() -> Vec<Case> {
             name: "a 1e-6 thin plate cut by a box",
             build: Box::new(|| {
                 let a = PrimitiveBuilder::make_box(20.0, 20.0, 1e-6)?;
-                let b = shifted(&PrimitiveBuilder::make_box(10.0, 10.0, 10.0)?, 5.0, 5.0, -5.0);
+                let b = shifted(
+                    &PrimitiveBuilder::make_box(10.0, 10.0, 10.0)?,
+                    5.0,
+                    5.0,
+                    -5.0,
+                );
                 Ok((a, b))
             }),
             expected: [None, None, None],
@@ -210,7 +215,12 @@ fn cases() -> Vec<Case> {
             name: "a needle through a plate",
             build: Box::new(|| {
                 let plate = PrimitiveBuilder::make_box(200.0, 200.0, 2.0)?;
-                let needle = shifted(&PrimitiveBuilder::make_box(0.02, 0.02, 20.0)?, 100.0, 100.0, -9.0);
+                let needle = shifted(
+                    &PrimitiveBuilder::make_box(0.02, 0.02, 20.0)?,
+                    100.0,
+                    100.0,
+                    -9.0,
+                );
                 Ok((plate, needle))
             }),
             expected: [None, None, None],
@@ -266,7 +276,12 @@ fn cases() -> Vec<Case> {
                     BooleanOpType::Union,
                     &tol,
                 )?;
-                let slab = shifted(&PrimitiveBuilder::make_box(60.0, 60.0, 10.0)?, -30.0, -30.0, 30.0);
+                let slab = shifted(
+                    &PrimitiveBuilder::make_box(60.0, 60.0, 10.0)?,
+                    -30.0,
+                    -30.0,
+                    30.0,
+                );
                 Ok((crossed, slab))
             }),
             expected: [None, None, None],
@@ -278,10 +293,24 @@ fn cases() -> Vec<Case> {
             build: Box::new(|| {
                 let tol = Tolerance::default();
                 let outer = PrimitiveBuilder::make_box(40.0, 40.0, 40.0)?;
-                let inner = shifted(&PrimitiveBuilder::make_box(10.0, 10.0, 10.0)?, 15.0, 15.0, 15.0);
-                let hollow =
-                    BooleanEngine::boolean_solids_exact(&outer, &inner, BooleanOpType::Difference, &tol)?;
-                let knife = shifted(&PrimitiveBuilder::make_box(60.0, 60.0, 10.0)?, -10.0, -10.0, 35.0);
+                let inner = shifted(
+                    &PrimitiveBuilder::make_box(10.0, 10.0, 10.0)?,
+                    15.0,
+                    15.0,
+                    15.0,
+                );
+                let hollow = BooleanEngine::boolean_solids_exact(
+                    &outer,
+                    &inner,
+                    BooleanOpType::Difference,
+                    &tol,
+                )?;
+                let knife = shifted(
+                    &PrimitiveBuilder::make_box(60.0, 60.0, 10.0)?,
+                    -10.0,
+                    -10.0,
+                    35.0,
+                );
                 Ok((hollow, knife))
             }),
             expected: [None, None, None],

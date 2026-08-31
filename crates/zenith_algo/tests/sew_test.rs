@@ -95,8 +95,9 @@ fn a_difference_comes_back_with_every_edge_shared_by_two_faces() {
         Vec3::new(20.0, 20.0, 0.0),
     );
 
-    let result = BooleanEngine::boolean_solids_exact(&base, &cutter, BooleanOpType::Difference, &tol)
-        .expect("difference");
+    let result =
+        BooleanEngine::boolean_solids_exact(&base, &cutter, BooleanOpType::Difference, &tol)
+            .expect("difference");
 
     assert_shared(&result, "box minus corner box");
     let volume = volume_of(&result);
@@ -142,9 +143,8 @@ fn a_union_stays_shared_and_keeps_its_volume() {
         Vec3::new(10.0, 10.0, 20.0),
     );
 
-    let result =
-        BooleanEngine::boolean_solids_exact(&base, &block, BooleanOpType::Union, &tol)
-            .expect("union");
+    let result = BooleanEngine::boolean_solids_exact(&base, &block, BooleanOpType::Union, &tol)
+        .expect("union");
 
     assert_shared(&result, "box with a block on top");
     let volume = volume_of(&result);
@@ -169,7 +169,8 @@ fn sewing_an_already_shared_solid_changes_nothing() {
         let (sewn, report) = Sewer::sew_solid(&solid, &tol).expect("sew");
 
         assert_eq!(
-            report.edges_before, report.edges_after,
+            report.edges_before,
+            report.edges_after,
             "a builder's own output has nothing to merge: {}",
             report.summary()
         );

@@ -205,9 +205,7 @@ fn build_cases() -> Vec<Case> {
     cases.push(Case {
         name: "filleted box 20x30x40 r4",
         solid: FilletBuilder::fillet_box_z_edges(20.0, 30.0, 40.0, fillet_radius, &tol),
-        analytic_volume: Some(
-            (20.0 * 30.0 - (4.0 - PI) * fillet_radius * fillet_radius) * 40.0,
-        ),
+        analytic_volume: Some((20.0 * 30.0 - (4.0 - PI) * fillet_radius * fillet_radius) * 40.0),
     });
 
     // 面取り: 各角から一辺 c の直角二等辺三角形が落ちる。
@@ -233,7 +231,11 @@ fn build_cases() -> Vec<Case> {
 
     cases.push(Case {
         name: "extruded rectangle 30x20 h25",
-        solid: ExtrudeBuilder::extrude_wire(&rect_wire(15.0, 10.0, 0.0), Vec3::new(0.0, 0.0, 25.0), &tol),
+        solid: ExtrudeBuilder::extrude_wire(
+            &rect_wire(15.0, 10.0, 0.0),
+            Vec3::new(0.0, 0.0, 25.0),
+            &tol,
+        ),
         analytic_volume: Some(30.0 * 20.0 * 25.0),
     });
 
@@ -285,12 +287,9 @@ fn build_cases() -> Vec<Case> {
         });
 
         // パターン: n 個ぶんの体積になる。
-        if let Ok(copies) = PatternBuilder::linear_pattern(
-            &box_solid,
-            Vec3::new(1.0, 0.0, 0.0),
-            50.0,
-            3,
-        ) {
+        if let Ok(copies) =
+            PatternBuilder::linear_pattern(&box_solid, Vec3::new(1.0, 0.0, 0.0), 50.0, 3)
+        {
             for (index, copy) in copies.into_iter().enumerate() {
                 cases.push(Case {
                     name: match index {
@@ -494,5 +493,8 @@ fn main() {
     }
 
     println!("{}", "-".repeat(118));
-    println!("{passed} of {} builder cases clean, {failed} with problems", cases.len());
+    println!(
+        "{passed} of {} builder cases clean, {failed} with problems",
+        cases.len()
+    );
 }

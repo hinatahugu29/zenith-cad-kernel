@@ -51,7 +51,10 @@ fn report(name: &str, solid: &Solid) -> bool {
         .collect();
 
     println!("--- {name}");
-    println!("  faces                 : {}", solid.outer_shell.faces.len());
+    println!(
+        "  faces                 : {}",
+        solid.outer_shell.faces.len()
+    );
     println!("  distinct edge ids     : {distinct_edges}");
     println!("  ids used by two faces : {shared_twice}");
     println!("  ids used by one face  : {used_once}");

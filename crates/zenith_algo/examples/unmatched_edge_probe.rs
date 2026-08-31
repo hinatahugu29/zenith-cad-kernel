@@ -15,9 +15,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use zenith_algo::{
-    BooleanOpType, BrepIntersectionBuilder, BrepTransform, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanOpType, BrepIntersectionBuilder, BrepTransform, PrimitiveBuilder};
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams, TriangleMesh};
@@ -67,7 +65,8 @@ fn cutter(kind: &str, low: &Point3, high: &Point3) -> Option<Solid> {
     let size = Vec3::new(high.x - low.x, high.y - low.y, high.z - low.z);
     match kind {
         "slab" => {
-            let solid = PrimitiveBuilder::make_box(size.x * 0.6, size.y * 2.0, size.z * 2.0).ok()?;
+            let solid =
+                PrimitiveBuilder::make_box(size.x * 0.6, size.y * 2.0, size.z * 2.0).ok()?;
             Some(BrepTransform::translate_solid(
                 &solid,
                 Vec3::new(
@@ -121,7 +120,10 @@ fn key_of(start: Point3, end: Point3, grid: f64) -> (i64, i64, i64, i64, i64, i6
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let subject = args.first().cloned().unwrap_or_else(|| "sphere".to_string());
+    let subject = args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "sphere".to_string());
     let kind = args.get(1).cloned().unwrap_or_else(|| "corner".to_string());
     let op = match args.get(2).map(|s| s.as_str()) {
         Some("union") => BooleanOpType::Union,
@@ -192,7 +194,11 @@ fn main() {
             "    piece {index:>3} ({:?}, {:?}{}) mid ({:.4} {:.4} {:.4})",
             piece.operand,
             piece.location,
-            if piece.reverse_orientation { ", reversed" } else { "" },
+            if piece.reverse_orientation {
+                ", reversed"
+            } else {
+                ""
+            },
             middle.x,
             middle.y,
             middle.z
@@ -216,63 +222,68 @@ fn main() {
     if lonely == 0 {
         println!("    none");
 
-    // **同じ向きに2度使われた稜。** 閉じた殻では、1本の稜はちょうど2枚の面に
-    // 使われ、その向きは互いに逆になります。同じ向きなら、どちらかの面が
-    // 裏返っています。本数だけでは、どの片が裏返っているか分かりません。
-    println!();
-    println!("  edges used twice the same way round (a piece is inside out):");
-    let mut directed: BTreeMap<(i64, i64, i64, i64, i64, i64), Vec<usize>> = BTreeMap::new();
-    for (index, piece) in pieces.iter().enumerate() {
-        for wire in std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter()) {
-            for oriented in &wire.edges {
-                let mut start = oriented.evaluate_normalized(0.0);
-                let mut end = oriented.evaluate_normalized(1.0);
-                if piece.reverse_orientation {
-                    std::mem::swap(&mut start, &mut end);
+        // **同じ向きに2度使われた稜。** 閉じた殻では、1本の稜はちょうど2枚の面に
+        // 使われ、その向きは互いに逆になります。同じ向きなら、どちらかの面が
+        // 裏返っています。本数だけでは、どの片が裏返っているか分かりません。
+        println!();
+        println!("  edges used twice the same way round (a piece is inside out):");
+        let mut directed: BTreeMap<(i64, i64, i64, i64, i64, i64), Vec<usize>> = BTreeMap::new();
+        for (index, piece) in pieces.iter().enumerate() {
+            for wire in std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter())
+            {
+                for oriented in &wire.edges {
+                    let mut start = oriented.evaluate_normalized(0.0);
+                    let mut end = oriented.evaluate_normalized(1.0);
+                    if piece.reverse_orientation {
+                        std::mem::swap(&mut start, &mut end);
+                    }
+                    let cell = |point: Point3| {
+                        (
+                            (point.x / grid).round() as i64,
+                            (point.y / grid).round() as i64,
+                            (point.z / grid).round() as i64,
+                        )
+                    };
+                    let (a, b) = (cell(start), cell(end));
+                    directed
+                        .entry((a.0, a.1, a.2, b.0, b.1, b.2))
+                        .or_default()
+                        .push(index);
                 }
-                let cell = |point: Point3| {
-                    (
-                        (point.x / grid).round() as i64,
-                        (point.y / grid).round() as i64,
-                        (point.z / grid).round() as i64,
-                    )
-                };
-                let (a, b) = (cell(start), cell(end));
-                directed
-                    .entry((a.0, a.1, a.2, b.0, b.1, b.2))
-                    .or_default()
-                    .push(index);
             }
         }
-    }
-    let mut same = 0usize;
-    for ((x0, y0, z0, x1, y1, z1), users) in &directed {
-        if users.len() < 2 {
-            continue;
-        }
-        same += users.len();
-        println!(
-            "    pieces {users:?} all run ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})",
-            *x0 as f64 * grid,
-            *y0 as f64 * grid,
-            *z0 as f64 * grid,
-            *x1 as f64 * grid,
-            *y1 as f64 * grid,
-            *z1 as f64 * grid
-        );
-        for index in users {
-            let piece = &pieces[*index];
+        let mut same = 0usize;
+        for ((x0, y0, z0, x1, y1, z1), users) in &directed {
+            if users.len() < 2 {
+                continue;
+            }
+            same += users.len();
             println!(
-                "      piece {index:>3} ({:?}, {:?}{})",
-                piece.operand,
-                piece.location,
-                if piece.reverse_orientation { ", reversed" } else { "" }
+                "    pieces {users:?} all run ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})",
+                *x0 as f64 * grid,
+                *y0 as f64 * grid,
+                *z0 as f64 * grid,
+                *x1 as f64 * grid,
+                *y1 as f64 * grid,
+                *z1 as f64 * grid
             );
+            for index in users {
+                let piece = &pieces[*index];
+                println!(
+                    "      piece {index:>3} ({:?}, {:?}{})",
+                    piece.operand,
+                    piece.location,
+                    if piece.reverse_orientation {
+                        ", reversed"
+                    } else {
+                        ""
+                    }
+                );
+            }
         }
-    }
-    if same == 0 {
-        println!("    none");
-    }
+        if same == 0 {
+            println!("    none");
+        }
     }
 
     println!();
@@ -286,14 +297,17 @@ fn main() {
             "    {index:>3} {:?} {:?}{} {edges} edge use(s)",
             piece.operand,
             piece.location,
-            if piece.reverse_orientation { " reversed" } else { "" }
+            if piece.reverse_orientation {
+                " reversed"
+            } else {
+                ""
+            }
         );
         // **輪を丸ごと出す。** 縫えない稜だけ見ていると、「片が足りない」のか
         // 「片の輪が元の稜をそのまま抱えている」のかが分かれません。
         // 実測: 蓋の片が、割ったはずのスプラインを端から端まで持っていました。
         if std::env::args().any(|arg| arg == "--wires") {
-            for wire in
-                std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter())
+            for wire in std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter())
             {
                 for oriented in &wire.edges {
                     let (t0, t1) = oriented.edge.curve.param_range();

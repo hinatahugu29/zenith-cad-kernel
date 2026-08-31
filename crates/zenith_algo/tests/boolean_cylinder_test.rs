@@ -10,9 +10,7 @@
 
 use std::f64::consts::PI;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -245,8 +243,9 @@ fn test_difference_of_touching_solids_leaves_the_first_untouched() {
     // 面でぴったり接しているが、中身は重なっていない。
     let b = BrepTransform::translate_solid(&a, Vec3::new(20.0, 0.0, 0.0));
 
-    let result = BooleanEngine::boolean_solids_exact_result(&a, &b, BooleanOpType::Difference, &tol)
-        .expect("subtracting a solid that only touches should succeed");
+    let result =
+        BooleanEngine::boolean_solids_exact_result(&a, &b, BooleanOpType::Difference, &tol)
+            .expect("subtracting a solid that only touches should succeed");
 
     assert_eq!(result.solids.len(), 1);
     let volume = result_volume(&result.solids);

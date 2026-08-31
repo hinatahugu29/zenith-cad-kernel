@@ -236,8 +236,7 @@ pub fn extract_loops(solver: &SketchSolver, tol: &Tolerance) -> Option<Vec<Sketc
         segments.push((ia, ib, None));
     }
     for arc in &solver.arcs {
-        let (Some(center), Some(start), Some(end)) =
-            (at(arc.center), at(arc.start), at(arc.end))
+        let (Some(center), Some(start), Some(end)) = (at(arc.center), at(arc.start), at(arc.end))
         else {
             return None;
         };
@@ -313,7 +312,10 @@ pub fn extract_loops(solver: &SketchSolver, tol: &Tolerance) -> Option<Vec<Sketc
             if node == first_node {
                 break;
             }
-            let Some(next) = around[node].iter().copied().find(|candidate| !used[*candidate])
+            let Some(next) = around[node]
+                .iter()
+                .copied()
+                .find(|candidate| !used[*candidate])
             else {
                 // 戻れませんでした。**輪になっていません。**
                 return None;
@@ -410,19 +412,16 @@ fn split_arc(arc: &LoopArc, from: Point2, to: Point2) -> Vec<(Point2, Point2)> {
             )
         }
     };
-    (0..pieces).map(|index| (at(index), at(index + 1))).collect()
+    (0..pieces)
+        .map(|index| (at(index), at(index + 1)))
+        .collect()
 }
 
 /// 円弧を**有理2次で厳密に**張る。
 ///
 /// 半周以上は重みが 0 以下になるので張れません。**割ってください**——
 /// 近似で誤魔化すより、断るほうが正しい形です。
-fn arc_curve(
-    arc: &LoopArc,
-    from: Point2,
-    to: Point2,
-    plane: &WorkPlane,
-) -> Option<NurbsCurve3> {
+fn arc_curve(arc: &LoopArc, from: Point2, to: Point2, plane: &WorkPlane) -> Option<NurbsCurve3> {
     let radius = (from - arc.center).norm();
     if !(radius > 0.0) {
         return None;
@@ -477,7 +476,7 @@ pub fn extrude_sketch(
         return Err("高さが 0 です".to_string());
     }
     let outline = loops.into_iter().next().expect("1本").counterclockwise();
-    let wire = loop_to_wire(&outline, plane, tol)
-        .ok_or_else(|| "輪を 3D の輪にできません".to_string())?;
+    let wire =
+        loop_to_wire(&outline, plane, tol).ok_or_else(|| "輪を 3D の輪にできません".to_string())?;
     crate::ExtrudeBuilder::extrude_wire(&wire, plane.normal() * height, tol)
 }

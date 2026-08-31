@@ -63,7 +63,11 @@ fn main() {
         brep_volume(&a),
         mesh_volume(&a)
     );
-    println!("  B: {} face(s), brep {:.6}", b.outer_shell.faces.len(), brep_volume(&b));
+    println!(
+        "  B: {} face(s), brep {:.6}",
+        b.outer_shell.faces.len(),
+        brep_volume(&b)
+    );
 
     for (name, op) in [
         ("difference", BooleanOpType::Difference),
@@ -116,7 +120,12 @@ fn main() {
             }
             Err(err) => println!(
                 "      refused: {}",
-                err.split(';').next().unwrap_or(&err).chars().take(60).collect::<String>()
+                err.split(';')
+                    .next()
+                    .unwrap_or(&err)
+                    .chars()
+                    .take(60)
+                    .collect::<String>()
             ),
         }
     }

@@ -1,4 +1,6 @@
-use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, HoleBuilder, MassCalculator, PrimitiveBuilder};
+use zenith_algo::{
+    BooleanEngine, BooleanOpType, BrepTransform, HoleBuilder, MassCalculator, PrimitiveBuilder,
+};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 
@@ -20,7 +22,8 @@ fn test_drilled_box_side_slab_cut_matches_analytic_volume() {
     .expect("side slab cut difference on drilled box");
 
     assert_eq!(result.solids.len(), 1);
-    let volume = MassCalculator::compute_from_brep(&result.solids[0], &TessellationParams::default()).volume;
+    let volume =
+        MassCalculator::compute_from_brep(&result.solids[0], &TessellationParams::default()).volume;
 
     // 解析解: (30*30 - pi*5^2)*15 - (6*30*15) = 12321.902755 - 2700 = 9621.902755
     let expected = (30.0 * 30.0 - std::f64::consts::PI * 25.0) * 15.0 - (6.0 * 30.0 * 15.0);
@@ -49,7 +52,8 @@ fn test_drilled_box_corner_block_cut_matches_analytic_volume() {
     .expect("corner block cut difference on drilled box");
 
     assert_eq!(result.solids.len(), 1);
-    let volume = MassCalculator::compute_from_brep(&result.solids[0], &TessellationParams::default()).volume;
+    let volume =
+        MassCalculator::compute_from_brep(&result.solids[0], &TessellationParams::default()).volume;
 
     // 解析解: (30*30 - pi*5^2)*15 - (3*3*15) = 12321.902755 - 135 = 12186.902755
     let expected = (30.0 * 30.0 - std::f64::consts::PI * 25.0) * 15.0 - (3.0 * 3.0 * 15.0);

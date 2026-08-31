@@ -26,15 +26,14 @@ fn test_batch_boolean_four_bolt_holes_difference() {
         .collect();
 
     // 3. バッチブーリアン差分
-    let drilled_plate = BooleanEngine::boolean_solids_batch(
-        &plate,
-        &drills,
-        BooleanOpType::Difference,
-        &tol,
-    )
-    .expect("boolean_solids_batch 4 holes");
+    let drilled_plate =
+        BooleanEngine::boolean_solids_batch(&plate, &drills, BooleanOpType::Difference, &tol)
+            .expect("boolean_solids_batch 4 holes");
 
-    assert!(drilled_plate.is_topologically_valid(&tol), "drilled plate must be valid closed solid");
+    assert!(
+        drilled_plate.is_topologically_valid(&tol),
+        "drilled plate must be valid closed solid"
+    );
 
     let mass = MassCalculator::compute_from_brep(&drilled_plate, &params);
 
@@ -71,15 +70,13 @@ fn test_batch_boolean_multiple_ribs_union() {
     let ribs = vec![rib1, rib2];
 
     // 3. バッチブーリアン結合
-    let ribbed_part = BooleanEngine::boolean_solids_batch(
-        &base,
-        &ribs,
-        BooleanOpType::Union,
-        &tol,
-    )
-    .expect("boolean_solids_batch ribs union");
+    let ribbed_part = BooleanEngine::boolean_solids_batch(&base, &ribs, BooleanOpType::Union, &tol)
+        .expect("boolean_solids_batch ribs union");
 
-    assert!(ribbed_part.is_topologically_valid(&tol), "ribbed part must be valid closed solid");
+    assert!(
+        ribbed_part.is_topologically_valid(&tol),
+        "ribbed part must be valid closed solid"
+    );
 
     let mass = MassCalculator::compute_from_brep(&ribbed_part, &params);
 

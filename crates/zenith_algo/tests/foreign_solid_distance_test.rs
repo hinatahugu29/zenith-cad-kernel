@@ -64,14 +64,32 @@ fn the_untrimmed_sphere_says_which_points_are_inside() {
     let sphere = foreign_sphere();
     let tol = Tolerance::default();
 
-    assert_eq!(exact_inside(Point3::new(0.0, 0.0, 0.0), &sphere, &tol), Some(true));
-    assert_eq!(exact_inside(Point3::new(3.0, 4.0, 1.0), &sphere, &tol), Some(true));
-    assert_eq!(exact_inside(Point3::new(20.0, 0.0, 0.0), &sphere, &tol), Some(false));
-    assert_eq!(exact_inside(Point3::new(9.0, 9.0, 9.0), &sphere, &tol), Some(false));
+    assert_eq!(
+        exact_inside(Point3::new(0.0, 0.0, 0.0), &sphere, &tol),
+        Some(true)
+    );
+    assert_eq!(
+        exact_inside(Point3::new(3.0, 4.0, 1.0), &sphere, &tol),
+        Some(true)
+    );
+    assert_eq!(
+        exact_inside(Point3::new(20.0, 0.0, 0.0), &sphere, &tol),
+        Some(false)
+    );
+    assert_eq!(
+        exact_inside(Point3::new(9.0, 9.0, 9.0), &sphere, &tol),
+        Some(false)
+    );
 
     // 面のすぐ内と、すぐ外。**メッシュでは割れる幅**でも動かない。
-    assert_eq!(exact_inside(Point3::new(9.9998, 0.0, 0.0), &sphere, &tol), Some(true));
-    assert_eq!(exact_inside(Point3::new(10.0002, 0.0, 0.0), &sphere, &tol), Some(false));
+    assert_eq!(
+        exact_inside(Point3::new(9.9998, 0.0, 0.0), &sphere, &tol),
+        Some(true)
+    );
+    assert_eq!(
+        exact_inside(Point3::new(10.0002, 0.0, 0.0), &sphere, &tol),
+        Some(false)
+    );
 }
 
 /// 直方体の角の外。足はどの面のトリムにも落ちないので、境界の稜へ寄せる。
@@ -101,7 +119,10 @@ fn a_point_off_the_corner_of_a_box_still_has_a_foot() {
     assert_eq!(exact_inside(point, &unit, &tol), Some(false));
 
     // 中は中。
-    assert_eq!(exact_inside(Point3::new(4.5, 4.5, 4.5), &unit, &tol), Some(true));
+    assert_eq!(
+        exact_inside(Point3::new(4.5, 4.5, 4.5), &unit, &tol),
+        Some(true)
+    );
 }
 
 /// 回転面の**極**。最近点がちょうど極に来る配置。
@@ -122,14 +143,18 @@ fn a_point_on_the_axis_of_a_read_sphere_has_a_foot() {
         (Point3::new(0.0, 0.0, 5.0), 5.0, true),
         (Point3::new(0.0, 0.0, -5.0), 5.0, true),
     ] {
-        let projection =
-            nearest_boundary_projection(point, &sphere).expect("the pole is still a point of the face");
+        let projection = nearest_boundary_projection(point, &sphere)
+            .expect("the pole is still a point of the face");
         assert!(
             (projection.distance - distance).abs() < 1e-9,
             "{point:?}: expected {distance}, got {}",
             projection.distance
         );
-        assert_eq!(exact_inside(point, &sphere, &tol), Some(inside), "{point:?}");
+        assert_eq!(
+            exact_inside(point, &sphere, &tol),
+            Some(inside),
+            "{point:?}"
+        );
     }
 }
 
@@ -173,5 +198,8 @@ fn a_point_off_the_rim_of_a_read_cone_is_outside() {
     assert_eq!(exact_inside(point, &cone, &tol), Some(false));
 
     // 中は中。
-    assert_eq!(exact_inside(Point3::new(0.0, 0.0, 10.0), &cone, &tol), Some(true));
+    assert_eq!(
+        exact_inside(Point3::new(0.0, 0.0, 10.0), &cone, &tol),
+        Some(true)
+    );
 }

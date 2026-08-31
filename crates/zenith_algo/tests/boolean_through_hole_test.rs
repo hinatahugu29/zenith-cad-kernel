@@ -39,17 +39,13 @@ fn ring_and_rod() -> (Solid, Solid, f64, f64) {
         &PrimitiveBuilder::make_cylinder(4.0, 30.0).expect("bore"),
         Vec3::new(0.0, 0.0, -12.0),
     );
-    let ring = BooleanEngine::boolean_solids_exact_result(
-        &outer,
-        &bore,
-        BooleanOpType::Difference,
-        &tol,
-    )
-    .expect("the ring itself must build")
-    .solids
-    .into_iter()
-    .next()
-    .expect("one ring");
+    let ring =
+        BooleanEngine::boolean_solids_exact_result(&outer, &bore, BooleanOpType::Difference, &tol)
+            .expect("the ring itself must build")
+            .solids
+            .into_iter()
+            .next()
+            .expect("one ring");
 
     // 半径 3.6 < 4 なので、穴の壁にも届きません。
     let rod = BrepTransform::translate_solid(
@@ -64,7 +60,12 @@ fn ring_and_rod() -> (Solid, Solid, f64, f64) {
 
 fn run(a: &Solid, b: &Solid, op: BooleanOpType) -> Vec<Solid> {
     BooleanEngine::boolean_solids_exact_result(a, b, op, &Tolerance::default())
-        .unwrap_or_else(|err| panic!("{op:?} refused: {}", err.chars().take(120).collect::<String>()))
+        .unwrap_or_else(|err| {
+            panic!(
+                "{op:?} refused: {}",
+                err.chars().take(120).collect::<String>()
+            )
+        })
         .solids
 }
 

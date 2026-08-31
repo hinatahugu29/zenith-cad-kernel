@@ -9,9 +9,7 @@
 
 use std::f64::consts::PI;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -50,13 +48,7 @@ fn test_four_bolt_holes_in_a_plate() {
     let centres = [(15.0, 15.0), (65.0, 15.0), (65.0, 45.0), (15.0, 45.0)];
 
     for (index, (x, y)) in centres.iter().enumerate() {
-        plate = drill(
-            &plate,
-            radius,
-            60.0,
-            Vec3::new(*x, *y, -20.0),
-            &tol,
-        );
+        plate = drill(&plate, radius, 60.0, Vec3::new(*x, *y, -20.0), &tol);
 
         let expected = 80.0 * 60.0 * 20.0 - hole_volume * (index + 1) as f64;
         let actual = volume(&plate);
@@ -149,7 +141,10 @@ fn test_two_separate_holes_through_the_same_faces() {
         .map(|face| face.inner_wires.len())
         .max()
         .unwrap_or(0);
-    assert_eq!(top_holes, 2, "a face through which both holes pass has two loops");
+    assert_eq!(
+        top_holes, 2,
+        "a face through which both holes pass has two loops"
+    );
 }
 
 #[test]

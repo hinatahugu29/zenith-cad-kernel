@@ -121,7 +121,11 @@ fn main() {
             case.expected,
             result.min_distance,
             error,
-            if consistent { "consistent" } else { "INCONSISTENT" }
+            if consistent {
+                "consistent"
+            } else {
+                "INCONSISTENT"
+            }
         );
         if relative > 1e-3 {
             wrong += 1;
@@ -129,12 +133,18 @@ fn main() {
     }
 
     println!("{}", "-".repeat(110));
-    println!("{wrong} of {} cases miss the closed form by more than 0.1%", cases.len());
+    println!(
+        "{wrong} of {} cases miss the closed form by more than 0.1%",
+        cases.len()
+    );
 
     // 刻みの細かさは探索の出発点にしか効かないはず。答えが刻みで動くなら、
     // B-Rep へ詰める段が効いていない。
     println!();
-    println!("{:<34}{:>12}{:>12}{:>12}{:>12}", "case", "8x8", "16x16", "32x32", "spread");
+    println!(
+        "{:<34}{:>12}{:>12}{:>12}{:>12}",
+        "case", "8x8", "16x16", "32x32", "spread"
+    );
     println!("{}", "-".repeat(82));
     let mut unstable = 0;
     for case in &cases {
@@ -164,7 +174,10 @@ fn main() {
         }
     }
     println!("{}", "-".repeat(82));
-    println!("{unstable} of {} cases move when the tessellation changes", cases.len());
+    println!(
+        "{unstable} of {} cases move when the tessellation changes",
+        cases.len()
+    );
 
     if wrong > 0 || unstable > 0 {
         std::process::exit(1);

@@ -13,9 +13,18 @@ fn test_dxf_export_contains_lwpolyline() {
     let loops = vec![loop1];
     let dxf_str = DxfExporter::generate_dxf_string(&loops);
 
-    assert!(dxf_str.contains("LWPOLYLINE"), "DXF must contain LWPOLYLINE entity");
-    assert!(dxf_str.contains("AcDbPolyline"), "DXF must contain AcDbPolyline subclass");
-    assert!(dxf_str.contains("20.000000"), "DXF must contain coordinate 20.000000");
+    assert!(
+        dxf_str.contains("LWPOLYLINE"),
+        "DXF must contain LWPOLYLINE entity"
+    );
+    assert!(
+        dxf_str.contains("AcDbPolyline"),
+        "DXF must contain AcDbPolyline subclass"
+    );
+    assert!(
+        dxf_str.contains("20.000000"),
+        "DXF must contain coordinate 20.000000"
+    );
     assert!(dxf_str.ends_with("0\nEOF\n"), "DXF must terminate with EOF");
 }
 
@@ -43,8 +52,14 @@ fn test_dxf_export_layered_structure() {
 
     assert!(dxf_str.contains("OUTLINE"), "Must contain OUTLINE layer");
     assert!(dxf_str.contains("HOLE"), "Must contain HOLE layer");
-    assert!(dxf_str.contains("CONTINUOUS"), "Must define CONTINUOUS linetype");
-    assert!(dxf_str.contains("AC1015"), "Must define AutoCAD AC1015 version header");
+    assert!(
+        dxf_str.contains("CONTINUOUS"),
+        "Must define CONTINUOUS linetype"
+    );
+    assert!(
+        dxf_str.contains("AC1015"),
+        "Must define AutoCAD AC1015 version header"
+    );
 }
 
 /// 層は**向き**で決まる。索引ではない。
@@ -83,8 +98,16 @@ fn the_layer_follows_the_winding_not_the_position_in_the_list() {
     // 外形1つ・穴1つ。穴を**先に**渡しても、向きで正しく分かれる。
     let hole_first = vec![clockwise.clone(), counter_clockwise(0.0)];
     let dxf = DxfExporter::generate_dxf_string(&hole_first);
-    assert_eq!(layer_uses(&dxf, "OUTLINE"), 1, "the outer contour is on OUTLINE:\n{dxf}");
-    assert_eq!(layer_uses(&dxf, "HOLE"), 1, "the clockwise contour is the hole:\n{dxf}");
+    assert_eq!(
+        layer_uses(&dxf, "OUTLINE"),
+        1,
+        "the outer contour is on OUTLINE:\n{dxf}"
+    );
+    assert_eq!(
+        layer_uses(&dxf, "HOLE"),
+        1,
+        "the clockwise contour is the hole:\n{dxf}"
+    );
 }
 
 /// エンティティが使っている層の数を数える。TABLES の層定義は数えない。

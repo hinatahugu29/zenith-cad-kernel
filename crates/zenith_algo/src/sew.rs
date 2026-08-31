@@ -227,13 +227,7 @@ struct CanonicalEdge {
 
 impl CanonicalEdge {
     /// 同じ稜なら「向きが揃っているか」を返す。別の稜なら `None`。
-    fn matches(
-        &self,
-        start: usize,
-        end: usize,
-        samples: &[Point3],
-        tol: f64,
-    ) -> Option<bool> {
+    fn matches(&self, start: usize, end: usize, samples: &[Point3], tol: f64) -> Option<bool> {
         if samples.len() != self.samples.len() {
             return None;
         }

@@ -161,7 +161,10 @@ impl SlotRim {
         }
 
         let radius = arcs[0].2;
-        if arcs.iter().any(|(_, _, r)| (*r - radius).abs() > 1e-4 * radius.max(1.0)) {
+        if arcs
+            .iter()
+            .any(|(_, _, r)| (*r - radius).abs() > 1e-4 * radius.max(1.0))
+        {
             return None;
         }
 
@@ -196,7 +199,9 @@ impl SlotRim {
         let side0 = &faces[side_indices[0]];
         let height = match &side0.geometry {
             FaceGeometry::Plane(p) => p.v_axis.norm(),
-            FaceGeometry::Nurbs(n) => (n.control_points[0][1].point - n.control_points[0][0].point).norm(),
+            FaceGeometry::Nurbs(n) => {
+                (n.control_points[0][1].point - n.control_points[0][0].point).norm()
+            }
             _ => 10.0,
         };
 
@@ -242,7 +247,10 @@ impl SlotRim {
 
         let pt_in = |local_x: f64, local_y: f64, local_z: f64| {
             // center は天面 (z=H) にあるので、local_z は天面からの相対高さ (z - H)
-            self.center + self.axis_x * local_x + self.axis_y * local_y + self.axis_z * (local_z - h_top)
+            self.center
+                + self.axis_x * local_x
+                + self.axis_y * local_y
+                + self.axis_z * (local_z - h_top)
         };
 
         // ローカル (x, y) 座標
@@ -324,22 +332,10 @@ impl SlotRim {
                 (edge_b, edge_c, edge_t)
             } else {
                 let ((cx_out, cy_out), (cx_in, cy_in)) = match i {
-                    1 => (
-                        (l_half + r_out, -r_out),
-                        (l_half + r_in, -r_in),
-                    ),
-                    2 => (
-                        (l_half + r_out, r_out),
-                        (l_half + r_in, r_in),
-                    ),
-                    4 => (
-                        (-l_half - r_out, r_out),
-                        (-l_half - r_in, r_in),
-                    ),
-                    5 => (
-                        (-l_half - r_out, -r_out),
-                        (-l_half - r_in, -r_in),
-                    ),
+                    1 => ((l_half + r_out, -r_out), (l_half + r_in, -r_in)),
+                    2 => ((l_half + r_out, r_out), (l_half + r_in, r_in)),
+                    4 => ((-l_half - r_out, r_out), (-l_half - r_in, r_in)),
+                    5 => ((-l_half - r_out, -r_out), (-l_half - r_in, -r_in)),
                     _ => unreachable!(),
                 };
 
@@ -580,12 +576,8 @@ impl SlotRim {
         }
 
         // 3. 短縮された天面 (正順 0..5)
-        let plane_t = PlaneSurface3::new(
-            pt_in(0.0, 0.0, h_top),
-            self.axis_x,
-            self.axis_y,
-        )
-        .ok_or("Failed to create top plane")?;
+        let plane_t = PlaneSurface3::new(pt_in(0.0, 0.0, h_top), self.axis_x, self.axis_y)
+            .ok_or("Failed to create top plane")?;
         let wire_t = Wire::new(vec![
             OrientedEdge::forward(et[0].clone()),
             OrientedEdge::forward(et[1].clone()),

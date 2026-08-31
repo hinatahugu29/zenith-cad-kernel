@@ -107,9 +107,15 @@ fn test_a_converted_planar_face_keeps_its_pcurve_on_its_edges() {
 fn test_our_own_curved_solids_keep_their_pcurves_on_their_edges() {
     // 自前で作った立体も同じ物差しで測る。読み込んだ形状だけの話ではない。
     let subjects: [(&str, Solid); 4] = [
-        ("cylinder", PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap()),
+        (
+            "cylinder",
+            PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
+        ),
         ("sphere", PrimitiveBuilder::make_sphere(10.0).unwrap()),
-        ("cone", PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap()),
+        (
+            "cone",
+            PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap(),
+        ),
         ("torus", PrimitiveBuilder::make_torus(12.0, 4.0).unwrap()),
     ];
 

@@ -242,4 +242,3 @@ impl ShellBuilder {
         crate::validated_solid(shell)
     }
 }
-

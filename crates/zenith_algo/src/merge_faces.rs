@@ -225,8 +225,8 @@ fn merge_group(faces: &[Face], members: &[usize], tol: &Tolerance) -> Result<Fac
     // 塊の内側で2回使われている稜は、併合後は内部の線になるので落とす
     let mut counts: BTreeMap<u64, usize> = BTreeMap::new();
     for index in members {
-        for wire in std::iter::once(&faces[*index].outer_wire)
-            .chain(faces[*index].inner_wires.iter())
+        for wire in
+            std::iter::once(&faces[*index].outer_wire).chain(faces[*index].inner_wires.iter())
         {
             for oriented in &wire.edges {
                 *counts.entry(oriented.edge.id).or_insert(0) += 1;
@@ -242,8 +242,8 @@ fn merge_group(faces: &[Face], members: &[usize], tol: &Tolerance) -> Result<Fac
 
     let mut boundary: Vec<OrientedEdge> = Vec::new();
     for index in members {
-        for wire in std::iter::once(&faces[*index].outer_wire)
-            .chain(faces[*index].inner_wires.iter())
+        for wire in
+            std::iter::once(&faces[*index].outer_wire).chain(faces[*index].inner_wires.iter())
         {
             for oriented in &wire.edges {
                 if counts[&oriented.edge.id] == 1 {

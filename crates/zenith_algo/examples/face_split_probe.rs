@@ -17,19 +17,15 @@
 use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2};
 
 use zenith_algo::{FaceSplitter, MassCalculator};
-use zenith_tess::TessellationParams;
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, NurbsSurface3};
 use zenith_math::{Point3, Tolerance, Vec3};
+use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Vertex, Wire};
 
 /// 半径 `r`、高さ `0..h` の円柱側面のうち、0度から90度の四半パッチ。
 fn cylinder_quarter(r: f64, h: f64) -> (NurbsSurface3, Face) {
     let w = FRAC_1_SQRT_2;
-    let ring = [
-        (r, 0.0, 1.0),
-        (r, r, w),
-        (0.0, r, 1.0),
-    ];
+    let ring = [(r, 0.0, 1.0), (r, r, w), (0.0, r, 1.0)];
     let grid: Vec<Vec<ControlPoint3>> = ring
         .iter()
         .map(|(x, y, weight)| {
@@ -373,7 +369,12 @@ fn main() {
                 let summed: f64 = areas_3d(&pieces).iter().sum();
                 let original_3d =
                     MassCalculator::compute_face_integral(face, &TessellationParams::default()).0;
-                let bad = report.area_residual > 1e-6 || report.cuts_refused > 0;
+                // **残差を読む前に、それが測れた数かを見ます**（4-215）。
+                // p-curve の取れない片が出ていたら、面積は 3D の受け皿に
+                // 落ちていて、そこは**トリムを知らない素のパッチ**を積みます。
+                let bad = report.unmeasurable_piece.is_some()
+                    || report.area_residual > 1e-6
+                    || report.cuts_refused > 0;
                 if bad {
                     multi_problems += 1;
                 } else {
@@ -388,6 +389,12 @@ fn main() {
                     original_3d,
                     report.area_residual
                 );
+                if let Some(index) = report.unmeasurable_piece {
+                    println!(
+                        "{:>46}片 {index} の p-curve が取れないので、上の残差は測れた数ではありません",
+                        ""
+                    );
+                }
                 for reason in report.refusals.iter().take(2) {
                     println!("{:>46}{}", "", reason.chars().take(58).collect::<String>());
                 }
@@ -403,5 +410,4 @@ fn main() {
         "{multi_clean} of {} multi-cut faces are clean, {multi_problems} with problems",
         multi.len()
     );
-
 }

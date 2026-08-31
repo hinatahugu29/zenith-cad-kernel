@@ -159,10 +159,12 @@ impl InterferenceChecker {
         let distance = dist_res.min_distance;
         if distance <= tol.linear {
             // 最近傍点が相手ソリッドの内部（深さ > tol.linear）に入っていれば浅い食い込み（Clash）
-            let in_b = crate::BooleanEngine::is_point_inside_mesh(dist_res.closest_point_a, &mesh_b)
-                && distance_to_mesh_point(dist_res.closest_point_a, &mesh_b) > tol.linear;
-            let in_a = crate::BooleanEngine::is_point_inside_mesh(dist_res.closest_point_b, &mesh_a)
-                && distance_to_mesh_point(dist_res.closest_point_b, &mesh_a) > tol.linear;
+            let in_b =
+                crate::BooleanEngine::is_point_inside_mesh(dist_res.closest_point_a, &mesh_b)
+                    && distance_to_mesh_point(dist_res.closest_point_a, &mesh_b) > tol.linear;
+            let in_a =
+                crate::BooleanEngine::is_point_inside_mesh(dist_res.closest_point_b, &mesh_a)
+                    && distance_to_mesh_point(dist_res.closest_point_b, &mesh_a) > tol.linear;
 
             if in_b || in_a {
                 InterferenceReport {
@@ -218,7 +220,10 @@ impl InterferenceChecker {
                 crate::MassCalculator::compute_volume_from_brep(&intersection_solid, &params);
             if overlap > 0.0 {
                 report.overlap_volume = overlap;
-                report.message = format!("Solids overlap by exact {:.6} mm^3 (B-Rep intersection)", overlap);
+                report.message = format!(
+                    "Solids overlap by exact {:.6} mm^3 (B-Rep intersection)",
+                    overlap
+                );
                 return (report, Some(intersection_solid));
             }
         }
@@ -342,7 +347,10 @@ fn distance_to_mesh_point(point: Point3, mesh: &TriangleMesh) -> f64 {
         let d21 = v2.dot(&v1);
         let denom = d00 * d11 - d01 * d01;
         let (u, v) = if denom.abs() > 1e-18 {
-            ((d11 * d20 - d01 * d21) / denom, (d00 * d21 - d01 * d20) / denom)
+            (
+                (d11 * d20 - d01 * d21) / denom,
+                (d00 * d21 - d01 * d20) / denom,
+            )
         } else {
             (0.0, 0.0)
         };

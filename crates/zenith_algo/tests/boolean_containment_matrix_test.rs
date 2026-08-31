@@ -16,9 +16,7 @@
 
 use std::f64::consts::PI;
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -148,7 +146,9 @@ fn every_contained_pair_matches_the_closed_form_for_all_three_operations() {
         "{} of {checked} contained cases are wrong:
 {}",
         failures.len(),
-        failures.join("
-")
+        failures.join(
+            "
+"
+        )
     );
 }

@@ -5,9 +5,9 @@
 //! path - their writer, our reader, our writer, their reader - is exercised at
 //! once.
 
-use zenith_algo::StepInterop;
 use std::fs;
 use std::path::Path;
+use zenith_algo::StepInterop;
 
 use zenith_algo::MassCalculator;
 use zenith_io::StepImporter;
@@ -51,7 +51,10 @@ fn main() {
         let solids = match StepImporter::import_solids_from_file(&source) {
             Ok(solids) => solids,
             Err(err) => {
-                println!("{name:<16} FAILED: {}", err.chars().take(60).collect::<String>());
+                println!(
+                    "{name:<16} FAILED: {}",
+                    err.chars().take(60).collect::<String>()
+                );
                 continue;
             }
         };

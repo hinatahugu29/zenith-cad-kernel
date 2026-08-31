@@ -20,7 +20,8 @@ fn shifted(solid: &zenith_topo::Solid, x: f64, y: f64, z: f64) -> zenith_topo::S
 fn solids_that_are_apart_are_reported_apart_with_their_real_distance() {
     let tol = Tolerance::default();
 
-    let report = InterferenceChecker::check(&cube(20.0), &shifted(&cube(20.0), 50.0, 0.0, 0.0), &tol);
+    let report =
+        InterferenceChecker::check(&cube(20.0), &shifted(&cube(20.0), 50.0, 0.0, 0.0), &tol);
     assert_eq!(report.status, ClashStatus::Clearance);
     assert!(
         (report.min_distance - 30.0).abs() < 1e-9,
@@ -69,7 +70,8 @@ fn a_box_whose_corner_misses_a_sphere_is_not_a_clash() {
 #[test]
 fn solids_that_share_a_face_are_touching_and_not_clashing() {
     let tol = Tolerance::default();
-    let report = InterferenceChecker::check(&cube(20.0), &shifted(&cube(20.0), 20.0, 0.0, 0.0), &tol);
+    let report =
+        InterferenceChecker::check(&cube(20.0), &shifted(&cube(20.0), 20.0, 0.0, 0.0), &tol);
     assert_eq!(report.status, ClashStatus::Touching);
     assert_eq!(report.min_distance, 0.0);
     assert_eq!(report.overlap_volume, 0.0);
@@ -80,11 +82,8 @@ fn overlapping_solids_report_the_volume_they_share() {
     let tol = Tolerance::default();
 
     // 角で 10^3 だけ重なる2つの立方体。
-    let report = InterferenceChecker::check(
-        &cube(20.0),
-        &shifted(&cube(20.0), 10.0, 10.0, 10.0),
-        &tol,
-    );
+    let report =
+        InterferenceChecker::check(&cube(20.0), &shifted(&cube(20.0), 10.0, 10.0, 10.0), &tol);
     assert_eq!(report.status, ClashStatus::Clash);
     assert!(
         (report.overlap_volume - 1000.0).abs() / 1000.0 < 0.05,
@@ -142,9 +141,8 @@ fn the_reported_distance_does_not_depend_on_the_sampling() {
     let truth = 27.0f64.sqrt() - 5.0;
 
     for divisions in [8usize, 16, 32] {
-        let measured =
-            InterferenceChecker::check_with_divisions(&sphere, &boxed, divisions, &tol)
-                .min_distance;
+        let measured = InterferenceChecker::check_with_divisions(&sphere, &boxed, divisions, &tol)
+            .min_distance;
         assert!(
             (measured - truth).abs() < 1e-9,
             "at {divisions} divisions the gap read {measured}, not {truth}"
@@ -163,7 +161,15 @@ fn test_interference_checker_check_exact_returns_exact_brep_solid() {
     assert!(clash_solid.is_some(), "clash solid should be extracted");
 
     let solid = clash_solid.unwrap();
-    assert!(solid.is_topologically_valid(&tol), "clash solid must be valid solid");
+    assert!(
+        solid.is_topologically_valid(&tol),
+        "clash solid must be valid solid"
+    );
     let diff = (report.overlap_volume - 1000.0).abs();
-    assert!(diff < 1e-6, "exact overlap volume should be 1000.0, got {}, diff {}", report.overlap_volume, diff);
+    assert!(
+        diff < 1e-6,
+        "exact overlap volume should be 1000.0, got {}, diff {}",
+        report.overlap_volume,
+        diff
+    );
 }

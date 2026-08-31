@@ -141,9 +141,8 @@ fn bounds_of(mesh: &TriangleMesh) -> Vec<Bound> {
                 mesh.positions[triangle[1] as usize],
                 mesh.positions[triangle[2] as usize],
             ];
-            let centre = Point3::from(
-                (corners[0].coords + corners[1].coords + corners[2].coords) / 3.0,
-            );
+            let centre =
+                Point3::from((corners[0].coords + corners[1].coords + corners[2].coords) / 3.0);
             let radius = corners
                 .iter()
                 .map(|corner| (corner - centre).norm())
@@ -198,12 +197,7 @@ fn triangle_distance(a: &[Point3; 3], b: &[Point3; 3]) -> (f64, Point3, Point3) 
 
     for i in 0..3 {
         for j in 0..3 {
-            let (distance, pa, pb) = segment_distance(
-                a[i],
-                a[(i + 1) % 3],
-                b[j],
-                b[(j + 1) % 3],
-            );
+            let (distance, pa, pb) = segment_distance(a[i], a[(i + 1) % 3], b[j], b[(j + 1) % 3]);
             if distance < best {
                 best = distance;
                 best_a = pa;
@@ -232,12 +226,7 @@ fn triangle_distance(a: &[Point3; 3], b: &[Point3; 3]) -> (f64, Point3, Point3) 
     (best, best_a, best_b)
 }
 
-fn segment_distance(
-    p0: Point3,
-    p1: Point3,
-    q0: Point3,
-    q1: Point3,
-) -> (f64, Point3, Point3) {
+fn segment_distance(p0: Point3, p1: Point3, q0: Point3, q1: Point3) -> (f64, Point3, Point3) {
     let d1 = p1 - p0;
     let d2 = q1 - q0;
     let r = p0 - q0;
@@ -449,10 +438,7 @@ pub struct BoundaryProjection {
 ///
 /// 外向き法線は支持曲面の法線を面の向きで反転したもの。テッセレーションが
 /// 三角形の向きを決めるときと同じ規則（`zenith_tess` の `oriented_normal`）。
-pub fn nearest_boundary_projection(
-    point: Point3,
-    solid: &Solid,
-) -> Option<BoundaryProjection> {
+pub fn nearest_boundary_projection(point: Point3, solid: &Solid) -> Option<BoundaryProjection> {
     boundary_projections(point, solid)
         .into_iter()
         .reduce(|best, candidate| {
@@ -637,4 +623,3 @@ fn point_in_loop(pcurve_loop: &zenith_topo::FacePcurveLoop, uv: Point2) -> bool 
     }
     inside
 }
-

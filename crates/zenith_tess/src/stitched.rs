@@ -142,7 +142,10 @@ fn explain_face_owners(mesh: &TriangleMesh, owners: &[(u64, std::ops::Range<usiz
     let bad: Vec<_> = uses.iter().filter(|(_, tris)| tris.len() != 2).collect();
     eprintln!("OWNERWHY 非多様体の稜 {} 本", bad.len());
     for (id, range) in owners {
-        eprintln!("OWNERWHY   面 {id} の三角形は {}..{}", range.start, range.end);
+        eprintln!(
+            "OWNERWHY   面 {id} の三角形は {}..{}",
+            range.start, range.end
+        );
     }
     let mut pairs: BTreeMap<Vec<Option<u64>>, usize> = BTreeMap::new();
     for (_, tris) in &bad {
@@ -586,8 +589,7 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
         }
 
         if points.len() > 1
-            && (points[points.len() - 1] - points[0]).norm()
-                <= crate::surface_tess::WELD_TOLERANCE
+            && (points[points.len() - 1] - points[0]).norm() <= crate::surface_tess::WELD_TOLERANCE
         {
             uv.pop();
             points.pop();
@@ -708,9 +710,7 @@ fn patch_mesh(
                             if range.contains(&index) {
                                 let offset = index - range.start;
                                 let mut start = 0usize;
-                                for (edge, segments) in
-                                    rings[ring].segments.iter().enumerate()
-                                {
+                                for (edge, segments) in rings[ring].segments.iter().enumerate() {
                                     if offset < start + *segments {
                                         return format!(
                                             "ring {ring} 位置 {offset}/{}（{edge} 本目の稜の {} 点目）",
@@ -720,16 +720,15 @@ fn patch_mesh(
                                     }
                                     start += *segments;
                                 }
-                                return format!("ring {ring} 位置 {offset}/{}（稜の外）", range.len());
+                                return format!(
+                                    "ring {ring} 位置 {offset}/{}（稜の外）",
+                                    range.len()
+                                );
                             }
                         }
                         "不明".to_string()
                     };
-                    eprintln!(
-                        "TESSWHY     重複: {} と {}",
-                        place(left),
-                        place(right)
-                    );
+                    eprintln!("TESSWHY     重複: {} と {}", place(left), place(right));
                 }
             }
         }
@@ -852,8 +851,16 @@ fn patch_mesh(
                 let used = |vertex: usize| triangles.iter().any(|t| t.contains(&vertex));
                 eprintln!(
                     "EARCUTWHY       端の点は使われているか: [{a}] {}、[{b}] {}",
-                    if used(a) { "使われている" } else { "**使われていない**" },
-                    if used(b) { "使われている" } else { "**使われていない**" }
+                    if used(a) {
+                        "使われている"
+                    } else {
+                        "**使われていない**"
+                    },
+                    if used(b) {
+                        "使われている"
+                    } else {
+                        "**使われていない**"
+                    }
                 );
                 eprintln!(
                     "EARCUTWHY     欠けた辺 [{a}]->[{b}]  uv ({:.9},{:.9})->({:.9},{:.9})  長さ {:.3e}",
@@ -876,7 +883,13 @@ fn patch_mesh(
                 if let (Some(pa), Some(pb)) = (fixed[a], fixed[b]) {
                     eprintln!(
                         "EARCUTWHY       3D ({:.6},{:.6},{:.6})->({:.6},{:.6},{:.6}) 長さ {:.3e}",
-                        pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, (pb - pa).norm()
+                        pa.x,
+                        pa.y,
+                        pa.z,
+                        pb.x,
+                        pb.y,
+                        pb.z,
+                        (pb - pa).norm()
                     );
                 }
                 // **その辺を「またいでいる」三角形を出します。**
@@ -1118,7 +1131,8 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
     let cell_coord = |v: f64| (v / cell_size).floor() as i64;
     let cell_key = |p: Point3| (cell_coord(p.x), cell_coord(p.y), cell_coord(p.z));
 
-    let mut grid: std::collections::HashMap<(i64, i64, i64), Vec<u32>> = std::collections::HashMap::new();
+    let mut grid: std::collections::HashMap<(i64, i64, i64), Vec<u32>> =
+        std::collections::HashMap::new();
     let mut remap = vec![0u32; mesh.positions.len()];
     let mut positions = Vec::new();
     let mut normals = Vec::new();
@@ -1550,7 +1564,11 @@ fn split_edge_carrying_point(
             if (here - (from + along * t)).norm() > 1e-9 * length.max(1.0) {
                 continue;
             }
-            if best.as_ref().map(|(worst, _)| length < *worst).unwrap_or(true) {
+            if best
+                .as_ref()
+                .map(|(worst, _)| length < *worst)
+                .unwrap_or(true)
+            {
                 best = Some((length, (p, q)));
             }
         }
@@ -1684,8 +1702,16 @@ fn force_missing_boundary_edges(
             if new_left * area_left <= 0.0 || new_right * area_left <= 0.0 {
                 continue;
             }
-            triangles[left] = if area_left > 0.0 { [c, d, q] } else { [d, c, q] };
-            triangles[right] = if area_left > 0.0 { [d, c, p] } else { [c, d, p] };
+            triangles[left] = if area_left > 0.0 {
+                [c, d, q]
+            } else {
+                [d, c, q]
+            };
+            triangles[right] = if area_left > 0.0 {
+                [d, c, p]
+            } else {
+                [c, d, p]
+            };
             flipped = true;
             break;
         }
@@ -1764,7 +1790,11 @@ fn fill_missing_boundary_edges(
                         triangle = [b, a, candidate];
                     }
                     let size = area.abs();
-                    if best.as_ref().map(|(worst, _)| size < *worst).unwrap_or(true) {
+                    if best
+                        .as_ref()
+                        .map(|(worst, _)| size < *worst)
+                        .unwrap_or(true)
+                    {
                         best = Some((size, triangle));
                     }
                 }
@@ -2027,8 +2057,16 @@ pub(crate) fn delaunay_flip_interior_edges(
                 continue;
             }
 
-            triangles[left] = if area_left > 0.0 { [c, d, b] } else { [d, c, b] };
-            triangles[right] = if area_left > 0.0 { [d, c, a] } else { [c, d, a] };
+            triangles[left] = if area_left > 0.0 {
+                [c, d, b]
+            } else {
+                [d, c, b]
+            };
+            triangles[right] = if area_left > 0.0 {
+                [d, c, a]
+            } else {
+                [c, d, a]
+            };
             created.insert(key(c, d));
             touched.insert(left);
             touched.insert(right);
@@ -2061,8 +2099,7 @@ pub(crate) fn delaunay_flip_interior_edges(
             .iter()
             .filter(|triangle| {
                 let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
-                let area =
-                    ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5;
+                let area = ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5;
                 let longest = [(a, b), (b, c), (c, a)]
                     .iter()
                     .map(|(p, q)| (q - p).norm())
@@ -2576,10 +2613,8 @@ fn repair_boundary_ears(
                 !is_bad(neighbour)
             })
         };
-        let candidates = || {
-            (0..triangles.len())
-                .filter(|index| !skipped.contains(index) && is_bad(*index))
-        };
+        let candidates =
+            || (0..triangles.len()).filter(|index| !skipped.contains(index) && is_bad(*index));
         let end_of_a_chain = candidates().find(|index| touches_a_good_neighbour(*index));
         if end_of_a_chain.is_none() && why && candidates().next().is_some() {
             // **端が1つも無い。** 悪い三角形が閉じた輪になっていると
@@ -2638,7 +2673,9 @@ fn repair_boundary_ears(
             let diagonal = if a < d { (a, d) } else { (d, a) };
             if edge_uses.contains_key(&diagonal) {
                 if why {
-                    eprintln!("TESSWHY   FLIPWHY {flat:?} 角 {corner}: 対角 {diagonal:?} は既にある");
+                    eprintln!(
+                        "TESSWHY   FLIPWHY {flat:?} 角 {corner}: 対角 {diagonal:?} は既にある"
+                    );
                 }
                 continue;
             }
@@ -3049,13 +3086,7 @@ mod tests {
 
     #[test]
     fn a_single_flap_with_two_overused_edges_is_removed() {
-        let mut triangles = vec![
-            [0, 1, 3],
-            [1, 0, 4],
-            [1, 2, 5],
-            [2, 1, 6],
-            [0, 1, 2],
-        ];
+        let mut triangles = vec![[0, 1, 3], [1, 0, 4], [1, 2, 5], [2, 1, 6], [0, 1, 2]];
 
         remove_redundant_flap_triangles(&mut triangles);
 
@@ -3067,7 +3098,11 @@ mod tests {
                 .flat_map(|triangle| {
                     (0..3).map(move |corner| {
                         let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
-                        if a < b { (a, b) } else { (b, a) }
+                        if a < b {
+                            (a, b)
+                        } else {
+                            (b, a)
+                        }
                     })
                 })
                 .filter(|edge| *edge == (left, right))

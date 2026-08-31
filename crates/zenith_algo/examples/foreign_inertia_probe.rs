@@ -217,16 +217,22 @@ fn main() {
         let mass_coarse = MassCalculator::compute_from_brep(&solid, &coarse);
         let mass_fine = MassCalculator::compute_from_brep(&solid, &fine);
 
-        let record = |(ok, rel): (bool, f64), checks: &mut usize, failures: &mut usize, worst: &mut f64| {
-            *checks += 1;
-            *worst = worst.max(rel);
-            if !ok {
-                *failures += 1;
-            }
-        };
+        let record =
+            |(ok, rel): (bool, f64), checks: &mut usize, failures: &mut usize, worst: &mut f64| {
+                *checks += 1;
+                *worst = worst.max(rel);
+                if !ok {
+                    *failures += 1;
+                }
+            };
 
         record(
-            row("volume", mass_coarse.volume, mass_fine.volume, subject.volume),
+            row(
+                "volume",
+                mass_coarse.volume,
+                mass_fine.volume,
+                subject.volume,
+            ),
             &mut checks,
             &mut failures,
             &mut worst,
@@ -278,12 +284,21 @@ fn main() {
         let inertia_coarse = mass_coarse.inertia_tensor();
         let inertia_fine = mass_fine.inertia_tensor();
         for (label, axis, want) in [
-            ("Ixx about the origin", 0usize, subject.inertia_about_origin.x),
+            (
+                "Ixx about the origin",
+                0usize,
+                subject.inertia_about_origin.x,
+            ),
             ("Iyy about the origin", 1, subject.inertia_about_origin.y),
             ("Izz about the origin", 2, subject.inertia_about_origin.z),
         ] {
             record(
-                row(label, inertia_coarse[axis][axis], inertia_fine[axis][axis], want),
+                row(
+                    label,
+                    inertia_coarse[axis][axis],
+                    inertia_fine[axis][axis],
+                    want,
+                ),
                 &mut checks,
                 &mut failures,
                 &mut worst,
@@ -299,14 +314,10 @@ fn main() {
         )
         .ok();
         if let Some(turned) = turned {
-            let turned_principal = MassCalculator::compute_from_brep(&turned, &fine)
-                .principal_moments();
+            let turned_principal =
+                MassCalculator::compute_from_brep(&turned, &fine).principal_moments();
             let mut sorted = [principal.x, principal.y, principal.z];
-            let mut turned_sorted = [
-                turned_principal.x,
-                turned_principal.y,
-                turned_principal.z,
-            ];
+            let mut turned_sorted = [turned_principal.x, turned_principal.y, turned_principal.z];
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
             turned_sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
             let scale = sorted[2].abs().max(1e-12);
@@ -333,9 +344,7 @@ fn main() {
     }
 
     println!("{}", "-".repeat(96));
-    println!(
-        "{checks} check(s), {failures} miss(es), worst relative error {worst:.2e}"
-    );
+    println!("{checks} check(s), {failures} miss(es), worst relative error {worst:.2e}");
     if failures > 0 {
         std::process::exit(1);
     }

@@ -160,7 +160,9 @@ fn filleting_the_rim_matches_the_closed_form() {
             report.predicted_removed_volume
         );
         assert!(
-            out.outer_shell.validate_closed(&Default::default()).is_valid(),
+            out.outer_shell
+                .validate_closed(&Default::default())
+                .is_valid(),
             "fillet {radius} produced a shell that does not close"
         );
     }

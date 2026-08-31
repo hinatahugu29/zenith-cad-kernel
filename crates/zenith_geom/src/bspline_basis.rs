@@ -54,7 +54,6 @@ impl KnotVector {
         Self { knots: new_knots }
     }
 
-
     /// パラメータ範囲の最大値
     pub fn end_param(&self, num_ctrl_pts: usize) -> f64 {
         self.knots[num_ctrl_pts]

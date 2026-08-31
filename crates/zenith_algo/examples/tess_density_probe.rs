@@ -21,9 +21,7 @@
 //!   ブーリアンで開けたものは、同じ形である。メッシュの重さが桁で違うなら、
 //!   その差は形ではなく経路から来ている。
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, HoleBuilder, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, HoleBuilder, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams};
 use zenith_topo::Solid;

@@ -93,10 +93,8 @@ impl IgesExporter {
 
         // Directory Entry は1エンティティにつき2行、Parameter Data は可変行数。
         // DE から PD の先頭行を指すので、PD の中身を先に組んで行数を数える。
-        let parameter_bodies: Vec<Vec<String>> = surfaces
-            .iter()
-            .map(Self::entity_128_parameters)
-            .collect();
+        let parameter_bodies: Vec<Vec<String>> =
+            surfaces.iter().map(Self::entity_128_parameters).collect();
 
         let mut directory = String::new();
         let mut parameters = String::new();
@@ -167,32 +165,32 @@ impl IgesExporter {
         // 既定（`,` と `;`）が使われる。OpenCASCADE 自身もそう書いている。
         let file_name = format!("{product_name}.igs");
         let fields: Vec<String> = vec![
-            String::new(),                                    // 1  パラメータ区切り（既定 ,）
-            String::new(),                                    // 2  レコード区切り（既定 ;）
-            hollerith(product_name),                          // 3  送り手の製品ID
-            hollerith(&file_name),                            // 4  ファイル名
-            hollerith("Zenith CAD Kernel"),                   // 5  ネイティブシステムID
-            hollerith("Zenith CAD Kernel 0.1.0"),             // 6  プリプロセッサ版
-            "32".to_string(),                                 // 7  整数のビット数
-            "308".to_string(),                                // 8  単精度の指数上限
-            "15".to_string(),                                 // 9  単精度の有効桁
-            "308".to_string(),                                // 10 倍精度の指数上限
-            "15".to_string(),                                 // 11 倍精度の有効桁
-            String::new(),                                    // 12 受け手の製品ID
-            "1.".to_string(),                                 // 13 モデル空間の倍率
-            "2".to_string(),                                  // 14 単位フラグ（2 = ミリメートル）
-            "2HMM".to_string(),                               // 15 単位名
-            "1".to_string(),                                  // 16 線幅の段階数
-            "0.01".to_string(),                               // 17 最大線幅
-            hollerith("20260822.120000"),                     // 18 ファイル生成日時
-            "1E-07".to_string(),                              // 19 最小分解能
-            real(extent.max(1.0)),                            // 20 座標の最大値
-            String::new(),                                    // 21 作成者
-            String::new(),                                    // 22 組織
-            "11".to_string(),                                 // 23 仕様の版（11 = IGES 5.3）
-            "0".to_string(),                                  // 24 製図規格
-            hollerith("20260822.120000"),                     // 25 モデル最終更新日時
-            String::new(),                                    // 26 プロトコル識別子
+            String::new(),                        // 1  パラメータ区切り（既定 ,）
+            String::new(),                        // 2  レコード区切り（既定 ;）
+            hollerith(product_name),              // 3  送り手の製品ID
+            hollerith(&file_name),                // 4  ファイル名
+            hollerith("Zenith CAD Kernel"),       // 5  ネイティブシステムID
+            hollerith("Zenith CAD Kernel 0.1.0"), // 6  プリプロセッサ版
+            "32".to_string(),                     // 7  整数のビット数
+            "308".to_string(),                    // 8  単精度の指数上限
+            "15".to_string(),                     // 9  単精度の有効桁
+            "308".to_string(),                    // 10 倍精度の指数上限
+            "15".to_string(),                     // 11 倍精度の有効桁
+            String::new(),                        // 12 受け手の製品ID
+            "1.".to_string(),                     // 13 モデル空間の倍率
+            "2".to_string(),                      // 14 単位フラグ（2 = ミリメートル）
+            "2HMM".to_string(),                   // 15 単位名
+            "1".to_string(),                      // 16 線幅の段階数
+            "0.01".to_string(),                   // 17 最大線幅
+            hollerith("20260822.120000"),         // 18 ファイル生成日時
+            "1E-07".to_string(),                  // 19 最小分解能
+            real(extent.max(1.0)),                // 20 座標の最大値
+            String::new(),                        // 21 作成者
+            String::new(),                        // 22 組織
+            "11".to_string(),                     // 23 仕様の版（11 = IGES 5.3）
+            "0".to_string(),                      // 24 製図規格
+            hollerith("20260822.120000"),         // 25 モデル最終更新日時
+            String::new(),                        // 26 プロトコル識別子
         ];
 
         let mut global = String::new();

@@ -10,19 +10,27 @@
 //! 二重に数えています。
 
 use zenith_algo::{FaceSplitter, MassCalculator};
-use zenith_tess::TessellationParams;
 use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3, PlaneSurface3};
 use zenith_math::{Point3, Tolerance, Vec3};
+use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Vertex, Wire};
 
 fn segment(from: Point3, to: Point3) -> Edge {
     let curve = NurbsCurve3::new(
         1,
-        vec![ControlPoint3::unweighted(from), ControlPoint3::unweighted(to)],
+        vec![
+            ControlPoint3::unweighted(from),
+            ControlPoint3::unweighted(to),
+        ],
         KnotVector::new(vec![0.0, 0.0, 1.0, 1.0]),
     )
     .expect("a straight edge");
-    Edge::new(curve, Vertex::from_point(from), Vertex::from_point(to), 1e-9)
+    Edge::new(
+        curve,
+        Vertex::from_point(from),
+        Vertex::from_point(to),
+        1e-9,
+    )
 }
 
 fn rectangle(half: f64, z: f64) -> Vec<Edge> {
@@ -50,7 +58,13 @@ fn planar_face(half: f64) -> Face {
             .map(OrientedEdge::forward)
             .collect(),
     );
-    Face::new(FaceGeometry::Plane(plane), wire, Vec::new(), zenith_topo::Orientation::Forward, 1e-9)
+    Face::new(
+        FaceGeometry::Plane(plane),
+        wire,
+        Vec::new(),
+        zenith_topo::Orientation::Forward,
+        1e-9,
+    )
 }
 
 /// 20 x 20 の正方形の真ん中に、6 x 6 の正方形のループを入れて割る。

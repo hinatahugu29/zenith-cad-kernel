@@ -34,7 +34,11 @@ fn volume_of(solid: &Solid) -> f64 {
 
 fn assert_closed(solid: &Solid, what: &str) {
     let report = solid.outer_shell.validate_closed(&Tolerance::default());
-    assert!(report.is_valid(), "{what} left an open shell: {:?}", report.errors);
+    assert!(
+        report.is_valid(),
+        "{what} left an open shell: {:?}",
+        report.errors
+    );
 }
 
 /// 稜の中点が `point` に最も近いブレンド可能な稜を選ぶ
@@ -94,7 +98,11 @@ fn filleting_a_box_edge_removes_the_volume_the_closed_form_says() {
                 .unwrap_or_else(|err| panic!("fillet r{radius}: {err}"));
 
         assert_closed(&solid, &format!("fillet r{radius}"));
-        assert_eq!(solid.outer_shell.faces.len(), 7, "one edge becomes one face");
+        assert_eq!(
+            solid.outer_shell.faces.len(),
+            7,
+            "one edge becomes one face"
+        );
 
         let expected_removed = 40.0 * radius * radius * (1.0 - FRAC_PI_4);
         assert!(
@@ -247,7 +255,10 @@ fn several_edges_can_be_blended_one_after_another() {
     .map(|point| edge_nearest(&boxed, *point))
     .collect();
     assert_eq!(
-        uprights.iter().collect::<std::collections::BTreeSet<_>>().len(),
+        uprights
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
         4,
         "the four uprights must be four distinct edges"
     );
@@ -294,7 +305,11 @@ fn a_concave_edge_is_refused_rather_than_blended_the_wrong_way() {
             }
         }
     }
-    assert_eq!(concave_ids.len(), 1, "there is one inside upright at the notch");
+    assert_eq!(
+        concave_ids.len(),
+        1,
+        "there is one inside upright at the notch"
+    );
 
     let error = EdgeBlender::fillet_edge(&l_shape, concave_ids[0], 2.0)
         .expect_err("a concave edge must be refused");

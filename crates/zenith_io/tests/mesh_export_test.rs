@@ -70,7 +70,8 @@ fn test_obj_export_to_file() {
     let mesh = make_test_mesh();
     let temp_dir = std::env::temp_dir();
     let obj_path = temp_dir.join("zenith_test_export.obj");
-    ObjExporter::export_to_file(&mesh, &obj_path, "TestQuad").expect("OBJ file export should succeed");
+    ObjExporter::export_to_file(&mesh, &obj_path, "TestQuad")
+        .expect("OBJ file export should succeed");
     let content = std::fs::read_to_string(&obj_path).expect("read OBJ string");
     assert!(content.contains("o TestQuad"));
     let _ = std::fs::remove_file(obj_path);

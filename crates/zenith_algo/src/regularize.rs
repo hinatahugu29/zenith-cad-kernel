@@ -404,7 +404,9 @@ impl Regularizer {
 
         let patches = match Self::grid_of_patches(surface, &u_cuts, &v_cuts) {
             Some(patches) => patches,
-            None => return FaceSplit::LeftAlone("the surface would not split at its knots".to_string()),
+            None => {
+                return FaceSplit::LeftAlone("the surface would not split at its knots".to_string())
+            }
         };
 
         // 面が持っていた辺を、パッチごとに割り当て直す。どのパッチにも入らない
@@ -618,7 +620,10 @@ impl Regularizer {
         let sample = |edge: &Edge, count: usize| -> Vec<Point3> {
             let (t0, t1) = edge.curve.param_range();
             (0..=count)
-                .map(|i| edge.curve.evaluate(t0 + (t1 - t0) * i as f64 / count as f64))
+                .map(|i| {
+                    edge.curve
+                        .evaluate(t0 + (t1 - t0) * i as f64 / count as f64)
+                })
                 .collect()
         };
         let left = sample(a, 6);
@@ -934,7 +939,10 @@ mod tests {
         let tol = Tolerance::default();
         let cases: Vec<(&str, Solid)> = vec![
             ("sphere", PrimitiveBuilder::make_sphere(10.0).unwrap()),
-            ("cylinder", PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap()),
+            (
+                "cylinder",
+                PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
+            ),
             ("box", PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap()),
         ];
 

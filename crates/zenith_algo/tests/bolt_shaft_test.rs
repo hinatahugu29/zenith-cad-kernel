@@ -6,15 +6,18 @@ use zenith_tess::TessellationParams;
 #[test]
 fn test_make_hex_bolt_matches_analytic_volume() {
     let tol = Tolerance::default();
-    let across_flats = 16.0;   // 二面幅 S = 16mm (M10ボルト頭相当)
-    let head_thickness = 6.4;  // 頭部厚み k = 6.4mm
-    let shank_radius = 5.0;    // 軸部半径 r = 5.0mm (直径 10mm)
-    let shank_length = 30.0;   // 軸部長 L = 30mm
+    let across_flats = 16.0; // 二面幅 S = 16mm (M10ボルト頭相当)
+    let head_thickness = 6.4; // 頭部厚み k = 6.4mm
+    let shank_radius = 5.0; // 軸部半径 r = 5.0mm (直径 10mm)
+    let shank_length = 30.0; // 軸部長 L = 30mm
 
     let bolt = BoltBuilder::make_hex_bolt(across_flats, head_thickness, shank_radius, shank_length)
         .expect("make_hex_bolt");
 
-    assert!(bolt.is_topologically_valid(&tol), "bolt must be valid closed solid");
+    assert!(
+        bolt.is_topologically_valid(&tol),
+        "bolt must be valid closed solid"
+    );
 
     let params = TessellationParams::default();
     let mass = MassCalculator::compute_from_brep(&bolt, &params);
@@ -41,10 +44,12 @@ fn test_make_stepped_shaft_matches_analytic_volume() {
     // 3段シャフト: 段1 (r=10, L=20), 段2 (r=15, L=30), 段3 (r=8, L=25)
     let sections = [(10.0, 20.0), (15.0, 30.0), (8.0, 25.0)];
 
-    let shaft = ShaftBuilder::make_stepped_shaft(&sections)
-        .expect("make_stepped_shaft");
+    let shaft = ShaftBuilder::make_stepped_shaft(&sections).expect("make_stepped_shaft");
 
-    assert!(shaft.is_topologically_valid(&tol), "stepped shaft must be valid closed solid");
+    assert!(
+        shaft.is_topologically_valid(&tol),
+        "stepped shaft must be valid closed solid"
+    );
 
     let params = TessellationParams::default();
     let mass = MassCalculator::compute_from_brep(&shaft, &params);
@@ -71,8 +76,7 @@ fn test_make_shaft_with_keyway_matches_analytic_volume() {
     let radius = 12.0;
     let length = 50.0;
 
-    let base_shaft = ShaftBuilder::make_stepped_shaft(&[(radius, length)])
-        .expect("base shaft");
+    let base_shaft = ShaftBuilder::make_stepped_shaft(&[(radius, length)]).expect("base shaft");
 
     let key_width = 6.0;
     let key_depth = 3.5;
@@ -89,7 +93,10 @@ fn test_make_shaft_with_keyway_matches_analytic_volume() {
     )
     .expect("make_shaft_with_keyway");
 
-    assert!(shaft_with_key.is_topologically_valid(&tol), "shaft with keyway must be valid closed solid");
+    assert!(
+        shaft_with_key.is_topologically_valid(&tol),
+        "shaft with keyway must be valid closed solid"
+    );
 
     let params = TessellationParams::default();
     let mass = MassCalculator::compute_from_brep(&shaft_with_key, &params);

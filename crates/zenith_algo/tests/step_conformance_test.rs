@@ -18,10 +18,7 @@ fn export(name: &str, solid: &zenith_topo::Solid) -> String {
 
 #[test]
 fn test_rational_curves_declare_the_full_complex_entity() {
-    let step = export(
-        "CYL",
-        &PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
-    );
+    let step = export("CYL", &PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap());
 
     assert!(
         step.contains("RATIONAL_B_SPLINE_CURVE"),
@@ -32,7 +29,9 @@ fn test_rational_curves_declare_the_full_complex_entity() {
     // CURVE() が欠けると OpenCASCADE が境界ループを捨てる。
     for occurrence in step.match_indices("RATIONAL_B_SPLINE_CURVE") {
         let prefix = &step[..occurrence.0];
-        let entity_start = prefix.rfind("( BOUNDED_CURVE()").expect("complex curve entity");
+        let entity_start = prefix
+            .rfind("( BOUNDED_CURVE()")
+            .expect("complex curve entity");
         let entity = &step[entity_start..occurrence.0];
         assert!(
             entity.contains(" CURVE() "),
@@ -65,10 +64,7 @@ fn test_rational_surfaces_declare_the_full_complex_entity() {
 fn test_planar_faces_bounded_by_arcs_are_exported_with_shared_edges() {
     // 円柱の端面は平面をスプライン円弧で囲んだ面。側面と同じ EDGE_CURVE を
     // 共有していないと、読み手が閉シェルを組み立てられない。
-    let step = export(
-        "CYL",
-        &PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
-    );
+    let step = export("CYL", &PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap());
 
     let edge_curve_count = step.matches("EDGE_CURVE(").count();
     let oriented_edge_count = step.matches("ORIENTED_EDGE(").count();
@@ -254,7 +250,10 @@ fn test_every_edge_carries_a_pcurve_for_each_face_that_uses_it() {
                 .and_then(|(_, rest)| rest.split_once("),"))
                 .map(|(list, _)| list)
                 .unwrap_or("");
-            let count = inside.split(',').filter(|part| part.trim().starts_with('#')).count();
+            let count = inside
+                .split(',')
+                .filter(|part| part.trim().starts_with('#'))
+                .count();
             assert_eq!(
                 count, 2,
                 "{name}: an edge is shared by two faces, so it needs two p-curves; \

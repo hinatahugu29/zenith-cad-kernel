@@ -10,8 +10,8 @@ fn test_triangular_rib() {
     let height = 25.0;
     let thickness = 6.0;
 
-    let solid = RibBuilder::make_triangular_rib(length, height, thickness, &tol)
-        .expect("triangular rib");
+    let solid =
+        RibBuilder::make_triangular_rib(length, height, thickness, &tol).expect("triangular rib");
 
     // 1. B-Rep 閉多様体検証
     assert!(

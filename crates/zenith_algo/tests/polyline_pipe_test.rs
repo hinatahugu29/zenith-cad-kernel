@@ -37,7 +37,6 @@ fn test_polyline_fillet_and_sweep_pipe_solid() {
     println!("Polyline Pipe Volume: {:.2} mm^3", mass.volume);
     assert!(mass.volume > 5000.0, "Pipe volume is too small");
 
-
     // STEP 出力テスト
     let step_str = StepExporter::export_solid_to_string(&solid, "ZENITH_POLYLINE_PIPE");
     assert!(step_str.contains("MANIFOLD_SOLID_BREP"));

@@ -53,10 +53,8 @@ fn skin_rows(
     for row in rows {
         let mut solved = vec![Point3::origin(); count];
         for axis in 0..3 {
-            let rhs = nalgebra::DVector::<f64>::from_iterator(
-                count,
-                row.iter().map(|cp| cp.point[axis]),
-            );
+            let rhs =
+                nalgebra::DVector::<f64>::from_iterator(count, row.iter().map(|cp| cp.point[axis]));
             let solution = decomposition
                 .solve(&rhs)
                 .ok_or_else(|| "Skinning interpolation matrix is singular".to_string())?;
@@ -196,7 +194,8 @@ impl SweepBuilder {
 
         // 1. 各象限 (quad 0..4) の制御点グリッド行を計算
         let weight = std::f64::consts::FRAC_1_SQRT_2;
-        let mut quad_rows: Vec<(Vec<ControlPoint3>, Vec<ControlPoint3>, Vec<ControlPoint3>)> = Vec::with_capacity(4);
+        let mut quad_rows: Vec<(Vec<ControlPoint3>, Vec<ControlPoint3>, Vec<ControlPoint3>)> =
+            Vec::with_capacity(4);
 
         for quad in 0..4 {
             let (ang0, ang1) = match quad {
@@ -239,12 +238,12 @@ impl SweepBuilder {
             sweep_knots = knots;
             skinned_quad_rows.push((skinned[0].clone(), skinned[1].clone(), skinned[2].clone()));
         }
-        let sweep_degree = if skinned_quad_rows[0].0.len() == n_sec && n_sec >= SWEEP_SKIN_DEGREE + 1
-        {
-            SWEEP_SKIN_DEGREE
-        } else {
-            1
-        };
+        let sweep_degree =
+            if skinned_quad_rows[0].0.len() == n_sec && n_sec >= SWEEP_SKIN_DEGREE + 1 {
+                SWEEP_SKIN_DEGREE
+            } else {
+                1
+            };
 
         // 2. 始点・終点リングの共有頂点 (4頂点ずつ)
         let mut vb = Vec::with_capacity(4);
@@ -337,7 +336,12 @@ impl SweepBuilder {
                 ],
                 KnotVector::clamped_uniform(2, 1),
             )?;
-            bot_spoke_edges.push(Edge::new(spoke_line, v_bot_center.clone(), v_q.clone(), 1e-6));
+            bot_spoke_edges.push(Edge::new(
+                spoke_line,
+                v_bot_center.clone(),
+                v_q.clone(),
+                1e-6,
+            ));
         }
 
         for quad in 0..4 {
@@ -349,7 +353,10 @@ impl SweepBuilder {
             // 3x2 有理 NURBS パッチ (U: 2次円弧 p_e -> p_s 3点, V: 1次放射 外周 -> 中心 2点)
             // 法線: (p_e -> p_s) x (外周 -> 中心) = -t0 (外向き法線)
             let row0 = vec![ControlPoint3::new(p_e, 1.0), ControlPoint3::new(ctr0, 1.0)];
-            let row1 = vec![ControlPoint3::new(corner, std::f64::consts::FRAC_1_SQRT_2), ControlPoint3::new(ctr0, std::f64::consts::FRAC_1_SQRT_2)];
+            let row1 = vec![
+                ControlPoint3::new(corner, std::f64::consts::FRAC_1_SQRT_2),
+                ControlPoint3::new(ctr0, std::f64::consts::FRAC_1_SQRT_2),
+            ];
             let row2 = vec![ControlPoint3::new(p_s, 1.0), ControlPoint3::new(ctr0, 1.0)];
 
             let surf = NurbsSurface3::new(
@@ -369,7 +376,6 @@ impl SweepBuilder {
             faces.push(Face::simple(FaceGeometry::Nurbs(surf), wire));
         }
 
-
         // 7. 終端面キャップ (4象限 NURBS パッチ)
         let (ctr1, _t1, _n1, _b1) = frames[n_sec - 1];
         let v_top_center = Vertex::new(ctr1, 1e-6);
@@ -384,7 +390,12 @@ impl SweepBuilder {
                 ],
                 KnotVector::clamped_uniform(2, 1),
             )?;
-            top_spoke_edges.push(Edge::new(spoke_line, v_top_center.clone(), v_q.clone(), 1e-6));
+            top_spoke_edges.push(Edge::new(
+                spoke_line,
+                v_top_center.clone(),
+                v_q.clone(),
+                1e-6,
+            ));
         }
 
         for quad in 0..4 {
@@ -394,7 +405,10 @@ impl SweepBuilder {
             let corner = ctr1 + (p_s - ctr1) + (p_e - ctr1);
 
             let row0 = vec![ControlPoint3::new(p_s, 1.0), ControlPoint3::new(ctr1, 1.0)];
-            let row1 = vec![ControlPoint3::new(corner, std::f64::consts::FRAC_1_SQRT_2), ControlPoint3::new(ctr1, std::f64::consts::FRAC_1_SQRT_2)];
+            let row1 = vec![
+                ControlPoint3::new(corner, std::f64::consts::FRAC_1_SQRT_2),
+                ControlPoint3::new(ctr1, std::f64::consts::FRAC_1_SQRT_2),
+            ];
             let row2 = vec![ControlPoint3::new(p_e, 1.0), ControlPoint3::new(ctr1, 1.0)];
 
             let surf = NurbsSurface3::new(
@@ -418,12 +432,6 @@ impl SweepBuilder {
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)
     }
-
-
-
-
-
-
 
     /// 任意の2D/3D閉断面ワイヤを3D NURBS軌道曲線（パス）に沿って掃引した完全閉B-Repソリッドを生成
 
@@ -505,11 +513,8 @@ impl SweepBuilder {
                     })
                     .collect();
 
-                let mapped_curve = NurbsCurve3::new(
-                    orig_curve.degree,
-                    mapped_cps,
-                    orig_curve.knots.clone(),
-                )?;
+                let mapped_curve =
+                    NurbsCurve3::new(orig_curve.degree, mapped_cps, orig_curve.knots.clone())?;
 
                 let v_s = vertex_matrix[i][j].clone();
                 let v_e = vertex_matrix[i][next_j].clone();
@@ -562,21 +567,30 @@ impl SweepBuilder {
 
         // 5. 始端面キャップ (Start Cap: PLANE, 外向き法線 -t0)
         let (ctr0, _t0, n0, b0) = frames[0];
-        let p_start_cap = PlaneSurface3::new(ctr0, b0, n0).ok_or("Failed to create start cap plane")?;
+        let p_start_cap =
+            PlaneSurface3::new(ctr0, b0, n0).ok_or("Failed to create start cap plane")?;
         let mut start_cap_edges = Vec::with_capacity(k);
         for j in (0..k).rev() {
             start_cap_edges.push(OrientedEdge::reversed(ring_edges_matrix[0][j].clone()));
         }
-        faces.push(Face::simple(FaceGeometry::Plane(p_start_cap), Wire::new(start_cap_edges)));
+        faces.push(Face::simple(
+            FaceGeometry::Plane(p_start_cap),
+            Wire::new(start_cap_edges),
+        ));
 
         // 6. 終端面キャップ (End Cap: PLANE, 外向き法線 +t1)
         let (ctr1, _t1, n1, b1) = frames[n_sec - 1];
         let p_end_cap = PlaneSurface3::new(ctr1, n1, b1).ok_or("Failed to create end cap plane")?;
         let mut end_cap_edges = Vec::with_capacity(k);
         for j in 0..k {
-            end_cap_edges.push(OrientedEdge::forward(ring_edges_matrix[n_sec - 1][j].clone()));
+            end_cap_edges.push(OrientedEdge::forward(
+                ring_edges_matrix[n_sec - 1][j].clone(),
+            ));
         }
-        faces.push(Face::simple(FaceGeometry::Plane(p_end_cap), Wire::new(end_cap_edges)));
+        faces.push(Face::simple(
+            FaceGeometry::Plane(p_end_cap),
+            Wire::new(end_cap_edges),
+        ));
 
         // 7. 閉シェル化とSolid検証
         let shell = Shell::closed(faces);

@@ -9,9 +9,7 @@
 //! **`volume > 0` では捕まりません**（`A + B` にも体積はあります）。
 //! ここは全部、閉じた式で押さえます。
 
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;

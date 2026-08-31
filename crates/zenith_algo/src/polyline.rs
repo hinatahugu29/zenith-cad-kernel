@@ -2,7 +2,6 @@ use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve3};
 use zenith_math::{Point3, Tolerance};
 use zenith_topo::{OrientedEdge, Solid, Vertex, Wire};
 
-
 /// 3D ポリラインおよび角丸め（フィレット）ポリラインモデリングビルダー
 pub struct PolylineBuilder;
 
@@ -131,7 +130,6 @@ impl PolylineBuilder {
         corner_radius: f64,
         _tol: &Tolerance,
     ) -> Result<Solid, String> {
-
         if radius <= 1e-6 {
             return Err("Pipe radius must be positive".to_string());
         }
@@ -200,7 +198,13 @@ impl PolylineBuilder {
         for segment in segments {
             length += match segment {
                 PathSegment::Line { start, end } => (*end - *start).norm(),
-                PathSegment::Arc { start, end, radius: r, center, .. } => {
+                PathSegment::Arc {
+                    start,
+                    end,
+                    radius: r,
+                    center,
+                    ..
+                } => {
                     let a = *start - *center;
                     let b = *end - *center;
                     let cosine = (a.dot(&b) / (a.norm() * b.norm())).clamp(-1.0, 1.0);
@@ -224,7 +228,6 @@ impl PolylineBuilder {
         if segments.is_empty() {
             return Err("No path segments generated".to_string());
         }
-
 
         // 閉断面ワイヤの構築
         let num_p = profile_pts.len();
@@ -250,7 +253,11 @@ impl PolylineBuilder {
             .max(1.0);
         let stations = Self::station_count(&segments, extent * 0.5);
 
-        crate::sweep::SweepBuilder::sweep_wire_along_curve(&profile_wire, &path_curve, stations, tol)
+        crate::sweep::SweepBuilder::sweep_wire_along_curve(
+            &profile_wire,
+            &path_curve,
+            stations,
+            tol,
+        )
     }
 }
-

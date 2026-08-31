@@ -224,27 +224,69 @@ fn main() {
     };
 
     let cases: Vec<(&str, Solid, Solid)> = vec![
-        ("box x box (corner)", boxa.clone(), shifted(&boxa, 10.0, 10.0, 10.0)),
-        ("box x cylinder", boxa.clone(), shifted(&cylinder, 5.0, 5.0, -10.0)),
-        ("box x sphere", boxa.clone(), shifted(&sphere, 10.0, 10.0, 15.0)),
+        (
+            "box x box (corner)",
+            boxa.clone(),
+            shifted(&boxa, 10.0, 10.0, 10.0),
+        ),
+        (
+            "box x cylinder",
+            boxa.clone(),
+            shifted(&cylinder, 5.0, 5.0, -10.0),
+        ),
+        (
+            "box x sphere",
+            boxa.clone(),
+            shifted(&sphere, 10.0, 10.0, 15.0),
+        ),
         ("box x cone", boxa.clone(), shifted(&cone, 8.0, 8.0, 5.0)),
         ("box x torus", boxa.clone(), shifted(&torus, 5.0, 5.0, 10.0)),
-        ("cylinder x sphere", cylinder.clone(), shifted(&sphere, 3.0, 0.0, 0.0)),
-        ("cylinder x cone", cylinder.clone(), shifted(&cone, 3.0, 0.0, -5.0)),
-        ("cylinder x torus", cylinder.clone(), shifted(&torus, 0.0, 0.0, 0.0)),
-        ("sphere x cone", sphere.clone(), shifted(&cone, 0.0, 0.0, -5.0)),
-        ("sphere x torus", sphere.clone(), shifted(&torus, 0.0, 0.0, 0.0)),
-        ("cone x torus (rim on the tube)", cone.clone(), shifted(&torus, 10.0, 0.0, 0.0)),
-        ("cone x torus (lifted)", cone.clone(), shifted(&torus, 10.0, 0.0, 3.0)),
-        ("torus x torus", torus.clone(), shifted(&torus, 12.0, 0.0, 0.0)),
+        (
+            "cylinder x sphere",
+            cylinder.clone(),
+            shifted(&sphere, 3.0, 0.0, 0.0),
+        ),
+        (
+            "cylinder x cone",
+            cylinder.clone(),
+            shifted(&cone, 3.0, 0.0, -5.0),
+        ),
+        (
+            "cylinder x torus",
+            cylinder.clone(),
+            shifted(&torus, 0.0, 0.0, 0.0),
+        ),
+        (
+            "sphere x cone",
+            sphere.clone(),
+            shifted(&cone, 0.0, 0.0, -5.0),
+        ),
+        (
+            "sphere x torus",
+            sphere.clone(),
+            shifted(&torus, 0.0, 0.0, 0.0),
+        ),
+        (
+            "cone x torus (rim on the tube)",
+            cone.clone(),
+            shifted(&torus, 10.0, 0.0, 0.0),
+        ),
+        (
+            "cone x torus (lifted)",
+            cone.clone(),
+            shifted(&torus, 10.0, 0.0, 3.0),
+        ),
+        (
+            "torus x torus",
+            torus.clone(),
+            shifted(&torus, 12.0, 0.0, 0.0),
+        ),
         // **4-209 で壊れる3件**。面をまたいで境界の点が食い違うところを
         // 探しています。
         ("box x cone (generatrix in a face)", boxa.clone(), {
             let half_angle = (10f64 / 20.0).atan();
-            let stand = zenith_math::Transform3::from_axis_angle(
-                &Vec3::new(0.0, 1.0, 0.0),
-                half_angle,
-            );
+            let stand =
+                zenith_math::Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), half_angle);
             let generatrix_x = 20.0 / 5f64.sqrt();
             BrepTransform::translate_solid(
                 &BrepTransform::transform_solid(
@@ -264,7 +306,10 @@ fn main() {
 
     println!("稜の曲線の端と、その端の頂点との差（表示側の寄せは別。ここは上流の値です）");
     println!();
-    println!("{:<34}{:<14}{:>8}{:>14}{:>12}", "case", "op", "ends", "worst", "over weld");
+    println!(
+        "{:<34}{:<14}{:>8}{:>14}{:>12}",
+        "case", "op", "ends", "worst", "over weld"
+    );
     println!("{}", "-".repeat(84));
 
     let (mut worst_all, mut worst_where) = (0.0f64, String::from("-"));
@@ -272,7 +317,10 @@ fn main() {
     for (name, a, b) in &cases {
         for (label, op) in ops {
             let Ok(result) = BooleanEngine::boolean_solids_exact_result(a, b, op, &tol) else {
-                println!("{:<34}{:<14}{:>8}{:>14}{:>12}", name, label, "-", "断られた", "-");
+                println!(
+                    "{:<34}{:<14}{:>8}{:>14}{:>12}",
+                    name, label, "-", "断られた", "-"
+                );
                 continue;
             };
             let (mut ends, mut worst, mut over) = (0usize, 0.0f64, 0usize);
@@ -296,9 +344,20 @@ fn main() {
                     );
                 }
             }
-            let tees: usize = result.solids.iter().map(|solid| t_vertices(solid).len()).sum();
+            let tees: usize = result
+                .solids
+                .iter()
+                .map(|solid| t_vertices(solid).len())
+                .sum();
             if tees > 0 {
-                println!("{:<34}{:<14}{:>8}{:>14}{:>12}  **稜の途中に頂点 {tees} 個**", name, label, ends, format!("{worst:.3e}"), over);
+                println!(
+                    "{:<34}{:<14}{:>8}{:>14}{:>12}  **稜の途中に頂点 {tees} 個**",
+                    name,
+                    label,
+                    ends,
+                    format!("{worst:.3e}"),
+                    over
+                );
             }
             ends_all += ends;
             over_all += over;
