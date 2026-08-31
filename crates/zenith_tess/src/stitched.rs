@@ -902,14 +902,17 @@ fn patch_mesh(
         // たわみを満たすまでに何倍になったかが分かります。膨らむ倍率が
         // 大きいなら、悪いのは細分ではなく**渡している三角形の形**です。
         let before_refinement = triangles.len();
-        // **内側の対角線を Delaunay へ入れ替えると、H5 に届きます**——
-        // 64分割の1面あたり最大 14,996 → 7,646 枚（4-209）。**入れていません。**
-        // `contact_placement_probe` のメッシュ非多様体が 0 → 3件になるからです
-        // （4-204 と同じ3件）。壊れる機構は 4-209 に書いてあります——面を
-        // またいで境界の点が食い違っているところがあり、入れ替えはそれを
-        // 露わにするだけです。**先に食い違いを直してから入れてください。**
-        // 口は `ZENITH_DELAUNAY_FLIP=1` で開きます。
-        if std::env::var_os("ZENITH_DELAUNAY_FLIP").is_some() {
+        // **内側の対角線を Delaunay へ入れ替えます**（4-209）。点は増えず、
+        // 境界にも触れません。形が良くなったぶん、細分で割る回数が減ります
+        // ——64分割の1面あたり最大 **14,996 → 11,484 枚**。
+        //
+        // **4-204 はここで表示メッシュを3件壊して戻しています。** 壊れる形は
+        // 名前が付きました——接している面どうしが、境界に沿った同じ薄片や、
+        // 境界の直線区間をまたぐ同じ弦を、**両方の面の内側に**持ってしまう
+        // ことです。入れ替え側で3つ禁じてあります（境界に沿った耳、境界の
+        // 折れ線の上を走る弦、まっすぐな境界の点をとばす弦）。
+        // 止めるときは `ZENITH_NO_DELAUNAY_FLIP=1`。
+        if std::env::var_os("ZENITH_NO_DELAUNAY_FLIP").is_none() {
             delaunay_flip_interior_edges(&uvs, &ring_ranges, &protected, &mut triangles);
             explain_flat("Delaunay 入れ替え後", &triangles, &uvs);
         }
@@ -1810,6 +1813,37 @@ fn delaunay_flip_interior_edges(
         }
     }
 
+    // 境界の折れ線の上を走るかどうか（4-84 と同じ測り方）。
+    let mut boundary_span = 0.0f64;
+    for range in ring_ranges {
+        for offset in 0..range.len() {
+            let a = uvs[range.start + offset];
+            let b = uvs[range.start + (offset + 1) % range.len()];
+            boundary_span = boundary_span.max((b - a).norm());
+        }
+    }
+    let on_polyline_eps = boundary_span.max(1e-12) * 1e-6;
+    let runs_along_the_boundary = |a: usize, b: usize| {
+        let middle = Point2::new((uvs[a].x + uvs[b].x) * 0.5, (uvs[a].y + uvs[b].y) * 0.5);
+        for range in ring_ranges {
+            for offset in 0..range.len() {
+                let p = uvs[range.start + offset];
+                let q = uvs[range.start + (offset + 1) % range.len()];
+                let span = q - p;
+                let length_squared = span.norm_squared();
+                let t = if length_squared <= f64::EPSILON {
+                    0.0
+                } else {
+                    ((middle - p).dot(&span) / length_squared).clamp(0.0, 1.0)
+                };
+                if ((p + span * t) - middle).norm() <= on_polyline_eps {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
     // 4点が同一円周上に来る形（正方格子など）では、入れ替えても入れ替えても
     // 判定が立ちます。**回数で止めます。**
     for _pass in 0..32 {
@@ -1901,6 +1935,83 @@ fn delaunay_flip_interior_edges(
             // 「3D で畳まれる」は、どれも幾何の話でした。**壊れていたのは
             // 位相のほうです。**
             if owners.contains_key(&key(c, d)) || created.contains(&key(c, d)) {
+                continue;
+            }
+            // **境界に沿った耳を作りません**（4-209）。
+            //
+            // リングの連続する3点だけでできた三角形は、境界にぴったり沿った
+            // 薄片です。接している面どうしは、**同じ薄片を1枚ずつ**出すので、
+            // その第3の辺が4回使われて非多様体になります（実測: 3件とも
+            // この形でした）。
+            let hugs_the_boundary = |t: [usize; 3]| {
+                ring_ranges.iter().any(|range| {
+                    let count = range.len();
+                    if count < 3 || !t.iter().all(|vertex| range.contains(vertex)) {
+                        return false;
+                    }
+                    let mut offsets: Vec<usize> = t.iter().map(|v| v - range.start).collect();
+                    offsets.sort_unstable();
+                    let spread = |a: usize, b: usize| (b + count - a) % count;
+                    (0..3).any(|start| {
+                        let (x, y, z) = (
+                            offsets[start],
+                            offsets[(start + 1) % 3],
+                            offsets[(start + 2) % 3],
+                        );
+                        spread(x, y) == 1 && spread(y, z) == 1
+                    })
+                })
+            };
+            if hugs_the_boundary([c, d, b]) || hugs_the_boundary([c, d, a]) {
+                continue;
+            }
+            // **境界の折れ線の上を走る弦も作りません**（4-84 と同じ判定）。
+            // 一直線に伸びた境界では、離れた2点を結ぶ弦が境界の上に乗ります。
+            // 耳の判定は連続する3点しか見ないので、**間を2点以上とばす弦**は
+            // ここで止めます（実測: 弦の長さ 2.163 で、間の点が3つ乗って
+            // いました）。
+            if runs_along_the_boundary(c, d) {
+                continue;
+            }
+            // **同じリングの上で、間を2点以上とばす弦は作りません**（4-209）。
+            //
+            // 接している面どうしは、境界のまわりを**どちらも同じように**
+            // 覆います。片方だけが長い弦を張ると、その弦が両方の面の内側に
+            // 現れて4回使われます（実測: 長さ 2.163 の弦で、間に3点）。
+            let skips_along_a_ring = ring_ranges.iter().any(|range| {
+                if !range.contains(&c) || !range.contains(&d) {
+                    return false;
+                }
+                let count = range.len();
+                let (x, y) = (c - range.start, d - range.start);
+                let forward = (y + count - x) % count;
+                let backward = (x + count - y) % count;
+                let (from, gap) = if forward <= backward {
+                    (x, forward)
+                } else {
+                    (y, backward)
+                };
+                if !(2..=count / 2).contains(&gap) {
+                    return false;
+                }
+                // **とばした点が、その弦にどれだけ近いか。** 境界が曲がって
+                // いれば離れるので、そこは弾きません。まっすぐなところだけを
+                // 弾きます。
+                let (p, q) = (uvs[c], uvs[d]);
+                let along = q - p;
+                let length = along.norm();
+                if length <= 0.0 {
+                    return false;
+                }
+                let mut worst = 0.0f64;
+                for step in 1..gap {
+                    let point = uvs[range.start + (from + step) % count];
+                    let t = ((point - p).dot(&along) / (length * length)).clamp(0.0, 1.0);
+                    worst = worst.max((point - (p + along * t)).norm());
+                }
+                worst <= length * 0.05
+            });
+            if skips_along_a_ring {
                 continue;
             }
 
