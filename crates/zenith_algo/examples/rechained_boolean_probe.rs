@@ -29,6 +29,15 @@
 //! | B-Rep の非多様体 | 1本でもあれば |
 //! | 演算が返るか | **返らないこと自体は赤にしません** |
 //!
+//! # いまの数
+//!
+//! **10連鎖・30演算すべてが緑**です（4-220、4-221）。恒等式の破れ 0、
+//! 非多様体 0、断り 0。残差の最悪は **1.906e-7**（トーラス2つを円柱で切る）。
+//!
+//! 4-213 の時点では2段目の断りが 6 件ありました。**2つとも直っています**
+//! ——切り込みがトリム境界を追い越していたこと（4-217、4-219）と、蓋の材料に
+//! 重複除去がかかっていなかったこと（4-220）です。
+//!
 //! ```bash
 //! cargo run --release -p zenith_algo --example rechained_boolean_probe
 //! ```
@@ -42,7 +51,13 @@ struct Chain {
     name: &'static str,
     /// 1段目。曲面が交わるものを選びます。
     first: fn() -> (Solid, Solid, BooleanOpType),
-    /// 2段目に当てる立体。
+    /// **測る前に、差で当てておく立体**（3段以上にするための段）。
+    ///
+    /// 実務のモデルは2段では終わりません。**自分の出力を入力に戻す**軸を
+    /// 厚くするために、測る段の手前をもう1段深くできるようにしてあります
+    /// （4-221）。空なら 2 段のままです。
+    middle: &'static [fn() -> Solid],
+    /// 最後に当てる立体。**恒等式はこの段で測ります。**
     second: fn() -> Solid,
 }
 
@@ -88,6 +103,7 @@ fn chains() -> Vec<Chain> {
     vec![
         Chain {
             name: "(cylinder - cylinder) then cut by a box",
+            middle: &[],
             first: || {
                 let upright = PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap();
                 let rotation = Transform3::from_axis_angle(
@@ -113,6 +129,7 @@ fn chains() -> Vec<Chain> {
         },
         Chain {
             name: "(sphere - cylinder) then cut by a sphere",
+            middle: &[],
             first: || {
                 let ball = PrimitiveBuilder::make_sphere(12.0).unwrap();
                 let drill = BrepTransform::translate_solid(
@@ -130,6 +147,7 @@ fn chains() -> Vec<Chain> {
         },
         Chain {
             name: "(torus - cylinder) then cut by a box",
+            middle: &[],
             first: || {
                 let torus = PrimitiveBuilder::make_torus(12.0, 4.0).unwrap();
                 let rod = BrepTransform::translate_solid(
@@ -147,6 +165,7 @@ fn chains() -> Vec<Chain> {
         },
         Chain {
             name: "(cone + sphere) then cut by a cylinder",
+            middle: &[],
             first: || {
                 let cone = PrimitiveBuilder::make_cone(10.0, 0.0, 20.0).unwrap();
                 let ball = BrepTransform::translate_solid(
@@ -164,6 +183,7 @@ fn chains() -> Vec<Chain> {
         },
         Chain {
             name: "(box - cylinder) then cut by a torus",
+            middle: &[],
             first: || {
                 let block = PrimitiveBuilder::make_box(40.0, 40.0, 20.0).unwrap();
                 let drill = BrepTransform::translate_solid(
@@ -176,6 +196,125 @@ fn chains() -> Vec<Chain> {
                 BrepTransform::translate_solid(
                     &PrimitiveBuilder::make_torus(14.0, 5.0).unwrap(),
                     Vec3::new(20.0, 20.0, 10.0),
+                )
+            },
+        },
+        // ---- ここから 4-221 で足した分（軸を厚くする） ----
+        Chain {
+            // **3段。** 実務のモデルは2段では終わりません。
+            name: "3 stages: (cyl - cyl), box, then a box",
+            middle: &[|| {
+                BrepTransform::translate_solid(
+                    &PrimitiveBuilder::make_box(30.0, 30.0, 30.0).unwrap(),
+                    Vec3::new(-5.0, -15.0, 25.0),
+                )
+            }],
+            first: || {
+                let upright = PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap();
+                let rotation = Transform3::from_axis_angle(
+                    &Vec3::new(0.0, 1.0, 0.0),
+                    std::f64::consts::FRAC_PI_2,
+                );
+                let lying = BrepTransform::translate_solid(
+                    &BrepTransform::transform_solid(
+                        &PrimitiveBuilder::make_cylinder(6.0, 40.0).unwrap(),
+                        &rotation,
+                    )
+                    .unwrap(),
+                    Vec3::new(-20.0, 0.0, 20.0),
+                );
+                (upright, lying, BooleanOpType::Difference)
+            },
+            second: || {
+                BrepTransform::translate_solid(
+                    &PrimitiveBuilder::make_box(40.0, 40.0, 40.0).unwrap(),
+                    Vec3::new(-20.0, -20.0, -30.0),
+                )
+            },
+        },
+        Chain {
+            // **3段。** 曲面で切ったあと、もう一度曲面で切ります。
+            name: "3 stages: (sphere - cyl), sphere, then a cylinder",
+            middle: &[|| {
+                BrepTransform::translate_solid(
+                    &PrimitiveBuilder::make_sphere(8.0).unwrap(),
+                    Vec3::new(10.0, 0.0, 0.0),
+                )
+            }],
+            first: || {
+                let ball = PrimitiveBuilder::make_sphere(12.0).unwrap();
+                let drill = BrepTransform::translate_solid(
+                    &PrimitiveBuilder::make_cylinder(5.0, 40.0).unwrap(),
+                    Vec3::new(0.0, 0.0, -20.0),
+                );
+                (ball, drill, BooleanOpType::Difference)
+            },
+            second: || {
+                let rotation = Transform3::from_axis_angle(
+                    &Vec3::new(1.0, 0.0, 0.0),
+                    std::f64::consts::FRAC_PI_2,
+                );
+                BrepTransform::translate_solid(
+                    &BrepTransform::transform_solid(
+                        &PrimitiveBuilder::make_cylinder(4.0, 40.0).unwrap(),
+                        &rotation,
+                    )
+                    .unwrap(),
+                    Vec3::new(0.0, 20.0, 6.0),
+                )
+            },
+        },
+        Chain {
+            // **桁を混ぜます。** 大きい板に、小さい穴を開けてから切ります。
+            name: "mixed scale: big plate, small drill, then a box",
+            middle: &[],
+            first: || {
+                let plate = PrimitiveBuilder::make_box(400.0, 400.0, 20.0).unwrap();
+                let drill = BrepTransform::translate_solid(
+                    &PrimitiveBuilder::make_cylinder(2.0, 60.0).unwrap(),
+                    Vec3::new(200.0, 200.0, -20.0),
+                );
+                (plate, drill, BooleanOpType::Difference)
+            },
+            second: || {
+                BrepTransform::translate_solid(
+                    &PrimitiveBuilder::make_box(100.0, 100.0, 100.0).unwrap(),
+                    Vec3::new(150.0, 150.0, 10.0),
+                )
+            },
+        },
+        Chain {
+            // **トーラス2つ。** いちばん面が多い組を、もう一度切ります。
+            name: "(torus - torus) then cut by a cylinder",
+            middle: &[],
+            first: || {
+                let outer = PrimitiveBuilder::make_torus(12.0, 4.0).unwrap();
+                let inner = PrimitiveBuilder::make_torus(12.0, 2.0).unwrap();
+                (outer, inner, BooleanOpType::Difference)
+            },
+            second: || {
+                BrepTransform::translate_solid(
+                    &PrimitiveBuilder::make_cylinder(6.0, 40.0).unwrap(),
+                    Vec3::new(12.0, 0.0, -20.0),
+                )
+            },
+        },
+        Chain {
+            // **円錐を切ってから、球で削ります。**
+            name: "(cone - cylinder) then cut by a sphere",
+            middle: &[],
+            first: || {
+                let cone = PrimitiveBuilder::make_cone(12.0, 4.0, 24.0).unwrap();
+                let drill = BrepTransform::translate_solid(
+                    &PrimitiveBuilder::make_cylinder(3.0, 40.0).unwrap(),
+                    Vec3::new(0.0, 0.0, -8.0),
+                );
+                (cone, drill, BooleanOpType::Difference)
+            },
+            second: || {
+                BrepTransform::translate_solid(
+                    &PrimitiveBuilder::make_sphere(7.0).unwrap(),
+                    Vec3::new(9.0, 0.0, 4.0),
                 )
             },
         },
@@ -197,6 +336,7 @@ fn main() {
     let mut non_manifold = 0usize;
     let mut refused_first = 0usize;
     let mut refused_second = 0usize;
+    let mut refused_middle = 0usize;
     let mut worst = 0.0f64;
     let mut worst_where = String::new();
 
@@ -216,7 +356,39 @@ fn main() {
             );
             continue;
         }
-        let result = &stage_one.solids[0];
+        // **測る前に、もう1段（以上）当てておきます**（4-221）。
+        let mut carried = stage_one.solids[0].clone();
+        let mut middle_refused = false;
+        for build in chain.middle {
+            match BooleanEngine::boolean_solids_exact_result(
+                &carried,
+                &build(),
+                BooleanOpType::Difference,
+                &tol,
+            ) {
+                Ok(out) if out.solids.len() == 1 => carried = out.solids[0].clone(),
+                Ok(out) => {
+                    println!(
+                        "{:<44}{:>8}  途中の段が {} 個の立体を返した（1個のときだけ測ります）",
+                        chain.name,
+                        "-",
+                        out.solids.len()
+                    );
+                    middle_refused = true;
+                    break;
+                }
+                Err(_) => {
+                    println!("{:<44}{:>8}  途中の段が断られた", chain.name, "-");
+                    refused_middle += 1;
+                    middle_refused = true;
+                    break;
+                }
+            }
+        }
+        if middle_refused {
+            continue;
+        }
+        let result = &carried;
         let faces = result.outer_shell.faces.len();
         let whole = volume(result);
         let cutter = (chain.second)();
@@ -296,7 +468,7 @@ fn main() {
     println!("{}", "-".repeat(108));
     println!(
         "恒等式の破れ {broken} 件、非多様体を返したもの {non_manifold} 件、\
-         1段目の断り {refused_first} 件、2段目の断り {refused_second} 件。\
+         1段目の断り {refused_first} 件、途中の段の断り {refused_middle} 件、最後の段の断り {refused_second} 件。\
          残差の最悪 {worst:.3e}（{worst_where}）。"
     );
     println!();
