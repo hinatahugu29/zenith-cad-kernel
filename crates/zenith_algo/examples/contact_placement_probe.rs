@@ -951,6 +951,13 @@ fn main() {
     let mut wrong = 0usize;
     let mut returned = 0usize;
     let mut refused = 0usize;
+    // **「まだ実装していない」ので断った件数**（9-H の H7）。
+    //
+    // 断ること自体は赤ではありません——**答えが本当に非多様体なら、断るのが
+    // 正しい**からです。赤にするのは「実装が足りなくて断った」ほうだけで、
+    // ここは長らく 0 でしたが、**主張であってゲートではありませんでした**。
+    // 配置を足すたびに出ます（4-205 で 1 件出て、同じ日に直しました）。
+    let mut unimplemented = 0usize;
     let mut mesh_broken = 0usize;
     let mut swap_mismatch = 0usize;
     let mut identity_broken = 0usize;
@@ -1060,6 +1067,16 @@ fn main() {
             let (result, solids, bad_edges, verdict) = match &outcome {
                 Err(reason) => {
                     refused += 1;
+                    // 断り文は2種類です（`BooleanEngine`）。
+                    // - `refuses this placement:` — 答えが本当に非多様体。**正しい断り**
+                    // - `is not implemented yet`  — 実装が足りない。**赤**
+                    if reason.contains("is not implemented yet") {
+                        unimplemented += 1;
+                        eprintln!(
+                            "GATE ERROR: {} {label} は「未実装」として断られました",
+                            case.name
+                        );
+                    }
                     if std::env::var_os("ZENITH_REFUSE_WHY").is_some() {
                         eprintln!("REFUSEWHY {} {label}: {reason}", case.name);
                     }
@@ -1155,7 +1172,7 @@ fn main() {
         println!("引数を入れ替えたときの食い違い: **{swap_mismatch} 件**（和と積のみ）");
     }
     println!(
-        "{returned} 件が立体を返し、{refused} 件が断られました。**B-Rep が非多様体だったもの {wrong} 件**、メッシュが非多様体だったもの {mesh_broken} 件。"
+        "{returned} 件が立体を返し、{refused} 件が断られました（うち**「未実装」として断ったもの {unimplemented} 件**）。**B-Rep が非多様体だったもの {wrong} 件**、メッシュが非多様体だったもの {mesh_broken} 件。"
     );
     println!(
         "**恒等式**: {identity_checked} 配置で測り、破れ {identity_broken} 件、残差の最悪 {identity_worst:.3e}（{identity_worst_case}）。"
@@ -1180,6 +1197,17 @@ fn main() {
     // **恒等式の破れも同じ重さです**（4-191）。返ってきたのに答えが合わない。
     if identity_broken > 0 {
         eprintln!("GATE ERROR: identity broken in {identity_broken} placements");
+        std::process::exit(1);
+    }
+    // **「未実装」として断ったら赤**（9-H の H7）。
+    //
+    // 答えが本当に非多様体で断るのは規約どおりなので赤にしません。**赤に
+    // するのは実装が足りないほうだけ**です。ここが 0 であることは長く
+    // 文書の主張でしたが、ゲートではありませんでした。
+    if unimplemented > 0 {
+        eprintln!(
+            "GATE ERROR: {unimplemented} operations were refused as \"not implemented yet\""
+        );
         std::process::exit(1);
     }
 }
