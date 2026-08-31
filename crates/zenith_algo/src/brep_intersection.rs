@@ -1801,6 +1801,76 @@ impl BrepIntersectionBuilder {
                 });
             }
 
+            // **そのままで入らなかったら、トリム境界まで切り詰めて当て直す。**
+            //
+            // 曲面のブーリアン結果をもう一度切ると、2段目の交線は支持パッチの
+            // 縁まで伸びます。面の境界は1段目で削られた分だけ内側にあるので、
+            // 端が **0.54〜1.00** 余ります（4-213）。切り詰めると、実測で
+            // **5.6e-10** まで境界に着き、そのまま割れます（面 A0・A3 で
+            // 残差 2.175e-9、A5 で 7.057e-15）。
+            //
+            // **上を試したあとに置いてあります。** 切り詰めは推測を含む
+            // （どの交点で切るか）ので、素のままで通る割り方を横取りさせません。
+            let clipped: Vec<Edge> = split_edges
+                .iter()
+                .map(|edge| clip_edge_to_face_trim(face, edge, tol).unwrap_or_else(|| edge.clone()))
+                .collect();
+            if clipped
+                .iter()
+                .zip(split_edges.iter())
+                .any(|(after, before)| after.curve != before.curve)
+            {
+                let chains = group_edges_into_chains(&deduplicate_split_edges(&clipped, tol), tol);
+                if why {
+                    eprintln!(
+                        "CHAINWHY 切り詰めて当て直す: 交線 {} 本 → 鎖 {} 本",
+                        clipped.len(),
+                        chains.len()
+                    );
+                }
+                let mut chain_faces = vec![face.clone()];
+                let mut applied: usize = 0;
+                for chain in chains.iter() {
+                    let mut next_faces = Vec::new();
+                    for current_face in chain_faces {
+                        match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
+                            Ok((pieces, report))
+                                if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                            {
+                                applied += 1;
+                                next_faces.extend(pieces);
+                            }
+                            other => {
+                                if why {
+                                    match &other {
+                                        Ok((pieces, report)) => eprintln!(
+                                            "CHAINWHY   切り詰めた鎖 {} 本: 片 {} 枚、面積残差 {:.3e} で採らず",
+                                            chain.len(),
+                                            pieces.len(),
+                                            report.area_residual
+                                        ),
+                                        Err(reason) => eprintln!(
+                                            "CHAINWHY   切り詰めた鎖 {} 本: {}",
+                                            chain.len(),
+                                            reason.chars().take(160).collect::<String>()
+                                        ),
+                                    }
+                                }
+                                next_faces.push(current_face)
+                            }
+                        }
+                    }
+                    chain_faces = next_faces;
+                }
+                if applied > 0 {
+                    return Ok(PlanarFaceMultiSplitResult {
+                        faces: chain_faces,
+                        applied_split_count: split_edges.len(),
+                        skipped_split_count: 0,
+                    });
+                }
+            }
+
             // 繋いでも境界に届かない切り込みは、**面の内側で閉じている**
             // ことがあります。球の角を箱で削ると、3枚の面が作る3本の弧が
             // 球面上で輪になり、どの弧も面の境界には着きません。
@@ -2811,6 +2881,144 @@ fn deduplicate_split_edges(edges: &[Edge], tol: &Tolerance) -> Vec<Edge> {
 }
 
 /// Links edges end to end into chains, by coincident endpoints.
+/// 点から面の外周ワイヤまでの距離。
+fn distance_to_outer_wire(face: &Face, point: Point3) -> f64 {
+    let mut best = f64::MAX;
+    for oriented in &face.outer_wire.edges {
+        if let Ok(result) =
+            zenith_geom::ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 64, 1e-14)
+        {
+            best = best.min(result.distance);
+        }
+    }
+    best
+}
+
+/// `lo..hi` の中で「境界までの距離」を最小にする位置を、黄金分割で詰める。
+fn nearest_approach_to_wire(
+    curve: &NurbsCurve3,
+    face: &Face,
+    mut lo: f64,
+    mut hi: f64,
+) -> (f64, f64) {
+    let phi = (5.0_f64.sqrt() - 1.0) * 0.5;
+    let mut c = hi - phi * (hi - lo);
+    let mut d = lo + phi * (hi - lo);
+    let mut distance_c = distance_to_outer_wire(face, curve.evaluate(c));
+    let mut distance_d = distance_to_outer_wire(face, curve.evaluate(d));
+    for _ in 0..120 {
+        if distance_c < distance_d {
+            hi = d;
+            d = c;
+            distance_d = distance_c;
+            c = hi - phi * (hi - lo);
+            distance_c = distance_to_outer_wire(face, curve.evaluate(c));
+        } else {
+            lo = c;
+            c = d;
+            distance_c = distance_d;
+            d = lo + phi * (hi - lo);
+            distance_d = distance_to_outer_wire(face, curve.evaluate(d));
+        }
+        if (hi - lo).abs() < 1e-15 {
+            break;
+        }
+    }
+    let at = 0.5 * (lo + hi);
+    (at, distance_to_outer_wire(face, curve.evaluate(at)))
+}
+
+/// 切り込みを、面の**トリム境界**まで切り詰める。
+///
+/// # なぜ要るか
+///
+/// 曲面のブーリアン結果をもう一度切ると、2段目の交線は**支持パッチの縁**
+/// まで伸びます。ところが面の実際の境界は、1段目で削られた分だけ内側へ
+/// 後退しています。その差が実測で **0.54〜1.00**（4-213）——`split_by_chain`
+/// は「端が境界から離れている」と断ります。
+///
+/// # どう切るか
+///
+/// **3D で、境界までの距離が 0 になるところ**を探します。UV の多角形で
+/// 挟み込むやり方は 4-213 で試して、端が 1.9e-5 の桁でしか合わず、吸着で
+/// 曲線が浮きました（4-215）。ここは距離を黄金分割で詰めるので、実測で
+/// **5.6e-10** まで合います。切るのは `split_at` で厳密に行い、**当てはめ
+/// 直しません**——当てはめ直すと自分の当てはめ誤差を測ることになります
+/// （4-213 の教訓）。
+///
+/// 端が既に境界の上にあるなら、その側は動かしません。どちらの側も境界に
+/// 触れないなら `None` を返します（**切り込みが面の内側で終わっている**
+/// ということで、それは切り詰めでは直りません）。
+fn clip_edge_to_face_trim(face: &Face, edge: &Edge, tol: &Tolerance) -> Option<Edge> {
+    let curve = &edge.curve;
+    let (t0, t1) = curve.param_range();
+    let start_gap = distance_to_outer_wire(face, curve.evaluate(t0));
+    let end_gap = distance_to_outer_wire(face, curve.evaluate(t1));
+    let on_boundary = tol.linear.max(1e-6);
+    if start_gap <= on_boundary && end_gap <= on_boundary {
+        return None;
+    }
+
+    let steps = 64usize;
+    let at = |index: usize| t0 + (t1 - t0) * index as f64 / steps as f64;
+    let gaps: Vec<f64> = (0..=steps)
+        .map(|index| distance_to_outer_wire(face, curve.evaluate(at(index))))
+        .collect();
+
+    // **距離の極小はいくらでもあります。** 0 に落ちたものだけが交点です。
+    let mut crossings: Vec<f64> = Vec::new();
+    for index in 1..steps {
+        if gaps[index] < gaps[index - 1] && gaps[index] <= gaps[index + 1] {
+            let (found, gap) = nearest_approach_to_wire(curve, face, at(index - 1), at(index + 1));
+            if gap <= on_boundary {
+                crossings.push(found);
+            }
+        }
+    }
+    crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let span = t1 - t0;
+    let head = if start_gap <= on_boundary {
+        t0
+    } else {
+        *crossings.first()?
+    };
+    let tail = if end_gap <= on_boundary {
+        t1
+    } else {
+        let last = *crossings.last()?;
+        if last <= head + span * 1e-12 {
+            return None;
+        }
+        last
+    };
+
+    let after_head = if head <= t0 + span * 1e-12 {
+        curve.clone()
+    } else {
+        curve.split_at(head)?.1
+    };
+    let (head_min, head_max) = after_head.param_range();
+    let clipped = if tail >= head_max - (head_max - head_min) * 1e-12 {
+        after_head
+    } else {
+        after_head.split_at(tail)?.0
+    };
+
+    let (clipped_min, clipped_max) = clipped.param_range();
+    let start = clipped.evaluate(clipped_min);
+    let end = clipped.evaluate(clipped_max);
+    if (start - end).norm() <= tol.linear {
+        return None;
+    }
+    Some(Edge::new(
+        clipped,
+        Vertex::from_point(start),
+        Vertex::from_point(end),
+        tol.linear,
+    ))
+}
+
 fn group_edges_into_chains(edges: &[Edge], tol: &Tolerance) -> Vec<Vec<Edge>> {
     let mut remaining: Vec<Edge> = edges.to_vec();
     let mut chains: Vec<Vec<Edge>> = Vec::new();
