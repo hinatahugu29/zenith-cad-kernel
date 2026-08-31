@@ -1158,6 +1158,8 @@ fn validate_plane_pcurve_loop(
     }
 
     let samples = samples_per_edge.max(2);
+    // **大きさに比例させます**（4-212）。小さいほうへは効かせません。
+    let allowance = tol.linear * wire_extent(wire).max(1.0);
     for (edge_index, (edge, pcurve)) in wire
         .edges
         .iter()
@@ -1176,14 +1178,44 @@ fn validate_plane_pcurve_loop(
             report.sampled_point_count += 1;
             report.max_distance = report.max_distance.max(distance);
 
-            if distance > tol.linear {
+            if distance > allowance {
                 report.mismatch_count += 1;
                 report.errors.push(format!(
-                    "{loop_name} loop edge {edge_index} p-curve differs from 3D edge by {distance:.6e}"
+                    "{loop_name} loop edge {edge_index} p-curve differs from 3D edge by {distance:.6e} (allowed {allowance:.6e})"
                 ));
             }
         }
     }
+}
+
+/// ワイヤが張っている大きさ（境界箱の対角）。
+///
+/// **公差を大きさに比例させるために使います。** p-curve が 3D の稜からどれだけ
+/// 離れてよいかは、**絶対の長さでは決められません**——4 m の部品に 1e-6 を
+/// 要求すると、相対では 2.5e-10 です。NURBS の当てはめはそこまで出ません。
+///
+/// 実測（4-212）: 直交する2円柱の差を、同じ形のまま 100 倍にすると
+/// **`p-curve differs from 3D edge by 1.008e-5`** で断られました。相対では
+/// 1e-7 で、1倍のときに通っている値と同じです。**桁を変えただけで断られる**
+/// のは、公差の付け方の問題です。
+///
+/// **小さいほうへは効かせません**（`max(1.0)`）。1 未満で比例させると、
+/// いま通っているものが通らなくなります。ここは「大きい模型で緩める」
+/// だけの直しです。
+fn wire_extent(wire: &Wire) -> f64 {
+    let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for oriented in &wire.edges {
+        for fraction in [0.0, 0.5, 1.0] {
+            let point = oriented.evaluate_normalized(fraction);
+            min = Point3::new(min.x.min(point.x), min.y.min(point.y), min.z.min(point.z));
+            max = Point3::new(max.x.max(point.x), max.y.max(point.y), max.z.max(point.z));
+        }
+    }
+    if !min.x.is_finite() || !max.x.is_finite() {
+        return 1.0;
+    }
+    (max - min).norm()
 }
 
 fn validate_face_pcurve_loop(
@@ -1206,6 +1238,9 @@ fn validate_face_pcurve_loop(
     }
 
     let samples = samples_per_edge.max(2);
+    // 曲面側は、もともと `tol.linear * 10` を許していました。大きさに比例
+    // させたうえで、その 10 倍も残します（曲面の p-curve は平面より難しい）。
+    let allowance = tol.linear.max(1e-6) * 10.0 * wire_extent(wire).max(1.0);
     for (edge_index, (edge, pcurve)) in wire
         .edges
         .iter()
@@ -1234,10 +1269,10 @@ fn validate_face_pcurve_loop(
             report.sampled_point_count += 1;
             report.max_distance = report.max_distance.max(distance);
 
-            if distance > tol.linear.max(1e-6) * 10.0 {
+            if distance > allowance {
                 report.mismatch_count += 1;
                 report.errors.push(format!(
-                    "{loop_name} loop edge {edge_index} p-curve differs from 3D edge by {distance:.6e}"
+                    "{loop_name} loop edge {edge_index} p-curve differs from 3D edge by {distance:.6e} (allowed {allowance:.6e})"
                 ));
             }
         }
