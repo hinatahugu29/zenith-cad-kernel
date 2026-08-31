@@ -1065,10 +1065,23 @@ impl BrepIntersectionBuilder {
 
         let mut wires: Vec<Wire> = Vec::with_capacity(edge_loop_extraction.loops.len());
         let mut failed_loop_count = 0;
+        let trace = std::env::var_os("ZENITH_CAP_TRACE").is_some();
         for edge_loop in &edge_loop_extraction.loops {
             match order_edges_into_closed_wire(&edge_loop.edges, tol) {
                 Ok(wire) => wires.push(wire),
-                Err(_) => failed_loop_count += 1,
+                // **輪は見つかったのに閉じたワイヤにならない**、という段が
+                // あります。「蓋 0 枚」だけでは、輪が無いのか、輪はあるのに
+                // 並べられないのかが分かりません（4-220）。
+                Err(reason) => {
+                    if trace {
+                        eprintln!(
+                            "      輪 {} 本を閉じたワイヤにできない: {}",
+                            edge_loop.edges.len(),
+                            reason.chars().take(150).collect::<String>()
+                        );
+                    }
+                    failed_loop_count += 1
+                }
             }
         }
 
@@ -1134,6 +1147,11 @@ impl BrepIntersectionBuilder {
         let mut total_skipped_edge_count = 0;
 
         for ((side, index), edges) in groups {
+            // **同じ弧が別々の実体で2本来ることがあります**（4-80）。そのまま
+            // 輪を辿ると、2本を往復するだけの「輪」になり、囲む面積が 0 に
+            // なって「平面と読めない」で落ちます（4-220 の実測）。分割の側は
+            // 既に同じ重複除去を通しています。
+            let edges = deduplicate_split_edges(&edges, tol);
             let cap_gen = Self::build_planar_caps_from_intersection_edges(&edges, tol);
             if std::env::var_os("ZENITH_CAP_TRACE").is_some() {
                 if cap_gen.edge_loop_extraction.loops.is_empty() {
@@ -2300,13 +2318,39 @@ fn build_caps_from_nested_loops(wires: Vec<Wire>, tol: &Tolerance) -> (Vec<Face>
     let mut faces = Vec::new();
     let mut failures = 0;
 
+    let trace = std::env::var_os("ZENITH_CAP_TRACE").is_some();
     for group in group_coplanar_loops(&wires, tol) {
         // 面の枠は、この組の最初のループから取る。同一平面なので共通に使える。
         let Some((origin, normal)) = planar_loop_frame(&wires[group[0]]) else {
+            // **輪が平面と読めない**、という段があります。「蓋 0 枚」だけでは
+            // ここか、枠の軸か、面の作成か、検算かが分かりません（4-220）。
+            if trace {
+                // **折り返した「輪」がここに来ます。** 同じ弧を往復すると
+                // 囲む面積が 0 になり、Newell の法線が取れません（4-220）。
+                // 点をそのまま出すのは、それを見分けるためです。
+                let points = wires[group[0]].sample_points(4);
+                eprintln!(
+                    "      輪 {} 本が平面と読めない（標本 {} 点）",
+                    wires[group[0]].edges.len(),
+                    points.len()
+                );
+                for (index, point) in points.iter().enumerate() {
+                    eprintln!(
+                        "        {index:>2} ({:.4} {:.4} {:.4})",
+                        point.x, point.y, point.z
+                    );
+                }
+            }
             failures += group.len();
             continue;
         };
         let Some(frame_u) = plane_frame_axis(normal) else {
+            if trace {
+                eprintln!(
+                    "      枠の軸が取れない（法線 {:.4} {:.4} {:.4}）",
+                    normal.x, normal.y, normal.z
+                );
+            }
             failures += group.len();
             continue;
         };
@@ -2374,12 +2418,42 @@ fn build_caps_from_nested_loops(wires: Vec<Wire>, tol: &Tolerance) -> (Vec<Face>
                 })
                 .collect();
 
+            let trace = std::env::var_os("ZENITH_CAP_TRACE").is_some();
             match CapBuilder::make_planar_cap_with_holes(wires[*index].clone(), holes) {
                 Ok(face) => match face.validate_pcurves(tol, 4) {
                     Ok(report) if report.is_valid() => faces.push(face),
-                    _ => failures += 1,
+                    // **どちらで落ちたかを言う。** 「蓋が 0 枚」だけでは、
+                    // 面が作れないのか、作った面が検算を通らないのかが
+                    // 分からない（4-220）。
+                    other => {
+                        if trace {
+                            match &other {
+                                Ok(report) => eprintln!(
+                                    "      蓋の p-curve 検算が通らない: {}",
+                                    report
+                                        .errors
+                                        .first()
+                                        .map(|e| e.chars().take(150).collect::<String>())
+                                        .unwrap_or_default()
+                                ),
+                                Err(reason) => eprintln!(
+                                    "      蓋の p-curve が取れない: {}",
+                                    reason.chars().take(150).collect::<String>()
+                                ),
+                            }
+                        }
+                        failures += 1
+                    }
                 },
-                Err(_) => failures += 1,
+                Err(reason) => {
+                    if trace {
+                        eprintln!(
+                            "      蓋の面が作れない: {}",
+                            reason.chars().take(150).collect::<String>()
+                        );
+                    }
+                    failures += 1
+                }
             }
         }
     }
