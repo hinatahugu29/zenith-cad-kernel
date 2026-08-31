@@ -1801,7 +1801,7 @@ fn fill_missing_boundary_edges(
 /// - **uv で狭義に凸な四角形だけ**入れ替える（潰れた三角形を作らない）
 /// - **向きを変えない**（入れ替えた2枚の符号付き面積が、元と同じ側）
 /// - **順序を添字で決める**（`HashMap` の反復に任せると答えが揺れます。4-132）
-fn delaunay_flip_interior_edges(
+pub(crate) fn delaunay_flip_interior_edges(
     uvs: &[Point2],
     ring_ranges: &[std::ops::Range<usize>],
     protected: &std::collections::HashSet<(usize, usize)>,

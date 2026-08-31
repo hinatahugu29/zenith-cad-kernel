@@ -863,6 +863,9 @@ pub(crate) fn refine_uv_triangulation_protected(
     // 17〜23 倍になります（4-150）。
     enforce_parametric_cells: bool,
 ) {
+    // **通しごとに入れ替えるか。** 止めるときは `ZENITH_NO_FLIP_BETWEEN=1`
+    // （効きを測り直すための口です）。
+    let flip_between_passes = std::env::var_os("ZENITH_NO_FLIP_BETWEEN").is_none();
     // **境界の点どうしを結ぶ辺は、連続していなくても割ってはいけません。**
     //
     // `protected` に入っているのはリングの**連続する対**だけです。ところが
@@ -1160,6 +1163,29 @@ pub(crate) fn refine_uv_triangulation_protected(
         }
         *triangles = refined;
         settled = refined_settled;
+
+        // **割ったあとに、もう一度だけ形を整えます**（9-H の H5）。
+        //
+        // 入れ替えは細分の**前**に1回だけ掛かっていました（4-209）。
+        // ところが最長辺二分は、割るたびに細長い片を作り直します——割った
+        // 直後の形が悪ければ、次の通しでまた割ることになります。
+        // **1通しごとに整えれば、同じたわみに届くまでの割り回数が減ります。**
+        //
+        // 点は1つも増えず、境界にも触れません（禁則は入れ替え側が持って
+        // います）。`settled` は形が変わったぶん当てにならないので、
+        // 入れ替えた通しでは全部を見直します。
+        if !enforce_parametric_cells && flip_between_passes {
+            let before: Vec<[usize; 3]> = triangles.clone();
+            crate::stitched::delaunay_flip_interior_edges(
+                uvs,
+                boundary_rings,
+                protected,
+                triangles,
+            );
+            if *triangles != before {
+                settled = vec![false; triangles.len()];
+            }
+        }
     }
 
     if skipped_for_weld > 0 && std::env::var_os("ZENITH_REFINE_WHY").is_some() {
