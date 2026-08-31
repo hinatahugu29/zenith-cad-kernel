@@ -1690,12 +1690,17 @@ impl BrepIntersectionBuilder {
 
             let mut chain_faces = vec![face.clone()];
             let mut applied: usize = 0;
-            for chain in chains.iter().filter(|chain| chain.len() >= 2) {
+            let mut applied_chain: Vec<bool> = vec![false; chains.len()];
+            for (chain_index, chain) in chains.iter().enumerate() {
+                if chain.len() < 2 {
+                    continue;
+                }
                 let mut next_faces = Vec::new();
                 for current_face in chain_faces {
                     match Self::split_planar_face_by_edge_chain(&current_face, chain, tol) {
                         Ok(split_faces) => {
                             applied += 1;
+                            applied_chain[chain_index] = true;
                             next_faces.extend(split_faces);
                         }
                         Err(reason) => {
@@ -1714,6 +1719,58 @@ impl BrepIntersectionBuilder {
                     }
                 }
                 chain_faces = next_faces;
+            }
+
+            // **当たらなかった鎖を、切り詰めてから当て直します**（4-219）。
+            //
+            // 切り手の平面がこれです。箱の底面（z = 25）は、断面の輪でまず
+            // 2枚に割れます。ところが穴の壁の切り口
+            // `(-5, 3.3167, 25) -> (10, 3.3167, 25)` は、**割れた片の境界
+            // （円柱の弧）を 0.536 追い越して**いるので当たりません。
+            //
+            // **1本の鎖も見ます。** 上の輪は2本以上でないと閉じませんが、
+            // 切り詰めたあとは1本でも境界から境界へ渡れます。
+            if applied > 0 {
+                for (chain_index, chain) in chains.iter().enumerate() {
+                    if applied_chain[chain_index] {
+                        continue;
+                    }
+                    let mut next_faces = Vec::new();
+                    for current_face in chain_faces {
+                        let Some(clipped) = clip_chain_to_face_trim(&current_face, chain, tol)
+                        else {
+                            next_faces.push(current_face);
+                            continue;
+                        };
+                        match crate::FaceSplitter::split_by_chain(&current_face, &clipped, tol) {
+                            Ok((pieces, report))
+                                if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                            {
+                                applied += 1;
+                                next_faces.extend(pieces);
+                            }
+                            other => {
+                                if explain {
+                                    match &other {
+                                        Ok((pieces, report)) => eprintln!(
+                                            "SPLITWHY     切り詰めた鎖 {} 本: 片 {} 枚、面積残差 {:.3e} で採らず",
+                                            clipped.len(),
+                                            pieces.len(),
+                                            report.area_residual
+                                        ),
+                                        Err(reason) => eprintln!(
+                                            "SPLITWHY     切り詰めた鎖 {} 本: {}",
+                                            clipped.len(),
+                                            reason.chars().take(160).collect::<String>()
+                                        ),
+                                    }
+                                }
+                                next_faces.push(current_face)
+                            }
+                        }
+                    }
+                    chain_faces = next_faces;
+                }
             }
 
             if applied > 0 {
@@ -1966,6 +2023,60 @@ impl BrepIntersectionBuilder {
                                     Err(reason) => eprintln!(
                                         "LEFTWHY   鎖 {} 本: {}",
                                         chain.len(),
+                                        reason.chars().take(160).collect::<String>()
+                                    ),
+                                }
+                            }
+                            next_faces.push(current_face)
+                        }
+                    }
+                }
+                faces = next_faces;
+                if applied_this_chain {
+                    applied_split_count += chain.len();
+                    skipped_split_count = skipped_split_count.saturating_sub(chain.len());
+                }
+            }
+
+            // **残りも、トリム境界まで切り詰めてから当て直します**（4-219）。
+            //
+            // 切り手の平面がこれです。箱の底面（z = 25）は、断面の輪で
+            // まず2枚に割れます。ところが穴の壁の切り口
+            // `(-5, 3.3167, 25) -> (10, 3.3167, 25)` は、**割れた片の境界
+            // （円柱の弧）を 0.536 追い越して**いるので当たりません。
+            // 4-217 の切り詰めは「1つも当たらなかったとき」の受け皿に入れた
+            // ので、**一部だけ当たったここには効いていませんでした**。
+            //
+            // **鎖の長さで絞りません。** 上の輪は 2本以上でないと閉じま
+            // せんが、ここは1本でも境界から境界へ渡れます。
+            for chain in group_edges_into_chains(&deduplicate_split_edges(&leftover, tol), tol) {
+                let mut next_faces = Vec::new();
+                let mut applied_this_chain = false;
+                for current_face in faces {
+                    let clipped = clip_chain_to_face_trim(&current_face, &chain, tol);
+                    let Some(clipped) = clipped else {
+                        next_faces.push(current_face);
+                        continue;
+                    };
+                    match crate::FaceSplitter::split_by_chain(&current_face, &clipped, tol) {
+                        Ok((pieces, report))
+                            if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                        {
+                            applied_this_chain = true;
+                            next_faces.extend(pieces);
+                        }
+                        other => {
+                            if leftover_why {
+                                match &other {
+                                    Ok((pieces, report)) => eprintln!(
+                                        "LEFTWHY   切り詰めた鎖 {} 本: 片 {} 枚、面積残差 {:.3e} で採らず",
+                                        clipped.len(),
+                                        pieces.len(),
+                                        report.area_residual
+                                    ),
+                                    Err(reason) => eprintln!(
+                                        "LEFTWHY   切り詰めた鎖 {} 本: {}",
+                                        clipped.len(),
                                         reason.chars().take(160).collect::<String>()
                                     ),
                                 }
