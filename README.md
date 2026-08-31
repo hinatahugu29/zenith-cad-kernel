@@ -3,7 +3,8 @@
 このリポジトリを初めて扱う人・AIは、コードを変更する前に次の順で読んでください。
 
 1. [`HANDOVER.md`](HANDOVER.md) — 現在地点、作業ブランチ、次に着手する候補
-   （**次の方針は 9-H**。段取りと数値目標 H1〜H5 がここにあります）
+   （**次の方針は 9-H**。段取りと数値目標 **H1〜H8** がここにあります。
+   **H1〜H5 は達成済み**で、いま追うのは **H6〜H8**）
 2. [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) — 主張を再測定する手順
 3. [`KERNEL_SPECS.md`](KERNEL_SPECS.md) — 現在の仕様と実装範囲
 4. [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) — 機能一覧と制限
@@ -31,6 +32,11 @@ git diff main...HEAD --stat
 # 恒等式で掃く（|A∪B|+|A∩B| = |A|+|B|、|A\B|+|A∩B| = |A|）
 cargo run --release -p zenith_algo --example foreign_cross_pair_probe
 ```
+
+**掃く軸は4本目まで来ています**——「置き方」（`contact_placement_probe`）、
+「大きさの桁」（`scale_sweep_probe`）、「自分の出力を入力に戻す」
+（`rechained_boolean_probe`）は枯れました。**4本目の「読んだ立体（STEP）を
+切る」は未着手**です（9-H の H8。検体は `reference/OCCT`）。
 
 **閉じた式が無くても、恒等式なら測れます。** 2026/08/28 に直した誤答3件は
 **3件とも恒等式でしか見えませんでした**——面は閉じ、非多様体でもなく、
