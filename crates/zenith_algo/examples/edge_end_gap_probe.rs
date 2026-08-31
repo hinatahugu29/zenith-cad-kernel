@@ -15,7 +15,7 @@
 //! - 溶接の距離 (1e-7) を超えている箇所の数（`over weld`）
 //! - 稜の端の総数（`ends`）
 use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, PrimitiveBuilder};
-use zenith_math::{Tolerance, Vec3};
+use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_topo::Solid;
 
 const WELD: f64 = 1e-7;
@@ -45,6 +45,172 @@ fn end_gaps(solid: &Solid) -> (usize, f64, usize) {
     (ends, worst, over)
 }
 
+/// **稜の途中に、別の稜の頂点が乗っていないか**（T字の頂点。4-209）。
+///
+/// 乗っていると、その稜を持つ面と、頂点を持つ面とで、**境界の点列が
+/// 食い違います**。B-Rep の多様体判定は稜の使われ方しか見ないので、ここは
+/// 通り抜けます。効くのはテッセレーションで、**面をまたいだ継ぎ目が開きます**。
+fn t_vertices(solid: &Solid) -> Vec<(Point3, f64, f64)> {
+    let mut vertices: Vec<Point3> = Vec::new();
+    let mut edges: Vec<(Point3, Point3, Vec<Point3>)> = Vec::new();
+    for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
+        for face in &shell.faces {
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oriented in &wire.edges {
+                    vertices.push(oriented.start_vertex().point);
+                    vertices.push(oriented.end_vertex().point);
+                    let samples = (1..32)
+                        .map(|step| oriented.evaluate_normalized(step as f64 / 32.0))
+                        .collect();
+                    edges.push((
+                        oriented.start_vertex().point,
+                        oriented.end_vertex().point,
+                        samples,
+                    ));
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for vertex in &vertices {
+        for (start, end, samples) in &edges {
+            if (vertex - start).norm() <= 1e-9 || (vertex - end).norm() <= 1e-9 {
+                continue;
+            }
+            let Some(closest) = samples
+                .iter()
+                .map(|sample| (sample - vertex).norm())
+                .min_by(|a, b| a.partial_cmp(b).unwrap())
+            else {
+                continue;
+            };
+            if closest > 1e-6 {
+                continue;
+            }
+            let along = (vertex - start).norm() / (end - start).norm().max(1e-30);
+            out.push((*vertex, closest, along));
+        }
+    }
+    out.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    out.dedup_by(|a, b| (a.0 - b.0).norm() <= 1e-9);
+    out
+}
+
+/// **同じ線の上に、別々の稜が部分的に重なっていないか**（4-209）。
+///
+/// 端点まで一致していれば「同じ稜が2本」で、それは別に測ってあります
+/// （0組でした）。ここで探すのは**片方がもう片方の一部を覆っている**形です。
+/// 覆われている側の面は、覆っている側の面が持たない点を境界に持つので、
+/// **面ごとの境界の点列が食い違います**。
+fn overlapping_edges(solid: &Solid) -> Vec<(u64, u64, usize, f64)> {
+    let mut sampled: Vec<(u64, Vec<Point3>)> = Vec::new();
+    for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
+        for face in &shell.faces {
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oriented in &wire.edges {
+                    if sampled.iter().any(|(id, _)| *id == oriented.edge.id) {
+                        continue;
+                    }
+                    let points = (0..=16)
+                        .map(|step| oriented.evaluate_normalized(step as f64 / 16.0))
+                        .collect();
+                    sampled.push((oriented.edge.id, points));
+                }
+            }
+        }
+    }
+
+    let distance_to_polyline = |point: &Point3, polyline: &[Point3]| -> f64 {
+        let mut best = f64::INFINITY;
+        for pair in polyline.windows(2) {
+            let along = pair[1] - pair[0];
+            let length_sq = along.norm_squared();
+            let t = if length_sq <= 0.0 {
+                0.0
+            } else {
+                ((point - pair[0]).dot(&along) / length_sq).clamp(0.0, 1.0)
+            };
+            best = best.min((point - (pair[0] + along * t)).norm());
+        }
+        best
+    };
+
+    let mut out = Vec::new();
+    for i in 0..sampled.len() {
+        for j in 0..sampled.len() {
+            if i == j {
+                continue;
+            }
+            let (left, right) = (&sampled[i], &sampled[j]);
+            // 端点どうしが一致する（＝同じ稜）ものは、ここでは見ません。
+            let ends_match = (left.1[0] - right.1[0]).norm() <= 1e-9
+                && (left.1[16] - right.1[16]).norm() <= 1e-9;
+            let ends_match_reversed = (left.1[0] - right.1[16]).norm() <= 1e-9
+                && (left.1[16] - right.1[0]).norm() <= 1e-9;
+            if ends_match || ends_match_reversed {
+                continue;
+            }
+            let (mut on, mut worst) = (0usize, 0.0f64);
+            for point in &left.1 {
+                let gap = distance_to_polyline(point, &right.1);
+                if gap <= 1e-7 {
+                    on += 1;
+                    worst = worst.max(gap);
+                }
+            }
+            // 端点1つだけ触れているのは、ふつうに繋がっているだけです。
+            if on >= 3 {
+                out.push((left.0, right.0, on, worst));
+            }
+        }
+    }
+    out
+}
+
+/// **同じ場所を通る稜が2本ないか**（4-209。判定を直しました）。
+///
+/// 前は「中間の最大差が 0 より大きい」ものだけを見ていたので、**完全に
+/// 一致する2本**を見落としていました。稜の番号が別なら、刻みの計画
+/// （`SamplePlan::segments_for`）も別に引かれます。**同じ稜のはずなのに
+/// 面ごとに刻み数が違えば、境界の点列が食い違います。**
+fn identical_edges(solid: &Solid) -> Vec<(u64, u64, f64)> {
+    let mut sampled: Vec<(u64, Vec<Point3>)> = Vec::new();
+    for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
+        for face in &shell.faces {
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oriented in &wire.edges {
+                    if sampled.iter().any(|(id, _)| *id == oriented.edge.id) {
+                        continue;
+                    }
+                    let points = (0..=8)
+                        .map(|step| oriented.evaluate_normalized(step as f64 / 8.0))
+                        .collect();
+                    sampled.push((oriented.edge.id, points));
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for i in 0..sampled.len() {
+        for j in (i + 1)..sampled.len() {
+            let (a, b) = (&sampled[i], &sampled[j]);
+            for reversed in [false, true] {
+                let worst = (0..=8)
+                    .map(|step| {
+                        let other = if reversed { 8 - step } else { step };
+                        (b.1[other] - a.1[step]).norm()
+                    })
+                    .fold(0.0f64, f64::max);
+                if worst <= 1e-7 {
+                    out.push((a.0, b.0, worst));
+                }
+            }
+        }
+    }
+    out
+}
+
 fn main() {
     let tol = Tolerance::default();
     let boxa = PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box");
@@ -71,6 +237,24 @@ fn main() {
         ("cone x torus (rim on the tube)", cone.clone(), shifted(&torus, 10.0, 0.0, 0.0)),
         ("cone x torus (lifted)", cone.clone(), shifted(&torus, 10.0, 0.0, 3.0)),
         ("torus x torus", torus.clone(), shifted(&torus, 12.0, 0.0, 0.0)),
+        // **4-209 で壊れる3件**。面をまたいで境界の点が食い違うところを
+        // 探しています。
+        ("box x cone (generatrix in a face)", boxa.clone(), {
+            let half_angle = (10f64 / 20.0).atan();
+            let stand = zenith_math::Transform3::from_axis_angle(
+                &Vec3::new(0.0, 1.0, 0.0),
+                half_angle,
+            );
+            let generatrix_x = 20.0 / 5f64.sqrt();
+            BrepTransform::translate_solid(
+                &BrepTransform::transform_solid(
+                    &PrimitiveBuilder::make_cone(10.0, 0.0, 20.0).expect("cone"),
+                    &stand,
+                )
+                .expect("stand cone"),
+                Vec3::new(20.0 - generatrix_x, 10.0, 5.0),
+            )
+        }),
     ];
     let ops = [
         ("union", BooleanOpType::Union),
@@ -97,6 +281,24 @@ fn main() {
                 ends += e;
                 worst = worst.max(w);
                 over += o;
+            }
+            for solid in &result.solids {
+                for (a, b, worst) in identical_edges(solid) {
+                    println!(
+                        "{:<34}{:<14}  **同じ場所を通る稜が2本**: 稜 {a} と 稜 {b}（最大差 {worst:.3e}）",
+                        name, label
+                    );
+                }
+                for (a, b, on, worst) in overlapping_edges(solid) {
+                    println!(
+                        "{:<34}{:<14}  **稜 {a} の 17 点中 {on} 点が 稜 {b} の上に乗っている**（最大 {worst:.3e}）",
+                        name, label
+                    );
+                }
+            }
+            let tees: usize = result.solids.iter().map(|solid| t_vertices(solid).len()).sum();
+            if tees > 0 {
+                println!("{:<34}{:<14}{:>8}{:>14}{:>12}  **稜の途中に頂点 {tees} 個**", name, label, ends, format!("{worst:.3e}"), over);
             }
             ends_all += ends;
             over_all += over;

@@ -470,6 +470,14 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
     let mut out = Vec::new();
     for (wire, pcurve_loop) in wires.iter().zip(loops) {
         if pcurve_loop.segments.len() != wire.edges.len() {
+            if std::env::var_os("ZENITH_RING_WHY").is_some() {
+                eprintln!(
+                    "RINGWHY 面 {} は縫合に乗れない: p-curve の区間 {} 本に対し稜 {} 本",
+                    face.id,
+                    pcurve_loop.segments.len(),
+                    wire.edges.len()
+                );
+            }
             return None;
         }
         let mut uv: Vec<Point2> = Vec::new();
@@ -478,6 +486,12 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
 
         for (segment, oriented) in pcurve_loop.segments.iter().zip(wire.edges.iter()) {
             if segment.edge_id != oriented.edge.id {
+                if std::env::var_os("ZENITH_RING_WHY").is_some() {
+                    eprintln!(
+                        "RINGWHY 面 {} は縫合に乗れない: p-curve は稜 {} を指しているが、ワイヤは稜 {}",
+                        face.id, segment.edge_id, oriented.edge.id
+                    );
+                }
                 return None;
             }
             let segments = plan.segments_for(segment.edge_id).max(1);
@@ -552,6 +566,24 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
         {
             uv.pop();
             points.pop();
+        }
+        // **その面が、どの稜を何刻みで取ったか**（`ZENITH_RING_WHY=1`）。
+        //
+        // 面をまたいだ継ぎ目が開くとき、いちばん知りたいのはこれです——
+        // 同じ稜を共有している2枚が、同じ点を出しているか（4-209）。
+        if std::env::var_os("ZENITH_RING_WHY").is_some() {
+            let listed: Vec<String> = pcurve_loop
+                .segments
+                .iter()
+                .zip(segment_counts.iter())
+                .map(|(segment, count)| format!("稜 {} x{count}", segment.edge_id))
+                .collect();
+            eprintln!(
+                "RINGWHY 面 {} のリング: 点 {}、{}",
+                face.id,
+                points.len(),
+                listed.join("、")
+            );
         }
         out.push(BoundaryRing {
             uv,
