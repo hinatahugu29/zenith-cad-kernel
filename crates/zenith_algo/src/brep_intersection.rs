@@ -6783,7 +6783,21 @@ fn intersect_nurbs_patches(
     // 種が見つからないのかを切り分けられません。
     let explain = std::env::var_os("ZENITH_SSI_WHY").is_some();
     if explain {
-        eprintln!("SSIWHY {} branch(es) marched", branches.len());
+        // **許容と、その元になった大きさも出します**（4-223）。
+        // 「何本辿れたか」だけでは、公差をいじっても数字が動かない理由が
+        // 分かりません。`deviation_limit` は絶対値なので、模型が小さいと
+        // 相対では緩くなります。
+        eprintln!(
+            "SSIWHY {} branch(es) marched  パッチの大きさ {extent:.6e}、             当てはめの許容 {deviation_limit:.3e}（相対 {:.3e}）、最初の歩幅 {first_step:.3e}",
+            branches.len(),
+            deviation_limit / extent.max(f64::MIN_POSITIVE)
+        );
+        for (_, _, deviation) in &branches {
+            eprintln!(
+                "SSIWHY   採った枝のずれ {deviation:.3e}（相対 {:.3e}）",
+                deviation / extent.max(f64::MIN_POSITIVE)
+            );
+        }
     }
 
     let mut edges = Vec::new();
@@ -6886,7 +6900,19 @@ fn surface_patch_extent(surface: &NurbsSurface3) -> f64 {
             worst = worst.max((a - b).norm());
         }
     }
-    worst.max(1.0)
+    // **1.0 の床を置いてはいけません**（4-223）。
+    //
+    // 床の意図は「潰れたパッチで 0 を返さない」ことですが、**絶対値で
+    // 置くと小さい模型で嘘になります**。実測: 差し渡し 0.21 のパッチが
+    // 「1.0」と報告され、`first_step = extent * 0.1` が **0.1**——
+    // **模型の半分**の歩幅で辿り始めていました。
+    //
+    // 潰れているかどうかだけを見て、大きさは測ったとおりに返します。
+    if worst > 0.0 {
+        worst
+    } else {
+        1.0
+    }
 }
 
 fn oriented_plane_normal(face: &Face) -> Vec3 {
