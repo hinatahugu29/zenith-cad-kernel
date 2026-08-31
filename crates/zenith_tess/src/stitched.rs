@@ -78,6 +78,25 @@ pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> 
     mesh
 }
 
+/// **面ごとの枚数を、本番と同じ道で数える。**
+///
+/// 1面だけを立体にして測ると、刻みの計画（`SamplePlan`）が立体の大きさと
+/// 隣の稜から決まるぶん、本番と違う数になります——実測で 14,996 が 12,244 に
+/// 見えました。**測りたいのは画面に出るほうなので、同じ道を通します。**
+///
+/// 返すのは `(面の番号, その面の三角形の枚数)` です（溶接の前）。
+pub fn face_triangle_counts(solid: &Solid, params: &TessellationParams) -> Vec<(u64, usize)> {
+    let plan = SamplePlan::for_solid(solid, params);
+    let mut out = Vec::new();
+    for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
+        for face in &shell.faces {
+            let mesh = tessellate_face_stitched(face, params, &plan);
+            out.push((face.id, mesh.num_triangles()));
+        }
+    }
+    out
+}
+
 /// 溶接前の三角形添字の範囲を面ごとに控えながら、殻をメッシュにする。
 fn tessellate_shell_stitched_owned(
     shell: &Shell,
