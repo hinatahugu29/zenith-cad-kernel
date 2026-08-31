@@ -145,13 +145,11 @@ impl Sewer {
         for canonical in edges.iter_mut() {
             let start = vertices.representative(canonical.start);
             let end = vertices.representative(canonical.end);
-            canonical.edge = Edge {
-                id: canonical.edge.id,
-                curve: canonical.edge.curve.clone(),
-                start_vertex: start,
-                end_vertex: end,
-                tolerance: canonical.edge.tolerance,
-            };
+            // **曲線の端も、束ねた頂点へ一緒に動かします**（4-208）。
+            // 頂点だけ差し替えると、曲線の端がそこから 1e-7 の桁で離れ、
+            // 境界の標本を曲線から取る側（テッセレーション）が継ぎ目に
+            // 「同じはずの点」を2つ作ります。
+            canonical.edge = canonical.edge.with_vertices(start, end);
         }
 
         // 面のワイヤを共有稜で張り直す

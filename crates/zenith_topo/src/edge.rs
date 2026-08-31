@@ -43,12 +43,32 @@ impl Edge {
         end_vertex: Vertex,
         tolerance: f64,
     ) -> Self {
+        let mut curve = curve;
+        snap_curve_ends_to_vertices(&mut curve, &start_vertex, &end_vertex);
         Self {
             id: EDGE_ID_GEN.fetch_add(1, Ordering::Relaxed),
             curve,
             start_vertex,
             end_vertex,
             tolerance,
+        }
+    }
+
+    /// **番号と公差はそのままに、端点の頂点だけ差し替える。**
+    ///
+    /// 縫うときに、離れた頂点を1つに束ねてから稜へ入れ直す経路があります
+    /// （`sew`）。そこで**頂点だけが動いて曲線が置き去りになる**と、曲線の端が
+    /// 頂点から離れます——実測 1.1〜1.3e-7（4-208）。ここを通せば、束ねた
+    /// 位置へ曲線の端も一緒に動きます。
+    pub fn with_vertices(&self, start_vertex: Vertex, end_vertex: Vertex) -> Self {
+        let mut curve = self.curve.clone();
+        snap_curve_ends_to_vertices(&mut curve, &start_vertex, &end_vertex);
+        Self {
+            id: self.id,
+            curve,
+            start_vertex,
+            end_vertex,
+            tolerance: self.tolerance,
         }
     }
 
@@ -72,6 +92,46 @@ impl Edge {
             bbox.extend_point(cp.point);
         }
         bbox
+    }
+}
+
+/// 曲線の端が頂点から離れられる距離。**これを超えたら寄せません**——
+/// 別の曲線を渡された可能性のほうが高いので、黙って形を変えるほうが危険です。
+const END_SNAP_LIMIT: f64 = 1e-5;
+
+/// **曲線の端を、頂点の位置に合わせる**（4-208）。
+///
+/// 交線から作った稜では、曲線の端が頂点と **1.1〜1.3e-7** ずれることが
+/// あります（実測。`edge_end_gap_probe` で掃くと、稜の端 5,292 箇所のうち
+/// 54 箇所。`box × cylinder` や `cylinder × cone` にも出ます）。
+///
+/// **B-Rep としては多様体のままで、恒等式も破れません。** 効くのは
+/// 「稜の曲線から点を取る」側です——境界の標本を曲線から取るテッセレーション
+/// では、隣り合う2本の稜が継ぎ目に「同じはずの点」を2つ作り、溶接の距離
+/// (1e-7) より大きいと束ねられず、そこが穴になりました（4-208）。
+///
+/// 端を止めた（clamped）曲線では、`evaluate` の端はそのまま最初・最後の
+/// 制御点なので、そこを頂点へ動かせば端が一致します。**端が制御点で
+/// 決まっていない曲線には触れません**——確かめてから動かします。
+fn snap_curve_ends_to_vertices(curve: &mut NurbsCurve3, start: &Vertex, end: &Vertex) {
+    let (t_min, t_max) = curve.param_range();
+    for (t, target, index) in [
+        (t_min, start.point, 0),
+        (t_max, end.point, curve.control_points.len().saturating_sub(1)),
+    ] {
+        let Some(control) = curve.control_points.get(index) else {
+            continue;
+        };
+        let here = curve.evaluate(t);
+        let gap = (here - target).norm();
+        if gap == 0.0 || gap > END_SNAP_LIMIT {
+            continue;
+        }
+        // **端が制御点そのものか**を確かめてから動かします。
+        if (here - control.point).norm() > 1e-12 {
+            continue;
+        }
+        curve.control_points[index].point = target;
     }
 }
 
