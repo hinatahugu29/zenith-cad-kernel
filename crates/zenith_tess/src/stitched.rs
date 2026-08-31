@@ -1903,6 +1903,24 @@ fn delaunay_flip_interior_edges(
         if missing > 0 {
             eprintln!("FLIPWHY   入れ替えのあと、境界の辺 {missing} 本が消えている");
         }
+        // **潰れた三角形が残っていないか。** 3点がほぼ一直線なら、その辺は
+        // 隣の面から見て相手のいない稜になりがちです（4-209）。
+        let flat = triangles
+            .iter()
+            .filter(|triangle| {
+                let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+                let area =
+                    ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5;
+                let longest = [(a, b), (b, c), (c, a)]
+                    .iter()
+                    .map(|(p, q)| (q - p).norm())
+                    .fold(0.0f64, f64::max);
+                area <= longest * longest * 1e-6
+            })
+            .count();
+        if flat > 0 {
+            eprintln!("FLIPWHY   入れ替えのあと、潰れた三角形が {flat} 枚");
+        }
     }
 }
 
