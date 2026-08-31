@@ -736,9 +736,16 @@ fn patch_mesh(
         explain_flat("潰れた耳を外して張り直した後", &triangles, &uvs);
     }
 
+    // **辺の上に乗ったまま置き去りになった境界の点を挿し戻します**（4-209）。
+    // 上の挿し戻しは「両隣を結ぶ辺」が要るので、一直線の境界では効きません。
+    insert_unused_boundary_points_on_straddled_edges(&uvs, &ring_ranges, &mut triangles);
+
     // **境界の辺が抜けている穴を埋めます**（4-207）。挿し戻しと耳の修理を
     // 通っても、「点は使われているのに辺だけ無い」形が残ります。
     fill_missing_boundary_edges(&uvs, &ring_ranges, &mut triangles);
+
+    // **それでも残る境界の辺は、横切っている辺を入れ替えて通します**（4-209）。
+    force_missing_boundary_edges(&uvs, &ring_ranges, &mut triangles);
 
     // **境界の辺が全部そろっているかを数えます**（`ZENITH_EARCUT_WHY=1`）。
     //
@@ -782,6 +789,15 @@ fn patch_mesh(
                 }
                 let previous = range.start + (offset + count - 1) % count;
                 let following = range.start + (offset + 2) % count;
+                // **端の点が、そもそも使われているか。** 使われていないなら
+                // 挿し戻しが効いていない側の話で、使われているなら辺だけの
+                // 話です（4-207）。直す場所が変わります。
+                let used = |vertex: usize| triangles.iter().any(|t| t.contains(&vertex));
+                eprintln!(
+                    "EARCUTWHY       端の点は使われているか: [{a}] {}、[{b}] {}",
+                    if used(a) { "使われている" } else { "**使われていない**" },
+                    if used(b) { "使われている" } else { "**使われていない**" }
+                );
                 eprintln!(
                     "EARCUTWHY     欠けた辺 [{a}]->[{b}]  uv ({:.9},{:.9})->({:.9},{:.9})  長さ {:.3e}",
                     uvs[a].x,
@@ -836,6 +852,17 @@ fn patch_mesh(
         // たわみを満たすまでに何倍になったかが分かります。膨らむ倍率が
         // 大きいなら、悪いのは細分ではなく**渡している三角形の形**です。
         let before_refinement = triangles.len();
+        // **内側の対角線を Delaunay へ入れ替えると、H5 に届きます**——
+        // 64分割の1面あたり最大 14,996 → 7,646 枚（4-209）。**入れていません。**
+        // `contact_placement_probe` のメッシュ非多様体が 0 → 3件になるからです
+        // （4-204 と同じ3件）。壊れる機構は 4-209 に書いてあります——面を
+        // またいで境界の点が食い違っているところがあり、入れ替えはそれを
+        // 露わにするだけです。**先に食い違いを直してから入れてください。**
+        // 口は `ZENITH_DELAUNAY_FLIP=1` で開きます。
+        if std::env::var_os("ZENITH_DELAUNAY_FLIP").is_some() {
+            delaunay_flip_interior_edges(&uvs, &ring_ranges, &protected, &mut triangles);
+            explain_flat("Delaunay 入れ替え後", &triangles, &uvs);
+        }
         crate::surface_tess::refine_uv_triangulation_protected(
             surface,
             params,
@@ -1418,6 +1445,187 @@ fn drop_flat_boundary_triangles(
 /// **点は1つも増えません。** 覆えていなかったところを覆うだけです。
 /// 見つからなければ何もしません（もっともらしい三角形を作るより、
 /// 埋まらないほうが良い）。
+/// **その点が内側に乗っている辺を割る。** 割るのは、その辺を持つ三角形
+/// **全部**です（片方だけ割ると面の中に T字ができます）。割れたら `true`。
+fn split_edge_carrying_point(
+    uvs: &[Point2],
+    triangles: &mut Vec<[usize; 3]>,
+    point: usize,
+) -> bool {
+    let here = uvs[point];
+    let mut best: Option<(f64, (usize, usize))> = None;
+    for triangle in triangles.iter() {
+        for corner in 0..3 {
+            let (p, q) = (triangle[corner], triangle[(corner + 1) % 3]);
+            if p == point || q == point {
+                continue;
+            }
+            let (from, to) = (uvs[p], uvs[q]);
+            let along = to - from;
+            let length_sq = along.norm_squared();
+            if length_sq <= 0.0 {
+                continue;
+            }
+            let t = (here - from).dot(&along) / length_sq;
+            if !(1e-9..=1.0 - 1e-9).contains(&t) {
+                continue;
+            }
+            let length = length_sq.sqrt();
+            if (here - (from + along * t)).norm() > 1e-9 * length.max(1.0) {
+                continue;
+            }
+            if best.as_ref().map(|(worst, _)| length < *worst).unwrap_or(true) {
+                best = Some((length, (p, q)));
+            }
+        }
+    }
+    let Some((_, (p, q))) = best else {
+        return false;
+    };
+
+    let mut kept = Vec::with_capacity(triangles.len() + 2);
+    let mut split = Vec::new();
+    for triangle in triangles.iter() {
+        let carries = (0..3).any(|corner| {
+            let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+            (a == p && b == q) || (a == q && b == p)
+        });
+        if carries {
+            split.push(*triangle);
+        } else {
+            kept.push(*triangle);
+        }
+    }
+    if split.is_empty() {
+        return false;
+    }
+    for triangle in split {
+        let corner = (0..3)
+            .find(|corner| {
+                let (a, b) = (triangle[*corner], triangle[(*corner + 1) % 3]);
+                (a == p && b == q) || (a == q && b == p)
+            })
+            .expect("この三角形はその辺を持っている");
+        let (first, second) = (triangle[corner], triangle[(corner + 1) % 3]);
+        let apex = triangle[(corner + 2) % 3];
+        kept.push([first, point, apex]);
+        kept.push([point, second, apex]);
+    }
+    *triangles = kept;
+    true
+}
+
+/// **欠けている境界の辺を、横切っている辺を入れ替えて通す。**
+///
+/// `fill_missing_boundary_edges`（4-207）は「両端と辺を共有している点」が
+/// あるときだけ埋められます。**無いこともあります**——実測（`box × cone`、
+/// 母線が面に乗る配置）: 落ちた点を挿し戻したあと、境界の辺 53 本のうち
+/// 1 本（`[2]->[3]`）が、共通の隣を持たないまま残りました。
+///
+/// 制約付き三角形分割の教科書どおり、**その辺を横切っている辺を入れ替えて
+/// いきます**。凸でない四角形は入れ替えられないので、進まなくなったら
+/// 諦めます（黙って形を変えるより、欠けたまま置くほうが安全です）。
+fn force_missing_boundary_edges(
+    uvs: &[Point2],
+    ring_ranges: &[std::ops::Range<usize>],
+    triangles: &mut Vec<[usize; 3]>,
+) {
+    let key = |a: usize, b: usize| if a < b { (a, b) } else { (b, a) };
+    let signed_area = |a: usize, b: usize, c: usize| {
+        let (p, q, r) = (uvs[a], uvs[b], uvs[c]);
+        (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+    };
+    // 線分 `a b` と線分 `p q` が、端点を共有せずに交わるか。
+    let crosses = |a: usize, b: usize, p: usize, q: usize| -> bool {
+        if p == a || p == b || q == a || q == b {
+            return false;
+        }
+        let d1 = signed_area(a, b, p);
+        let d2 = signed_area(a, b, q);
+        let d3 = signed_area(p, q, a);
+        let d4 = signed_area(p, q, b);
+        d1 * d2 < 0.0 && d3 * d4 < 0.0
+    };
+
+    for _round in 0..64 {
+        let mut present: std::collections::HashSet<(usize, usize)> = Default::default();
+        for triangle in triangles.iter() {
+            for corner in 0..3 {
+                present.insert(key(triangle[corner], triangle[(corner + 1) % 3]));
+            }
+        }
+        let mut target: Option<(usize, usize)> = None;
+        'search: for range in ring_ranges {
+            let count = range.len();
+            for offset in 0..count {
+                let a = range.start + offset;
+                let b = range.start + (offset + 1) % count;
+                if !present.contains(&key(a, b)) {
+                    target = Some((a, b));
+                    break 'search;
+                }
+            }
+        }
+        let Some((a, b)) = target else {
+            return;
+        };
+
+        // その辺を横切っている辺のうち、入れ替えられるものを1本入れ替える。
+        let mut owners: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+        for (index, triangle) in triangles.iter().enumerate() {
+            for corner in 0..3 {
+                owners
+                    .entry(key(triangle[corner], triangle[(corner + 1) % 3]))
+                    .or_default()
+                    .push(index);
+            }
+        }
+        let mut flipped = false;
+        for (edge, holders) in &owners {
+            if holders.len() != 2 || !crosses(a, b, edge.0, edge.1) {
+                continue;
+            }
+            let (left, right) = (holders[0], holders[1]);
+            let (p, q) = *edge;
+            let opposite = |triangle: &[usize; 3]| -> Option<usize> {
+                triangle
+                    .iter()
+                    .copied()
+                    .find(|vertex| *vertex != p && *vertex != q)
+            };
+            let (Some(c), Some(d)) = (opposite(&triangles[left]), opposite(&triangles[right]))
+            else {
+                continue;
+            };
+            if c == d || present.contains(&key(c, d)) {
+                continue;
+            }
+            let (area_left, area_right) = (signed_area(p, q, c), signed_area(q, p, d));
+            if area_left == 0.0 || area_right == 0.0 || area_left * area_right < 0.0 {
+                continue;
+            }
+            let (new_left, new_right) = (signed_area(c, d, q), signed_area(d, c, p));
+            if new_left * area_left <= 0.0 || new_right * area_left <= 0.0 {
+                continue;
+            }
+            triangles[left] = if area_left > 0.0 { [c, d, q] } else { [d, c, q] };
+            triangles[right] = if area_left > 0.0 { [d, c, p] } else { [c, d, p] };
+            flipped = true;
+            break;
+        }
+        if !flipped {
+            // 横切っている辺が無いなら、**端の点がほかの辺の上に乗っている**
+            // ことがあります（境界が一直線のところ）。その辺を割ります。
+            if split_edge_carrying_point(uvs, triangles, a)
+                || split_edge_carrying_point(uvs, triangles, b)
+            {
+                continue;
+            }
+            return;
+        }
+    }
+}
+
 fn fill_missing_boundary_edges(
     uvs: &[Point2],
     ring_ranges: &[std::ops::Range<usize>],
@@ -1491,6 +1699,319 @@ fn fill_missing_boundary_edges(
             }
         }
         if !added {
+            return;
+        }
+    }
+}
+
+/// **内側の辺だけを Delaunay に入れ替える**（9-H の H5）。
+///
+/// earcut は「耳を切る」ので、細長い三角形の扇を返します。そこへ弦のたわみで
+/// 細分を掛けると、**形が悪いぶんだけ余計に割ります**——実測（4-204、4-208）:
+/// 境界 384 点から earcut 382 枚、細分後 **14,996 枚（39.3倍）**。
+///
+/// 点は1つも足さず、**境界の辺には触れず**、内側の対角線だけを入れ替えます。
+///
+/// **4-204 で一度入れて戻しています。** そのときは表示メッシュが3件壊れ、
+/// 原因を3回推測して3回とも外しました。**あのとき壊れた機構は 4-208 で
+/// 名前が付いています**——稜の曲線の端が頂点から 1e-7 ずれていて、入れ替えが
+/// その双子をまたぐ形を作っていました。**上流を直したので、もう双子は
+/// ありません。** 入れ直すなら、`contact_placement_probe` のメッシュ非多様体を
+/// 必ず見てください（テストも B-Rep も緑のまま、そこだけが壊れます）。
+///
+/// 守っていること。
+///
+/// - **境界の辺は入れ替えない**（リングの連続する2点と、`protected`）
+/// - **uv で狭義に凸な四角形だけ**入れ替える（潰れた三角形を作らない）
+/// - **向きを変えない**（入れ替えた2枚の符号付き面積が、元と同じ側）
+/// - **順序を添字で決める**（`HashMap` の反復に任せると答えが揺れます。4-132）
+fn delaunay_flip_interior_edges(
+    uvs: &[Point2],
+    ring_ranges: &[std::ops::Range<usize>],
+    protected: &std::collections::HashSet<(usize, usize)>,
+    triangles: &mut [[usize; 3]],
+) {
+    let key = |a: usize, b: usize| if a < b { (a, b) } else { (b, a) };
+    let signed_area = |a: usize, b: usize, c: usize| {
+        let (p, q, r) = (uvs[a], uvs[b], uvs[c]);
+        (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+    };
+
+    // リングの連続する2点は境界の辺。**入れ替えると継ぎ目が開きます。**
+    let mut boundary: std::collections::HashSet<(usize, usize)> = Default::default();
+    for range in ring_ranges {
+        let count = range.len();
+        for offset in 0..count {
+            boundary.insert(key(
+                range.start + offset,
+                range.start + (offset + 1) % count,
+            ));
+        }
+    }
+
+    // 4点が同一円周上に来る形（正方格子など）では、入れ替えても入れ替えても
+    // 判定が立ちます。**回数で止めます。**
+    for _pass in 0..32 {
+        let mut owners: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+        for (index, triangle) in triangles.iter().enumerate() {
+            for corner in 0..3 {
+                owners
+                    .entry(key(triangle[corner], triangle[(corner + 1) % 3]))
+                    .or_default()
+                    .push(index);
+            }
+        }
+
+        let mut flipped = false;
+        let mut touched: std::collections::HashSet<usize> = Default::default();
+        // **この周回で作った対角線**。`owners` はこの周回の始めの姿なので、
+        // ここを覚えておかないと同じ辺を2度作れてしまいます（その辺は3枚に
+        // 共有され、メッシュが非多様体になります）。
+        let mut created: std::collections::HashSet<(usize, usize)> = Default::default();
+        for (edge, holders) in &owners {
+            if holders.len() != 2 || boundary.contains(edge) || protected.contains(edge) {
+                continue;
+            }
+            let (left, right) = (holders[0], holders[1]);
+            // 1回のまわりで同じ三角形を2度触らない（`owners` が古くなるので）。
+            if touched.contains(&left) || touched.contains(&right) {
+                continue;
+            }
+            let (a, b) = *edge;
+            let opposite = |triangle: &[usize; 3]| -> Option<usize> {
+                triangle
+                    .iter()
+                    .copied()
+                    .find(|vertex| *vertex != a && *vertex != b)
+            };
+            let (Some(c), Some(d)) = (opposite(&triangles[left]), opposite(&triangles[right]))
+            else {
+                continue;
+            };
+            if c == d {
+                continue;
+            }
+
+            // **狭義に凸か。** `a b` を挟む2枚が、入れ替えたあとも同じ側を
+            // 向いていなければ、四角形は凸ではありません。
+            let (area_left, area_right) = (signed_area(a, b, c), signed_area(b, a, d));
+            if area_left == 0.0 || area_right == 0.0 || area_left * area_right < 0.0 {
+                continue;
+            }
+            let (new_left, new_right) = (signed_area(c, d, b), signed_area(d, c, a));
+            if new_left * area_left <= 0.0 || new_right * area_left <= 0.0 {
+                continue;
+            }
+            // **潰れかけた四角形は触りません。** 符号だけ見ていると、4点が
+            // ほぼ一直線に並んだところで入れ替えが通り、薄片が残ります。
+            let quad = area_left.abs() + area_right.abs();
+            if new_left.abs() < quad * 1e-3 || new_right.abs() < quad * 1e-3 {
+                continue;
+            }
+
+            // **入れ替えたほうが Delaunay か。** `d` が `a b c` の外接円の
+            // 中に居るなら、いまの対角線は外れています。
+            let incircle = |a: usize, b: usize, c: usize, d: usize| -> f64 {
+                let (pa, pb, pc, pd) = (uvs[a], uvs[b], uvs[c], uvs[d]);
+                let (ax, ay) = (pa.x - pd.x, pa.y - pd.y);
+                let (bx, by) = (pb.x - pd.x, pb.y - pd.y);
+                let (cx, cy) = (pc.x - pd.x, pc.y - pd.y);
+                let det = (ax * ax + ay * ay) * (bx * cy - by * cx)
+                    - (bx * bx + by * by) * (ax * cy - ay * cx)
+                    + (cx * cx + cy * cy) * (ax * by - ay * bx);
+                // 向きを揃えてから読む。
+                if signed_area(a, b, c) > 0.0 {
+                    det
+                } else {
+                    -det
+                }
+            };
+            if incircle(a, b, c, d) <= 0.0 {
+                continue;
+            }
+            // **作ろうとしている対角線が、もう別のところにあるなら入れ替え
+            // ません。** あると、その辺は3枚に共有され、メッシュが非多様体に
+            // なります——実測（`box × cone`、母線が面に乗る配置の積）:
+            // 稜 (18.008,8.333,20)-(18.283,8.342,20) が3回使われ、その間に
+            // 面積 5.9e-4 の薄片が1枚挟まっていました。
+            //
+            // **4-204 が3回推測して外したのは、ここです。** あのときの
+            // 「溶接で同じ点になる頂点をまたいでいる」「向きの揃わない片」
+            // 「3D で畳まれる」は、どれも幾何の話でした。**壊れていたのは
+            // 位相のほうです。**
+            if owners.contains_key(&key(c, d)) || created.contains(&key(c, d)) {
+                continue;
+            }
+
+            triangles[left] = if area_left > 0.0 { [c, d, b] } else { [d, c, b] };
+            triangles[right] = if area_left > 0.0 { [d, c, a] } else { [c, d, a] };
+            created.insert(key(c, d));
+            touched.insert(left);
+            touched.insert(right);
+            flipped = true;
+        }
+        if !flipped {
+            break;
+        }
+    }
+
+    // **境界の辺が全部残っているか。** 入れ替えは境界に触れない建て付けなので、
+    // ここが 0 でなければ建て付けのほうが壊れています（`ZENITH_EARCUT_WHY=1`）。
+    if std::env::var_os("ZENITH_EARCUT_WHY").is_some() {
+        let mut present: std::collections::HashSet<(usize, usize)> = Default::default();
+        for triangle in triangles.iter() {
+            for corner in 0..3 {
+                present.insert(key(triangle[corner], triangle[(corner + 1) % 3]));
+            }
+        }
+        let missing = boundary
+            .iter()
+            .filter(|edge| !present.contains(edge))
+            .count();
+        if missing > 0 {
+            eprintln!("FLIPWHY   入れ替えのあと、境界の辺 {missing} 本が消えている");
+        }
+    }
+}
+
+/// **辺の上に乗っている境界の点を、その辺を割って挿し戻す。**
+///
+/// `reinsert_dropped_boundary_points` は「使われていない点の両隣を結ぶ辺」が
+/// 三角形分割にあることを頼りにします。**一直線に並んだ境界では、その辺すら
+/// 無いことがあります**——実測（`box × cone`、母線が面に乗る配置）: 箱の面の
+/// 境界 53 本のうち 2 本が無く、点 `[2]` は**どの三角形にも使われていません**
+/// でした。両隣 `[1]` `[3]` を結ぶ辺も無く、扇はもっと遠くへ張られています。
+///
+/// そこで、**その点が乗っている辺を探して割ります**。乗っている辺を持つ
+/// 三角形は2枚あることも1枚のこともあるので、**その辺を持つ三角形を全部**
+/// 割ります（片方だけ割ると、面の中に T字ができます）。
+///
+/// 点は増えません（もともと境界にある点を使うだけです）。
+fn insert_unused_boundary_points_on_straddled_edges(
+    uvs: &[Point2],
+    ring_ranges: &[std::ops::Range<usize>],
+    triangles: &mut Vec<[usize; 3]>,
+) {
+    for _round in 0..64 {
+        let mut used: std::collections::HashSet<usize> = Default::default();
+        for triangle in triangles.iter() {
+            for corner in 0..3 {
+                used.insert(triangle[corner]);
+            }
+        }
+
+        let mut repaired = false;
+        for range in ring_ranges {
+            for index in range.clone() {
+                if used.contains(&index) {
+                    continue;
+                }
+                let here = uvs[index];
+                // その点が乗っている辺を探す。**いちばん短い辺**を採ります
+                // ——長い弦の上には、ほかの点も乗っているかもしれないので。
+                let mut best: Option<(f64, (usize, usize))> = None;
+                for triangle in triangles.iter() {
+                    for corner in 0..3 {
+                        let (p, q) = (triangle[corner], triangle[(corner + 1) % 3]);
+                        let (from, to) = (uvs[p], uvs[q]);
+                        let along = to - from;
+                        let length_sq = along.norm_squared();
+                        if length_sq <= 0.0 {
+                            continue;
+                        }
+                        let t = (here - from).dot(&along) / length_sq;
+                        if !(1e-9..=1.0 - 1e-9).contains(&t) {
+                            continue;
+                        }
+                        let offset = (here - (from + along * t)).norm();
+                        if offset > 1e-9 * length_sq.sqrt().max(1.0) {
+                            continue;
+                        }
+                        if best
+                            .as_ref()
+                            .map(|(worst, _)| length_sq.sqrt() < *worst)
+                            .unwrap_or(true)
+                        {
+                            best = Some((length_sq.sqrt(), (p, q)));
+                        }
+                    }
+                }
+                let Some((_, (p, q))) = best else {
+                    // 乗っている辺が無いなら、**その点を含んでいる三角形**を
+                    // 割ります。earcut が落とした点は、落としたぶんだけ内側へ
+                    // 寄った弦の**内側**に来ることがあります。
+                    let containing = triangles.iter().position(|triangle| {
+                        let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+                        let side = |from: Point2, to: Point2| {
+                            (to.x - from.x) * (here.y - from.y)
+                                - (to.y - from.y) * (here.x - from.x)
+                        };
+                        let (ab, bc, ca) = (side(a, b), side(b, c), side(c, a));
+                        (ab >= 0.0 && bc >= 0.0 && ca >= 0.0)
+                            || (ab <= 0.0 && bc <= 0.0 && ca <= 0.0)
+                    });
+                    let Some(position) = containing else {
+                        if std::env::var_os("ZENITH_EARCUT_WHY").is_some() {
+                            eprintln!(
+                                "REINSERTWHY 使われていない点 [{index}] uv ({:.6},{:.6}) は、乗っている辺も含んでいる三角形も無い",
+                                here.x, here.y
+                            );
+                        }
+                        continue;
+                    };
+                    let triangle = triangles.swap_remove(position);
+                    triangles.push([triangle[0], triangle[1], index]);
+                    triangles.push([triangle[1], triangle[2], index]);
+                    triangles.push([triangle[2], triangle[0], index]);
+                    repaired = true;
+                    break;
+                };
+
+                // その辺を持つ三角形を**全部**割る。
+                let mut split = Vec::new();
+                let mut kept = Vec::with_capacity(triangles.len());
+                for triangle in triangles.iter() {
+                    let has = (0..3).any(|corner| {
+                        let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                        (a == p && b == q) || (a == q && b == p)
+                    });
+                    if has {
+                        split.push(*triangle);
+                    } else {
+                        kept.push(*triangle);
+                    }
+                }
+                if split.is_empty() {
+                    continue;
+                }
+                for triangle in split {
+                    let Some(apex) = triangle
+                        .iter()
+                        .copied()
+                        .find(|vertex| *vertex != p && *vertex != q)
+                    else {
+                        continue;
+                    };
+                    // 元の並び順を保ったまま、`p q` を `p m` と `m q` に置き換える。
+                    let corner = (0..3)
+                        .find(|corner| {
+                            let (a, b) = (triangle[*corner], triangle[(*corner + 1) % 3]);
+                            (a == p && b == q) || (a == q && b == p)
+                        })
+                        .expect("この三角形はその辺を持っている");
+                    let (first, second) = (triangle[corner], triangle[(corner + 1) % 3]);
+                    kept.push([first, index, apex]);
+                    kept.push([index, second, apex]);
+                }
+                *triangles = kept;
+                repaired = true;
+                break;
+            }
+            if repaired {
+                break;
+            }
+        }
+        if !repaired {
             return;
         }
     }
