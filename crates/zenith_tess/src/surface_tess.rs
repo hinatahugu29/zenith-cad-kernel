@@ -1145,7 +1145,18 @@ pub(crate) fn refine_uv_triangulation_protected(
             .collect();
         for left in 0..points.len() {
             for right in (left + 1)..points.len() {
-                if (points[right] - points[left]).norm() > WELD_TOLERANCE {
+                let gap = (points[right] - points[left]).norm();
+                if gap > WELD_TOLERANCE {
+                    // **溶接距離のすぐ外に居る対**も数えます。束ねられない
+                    // ぶん、そのまま2つの点として残り、同じ稜が2本になります。
+                    if gap <= REFINEMENT_CLEARANCE {
+                        eprintln!(
+                            "REFINEWHY   溶接距離のすぐ外の対 {gap:.3e}（{} と {}）uv 隔たり {:.3e}",
+                            if left < boundary_vertex_count { "境界" } else { "細分" },
+                            if right < boundary_vertex_count { "境界" } else { "細分" },
+                            (uvs[right] - uvs[left]).norm()
+                        );
+                    }
                     continue;
                 }
                 let left_boundary = left < boundary_vertex_count;

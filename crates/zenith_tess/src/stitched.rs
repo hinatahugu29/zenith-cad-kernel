@@ -470,7 +470,24 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
                 let t = t_min + (t_max - t_min) * fraction;
                 let here = segment.curve.evaluate(t);
                 // 位置は稜そのものから。p-curve はパラメータを取るためだけに使う。
-                let point = oriented.evaluate_normalized(fraction);
+                //
+                // **ただし両端だけは頂点の位置を使います**（4-208）。稜の曲線の
+                // 端は、頂点と 1e-7 の桁でずれることがあります——実測
+                // （`cone × torus` を持ち上げた配置）で **1.330e-7**。境界の
+                // 標本を曲線から取ると、隣り合う2本の稜がその継ぎ目に「同じ
+                // はずの点」を2つ作り、**溶接の距離 (1e-7) より大きいので
+                // 束ねられません**。残った2点はそのまま穴になります。
+                //
+                // 頂点は稜どうしで共有されているので、両端をそこへ寄せると
+                // 2本の稜が同じ点を出し、下の重複判定が片方を落とします。
+                // **隣の面も同じ頂点へ寄せる**ので、継ぎ目は開きません。
+                let point = if step == 0 {
+                    oriented.start_vertex().point
+                } else if step == segments {
+                    oriented.end_vertex().point
+                } else {
+                    oriented.evaluate_normalized(fraction)
+                };
                 // **落とす基準は、溶接の距離に合わせます。**
                 //
                 // ここが 1e-12 で、あとから掛かる `weld` が 1e-7 だと、その
