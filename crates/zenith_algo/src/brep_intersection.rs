@@ -1811,22 +1811,28 @@ impl BrepIntersectionBuilder {
             //
             // **上を試したあとに置いてあります。** 切り詰めは推測を含む
             // （どの交点で切るか）ので、素のままで通る割り方を横取りさせません。
-            let clipped: Vec<Edge> = split_edges
+            // **鎖にしてから、鎖の両端だけを切り詰めます。** 稜ごとに切ると、
+            // 鎖の内側の継ぎ目（相方と共有する点）まで切ってしまいます。
+            let clipped_chains: Vec<Vec<Edge>> = chains
                 .iter()
-                .map(|edge| clip_edge_to_face_trim(face, edge, tol).unwrap_or_else(|| edge.clone()))
+                .map(|chain| {
+                    clip_chain_to_face_trim(face, chain, tol).unwrap_or_else(|| chain.clone())
+                })
                 .collect();
-            if clipped
+            if clipped_chains
                 .iter()
-                .zip(split_edges.iter())
-                .any(|(after, before)| after.curve != before.curve)
+                .zip(chains.iter())
+                .any(|(after, before)| {
+                    after.len() != before.len()
+                        || after
+                            .iter()
+                            .zip(before.iter())
+                            .any(|(a, b)| a.curve != b.curve)
+                })
             {
-                let chains = group_edges_into_chains(&deduplicate_split_edges(&clipped, tol), tol);
+                let chains = clipped_chains;
                 if why {
-                    eprintln!(
-                        "CHAINWHY 切り詰めて当て直す: 交線 {} 本 → 鎖 {} 本",
-                        clipped.len(),
-                        chains.len()
-                    );
+                    eprintln!("CHAINWHY 切り詰めて当て直す: 鎖 {} 本", chains.len());
                 }
                 let mut chain_faces = vec![face.clone()];
                 let mut applied: usize = 0;
@@ -2928,7 +2934,7 @@ fn nearest_approach_to_wire(
     (at, distance_to_outer_wire(face, curve.evaluate(at)))
 }
 
-/// 切り込みを、面の**トリム境界**まで切り詰める。
+/// 切り込みの**自由端**を、面のトリム境界まで切り詰める。
 ///
 /// # なぜ要るか
 ///
@@ -2936,6 +2942,13 @@ fn nearest_approach_to_wire(
 /// まで伸びます。ところが面の実際の境界は、1段目で削られた分だけ内側へ
 /// 後退しています。その差が実測で **0.54〜1.00**（4-213）——`split_by_chain`
 /// は「端が境界から離れている」と断ります。
+///
+/// # どこを切ってよいか
+///
+/// **鎖の自由端だけ**です。鎖の内側の継ぎ目は、相方の稜と共有している点で、
+/// **境界の上にある必要はありません**。そこまで切り詰めると鎖が壊れます。
+/// 最初はここを区別せずに「境界に乗っていない端」を全部切ろうとして、
+/// ドリル穴の壁で `None` を返して何もできませんでした（4-217）。
 ///
 /// # どう切るか
 ///
@@ -2946,16 +2959,22 @@ fn nearest_approach_to_wire(
 /// 直しません**——当てはめ直すと自分の当てはめ誤差を測ることになります
 /// （4-213 の教訓）。
 ///
-/// 端が既に境界の上にあるなら、その側は動かしません。どちらの側も境界に
-/// 触れないなら `None` を返します（**切り込みが面の内側で終わっている**
-/// ということで、それは切り詰めでは直りません）。
-fn clip_edge_to_face_trim(face: &Face, edge: &Edge, tol: &Tolerance) -> Option<Edge> {
+/// 境界を跨いでいない自由端は切れません。そのときはその側を動かしません。
+fn clip_edge_ends_to_face_trim(
+    face: &Face,
+    edge: &Edge,
+    clip_start: bool,
+    clip_end: bool,
+    tol: &Tolerance,
+) -> Option<Edge> {
     let curve = &edge.curve;
     let (t0, t1) = curve.param_range();
+    let on_boundary = tol.linear.max(1e-6);
     let start_gap = distance_to_outer_wire(face, curve.evaluate(t0));
     let end_gap = distance_to_outer_wire(face, curve.evaluate(t1));
-    let on_boundary = tol.linear.max(1e-6);
-    if start_gap <= on_boundary && end_gap <= on_boundary {
+    let want_start = clip_start && start_gap > on_boundary;
+    let want_end = clip_end && end_gap > on_boundary;
+    if !want_start && !want_end {
         return None;
     }
 
@@ -2975,23 +2994,22 @@ fn clip_edge_to_face_trim(face: &Face, edge: &Edge, tol: &Tolerance) -> Option<E
             }
         }
     }
+    if crossings.is_empty() {
+        return None;
+    }
     crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
     let span = t1 - t0;
-    let head = if start_gap <= on_boundary {
-        t0
+    // **切る端から数えて、いちばん近い交点**まで詰めます。
+    let head = if want_start { crossings[0] } else { t0 };
+    let tail = if want_end {
+        crossings[crossings.len() - 1]
     } else {
-        *crossings.first()?
-    };
-    let tail = if end_gap <= on_boundary {
         t1
-    } else {
-        let last = *crossings.last()?;
-        if last <= head + span * 1e-12 {
-            return None;
-        }
-        last
     };
+    if tail <= head + span * 1e-12 {
+        return None;
+    }
 
     let after_head = if head <= t0 + span * 1e-12 {
         curve.clone()
@@ -3017,6 +3035,41 @@ fn clip_edge_to_face_trim(face: &Face, edge: &Edge, tol: &Tolerance) -> Option<E
         Vertex::from_point(end),
         tol.linear,
     ))
+}
+
+/// 鎖の**両端だけ**を、面のトリム境界まで切り詰める。
+///
+/// 鎖の内側の継ぎ目（相方と共有している点）は動かしません。1本も動かな
+/// ければ `None`。
+fn clip_chain_to_face_trim(face: &Face, chain: &[Edge], tol: &Tolerance) -> Option<Vec<Edge>> {
+    // 端点が鎖の中で何回使われているか。2回なら継ぎ目、1回なら自由端。
+    let shared = |point: Point3, skip: usize| {
+        chain.iter().enumerate().any(|(index, other)| {
+            index != skip
+                && (points_same_3d(other.start_vertex.point, point, tol.linear)
+                    || points_same_3d(other.end_vertex.point, point, tol.linear))
+        })
+    };
+
+    let mut out = chain.to_vec();
+    let mut moved = false;
+    for index in 0..chain.len() {
+        let edge = &chain[index];
+        let clip_start = !shared(edge.start_vertex.point, index);
+        let clip_end = !shared(edge.end_vertex.point, index);
+        if !clip_start && !clip_end {
+            continue;
+        }
+        if let Some(clipped) = clip_edge_ends_to_face_trim(face, edge, clip_start, clip_end, tol) {
+            out[index] = clipped;
+            moved = true;
+        }
+    }
+    if moved {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 fn group_edges_into_chains(edges: &[Edge], tol: &Tolerance) -> Vec<Vec<Edge>> {
