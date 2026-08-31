@@ -462,6 +462,16 @@ fn tessellate_face_stitched(
 /// 各ループを、稜ごとに決めた刻み方で uv と 3D の点列にする
 fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
     let pcurves = face.pcurves.as_ref()?;
+    // 診断の口（4-209）。**ここで1回だけ読みます。**
+    let watch = std::env::var("ZENITH_RING_WATCH").ok().and_then(|value| {
+        let parts: Vec<f64> = value
+            .split(',')
+            .filter_map(|part| part.trim().parse().ok())
+            .collect();
+        (parts.len() == 3).then(|| Point3::new(parts[0], parts[1], parts[2]))
+    });
+    let drop_why = std::env::var_os("ZENITH_DROP_WHY").is_some();
+    let ring_why = std::env::var_os("ZENITH_RING_WHY").is_some();
     let wires: Vec<&Wire> = std::iter::once(&face.outer_wire)
         .chain(face.inner_wires.iter())
         .collect();
@@ -470,7 +480,7 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
     let mut out = Vec::new();
     for (wire, pcurve_loop) in wires.iter().zip(loops) {
         if pcurve_loop.segments.len() != wire.edges.len() {
-            if std::env::var_os("ZENITH_RING_WHY").is_some() {
+            if ring_why {
                 eprintln!(
                     "RINGWHY 面 {} は縫合に乗れない: p-curve の区間 {} 本に対し稜 {} 本",
                     face.id,
@@ -486,7 +496,7 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
 
         for (segment, oriented) in pcurve_loop.segments.iter().zip(wire.edges.iter()) {
             if segment.edge_id != oriented.edge.id {
-                if std::env::var_os("ZENITH_RING_WHY").is_some() {
+                if ring_why {
                     eprintln!(
                         "RINGWHY 面 {} は縫合に乗れない: p-curve は稜 {} を指しているが、ワイヤは稜 {}",
                         face.id, segment.edge_id, oriented.edge.id
@@ -536,13 +546,10 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
                 // **その点を、どの面がどの稜の何番目として出したか**
                 // （`ZENITH_RING_WATCH="x,y,z"`）。面をまたいだ継ぎ目が開く
                 // とき、片方の面にしか無い点を捕まえるための口です（4-209）。
-                if let Some(watch) = std::env::var("ZENITH_RING_WATCH").ok().and_then(|value| {
-                    let parts: Vec<f64> = value
-                        .split(',')
-                        .filter_map(|part| part.trim().parse().ok())
-                        .collect();
-                    (parts.len() == 3).then(|| Point3::new(parts[0], parts[1], parts[2]))
-                }) {
+                //
+                // **読み取りは関数の頭で1回だけ**です。標本1点ごとに環境変数を
+                // 引くと、診断を使っていないときまで遅くなります。
+                if let Some(watch) = watch {
                     if (point - watch).norm() <= 1e-6 {
                         eprintln!(
                             "RINGWATCH 面 {} が 稜 {} の step {step}/{segments} として出した ({:.9},{:.9},{:.9})",
@@ -562,7 +569,7 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
                     points.push(point);
                 } else {
                     dropped_here += 1;
-                    if std::env::var_os("ZENITH_DROP_WHY").is_some() {
+                    if drop_why {
                         eprintln!(
                             "DROPSTEP face {} edge {} step {step}/{segments}",
                             face.id, segment.edge_id
@@ -570,7 +577,7 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
                     }
                 }
             }
-            if std::env::var_os("ZENITH_DROP_WHY").is_some() && dropped_here > 0 {
+            if drop_why && dropped_here > 0 {
                 eprintln!(
                     "DROPWHY face {} edge {} 刻み {segments} のうち {dropped_here} 点を落とした",
                     face.id, segment.edge_id
@@ -589,7 +596,7 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
         //
         // 面をまたいだ継ぎ目が開くとき、いちばん知りたいのはこれです——
         // 同じ稜を共有している2枚が、同じ点を出しているか（4-209）。
-        if std::env::var_os("ZENITH_RING_WHY").is_some() {
+        if ring_why {
             let listed: Vec<String> = pcurve_loop
                 .segments
                 .iter()

@@ -126,6 +126,11 @@
 **6. 落ちた境界の点を戻す道を2つ足しました**（4-209）。`split_edge_carrying_point`
 と `force_missing_boundary_edges`。境界の辺の欠けは全126演算で 0 本です。
 
+**環境変数の読み取りは、いちばん外で1回だけ**にしてあります。標本1点ごとに
+`std::env::var` を引くと、**診断を使っていないときまで遅くなります**（`String`
+を1点ごとに作ることになります）。口を足すときは、内側のループに置かないで
+ください。
+
 **新しい口**: `face_budget_probe`、`edge_end_gap_probe`、`cone_torus_mesh_probe`、
 `ZENITH_RING_WHY`、`ZENITH_RING_WATCH`、`ZENITH_SPLIT_WATCH`、
 `ZENITH_NO_DELAUNAY_FLIP`。すべて

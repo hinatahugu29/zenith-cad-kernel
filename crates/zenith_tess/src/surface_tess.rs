@@ -1000,6 +1000,14 @@ pub(crate) fn refine_uv_triangulation_protected(
         bucket.1.push(position);
     }
     let mut skipped_for_weld = 0usize;
+    // 診断の口（4-209）。**細分に入る前に1回だけ読みます。**
+    let split_watch = std::env::var("ZENITH_SPLIT_WATCH").ok().and_then(|value| {
+        let parts: Vec<f64> = value
+            .split(',')
+            .filter_map(|part| part.trim().parse().ok())
+            .collect();
+        (parts.len() == 3).then(|| Point3::new(parts[0], parts[1], parts[2]))
+    });
 
     for _ in 0..MAX_REFINEMENT_PASSES {
         if triangles.len() * 2 > MAX_REFINED_TRIANGLES {
@@ -1100,13 +1108,7 @@ pub(crate) fn refine_uv_triangulation_protected(
             // 面をまたいだ継ぎ目が開くとき、片方の面だけが割っていることが
             // あります。**割った現場を、座標で名指しして捕まえる**ための口です
             // （4-209）。境界の点どうしなら、そこは守りの穴です。
-            if let Some(watch) = std::env::var("ZENITH_SPLIT_WATCH").ok().and_then(|value| {
-                let parts: Vec<f64> = value
-                    .split(',')
-                    .filter_map(|part| part.trim().parse().ok())
-                    .collect();
-                (parts.len() == 3).then(|| Point3::new(parts[0], parts[1], parts[2]))
-            }) {
+            if let Some(watch) = split_watch {
                 if (position - watch).norm() <= 1e-6 {
                     eprintln!(
                         "SPLITWATCH 中点 ({:.9},{:.9},{:.9}) を作った: 辺 [{}]-[{}]（境界の点か: {} / {}、境界の点は {} 個）",
