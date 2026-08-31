@@ -533,6 +533,24 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
                 // **落としても継ぎ目は開きません。** どの点を落とすかは稜の
                 // 幾何と刻み方だけで決まり、隣の面も同じ稜を同じ割合で標本
                 // するので、同じ点を落とします。
+                // **その点を、どの面がどの稜の何番目として出したか**
+                // （`ZENITH_RING_WATCH="x,y,z"`）。面をまたいだ継ぎ目が開く
+                // とき、片方の面にしか無い点を捕まえるための口です（4-209）。
+                if let Some(watch) = std::env::var("ZENITH_RING_WATCH").ok().and_then(|value| {
+                    let parts: Vec<f64> = value
+                        .split(',')
+                        .filter_map(|part| part.trim().parse().ok())
+                        .collect();
+                    (parts.len() == 3).then(|| Point3::new(parts[0], parts[1], parts[2]))
+                }) {
+                    if (point - watch).norm() <= 1e-6 {
+                        eprintln!(
+                            "RINGWATCH 面 {} が 稜 {} の step {step}/{segments} として出した ({:.9},{:.9},{:.9})",
+                            face.id, segment.edge_id, point.x, point.y, point.z
+                        );
+                    }
+                }
+
                 let duplicate = points
                     .last()
                     .map(|last: &Point3| {
@@ -1130,10 +1148,21 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
         }
     }
 
+    // **同じ3頂点でも、向きが逆なら別の三角形です**（4-209）。
+    //
+    // 面と面が一直線の境界で出会うところでは、**両側の面が同じ3頂点の薄片を
+    // 1枚ずつ出します**。閉じた立体としては2枚とも要ります——向きが逆で、
+    // それぞれ別の側を向いているからです。並べ替えて突き合わせると、片方が
+    // 「重複」として外され、**その2辺が相手を失って穴になります**。
+    //
+    // 実測（`box × cone`、母線が面に乗る配置の積。内側の対角線の入れ替えを
+    // 入れたとき）: `同じ3頂点の重複 1` が出て、非多様体の稜が3本。
+    //
+    // 向きを保ったまま、いちばん小さい添字が先に来るように**回すだけ**に
+    // します。同じ向きの重複はこれまでどおり外れます。
     let sorted_triangle = |t: [u32; 3]| {
-        let mut arr = t;
-        arr.sort_unstable();
-        arr
+        let smallest = (0..3).min_by_key(|corner| t[*corner]).unwrap_or(0);
+        [t[smallest], t[(smallest + 1) % 3], t[(smallest + 2) % 3]]
     };
 
     let mut seen: std::collections::HashMap<[u32; 3], usize> = Default::default();

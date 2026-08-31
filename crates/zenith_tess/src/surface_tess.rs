@@ -1095,6 +1095,41 @@ pub(crate) fn refine_uv_triangulation_protected(
                 continue;
             }
 
+            // **この中点を作ったのは誰か**（`ZENITH_SPLIT_WATCH="x,y,z"`）。
+            //
+            // 面をまたいだ継ぎ目が開くとき、片方の面だけが割っていることが
+            // あります。**割った現場を、座標で名指しして捕まえる**ための口です
+            // （4-209）。境界の点どうしなら、そこは守りの穴です。
+            if let Some(watch) = std::env::var("ZENITH_SPLIT_WATCH").ok().and_then(|value| {
+                let parts: Vec<f64> = value
+                    .split(',')
+                    .filter_map(|part| part.trim().parse().ok())
+                    .collect();
+                (parts.len() == 3).then(|| Point3::new(parts[0], parts[1], parts[2]))
+            }) {
+                if (position - watch).norm() <= 1e-6 {
+                    eprintln!(
+                        "SPLITWATCH 中点 ({:.9},{:.9},{:.9}) を作った: 辺 [{}]-[{}]（境界の点か: {} / {}、境界の点は {} 個）",
+                        position.x,
+                        position.y,
+                        position.z,
+                        edge.0,
+                        edge.1,
+                        edge.0 < boundary_vertex_count,
+                        edge.1 < boundary_vertex_count,
+                        boundary_vertex_count
+                    );
+                    eprintln!(
+                        "SPLITWATCH   uv ({:.9},{:.9})-({:.9},{:.9})、protected か: {}",
+                        uvs[edge.0].x,
+                        uvs[edge.0].y,
+                        uvs[edge.1].x,
+                        uvs[edge.1].y,
+                        protected.contains(&edge_key(edge.0, edge.1))
+                    );
+                }
+            }
+
             let index = uvs.len();
             midpoints.insert(edge, index);
             uvs.push(midpoint);
