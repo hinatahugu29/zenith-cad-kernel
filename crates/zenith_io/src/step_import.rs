@@ -1595,6 +1595,19 @@ impl StepImporter {
             if let Some(nurbs) = patch {
                 return Ok(FaceGeometry::Nurbs(nurbs));
             }
+            // **境界に合わせた解析パッチを作れませんでした**（`ZENITH_STEP_WHY=1`）。
+            //
+            // ここで落ちると `get_surface` の**決め打ちのパッチ**（トーラスなら
+            // 90度 x 90度）に落ちます。面がそこに乗っていなければ、境界の点は
+            // **全部**曲面から外れます——実測（4-228）: `screw.step` の
+            // トーラス面3枚と円錐面2枚が、27/27・117/117 点とも外れました。
+            if std::env::var_os("ZENITH_STEP_WHY").is_some() {
+                eprintln!(
+                    "STEPWHY 曲面 #{id} {} は境界に合わせたパッチを作れず、決め打ちのパッチに落ちました（境界の点 {} 個）",
+                    raw.name,
+                    boundary_points.len()
+                );
+            }
         }
 
         Self::get_surface(ctx, id)
@@ -2141,6 +2154,35 @@ impl StepImporter {
             } else {
                 Orientation::Reversed
             };
+            // **面ごとに、境界の点が曲面からどれだけ離れているかを出す口**
+            // （`ZENITH_STEP_WHY=1`）。読めなかったファイルで、悪いのが曲線
+            // なのか面なのかを分けたあと、**どの曲面の実体か**まで名指しする
+            // ためです（4-228）。
+            if std::env::var_os("ZENITH_STEP_WHY").is_some() {
+                let kind = ctx
+                    .raw_entities
+                    .get(&surface_id)
+                    .map(|raw| raw.name.clone())
+                    .unwrap_or_else(|| "?".to_string());
+                let probe = Face::new(
+                    geom.clone(),
+                    outer.clone(),
+                    inner_wires.clone(),
+                    orientation,
+                    1e-6,
+                );
+                let report =
+                    probe.validate_boundary_on_surface(&Self::import_tolerance(ctx), 8);
+                if report.max_distance > 1e-6 {
+                    eprintln!(
+                        "STEPWHY ADVANCED_FACE #{face_id} 曲面 #{surface_id} {kind} 境界の点が曲面から最大 {:.6e}（{} / {} 点が外れ）",
+                        report.max_distance,
+                        report.off_surface_point_count,
+                        report.sampled_point_count
+                    );
+                }
+            }
+
             let face = Face::new(geom, outer, inner_wires, orientation, 1e-6);
             ctx.faces.insert(face_id, face.clone());
             return Ok(face);
@@ -3486,6 +3528,16 @@ fn torus_patch_for_boundary(
         // 芯円までの距離が副半径に一致していなければ、この面はトーラス上に無い。
         let from_core = ((radial_distance - major_radius).powi(2) + axial * axial).sqrt();
         if (from_core - minor_radius).abs() > scale * 1e-3 {
+            // **境界の点がトーラスの上に乗っていません**（`ZENITH_STEP_WHY=1`）。
+            // どれだけ外れているかを出します——公差の話なのか、そもそも別の
+            // 曲面なのかは、この数字で分かれます（4-228）。
+            if std::env::var_os("ZENITH_STEP_WHY").is_some() {
+                eprintln!(
+                    "STEPWHY   トーラス（芯 {major_radius:.6}、管 {minor_radius:.6}）の上に乗らない点: 芯からの距離 {from_core:.6}（差 {:.6e}、許す幅 {:.6e}）",
+                    (from_core - minor_radius).abs(),
+                    scale * 1e-3
+                );
+            }
             return None;
         }
         if radial_distance > major_radius.abs().max(1.0) * 1e-6 {
