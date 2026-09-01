@@ -612,8 +612,35 @@ impl StepImporter {
                 let v_start = Self::get_vertex(ctx, v_start_id)?;
                 let v_end = Self::get_vertex(ctx, v_end_id)?;
                 let mut curve = Self::get_curve(ctx, curve_id, v_start.point, v_end.point)?;
+                // **稜の頂点で切り詰めます**（4-228）。丸ごと使う稜では
+                // 何も起きません。
+                curve = Self::trim_curve_to_vertices(
+                    curve,
+                    v_start.point,
+                    v_end.point,
+                    Self::import_tolerance(ctx).linear,
+                );
                 if !same_sense {
                     curve = curve.reversed();
+                }
+
+                // **稜ごとに、曲線の端が頂点とどれだけ離れているかを出す口**
+                // （`ZENITH_STEP_WHY=1`）。読めなかったファイルで、どの曲線の
+                // 種類が悪いのかを推測せずに見るためです（4-228）。
+                if std::env::var_os("ZENITH_STEP_WHY").is_some() {
+                    let (t_min, t_max) = curve.param_range();
+                    let gap_start = (curve.evaluate(t_min) - v_start.point).norm();
+                    let gap_end = (curve.evaluate(t_max) - v_end.point).norm();
+                    if gap_start.max(gap_end) > 1e-6 {
+                        let kind = ctx
+                            .raw_entities
+                            .get(&curve_id)
+                            .map(|raw| raw.name.clone())
+                            .unwrap_or_else(|| "?".to_string());
+                        eprintln!(
+                            "STEPWHY EDGE_CURVE #{id} 曲線 #{curve_id} {kind} same_sense={same_sense} 端のずれ 始 {gap_start:.6e} 終 {gap_end:.6e}"
+                        );
+                    }
                 }
 
                 let edge = Edge::new(curve, v_start, v_end, 1e-6);
@@ -738,6 +765,73 @@ impl StepImporter {
              TRIMMED_CURVE, SURFACE_CURVE, SEAM_CURVE and (rational) B_SPLINE_CURVE_WITH_KNOTS",
             raw.name, id
         ))
+    }
+
+    /// **稜の頂点で、曲線を切り詰める**（4-228）。
+    ///
+    /// `EDGE_CURVE` の頂点は、曲線の**どこからどこまでを使うか**を決めます。
+    /// 自分が書いた STEP では稜が曲線を丸ごと使うので、これまで切り詰めなくても
+    /// 合っていました。**実物のデータはそうではありません**——実測: OCCT の
+    /// `screw.step` で、B スプラインの端が頂点から **10.18** 離れていました
+    /// （`EDGE_CURVE #336`。曲線 `#340` を途中まで使う稜）。
+    ///
+    /// 端のずれが公差の中なら**何もしません**（丸ごと使う稜がほとんどです）。
+    /// 曲線に無い点を指している稜は、切り詰めても直らないので、そのまま返して
+    /// 下流の検査に任せます——**黙って形を変えるより、断るほうが安全です**。
+    fn trim_curve_to_vertices(
+        curve: NurbsCurve3,
+        p_start: Point3,
+        p_end: Point3,
+        limit: f64,
+    ) -> NurbsCurve3 {
+        let (t_min, t_max) = curve.param_range();
+        let gap_start = (curve.evaluate(t_min) - p_start).norm();
+        let gap_end = (curve.evaluate(t_max) - p_end).norm();
+        if gap_start <= limit && gap_end <= limit {
+            return curve;
+        }
+
+        // 曲線の上でいちばん近いところを探す。**粗く撒いてから詰めます**
+        // （`ExtremumEngine` は `zenith_algo` にあり、ここからは使えません）。
+        let nearest = |point: Point3| -> (f64, f64) {
+            const SAMPLES: usize = 512;
+            let mut best = (t_min, f64::INFINITY);
+            for step in 0..=SAMPLES {
+                let t = t_min + (t_max - t_min) * (step as f64 / SAMPLES as f64);
+                let distance = (curve.evaluate(t) - point).norm();
+                if distance < best.1 {
+                    best = (t, distance);
+                }
+            }
+            let mut window = (t_max - t_min) / SAMPLES as f64;
+            for _ in 0..48 {
+                for side in [-1.0, 1.0] {
+                    let t = (best.0 + side * window).clamp(t_min, t_max);
+                    let distance = (curve.evaluate(t) - point).norm();
+                    if distance < best.1 {
+                        best = (t, distance);
+                    }
+                }
+                window *= 0.5;
+            }
+            best
+        };
+
+        let (t_start, near_start) = nearest(p_start);
+        let (t_end, near_end) = nearest(p_end);
+        // **頂点が曲線の上に無いなら、切り詰めても直りません。**
+        if near_start > limit || near_end > limit || !(t_start < t_end) {
+            return curve;
+        }
+
+        let trimmed = curve
+            .split_at(t_start)
+            .map(|(_, back)| back)
+            .unwrap_or_else(|| curve.clone());
+        trimmed
+            .split_at(t_end)
+            .map(|(front, _)| front)
+            .unwrap_or(trimmed)
     }
 
     fn parse_nurbs_curve(
