@@ -144,6 +144,43 @@ fn main() {
             }
         }
 
+        // **どのトーラスのパッチで相補になっていないか**（4-245）。
+        // 曲面ごとに、元の面の寄与と、和・積に入った片の寄与の合計を比べます。
+        {
+            let mut per_surface: Vec<(Vec<[i64; 3]>, f64, f64)> = Vec::new();
+            for face in faces_of(&a) {
+                if let Some(key) = surface_key(face) {
+                    per_surface.push((key, face_contribution(face), 0.0));
+                }
+            }
+            for solid in union.solids.iter().chain(intersection.solids.iter()) {
+                for face in faces_of(solid) {
+                    let Some(key) = surface_key(face) else {
+                        continue;
+                    };
+                    if let Some(entry) = per_surface.iter_mut().find(|entry| entry.0 == key) {
+                        entry.2 += face_contribution(face);
+                    }
+                }
+            }
+            let mut rows: Vec<(f64, f64, f64)> = per_surface
+                .iter()
+                .map(|(_, whole, pieces)| ((pieces - whole).abs(), *whole, *pieces))
+                .collect();
+            rows.sort_by(|left, right| right.0.total_cmp(&left.0));
+            let broken = rows.iter().filter(|row| row.0 > 1e-12).count();
+            println!(
+                "    トーラスの面 {} 枚のうち、相補になっていないもの {broken} 枚",
+                rows.len()
+            );
+            for (gap, whole, pieces) in rows.iter().take(3) {
+                if *gap <= 1e-12 {
+                    break;
+                }
+                println!("      ずれ {gap:.3e}（元 {whole:.12e}、片の合計 {pieces:.12e}）");
+            }
+        }
+
         let a_residual = from_a - a_whole;
         let b_residual = from_b - b_whole;
         let identity = (from_a + from_b + unmatched) - (a_whole + b_whole);
