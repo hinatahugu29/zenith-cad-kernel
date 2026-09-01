@@ -301,6 +301,84 @@ fn main() {
             );
         }
 
+        // **同じパッチの、和の片と積の片の「切り口」を UV で突き合わせます**
+        // （4-249。最後の1測定）。
+        //
+        // 片を足すと切り口の寄与は打ち消し合うはずです——**2つの切り口が
+        // 同じ曲線なら**。番号は共有していない（4-247）ので、**幾何で**
+        // 比べます。
+        {
+            // パッチの縁に乗っている区間は切り口ではありません。
+            let is_on_patch_edge = |samples: &[Point2]| -> bool {
+                let edge_value = |value: f64| value.abs() < 1e-9 || (value - 1.0).abs() < 1e-9;
+                samples.iter().all(|uv| edge_value(uv.x)) || samples.iter().all(|uv| edge_value(uv.y))
+            };
+            let cut_of = |face: &Face| -> Vec<Vec<Point2>> {
+                let Ok(pcurves) = face.pcurves(&tol) else {
+                    return Vec::new();
+                };
+                let mut out = Vec::new();
+                for segment in pcurves.outer_loop.segments.iter().chain(
+                    pcurves
+                        .inner_loops
+                        .iter()
+                        .flat_map(|loops| loops.segments.iter()),
+                ) {
+                    let (t_min, t_max) = segment.curve.param_range();
+                    let samples: Vec<Point2> = (0..=64)
+                        .map(|step| {
+                            segment
+                                .curve
+                                .evaluate(t_min + (t_max - t_min) * (step as f64 / 64.0))
+                        })
+                        .collect();
+                    if !is_on_patch_edge(&samples) {
+                        out.push(samples);
+                    }
+                }
+                out
+            };
+
+            let mut compared = 0usize;
+            let mut worst_gap = 0.0f64;
+            for face_u in union.solids.iter().flat_map(|solid| faces_of(solid)) {
+                let Some(key) = surface_key(face_u) else {
+                    continue;
+                };
+                if !a_keys.contains(&key) {
+                    continue;
+                }
+                let Some(face_i) = intersection
+                    .solids
+                    .iter()
+                    .flat_map(|solid| faces_of(solid))
+                    .find(|other| surface_key(other).as_ref() == Some(&key))
+                else {
+                    continue;
+                };
+                let (cuts_u, cuts_i) = (cut_of(face_u), cut_of(face_i));
+                if cuts_u.is_empty() || cuts_i.is_empty() {
+                    continue;
+                }
+                compared += 1;
+                // 片方の標本ごとに、もう片方のいちばん近い点までの距離。
+                for left in &cuts_u {
+                    for point in left {
+                        let mut best = f64::INFINITY;
+                        for right in &cuts_i {
+                            for other in right {
+                                best = best.min((other - point).norm());
+                            }
+                        }
+                        worst_gap = worst_gap.max(best);
+                    }
+                }
+            }
+            println!(
+                "    切り口の突き合わせ: {compared} 枚で比べ、UV の最大差 **{worst_gap:.3e}**"
+            );
+        }
+
         let a_residual = from_a - a_whole;
         let b_residual = from_b - b_whole;
         let identity = (from_a + from_b + unmatched) - (a_whole + b_whole);
