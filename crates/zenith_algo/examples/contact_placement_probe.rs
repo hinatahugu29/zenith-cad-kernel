@@ -1205,9 +1205,7 @@ fn main() {
     // するのは実装が足りないほうだけ**です。ここが 0 であることは長く
     // 文書の主張でしたが、ゲートではありませんでした。
     if unimplemented > 0 {
-        eprintln!(
-            "GATE ERROR: {unimplemented} operations were refused as \"not implemented yet\""
-        );
+        eprintln!("GATE ERROR: {unimplemented} operations were refused as \"not implemented yet\"");
         std::process::exit(1);
     }
 }

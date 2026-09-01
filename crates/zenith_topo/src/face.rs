@@ -669,11 +669,19 @@ fn match_nurbs_boundary_pcurve(
         let middle = edge.evaluate_normalized(0.5);
         format!("({:.9},{:.9},{:.9})", middle.x, middle.y, middle.z)
     };
-    if let Ok(curve) = match_nurbs_outer_boundary_pcurve(edge, surface, tol, samples_per_edge) {
-        if why {
-            eprintln!("PCURVEPATH {} : パッチの縁に合わせた", fingerprint());
+    // **近道を止める口**（`ZENITH_NO_PCURVE_SHORTCUT=1`。4-253）。
+    //
+    // H6 の原因は「同じ切り口が、和と積で別の道を通る」ことでした（4-252）。
+    // **道を1本に決めれば直るのか**を、実装を入れる前に測るための口です。
+    // **答えが変わります**——速くするために外す口ではありません。
+    let no_shortcut = std::env::var_os("ZENITH_NO_PCURVE_SHORTCUT").is_some();
+    if !no_shortcut {
+        if let Ok(curve) = match_nurbs_outer_boundary_pcurve(edge, surface, tol, samples_per_edge) {
+            if why {
+                eprintln!("PCURVEPATH {} : パッチの縁に合わせた", fingerprint());
+            }
+            return Ok(curve);
         }
-        return Ok(curve);
     }
 
     if let Ok(curve) = match_affine_patch_pcurve(edge, surface, tol) {
@@ -882,6 +890,20 @@ fn match_nurbs_outer_boundary_pcurve(
             "Edge {} is not on a NURBS iso-boundary; max distance {distance:.6e}",
             edge.edge.id
         ));
+    }
+
+    // **受け入れた距離を出します**（`ZENITH_PCURVE_WHY=1`。4-253）。
+    //
+    // 判定は**絶対 1e-5**です。本当にパッチの縁に乗る稜は距離がほぼ 0 の
+    // はずなので、**分布が二山なら、閾値を下げても縁の稜は落ちません**。
+    // H6 は「同じ切り口が演算ごとに違う道を通る」ことが原因なので
+    // （4-252）、**裏返る余地がどれくらいあるか**をここで測ります。
+    if std::env::var_os("ZENITH_PCURVE_WHY").is_some() {
+        // パッチの大きさも添えます。絶対の閾値が模型に対してどれくらいかは、
+        // これがないと分かりません。
+        let ((a, b), (c, d)) = surface.param_range();
+        let span = (surface.evaluate(a, c) - surface.evaluate(b, d)).norm();
+        eprintln!("PCURVEEDGE 受け入れた距離 {distance:.6e}  パッチの差し渡し {span:.6e}");
     }
 
     NurbsCurve2::bspline_from_points(1, vec![uv0, uv1])

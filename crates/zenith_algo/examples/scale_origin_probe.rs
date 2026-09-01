@@ -19,9 +19,7 @@
 //! 4-230 で交線の精度、4-231 で体積の積分が**それぞれ無罪**になったので、
 //! 残っているのは「どこを切って、どの片を採るか」です。**その中を、さらに
 //! 2つに割ります。**
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
@@ -99,8 +97,8 @@ fn main() {
         let (a1, b1) = built_small(scale);
         let built = identity_residual(&a1, &b1, &tol);
 
-        let shrunk = built_then_shrunk(scale)
-            .and_then(|(a2, b2)| identity_residual(&a2, &b2, &tol));
+        let shrunk =
+            built_then_shrunk(scale).and_then(|(a2, b2)| identity_residual(&a2, &b2, &tol));
 
         let show = |value: Option<(f64, f64, f64)>, pick: usize| -> String {
             match value {

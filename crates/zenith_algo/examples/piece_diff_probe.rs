@@ -20,9 +20,7 @@
 //!
 //! 面積ではなく寄与で見るのは、**面がどこにあるかが効く**からです（4-225 で
 //! 「面積のずれより体積のずれが 64 倍大きい」と測っています）。
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::{Face, Shell, Solid};
@@ -188,7 +186,11 @@ fn main() {
                 let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry else {
                     continue;
                 };
-                for (edge, segment) in face.outer_wire.edges.iter().zip(pcurves.outer_loop.segments.iter())
+                for (edge, segment) in face
+                    .outer_wire
+                    .edges
+                    .iter()
+                    .zip(pcurves.outer_loop.segments.iter())
                 {
                     let (t_min, t_max) = segment.curve.param_range();
                     for step in 0..=64 {
@@ -292,9 +294,7 @@ fn main() {
         for (volume, centre) in &measured {
             let Some((closest, distance)) = reference
                 .iter()
-                .map(|(other_volume, other_centre)| {
-                    (*other_volume, (other_centre - centre).norm())
-                })
+                .map(|(other_volume, other_centre)| (*other_volume, (other_centre - centre).norm()))
                 .min_by(|left, right| left.1.total_cmp(&right.1))
             else {
                 continue;

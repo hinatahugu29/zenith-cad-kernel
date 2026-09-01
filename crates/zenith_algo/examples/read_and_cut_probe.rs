@@ -74,8 +74,11 @@ fn non_manifold_edges(solid: &Solid) -> usize {
 }
 
 fn occt_sample(name: &str) -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../reference/OCCT/data/step"))
-        .join(name)
+    PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../reference/OCCT/data/step"
+    ))
+    .join(name)
 }
 
 fn main() {
@@ -128,8 +131,7 @@ fn main() {
         // **半分に食い込む箱**で切ります。中心を通す置き方は、面をいちばん
         // 多く割ります。
         let cutter = BrepTransform::translate_solid(
-            &PrimitiveBuilder::make_box(span.x, span.y, span.z * 0.5)
-                .expect("cutter"),
+            &PrimitiveBuilder::make_box(span.x, span.y, span.z * 0.5).expect("cutter"),
             Vec3::new(bbox.min.x, bbox.min.y, bbox.min.z + span.z * 0.25),
         );
         let vb = volume(std::slice::from_ref(&cutter));

@@ -301,7 +301,7 @@ fn ensure_similar(transform: &Transform3) -> Result<f64, String> {
         for other in axes.iter().skip(index + 1) {
             if axis.dot(other).abs() > SIMILARITY_TOLERANCE * scale * scale {
                 return Err(
-                    "B-Rep transform must be a similarity; axes are not orthogonal".to_string()
+                    "B-Rep transform must be a similarity; axes are not orthogonal".to_string(),
                 );
             }
         }

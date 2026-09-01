@@ -16,9 +16,7 @@
 //!
 //! 支持曲面の**制御点そのもの**で照合します。ブーリアンは面を切り分けても
 //! **支持曲面は共有する**ので、元の立体の曲面と一致します。
-use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
-};
+use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_math::{Point2, Point3, Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::{Face, FaceGeometry, Shell, Solid};
@@ -100,7 +98,8 @@ fn main() {
 
     for scale in scales {
         let (a, b) = build(scale);
-        let Ok(union) = BooleanEngine::boolean_solids_exact_result(&a, &b, BooleanOpType::Union, &tol)
+        let Ok(union) =
+            BooleanEngine::boolean_solids_exact_result(&a, &b, BooleanOpType::Union, &tol)
         else {
             println!("{scale:>8}  和が断られました");
             continue;
@@ -222,13 +221,17 @@ fn main() {
                 );
                 MassCalculator::compute_from_mesh(&mesh).volume
             };
-            let analytic_union: f64 = union.solids.iter().map(|solid| {
-                MassCalculator::compute_from_brep(solid, &params()).volume
-            }).sum();
+            let analytic_union: f64 = union
+                .solids
+                .iter()
+                .map(|solid| MassCalculator::compute_from_brep(solid, &params()).volume)
+                .sum();
             let mesh_union: f64 = union.solids.iter().map(mesh_volume).sum();
-            let analytic_intersection: f64 = intersection.solids.iter().map(|solid| {
-                MassCalculator::compute_from_brep(solid, &params()).volume
-            }).sum();
+            let analytic_intersection: f64 = intersection
+                .solids
+                .iter()
+                .map(|solid| MassCalculator::compute_from_brep(solid, &params()).volume)
+                .sum();
             let mesh_intersection: f64 = intersection.solids.iter().map(mesh_volume).sum();
             // **メッシュの物差しは粗すぎます**（4-248）。弦誤差で 0.2〜1% ずれる
             // ので、**6.8e-10 の取りこぼしは分解できません**。突き合わせに
@@ -258,7 +261,10 @@ fn main() {
                             continue;
                         };
                         for segment in pcurves.outer_loop.segments.iter().chain(
-                            pcurves.inner_loops.iter().flat_map(|loops| loops.segments.iter()),
+                            pcurves
+                                .inner_loops
+                                .iter()
+                                .flat_map(|loops| loops.segments.iter()),
                         ) {
                             out.entry(segment.edge_id).or_insert_with(|| {
                                 segment
@@ -311,7 +317,8 @@ fn main() {
             // パッチの縁に乗っている区間は切り口ではありません。
             let is_on_patch_edge = |samples: &[Point2]| -> bool {
                 let edge_value = |value: f64| value.abs() < 1e-9 || (value - 1.0).abs() < 1e-9;
-                samples.iter().all(|uv| edge_value(uv.x)) || samples.iter().all(|uv| edge_value(uv.y))
+                samples.iter().all(|uv| edge_value(uv.x))
+                    || samples.iter().all(|uv| edge_value(uv.y))
             };
             let cut_of = |face: &Face| -> Vec<Vec<Point2>> {
                 let Ok(pcurves) = face.pcurves(&tol) else {

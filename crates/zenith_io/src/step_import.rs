@@ -313,8 +313,7 @@ impl StepImporter {
             // 後者は `( ... UNCERTAINTY_MEASURE_WITH_UNIT(...) ... )` です。
             let args = if raw.name == "UNCERTAINTY_MEASURE_WITH_UNIT" {
                 raw.args.as_str()
-            } else if let Some(inner) =
-                Self::token_args(&raw.args, "UNCERTAINTY_MEASURE_WITH_UNIT")
+            } else if let Some(inner) = Self::token_args(&raw.args, "UNCERTAINTY_MEASURE_WITH_UNIT")
             {
                 inner
             } else {
@@ -2171,8 +2170,7 @@ impl StepImporter {
                     orientation,
                     1e-6,
                 );
-                let report =
-                    probe.validate_boundary_on_surface(&Self::import_tolerance(ctx), 8);
+                let report = probe.validate_boundary_on_surface(&Self::import_tolerance(ctx), 8);
                 if report.max_distance > 1e-6 {
                     eprintln!(
                         "STEPWHY ADVANCED_FACE #{face_id} 曲面 #{surface_id} {kind} 境界の点が曲面から最大 {:.6e}（{} / {} 点が外れ）",
