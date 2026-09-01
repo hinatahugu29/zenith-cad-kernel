@@ -147,10 +147,29 @@ fn main() {
         // **どのトーラスのパッチで相補になっていないか**（4-245）。
         // 曲面ごとに、元の面の寄与と、和・積に入った片の寄与の合計を比べます。
         {
-            let mut per_surface: Vec<(Vec<[i64; 3]>, f64, f64)> = Vec::new();
+            // **パッチの位置も添えます**（4-246）。どの 8 枚かが分からないと、
+            // 切られる側の半分なのか継ぎ目の側なのかを決められません。
+            let centre_of = |face: &Face| -> Point3 {
+                let FaceGeometry::Nurbs(surface) = &face.geometry else {
+                    return Point3::new(0.0, 0.0, 0.0);
+                };
+                let mut sum = Vec3::new(0.0, 0.0, 0.0);
+                let mut count = 0.0f64;
+                for row in &surface.control_points {
+                    for control in row {
+                        sum += Vec3::new(control.point.x, control.point.y, control.point.z);
+                        count += 1.0;
+                    }
+                }
+                if count <= 0.0 {
+                    return Point3::new(0.0, 0.0, 0.0);
+                }
+                Point3::new(sum.x / count, sum.y / count, sum.z / count)
+            };
+            let mut per_surface: Vec<(Vec<[i64; 3]>, f64, f64, Point3)> = Vec::new();
             for face in faces_of(&a) {
                 if let Some(key) = surface_key(face) {
-                    per_surface.push((key, face_contribution(face), 0.0));
+                    per_surface.push((key, face_contribution(face), 0.0, centre_of(face)));
                 }
             }
             for solid in union.solids.iter().chain(intersection.solids.iter()) {
@@ -163,9 +182,11 @@ fn main() {
                     }
                 }
             }
-            let mut rows: Vec<(f64, f64, f64)> = per_surface
+            let mut rows: Vec<(f64, f64, f64, Point3)> = per_surface
                 .iter()
-                .map(|(_, whole, pieces)| ((pieces - whole).abs(), *whole, *pieces))
+                .map(|(_, whole, pieces, centre)| {
+                    ((pieces - whole).abs(), *whole, *pieces, *centre)
+                })
                 .collect();
             rows.sort_by(|left, right| right.0.total_cmp(&left.0));
             let broken = rows.iter().filter(|row| row.0 > 1e-12).count();
@@ -173,11 +194,14 @@ fn main() {
                 "    トーラスの面 {} 枚のうち、相補になっていないもの {broken} 枚",
                 rows.len()
             );
-            for (gap, whole, pieces) in rows.iter().take(3) {
+            for (gap, _whole, _pieces, centre) in rows.iter().take(8) {
                 if *gap <= 1e-12 {
                     break;
                 }
-                println!("      ずれ {gap:.3e}（元 {whole:.12e}、片の合計 {pieces:.12e}）");
+                println!(
+                    "      ずれ {gap:.3e}  パッチの中心 ({:.6}, {:.6}, {:.6})",
+                    centre.x, centre.y, centre.z
+                );
             }
         }
 
