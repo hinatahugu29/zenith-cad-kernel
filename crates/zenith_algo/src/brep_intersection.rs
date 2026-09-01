@@ -6647,6 +6647,17 @@ fn intersect_face_supports(
         }
         (FaceGeometry::Nurbs(surface), FaceGeometry::Plane(plane)) => {
             if planar_rim_touches_section_circle(face_b, plane, surface, tol) {
+                // **黙って落とさない**（`ZENITH_SSI_WHY=1`。4-269）。
+                //
+                // ここは「接しているだけ」と判断して組を捨てる出口です。
+                // 捨てた組は交線を1本も出さないので、面が割れず、分類が
+                // 丸ごと片側に倒れます。**理由が出ないと、交線が 0 本という
+                // 事実だけが残ります**（4-267 の `linkrods.step` がそれでした）。
+                if std::env::var_os("ZENITH_SSI_WHY").is_some() {
+                    eprintln!(
+                        "SSIWHY 曲面×平面: 平面の縁が断面の円に接していると見て組を捨てました"
+                    );
+                }
                 return None;
             }
             Some(
@@ -6707,6 +6718,11 @@ fn intersect_planar_face_with_patch(
     tol: &Tolerance,
 ) -> FaceIntersectionKind {
     let Some(patch) = planar_face_as_patch(planar_face, plane) else {
+        // **黙って落とさない**（4-269）。平面の面を有界なパッチに直せない
+        // なら、交線は辿れません。
+        if std::env::var_os("ZENITH_SSI_WHY").is_some() {
+            eprintln!("SSIWHY 平面の面を有界なパッチに直せませんでした（境界の点が取れない）");
+        }
         return FaceIntersectionKind::Unsupported;
     };
     intersect_nurbs_patches(&patch, surface, tol)
