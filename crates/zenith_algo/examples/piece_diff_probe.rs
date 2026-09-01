@@ -76,7 +76,13 @@ fn build(s: f64) -> (Solid, Solid) {
 
 fn main() {
     let tol = Tolerance::default();
-    let small = 0.01_f64;
+    // **比べる桁を変えられるようにします**（`ZENITH_SMALL_SCALE`。4-243）。
+    // 4-242 で「0.02 と 0.01 のあいだで切り替わっている」と分かったので、
+    // 両方で流して出力を diff するのに要ります。
+    let small = std::env::var("ZENITH_SMALL_SCALE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0.01_f64);
 
     for (label, op) in [
         ("intersection", BooleanOpType::Intersection),
