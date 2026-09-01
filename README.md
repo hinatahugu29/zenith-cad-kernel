@@ -4,7 +4,9 @@
 
 1. [`HANDOVER.md`](HANDOVER.md) — 現在地点、作業ブランチ、次に着手する候補
    （**次の方針は 9-H**。段取りと数値目標 **H1〜H8** がここにあります。
-   **H1〜H5 は達成済み**で、いま追うのは **H6〜H8**）
+   **H1〜H7 は達成済み**で、いま追うのは **H8 だけ**です。H6 は 2026/09/02 に
+   達成しました——射影の収束判定の**単位が合っていなかった**のが原因で、
+   `scale_sweep_probe` の門を **0.005 まで**下げて破れ 0 です。4-259）
 2. [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) — 主張を再測定する手順
 3. [`KERNEL_SPECS.md`](KERNEL_SPECS.md) — 現在の仕様と実装範囲
 4. [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) — 機能一覧と制限
@@ -36,7 +38,13 @@ cargo run --release -p zenith_algo --example foreign_cross_pair_probe
 **掃く軸は4本目まで来ています**——「置き方」（`contact_placement_probe`）、
 「大きさの桁」（`scale_sweep_probe`）、「自分の出力を入力に戻す」
 （`rechained_boolean_probe`）は枯れました。**4本目の「読んだ立体（STEP）を
-切る」は未着手**です（9-H の H8。検体は `reference/OCCT`）。
+切る」は着手済み**です（9-H の H8。検体は `reference/OCCT`、掃き出しは
+`read_and_cut_probe`）。
+
+2026/09/02 の時点で、**OCCT が配る実物の STEP が2つとも読めて切れます**
+（`screw.step`、`linkrods.step`）。**ただし目標の「恒等式の破れ 0」には
+届いていません**——メッシュ非多様体が出ること、`linkrods.step` の演算が
+返らないこと（**射影の 9 割が p-curve の導出**。4-271）が残っています。
 
 **閉じた式が無くても、恒等式なら測れます。** 2026/08/28 に直した誤答3件は
 **3件とも恒等式でしか見えませんでした**——面は閉じ、非多様体でもなく、
