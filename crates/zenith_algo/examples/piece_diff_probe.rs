@@ -170,6 +170,8 @@ fn main() {
         // 対応だけがずれています**。
         let correspondence = |solid: &Solid| {
             let (mut same_fraction, mut nearest_anywhere) = (0.0f64, 0.0f64);
+            let mut worst_edge = 0u64;
+            let oriented_edge_id = |edge: &zenith_topo::OrientedEdge| edge.edge.id;
             for face in faces_of(solid) {
                 let Ok(pcurves) = face.pcurves(&tol) else {
                     continue;
@@ -185,7 +187,11 @@ fn main() {
                         let uv = segment.curve.evaluate(t_min + (t_max - t_min) * fraction);
                         let from_pcurve = surface.evaluate(uv.x, uv.y);
                         let from_edge = edge.evaluate_normalized(fraction);
-                        same_fraction = same_fraction.max((from_pcurve - from_edge).norm());
+                        let gap = (from_pcurve - from_edge).norm();
+                        if gap > same_fraction {
+                            same_fraction = gap;
+                            worst_edge = oriented_edge_id(edge);
+                        }
                         // 稜のどこでもよいとしたときの最短。
                         let mut best = f64::INFINITY;
                         for probe in 0..=256 {
@@ -196,7 +202,7 @@ fn main() {
                     }
                 }
             }
-            (same_fraction, nearest_anywhere)
+            (same_fraction, nearest_anywhere, worst_edge)
         };
         // **どの稜が浮いているのかを名指しします**（4-240）。
         //
@@ -222,8 +228,10 @@ fn main() {
                         let mut worst = 0.0f64;
                         let mut length = 0.0f64;
                         let mut previous: Option<Point3> = None;
-                        for step in 0..=32 {
-                            let point = oriented.evaluate_normalized(step as f64 / 32.0);
+                        // **標本は多めに取ります**（4-241）。32 では足りず、
+                        // 浮きを 1.894e-7 と見誤りました。
+                        for step in 0..=256 {
+                            let point = oriented.evaluate_normalized(step as f64 / 256.0);
                             if let Some(last) = previous {
                                 length += (point - last).norm();
                             }
@@ -258,9 +266,9 @@ fn main() {
             }
         }
 
-        let (same_small, nearest_small) = correspondence(small_solid);
+        let (same_small, nearest_small, worst_edge) = correspondence(small_solid);
         println!(
-            "  割合の対応: 同じ割合での最悪 {same_small:.3e}、**稜までの最短の最悪 {nearest_small:.3e}**（桁 {small}）"
+            "  割合の対応: 同じ割合での最悪 {same_small:.3e}、**稜までの最短の最悪 {nearest_small:.3e}**（桁 {small}、いちばん悪い稜は **{worst_edge}**）"
         );
 
         let big_pcurve = pcurve_worst(big_solid);

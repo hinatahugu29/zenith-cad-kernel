@@ -657,14 +657,29 @@ fn match_nurbs_boundary_pcurve(
     tol: &Tolerance,
     samples_per_edge: usize,
 ) -> Result<NurbsCurve2, String> {
+    // **どの道で作ったかを出します**（`ZENITH_PCURVE_WHY=1`。4-241）。
+    //
+    // 近道が2つ先に立っています。**射影の道（いちばん下）だけを直しても、
+    // 近道で作られている p-curve は1つも変わりません**——実測でそれに
+    // 4回連続で気づけませんでした。
+    let why = std::env::var_os("ZENITH_PCURVE_WHY").is_some();
     if let Ok(curve) = match_nurbs_outer_boundary_pcurve(edge, surface, tol, samples_per_edge) {
+        if why {
+            eprintln!("PCURVEPATH 稜 {} : パッチの縁に合わせた", edge.edge.id);
+        }
         return Ok(curve);
     }
 
     if let Ok(curve) = match_affine_patch_pcurve(edge, surface, tol) {
+        if why {
+            eprintln!("PCURVEPATH 稜 {} : アフィンなパッチ", edge.edge.id);
+        }
         return Ok(curve);
     }
 
+    if why {
+        eprintln!("PCURVEPATH 稜 {} : 射影して当てはめた", edge.edge.id);
+    }
     project_edge_to_nurbs_pcurve(edge, surface, tol, samples_per_edge)
 }
 
