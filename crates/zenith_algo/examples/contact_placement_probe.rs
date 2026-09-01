@@ -964,6 +964,7 @@ fn main() {
     let mut identity_worst = 0.0f64;
     let mut identity_worst_case: &str = "-";
     let mut identity_checked = 0usize;
+    let mut identity_vacuous = 0usize;
 
     println!("接触している配置（規約: 接触は、それ自体では位相を作らない）");
     println!();
@@ -1148,6 +1149,23 @@ fn main() {
             ];
             let worst = residuals[0].max(residuals[1]);
             identity_checked += 1;
+            // **中身の無い恒等式を数えます**（4-268）。
+            //
+            // 差が空で積が A 丸ごとなら、`0 + |A| - |A| = 0` は**必ず**閉じ
+            // ます。答えが間違っていても閉じるので、**採点になっていません**
+            // （4-267 で `linkrods.step` がこれでした）。**主力の掃き出しに
+            // 同じ見逃しが無いか**を数えるための口です。
+            let vacuous =
+                difference.abs() <= va.abs() * 1e-9 && (intersection - va).abs() <= va.abs() * 1e-9;
+            if vacuous {
+                identity_vacuous += 1;
+                if std::env::var_os("ZENITH_IDENTITY_WHY").is_some() {
+                    eprintln!(
+                        "IDENTITYWHY {:<32} **中身がありません**（差が空、積が A 丸ごと）",
+                        case.name
+                    );
+                }
+            }
             if worst > identity_worst {
                 identity_worst = worst;
                 identity_worst_case = case.name;
@@ -1175,7 +1193,7 @@ fn main() {
         "{returned} 件が立体を返し、{refused} 件が断られました（うち**「未実装」として断ったもの {unimplemented} 件**）。**B-Rep が非多様体だったもの {wrong} 件**、メッシュが非多様体だったもの {mesh_broken} 件。"
     );
     println!(
-        "**恒等式**: {identity_checked} 配置で測り、破れ {identity_broken} 件、残差の最悪 {identity_worst:.3e}（{identity_worst_case}）。"
+        "**恒等式**: {identity_checked} 配置で測り、破れ {identity_broken} 件、残差の最悪 {identity_worst:.3e}（{identity_worst_case}）。**中身の無いもの {identity_vacuous} 件**（差が空で積が A 丸ごと。必ず閉じるので採点になりません。4-268）。"
     );
     println!();
     println!("**多様体かどうかは「壊れていないか」しか見ません。** 答えが正しいかは");
