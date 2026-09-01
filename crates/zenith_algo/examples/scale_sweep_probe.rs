@@ -178,7 +178,15 @@ fn main() {
     let mut worst_residual = 0.0f64;
     let mut worst_where = String::new();
 
-    for placement in placements() {
+    // **1つの配置だけを測る口**（`ZENITH_SCALE_FILTER`）。桁の小さいところは
+    // 1回が重いので、追っている組だけを回せるようにしておきます。
+    let filter = std::env::var("ZENITH_SCALE_FILTER").ok();
+    for placement in placements().into_iter().filter(|placement| {
+        filter
+            .as_deref()
+            .map(|needle| placement.name.contains(needle))
+            .unwrap_or(true)
+    }) {
         for scale in scales.into_iter().chain(watched) {
             let gated = scales.contains(&scale);
             let (a, b) = (placement.build)(scale);
