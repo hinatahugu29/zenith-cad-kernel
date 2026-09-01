@@ -3603,11 +3603,48 @@ fn torus_patch_for_boundary(
     let (axis, x_axis, y_axis) = revolution_frame(z_dir, x_dir)?;
     let scale = minor_radius.abs().max(1.0);
 
+    // **紡錘トーラスの、軸をまたいだ側**（4-264）。
+    //
+    // 管が芯より大きいトーラス（`minor > major`）は自分と交わり、断面の円が
+    // **軸をまたぎます**。またいだ先の点は、符号付きの半径が**負**です。
+    // ところが3D の点から測れるのは**符号なしの距離**なので、素直に
+    // `|半径| - 芯` で測ると別の値になります。
+    //
+    // 実測（`screw.step` のねじ山。芯 8.25 / 管 54.873719）:
+    //
+    // | 頂点 | 半径 | 軸方向 | 符号なしで測ると | **符号付きで測ると** |
+    // | :--- | ---: | ---: | ---: | ---: |
+    // | #427 | 10.00 | -51.750 | 51.779581 | **54.873719** |
+    // | #337 | 1.25 | -54.045 | 54.496560 | **54.873719** |
+    //
+    // **符号付きなら、管の半径にぴたり一致します。** 円錐の「頂点の向こう側」
+    // （4-261）と同じ形の見落としでした。
+    //
+    // **またいだ側に全部あるときだけ裏返します。** 芯の符号を反転して角度を
+    // π ずらせば、あとの組み立ては何も変わりません。**またいでいる面**は
+    // 軸の上の点を含むので、これまでどおり断ります。
+    let flip = !boundary_points.is_empty()
+        && boundary_points.iter().all(|point| {
+            let (axial, radial) = axis_frame_coords(*point, origin, axis);
+            let straight = ((radial.norm() - major_radius).powi(2) + axial * axial).sqrt();
+            let crossed = ((radial.norm() + major_radius).powi(2) + axial * axial).sqrt();
+            (crossed - minor_radius).abs() < (straight - minor_radius).abs()
+        });
+    let (major_radius, angle_offset) = if flip {
+        (-major_radius, std::f64::consts::PI)
+    } else {
+        (major_radius, 0.0)
+    };
+
     let mut major_angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
     let mut minor_angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
 
     for point in boundary_points {
         let (axial, radial) = axis_frame_coords(*point, origin, axis);
+        // **半径は符号なしのままです。** 裏返しは芯の符号だけで表せます
+        // ——`|r| - (-芯) = |r| + 芯` が、符号付きで見た `|(-|r|) - 芯|` と
+        // 同じになるからです。両方を反転すると打ち消し合って元に戻ります
+        // （一度そう書いて、数字が1桁も動きませんでした）。
         let radial_distance = radial.norm();
         // 芯円までの距離が副半径に一致していなければ、この面はトーラス上に無い。
         let from_core = ((radial_distance - major_radius).powi(2) + axial * axial).sqrt();
@@ -3624,8 +3661,8 @@ fn torus_patch_for_boundary(
             }
             return None;
         }
-        if radial_distance > major_radius.abs().max(1.0) * 1e-6 {
-            major_angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)));
+        if radial.norm() > major_radius.abs().max(1.0) * 1e-6 {
+            major_angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)) - angle_offset);
         }
         minor_angles.push(axial.atan2(radial_distance - major_radius));
     }
@@ -3647,7 +3684,7 @@ fn torus_patch_for_boundary(
         &profile,
         profile_knots,
         2,
-        start_major,
+        start_major + angle_offset,
         major_sweep,
     )
 }
