@@ -161,6 +161,48 @@ fn main() {
             }
             worst
         };
+        // **割合の対応そのものを測ります**（4-239）。
+        //
+        // `validate_pcurves` は「同じ割合の点どうし」を比べます。**p-curve が
+        // 正確でも、割合の対応がずれていれば距離は縮みません。** そこで
+        // 2つ並べます——同じ割合での距離と、**稜のどこでもよいとしたときの
+        // 最短距離**。後者が小さくて前者が大きければ、**形は合っていて
+        // 対応だけがずれています**。
+        let correspondence = |solid: &Solid| {
+            let (mut same_fraction, mut nearest_anywhere) = (0.0f64, 0.0f64);
+            for face in faces_of(solid) {
+                let Ok(pcurves) = face.pcurves(&tol) else {
+                    continue;
+                };
+                let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry else {
+                    continue;
+                };
+                for (edge, segment) in face.outer_wire.edges.iter().zip(pcurves.outer_loop.segments.iter())
+                {
+                    let (t_min, t_max) = segment.curve.param_range();
+                    for step in 0..=64 {
+                        let fraction = step as f64 / 64.0;
+                        let uv = segment.curve.evaluate(t_min + (t_max - t_min) * fraction);
+                        let from_pcurve = surface.evaluate(uv.x, uv.y);
+                        let from_edge = edge.evaluate_normalized(fraction);
+                        same_fraction = same_fraction.max((from_pcurve - from_edge).norm());
+                        // 稜のどこでもよいとしたときの最短。
+                        let mut best = f64::INFINITY;
+                        for probe in 0..=256 {
+                            let other = probe as f64 / 256.0;
+                            best = best.min((from_pcurve - edge.evaluate_normalized(other)).norm());
+                        }
+                        nearest_anywhere = nearest_anywhere.max(best);
+                    }
+                }
+            }
+            (same_fraction, nearest_anywhere)
+        };
+        let (same_small, nearest_small) = correspondence(small_solid);
+        println!(
+            "  割合の対応: 同じ割合での最悪 {same_small:.3e}、**稜までの最短の最悪 {nearest_small:.3e}**（桁 {small}）"
+        );
+
         let big_pcurve = pcurve_worst(big_solid);
         let small_pcurve = pcurve_worst(small_solid);
         println!(
