@@ -374,8 +374,78 @@ fn main() {
                     }
                 }
             }
+            // **3D の稜でも比べます**（4-251）。UV で違っても、元の 3D 稜が
+            // 同じなら**射影の段**、3D から違うなら**切り詰め・吸着の段**です。
+            let cut_edges_3d = |face: &Face| -> Vec<Vec<Point3>> {
+                let Ok(pcurves) = face.pcurves(&tol) else {
+                    return Vec::new();
+                };
+                let mut out = Vec::new();
+                for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                    for oriented in &wire.edges {
+                        // その稜の p-curve がパッチの縁に乗っていなければ切り口。
+                        let Some(segment) = pcurves
+                            .outer_loop
+                            .segments
+                            .iter()
+                            .chain(pcurves.inner_loops.iter().flat_map(|l| l.segments.iter()))
+                            .find(|segment| segment.edge_id == oriented.edge.id)
+                        else {
+                            continue;
+                        };
+                        let (t_min, t_max) = segment.curve.param_range();
+                        let uv: Vec<Point2> = (0..=32)
+                            .map(|step| {
+                                segment
+                                    .curve
+                                    .evaluate(t_min + (t_max - t_min) * (step as f64 / 32.0))
+                            })
+                            .collect();
+                        if is_on_patch_edge(&uv) {
+                            continue;
+                        }
+                        out.push(
+                            (0..=64)
+                                .map(|step| oriented.evaluate_normalized(step as f64 / 64.0))
+                                .collect(),
+                        );
+                    }
+                }
+                out
+            };
+            let mut worst_3d = 0.0f64;
+            for face_u in union.solids.iter().flat_map(|solid| faces_of(solid)) {
+                let Some(key) = surface_key(face_u) else {
+                    continue;
+                };
+                if !a_keys.contains(&key) {
+                    continue;
+                }
+                let Some(face_i) = intersection
+                    .solids
+                    .iter()
+                    .flat_map(|solid| faces_of(solid))
+                    .find(|other| surface_key(other).as_ref() == Some(&key))
+                else {
+                    continue;
+                };
+                let (left_cuts, right_cuts) = (cut_edges_3d(face_u), cut_edges_3d(face_i));
+                for left in &left_cuts {
+                    for point in left {
+                        let mut best = f64::INFINITY;
+                        for right in &right_cuts {
+                            for other in right {
+                                best = best.min((other - point).norm());
+                            }
+                        }
+                        if best.is_finite() {
+                            worst_3d = worst_3d.max(best);
+                        }
+                    }
+                }
+            }
             println!(
-                "    切り口の突き合わせ: {compared} 枚で比べ、UV の最大差 **{worst_gap:.3e}**"
+                "    切り口の突き合わせ: {compared} 枚で比べ、UV の最大差 **{worst_gap:.3e}**、**3D の最大差 {worst_3d:.3e}**"
             );
         }
 
