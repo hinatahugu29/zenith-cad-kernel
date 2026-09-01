@@ -19,7 +19,7 @@
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
 };
-use zenith_math::{Point3, Tolerance, Vec3};
+use zenith_math::{Point2, Point3, Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::{Face, FaceGeometry, Shell, Solid};
 
@@ -203,6 +203,61 @@ fn main() {
                     centre.x, centre.y, centre.z
                 );
             }
+        }
+
+        // **同じ切り口の稜が、和の片と積の片で同じ p-curve を持っているか**
+        // （4-247）。持っていなければ、同じ切り口を2回別々に近似していること
+        // になり、その差がそのまま隙間になります。
+        {
+            let collect = |solids: &[Solid]| {
+                let mut out: std::collections::HashMap<u64, Vec<Point2>> = Default::default();
+                for solid in solids {
+                    for face in faces_of(solid) {
+                        let Ok(pcurves) = face.pcurves(&tol) else {
+                            continue;
+                        };
+                        for segment in pcurves.outer_loop.segments.iter().chain(
+                            pcurves.inner_loops.iter().flat_map(|loops| loops.segments.iter()),
+                        ) {
+                            out.entry(segment.edge_id).or_insert_with(|| {
+                                segment
+                                    .curve
+                                    .control_points
+                                    .iter()
+                                    .map(|control| control.point)
+                                    .collect()
+                            });
+                        }
+                    }
+                }
+                out
+            };
+            let in_union = collect(&union.solids);
+            let in_intersection = collect(&intersection.solids);
+            let (mut shared, mut differ, mut worst) = (0usize, 0usize, 0.0f64);
+            for (edge_id, left) in &in_union {
+                let Some(right) = in_intersection.get(edge_id) else {
+                    continue;
+                };
+                shared += 1;
+                if left.len() != right.len() {
+                    differ += 1;
+                    worst = f64::INFINITY;
+                    continue;
+                }
+                let gap = left
+                    .iter()
+                    .zip(right.iter())
+                    .map(|(a, b)| (a - b).norm())
+                    .fold(0.0f64, f64::max);
+                if gap > 0.0 {
+                    differ += 1;
+                    worst = worst.max(gap);
+                }
+            }
+            println!(
+                "    和と積で共有する稜 {shared} 本のうち、p-curve が違うもの {differ} 本（uv の最大差 {worst:.3e}）"
+            );
         }
 
         let a_residual = from_a - a_whole;
