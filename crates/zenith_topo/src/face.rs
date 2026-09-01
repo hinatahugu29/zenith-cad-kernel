@@ -666,8 +666,40 @@ fn match_nurbs_boundary_pcurve(
     // **稜の中点も出します**（4-252）。番号は実行ごとに変わるので、**同じ
     // 切り口かどうかは幾何で照合します**（4-247）。
     let fingerprint = || {
+        // **端も添えます**（4-254）。中点だけでは、**同じ継ぎ目の全長の稜と、
+        // それを割った半分の稜**が同じ指紋になります。割られているかどうかが
+        // 近道の可否を分けるので、そこが見えないと切り分けられません。
         let middle = edge.evaluate_normalized(0.5);
-        format!("({:.9},{:.9},{:.9})", middle.x, middle.y, middle.z)
+        let start = edge.evaluate_normalized(0.0);
+        let end = edge.evaluate_normalized(1.0);
+        format!(
+            "({:.9},{:.9},{:.9}) 長さ {:.9}",
+            middle.x,
+            middle.y,
+            middle.z,
+            (end - start).norm()
+        )
+    };
+    // **パッチの指紋も出します**（4-254）。
+    //
+    // 4-253 で案1（判定の閾値）と案2（道を1本に）が潰れ、残るのは
+    // 「パッチが演算ごとに張り直されるから判定が裏返る」（案3）だけです。
+    // **同じ切り口が、和と積で別のパッチを見ているか**を、ここで直接
+    // 突き合わせます。四隅と中心を並べれば、張り直しの差は出ます。
+    let patch_fingerprint = || {
+        let ((u_lo, u_hi), (v_lo, v_hi)) = surface.param_range();
+        let corner = |u: f64, v: f64| {
+            let p = surface.evaluate(u, v);
+            format!("{:.9},{:.9},{:.9}", p.x, p.y, p.z)
+        };
+        format!(
+            "[{} | {} | {} | {} | {}]",
+            corner(u_lo, v_lo),
+            corner(u_hi, v_lo),
+            corner(u_lo, v_hi),
+            corner(u_hi, v_hi),
+            corner((u_lo + u_hi) * 0.5, (v_lo + v_hi) * 0.5)
+        )
     };
     // **近道を止める口**（`ZENITH_NO_PCURVE_SHORTCUT=1`。4-253）。
     //
@@ -678,7 +710,11 @@ fn match_nurbs_boundary_pcurve(
     if !no_shortcut {
         if let Ok(curve) = match_nurbs_outer_boundary_pcurve(edge, surface, tol, samples_per_edge) {
             if why {
-                eprintln!("PCURVEPATH {} : パッチの縁に合わせた", fingerprint());
+                eprintln!(
+                    "PCURVEPATH {} : パッチの縁に合わせた : {}",
+                    fingerprint(),
+                    patch_fingerprint()
+                );
             }
             return Ok(curve);
         }
@@ -686,13 +722,21 @@ fn match_nurbs_boundary_pcurve(
 
     if let Ok(curve) = match_affine_patch_pcurve(edge, surface, tol) {
         if why {
-            eprintln!("PCURVEPATH {} : アフィンなパッチ", fingerprint());
+            eprintln!(
+                "PCURVEPATH {} : アフィンなパッチ : {}",
+                fingerprint(),
+                patch_fingerprint()
+            );
         }
         return Ok(curve);
     }
 
     if why {
-        eprintln!("PCURVEPATH {} : 射影して当てはめた", fingerprint());
+        eprintln!(
+            "PCURVEPATH {} : 射影して当てはめた : {}",
+            fingerprint(),
+            patch_fingerprint()
+        );
     }
     project_edge_to_nurbs_pcurve(edge, surface, tol, samples_per_edge)
 }
