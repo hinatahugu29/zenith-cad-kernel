@@ -205,6 +205,47 @@ fn main() {
             }
         }
 
+        // **積分の物差しを2本にして突き合わせます**（4-248）。
+        //
+        // `compute_from_brep` は p-curve を読んでトリムを効かせた**解析の
+        // 積分**、`compute_from_mesh` は**三角形の積分**です。片を足すと元より
+        // 小さい（4-246）のが**積分の取りこぼし**なら、2本の物差しは違う値を
+        // 出します。**同じ値なら、取りこぼしではありません。**
+        {
+            let mesh_volume = |solid: &Solid| {
+                let mesh = zenith_tess::tessellate_solid(
+                    solid,
+                    &TessellationParams {
+                        u_divisions: 64,
+                        v_divisions: 64,
+                    },
+                );
+                MassCalculator::compute_from_mesh(&mesh).volume
+            };
+            let analytic_union: f64 = union.solids.iter().map(|solid| {
+                MassCalculator::compute_from_brep(solid, &params()).volume
+            }).sum();
+            let mesh_union: f64 = union.solids.iter().map(mesh_volume).sum();
+            let analytic_intersection: f64 = intersection.solids.iter().map(|solid| {
+                MassCalculator::compute_from_brep(solid, &params()).volume
+            }).sum();
+            let mesh_intersection: f64 = intersection.solids.iter().map(mesh_volume).sum();
+            // **メッシュの物差しは粗すぎます**（4-248）。弦誤差で 0.2〜1% ずれる
+            // ので、**6.8e-10 の取りこぼしは分解できません**。突き合わせに
+            // 使えないことを、数字で見えるようにしておきます。
+            println!(
+                "    2本の物差し（**メッシュ側は弦誤差で 0.2〜1% ずれます。突き合わせには使えません**）:"
+            );
+            println!(
+                "      和 解析 {analytic_union:.12e} / メッシュ {mesh_union:.12e}（差 {:.2}%）",
+                (mesh_union - analytic_union) / analytic_union * 100.0
+            );
+            println!(
+                "      積 解析 {analytic_intersection:.12e} / メッシュ {mesh_intersection:.12e}（差 {:.2}%）",
+                (mesh_intersection - analytic_intersection) / analytic_intersection * 100.0
+            );
+        }
+
         // **同じ切り口の稜が、和の片と積の片で同じ p-curve を持っているか**
         // （4-247）。持っていなければ、同じ切り口を2回別々に近似していること
         // になり、その差がそのまま隙間になります。
