@@ -133,6 +133,28 @@ fn main() {
             println!("  **この口は信用できません**——面を1枚ずつ切り出せていません。下の表は読まないでください。");
         }
 
+        // **p-curve が稜からどれだけ離れているか**を、桁ごとに出します（4-235）。
+        //
+        // 面のトリム境界はこの p-curve で決まります。**絶対のずれなら、桁を
+        // 変えても同じ大きさのまま残り、小さい模型ほど相対では効きます。**
+        // コードは変えずに、いまある `validate_pcurves` で測ります。
+        let pcurve_worst = |solid: &Solid| -> f64 {
+            faces_of(solid)
+                .iter()
+                .filter_map(|face| {
+                    face.validate_pcurves(&tol, 8)
+                        .ok()
+                        .map(|report| report.max_distance)
+                })
+                .fold(0.0f64, f64::max)
+        };
+        let big_pcurve = pcurve_worst(big_solid);
+        let small_pcurve = pcurve_worst(small_solid);
+        println!(
+            "  p-curve が稜から離れる量: 桁 1 で {big_pcurve:.3e}、桁 {small} で {small_pcurve:.3e}（桁 1 を {small} 倍すると {:.3e}）",
+            big_pcurve * small
+        );
+
         // いちばん近い重心どうしで突き合わせる。
         let mut rows: Vec<(f64, f64, f64, Point3, f64)> = Vec::new();
         for (volume, centre) in &measured {
