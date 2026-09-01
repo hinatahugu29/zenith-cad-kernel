@@ -3393,6 +3393,29 @@ fn cone_patch_for_boundary(
     // 頂点では半径が 0 になるので、判定の尺度は基準半径から取る。
     let scale = radius.abs().max(1.0);
 
+    // **頂点の向こう側の面**（4-261）。
+    //
+    // STEP の円錐は無限で、`半径 + 軸方向 × 勾配` が**負になる側**も面です
+    // （頂点を越えた反対の葉）。そこにある面を素直に測ると「半径 7.5 なのに
+    // あるべき値が −7.5」となり、**差 15 で断って**いました。実測:
+    // `screw.step` の `CONICAL_SURFACE` 2枚がこれで、決め打ちの 90 度パッチに
+    // 落ちて境界が 13〜24 外れていました（4-260）。
+    //
+    // **裏返して同じ道に乗せます。** 半径と勾配の符号を反転し、角度を π
+    // ずらせば、あとの組み立ては何も変わりません。**境界の点が全部向こう側の
+    // ときだけ**裏返します——跨いでいる面は頂点を含むので、これまでどおり
+    // 断ります。
+    let flip = !boundary_points.is_empty()
+        && boundary_points.iter().all(|point| {
+            let (axial, _) = axis_frame_coords(*point, origin, axis);
+            radius + axial * slope < -scale * 1e-6
+        });
+    let (radius, slope, angle_offset) = if flip {
+        (-radius, -slope, std::f64::consts::PI)
+    } else {
+        (radius, slope, 0.0)
+    };
+
     let mut axial_min = f64::INFINITY;
     let mut axial_max = f64::NEG_INFINITY;
     let mut angles: Vec<f64> = Vec::with_capacity(boundary_points.len());
@@ -3401,13 +3424,27 @@ fn cone_patch_for_boundary(
         let (axial, radial) = axis_frame_coords(*point, origin, axis);
         let expected = radius + axial * slope;
         if (radial.norm() - expected).abs() > scale * 1e-3 {
+            // **境界の点が円錐の上に乗っていません**（`ZENITH_STEP_WHY=1`。4-261）。
+            //
+            // トーラス側には同じ口があるのに、**円錐だけ理由を1行も出して
+            // いませんでした**（4-260 の診断の穴）。「決め打ちのパッチに
+            // 落ちた」までは出るのに、**なぜ**が出ないと次に測るところが
+            // 決まりません。
+            if std::env::var_os("ZENITH_STEP_WHY").is_some() {
+                eprintln!(
+                    "STEPWHY   円錐（基準半径 {radius:.6}、勾配 {slope:.6}）の上に乗らない点: 軸方向 {axial:.6} での半径 {:.6}（あるべき値 {expected:.6}、差 {:.6e}、許す幅 {:.6e}）",
+                    radial.norm(),
+                    (radial.norm() - expected).abs(),
+                    scale * 1e-3
+                );
+            }
             return None;
         }
         axial_min = axial_min.min(axial);
         axial_max = axial_max.max(axial);
         // 頂点上の点には向きが無い。角度の被覆には数えない。
         if radial.norm() > scale * 1e-6 {
-            angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)));
+            angles.push(radial.dot(&y_axis).atan2(radial.dot(&x_axis)) - angle_offset);
         }
     }
 
@@ -3437,7 +3474,7 @@ fn cone_patch_for_boundary(
         &profile,
         KnotVector::clamped_uniform(2, 1),
         1,
-        start_angle,
+        start_angle + angle_offset,
         sweep,
     )
 }
