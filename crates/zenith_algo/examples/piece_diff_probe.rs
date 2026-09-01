@@ -81,6 +81,9 @@ fn main() {
     for (label, op) in [
         ("intersection", BooleanOpType::Intersection),
         ("difference", BooleanOpType::Difference),
+        // **和も測ります**（4-242）。恒等式には3演算とも入ります——差と積が
+        // 揃っていても、和がずれていれば破れます。
+        ("union", BooleanOpType::Union),
     ] {
         println!("=== {label} ===");
 

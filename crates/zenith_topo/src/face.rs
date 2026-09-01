@@ -1022,10 +1022,31 @@ fn project_edge_to_nurbs_pcurve(
     // 分けるために置きます。実測（4-236）: **点は 9 点、射影の最悪は
     // 1.2e-11〜1.3e-9、止めどころは 1.000e-6**——止めているのは弦の許容です。
     if std::env::var_os("ZENITH_PCURVE_WHY").is_some() {
+        // **曲面の指紋も出します**（4-242）。同じ稜でも、面が違えば曲面が
+        // 違います。**どの曲面へ射影した値なのか**が分からないと、外から
+        // 測った値と突き合わせられません（4-241 で 8 倍の食い違いが出ました）。
+        let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+        let span = {
+            let corners = [
+                surface.evaluate(u_min, v_min),
+                surface.evaluate(u_max, v_min),
+                surface.evaluate(u_min, v_max),
+                surface.evaluate(u_max, v_max),
+            ];
+            let mut worst = 0.0f64;
+            for (index, left) in corners.iter().enumerate() {
+                for right in corners.iter().skip(index + 1) {
+                    worst = worst.max((right - left).norm());
+                }
+            }
+            worst
+        };
         eprintln!(
-            "PCURVEWHY 稜 {} 点 {}（上限 {MAX_POINTS}）、止めどころ {deflection:.3e}、射影の最悪 {max_distance:.3e}、受け入れ幅 {on_surface_limit:.3e}",
+            "PCURVEWHY 稜 {} 点 {}（上限 {MAX_POINTS}）、止めどころ {deflection:.3e}、射影の最悪 {max_distance:.3e}、受け入れ幅 {on_surface_limit:.3e}、曲面の差し渡し {span:.6}、制御点 {}x{}",
             edge.edge.id,
-            parameters.len()
+            parameters.len(),
+            surface.control_points.len(),
+            surface.control_points.first().map(|row| row.len()).unwrap_or(0)
         );
     }
 
