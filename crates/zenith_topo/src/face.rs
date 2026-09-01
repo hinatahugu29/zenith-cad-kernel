@@ -470,6 +470,7 @@ impl Face {
             FaceGeometry::Plane(plane) => ((point - plane.origin).dot(&plane.normal).abs(), None),
             FaceGeometry::Nurbs(surface) => {
                 if let Some(uv) = seed {
+                    zenith_geom::work_counter::count_boundary_check_projection();
                     if let Ok(projection) = ExtremumEngine::point_to_surface_seeded(
                         point, surface, uv.x, uv.y, 24, 1e-9,
                     ) {
@@ -481,6 +482,7 @@ impl Face {
                         }
                     }
                 }
+                zenith_geom::work_counter::count_boundary_check_projection();
                 match ExtremumEngine::point_to_surface(point, surface, 24, 1e-9) {
                     Ok(projection) => (
                         projection.distance,
@@ -1002,6 +1004,7 @@ fn project_edge_to_nurbs_pcurve(
     let mut project = |t: f64, seed: Option<Point2>| -> Result<Point2, String> {
         let point = edge.evaluate_normalized(t);
         if let Some(uv) = seed {
+            zenith_geom::work_counter::count_pcurve_projection();
             if let Ok(projection) = ExtremumEngine::point_to_surface_seeded(
                 point,
                 surface,
@@ -1016,6 +1019,7 @@ fn project_edge_to_nurbs_pcurve(
                 }
             }
         }
+        zenith_geom::work_counter::count_pcurve_projection();
         let projection = ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)?;
         max_distance = max_distance.max(projection.distance);
         Ok(Point2::new(projection.u, projection.v))

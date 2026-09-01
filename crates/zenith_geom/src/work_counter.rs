@@ -23,6 +23,10 @@ static MARCHING_NEWTON_ITERATIONS: AtomicU64 = AtomicU64::new(0);
 static MARCHING_CALLS: AtomicU64 = AtomicU64::new(0);
 static SEED_SEARCHES: AtomicU64 = AtomicU64::new(0);
 static POINT_SURFACE_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **p-curve を作るための射影**（4-271）。
+static PCURVE_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **境界が曲面に乗っているかを見るための射影**（4-271）。
+static BOUNDARY_CHECK_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
 static POINT_SURFACE_COARSE_SEARCHES: AtomicU64 = AtomicU64::new(0);
 static PROJECTION_NEWTON_ITERATIONS: AtomicU64 = AtomicU64::new(0);
 static PROJECTION_DAMPING_TRIALS: AtomicU64 = AtomicU64::new(0);
@@ -48,6 +52,10 @@ pub struct WorkCounters {
     pub seed_searches: u64,
     /// 点から曲面への最近傍射影の回数。
     pub point_surface_projections: u64,
+    /// うち、p-curve を作るためのもの。
+    pub pcurve_projections: u64,
+    /// うち、境界が曲面に乗っているかを見るためのもの。
+    pub boundary_check_projections: u64,
     /// そのうち、出発点を渡されずに全域を粗く見た回数。
     ///
     /// 1回につき 17x17 の格子と8段の詰めで 353 回の曲面評価を払う。
@@ -106,6 +114,12 @@ impl WorkCounters {
             point_surface_projections: self
                 .point_surface_projections
                 .saturating_sub(earlier.point_surface_projections),
+            pcurve_projections: self
+                .pcurve_projections
+                .saturating_sub(earlier.pcurve_projections),
+            boundary_check_projections: self
+                .boundary_check_projections
+                .saturating_sub(earlier.boundary_check_projections),
             point_surface_coarse_searches: self
                 .point_surface_coarse_searches
                 .saturating_sub(earlier.point_surface_coarse_searches),
@@ -141,6 +155,8 @@ pub fn snapshot() -> WorkCounters {
         marching_calls: MARCHING_CALLS.load(Ordering::Relaxed),
         seed_searches: SEED_SEARCHES.load(Ordering::Relaxed),
         point_surface_projections: POINT_SURFACE_PROJECTIONS.load(Ordering::Relaxed),
+        pcurve_projections: PCURVE_PROJECTIONS.load(Ordering::Relaxed),
+        boundary_check_projections: BOUNDARY_CHECK_PROJECTIONS.load(Ordering::Relaxed),
         point_surface_coarse_searches: POINT_SURFACE_COARSE_SEARCHES.load(Ordering::Relaxed),
         projection_newton_iterations: PROJECTION_NEWTON_ITERATIONS.load(Ordering::Relaxed),
         projection_damping_trials: PROJECTION_DAMPING_TRIALS.load(Ordering::Relaxed),
@@ -162,6 +178,8 @@ pub fn reset() {
     MARCHING_CALLS.store(0, Ordering::Relaxed);
     SEED_SEARCHES.store(0, Ordering::Relaxed);
     POINT_SURFACE_PROJECTIONS.store(0, Ordering::Relaxed);
+    PCURVE_PROJECTIONS.store(0, Ordering::Relaxed);
+    BOUNDARY_CHECK_PROJECTIONS.store(0, Ordering::Relaxed);
     POINT_SURFACE_COARSE_SEARCHES.store(0, Ordering::Relaxed);
     PROJECTION_NEWTON_ITERATIONS.store(0, Ordering::Relaxed);
     PROJECTION_DAMPING_TRIALS.store(0, Ordering::Relaxed);
@@ -196,6 +214,20 @@ pub fn count_seed_search() {
 }
 
 #[inline]
+/// p-curve を作るために射影した。
+///
+/// **`point_to_surface` は呼ばれた回数しか数えていませんでした**（4-270）。
+/// 自由曲面を箱で切ると 190 万回呼ばれますが、**どこから呼ばれているか**が
+/// 分からないと、どこを直せばよいかが決まりません。
+pub fn count_pcurve_projection() {
+    PCURVE_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 境界が曲面に乗っているかを見るために射影した。
+pub fn count_boundary_check_projection() {
+    BOUNDARY_CHECK_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
 pub fn count_point_surface_projection() {
     POINT_SURFACE_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
 }
