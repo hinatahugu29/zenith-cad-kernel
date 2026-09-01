@@ -28,6 +28,16 @@ struct ImportContext {
     /// 1.464570 mm^3、センチのファイルで 24.0 mm^3。どちらも解析解 24000 から
     /// **ちょうど単位の3乗ぶん**外れていました。
     length_scale: f64,
+    /// ファイルが自分で申告している**不確かさ**（`UNCERTAINTY_MEASURE_WITH_UNIT`）。
+    /// 単位を掛けたあとのミリ。申告が無ければ `None`。
+    ///
+    /// **これを読まないと、正しいファイルを断ります。** 読み込んだ立体は
+    /// `Tolerance::default()`（1e-6）で検査していましたが、**実物のデータは
+    /// もっと粗い精度で書かれていることがあります**——実測（4-228）:
+    /// OCCT が配る `linkrods.step` は **2e-5 と申告**しており、境界の点が面から
+    /// 5〜9e-6 外れます。**そのファイルの中では正しい**のに、こちらの 1e-6 で
+    /// 断っていました。
+    declared_uncertainty: Option<f64>,
     raw_entities: HashMap<u64, RawEntity>,
     points: HashMap<u64, Point3>,
     directions: HashMap<u64, Vec3>,
@@ -43,6 +53,7 @@ impl ImportContext {
     fn new() -> Self {
         Self {
             length_scale: 1.0,
+            declared_uncertainty: None,
             raw_entities: HashMap::new(),
             points: HashMap::new(),
             directions: HashMap::new(),
@@ -113,6 +124,9 @@ impl StepImporter {
 
         // 2. 長さの単位。座標を読む前に決めておく必要がある。
         ctx.length_scale = Self::resolve_length_scale(&ctx)?;
+
+        // 2b. ファイルが申告している不確かさ。**検査の物差しに使います**（4-228）。
+        ctx.declared_uncertainty = Self::resolve_declared_uncertainty(&ctx);
 
         // 2. Solid B-Rep を探索
         let solid_ids = Self::solid_brep_ids(&ctx);
@@ -286,6 +300,58 @@ impl StepImporter {
             "STEP unit context (#{:?}) names no length unit; cannot tell what the numbers mean",
             seen
         ))
+    }
+
+    /// ファイルが申告している不確かさを読む（`UNCERTAINTY_MEASURE_WITH_UNIT`）。
+    ///
+    /// 申告が無い・読めないときは `None` を返します。**推測はしません。**
+    fn resolve_declared_uncertainty(ctx: &ImportContext) -> Option<f64> {
+        let mut best: Option<f64> = None;
+        for raw in ctx.raw_entities.values() {
+            // **実体名で来る場合と、複合実体の中に埋まっている場合があります。**
+            // 前者は `#18622 = UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(2.E-5),...)`、
+            // 後者は `( ... UNCERTAINTY_MEASURE_WITH_UNIT(...) ... )` です。
+            let args = if raw.name == "UNCERTAINTY_MEASURE_WITH_UNIT" {
+                raw.args.as_str()
+            } else if let Some(inner) =
+                Self::token_args(&raw.args, "UNCERTAINTY_MEASURE_WITH_UNIT")
+            {
+                inner
+            } else {
+                continue;
+            };
+            let Some(measure) = Self::token_args(args, "LENGTH_MEASURE") else {
+                continue;
+            };
+            let Ok(value) = measure.trim().parse::<f64>() else {
+                continue;
+            };
+            if !(value.is_finite() && value > 0.0) {
+                continue;
+            }
+            let millimetres = value * ctx.length_scale;
+            best = Some(best.map_or(millimetres, |worst: f64| worst.max(millimetres)));
+        }
+        best
+    }
+
+    /// 読み込んだ立体を検査するときの物差し。
+    ///
+    /// **ファイルの申告のほうが粗ければ、そちらに合わせます。** 申告より
+    /// 厳しく測っても、こちらが正しくなるわけではありません——**書いた側の
+    /// 精度を超える主張はできない**からです。
+    ///
+    /// **緩めっぱなしにはしません。** 天井は `1e-3` mm です。それを超える
+    /// 申告は、もう「不確かさ」ではなく別の問題なので、既定のまま断ります。
+    fn import_tolerance(ctx: &ImportContext) -> Tolerance {
+        const CEILING: f64 = 1e-3;
+        let mut tol = Tolerance::default();
+        if let Some(declared) = ctx.declared_uncertainty {
+            if declared > tol.linear && declared <= CEILING {
+                tol.linear = declared;
+            }
+        }
+        tol
     }
 
     /// 長さの単位の実体1つを、ミリへの係数に直す。`depth` は循環参照よけ。
@@ -634,7 +700,16 @@ impl StepImporter {
             }
         }
 
-        if raw.name == "SURFACE_CURVE" {
+        // `SEAM_CURVE` は ISO 10303-42 で `surface_curve` の subtype です。
+        // **属性の並びは同じ**（name, curve_3d, associated_geometry,
+        // master_representation）で、違うのは「閉じた曲面の継ぎ目に乗って
+        // いて、同じ曲面を2回指す」という制約だけです。**3D 曲線の取り出し方は
+        // 変わりません。**
+        //
+        // 実測（4-228）: OCCT が配っている `screw.step` と `linkrods.step` は
+        // **2つともこれで読めませんでした**。閉じた曲面（円柱・球・トーラス）の
+        // 継ぎ目にある稜はみなこれなので、実物のデータには普通に出ます。
+        if raw.name == "SURFACE_CURVE" || raw.name == "SEAM_CURVE" {
             let parts = Self::split_top_level_args(&raw.args);
             if parts.len() >= 2 {
                 if let Some(curve_3d_id) = Self::parse_entity_ref(parts[1]) {
@@ -660,7 +735,7 @@ impl StepImporter {
         // だけである。読めなかったことは、読めなかったと言う。
         Err(format!(
             "Unsupported curve entity {} (#{}). Zenith reads LINE, CIRCLE, \
-             TRIMMED_CURVE, SURFACE_CURVE and (rational) B_SPLINE_CURVE_WITH_KNOTS",
+             TRIMMED_CURVE, SURFACE_CURVE, SEAM_CURVE and (rational) B_SPLINE_CURVE_WITH_KNOTS",
             raw.name, id
         ))
     }
@@ -1795,7 +1870,7 @@ impl StepImporter {
 
         let shell_id = Self::parse_entity_ref(parts[1]).ok_or("Invalid shell ref")?;
         let outer_shell = Self::resolve_closed_shell(ctx, shell_id)?;
-        Solid::try_simple(outer_shell, &Tolerance::default()).map_err(|err| err.to_string())
+        Solid::try_simple(outer_shell, &Self::import_tolerance(ctx)).map_err(|err| err.to_string())
     }
 
     fn resolve_brep_with_voids(ctx: &mut ImportContext, raw: &RawEntity) -> Result<Solid, String> {
@@ -1811,7 +1886,7 @@ impl StepImporter {
             inner_shells.push(Self::resolve_oriented_closed_shell(ctx, oriented_shell_id)?);
         }
 
-        Solid::try_new(outer_shell, inner_shells, &Tolerance::default())
+        Solid::try_new(outer_shell, inner_shells, &Self::import_tolerance(ctx))
             .map_err(|err| err.to_string())
     }
 
