@@ -198,6 +198,66 @@ fn main() {
             }
             (same_fraction, nearest_anywhere)
         };
+        // **どの稜が浮いているのかを名指しします**（4-240）。
+        //
+        // 稜ごとに、支持曲面からの浮きと**素性**（番号・長さ・曲線の次数・
+        // その番号を使っている面の数）を並べます。**交線から来た稜は2枚の
+        // 面が共有し**、元の立体から切り取られた稜や蓋の縁はそうとは限りません。
+        {
+            let mut uses: std::collections::HashMap<u64, usize> = Default::default();
+            for face in faces_of(small_solid) {
+                for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                    for oriented in &wire.edges {
+                        *uses.entry(oriented.edge.id).or_insert(0) += 1;
+                    }
+                }
+            }
+            let mut rows: Vec<(f64, u64, f64, usize, usize)> = Vec::new();
+            for face in faces_of(small_solid) {
+                let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry else {
+                    continue;
+                };
+                for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                    for oriented in &wire.edges {
+                        let mut worst = 0.0f64;
+                        let mut length = 0.0f64;
+                        let mut previous: Option<Point3> = None;
+                        for step in 0..=32 {
+                            let point = oriented.evaluate_normalized(step as f64 / 32.0);
+                            if let Some(last) = previous {
+                                length += (point - last).norm();
+                            }
+                            previous = Some(point);
+                            // **曲面までの距離は、厳密に射影して測ります。**
+                            // 格子で撒くと格子の目で頭打ちになり、**順位まで
+                            // 当てになりません**（一度それで測って外しました）。
+                            let best = zenith_geom::ExtremumEngine::point_to_surface(
+                                point, surface, 32, 1e-12,
+                            )
+                            .map(|projection| projection.distance)
+                            .unwrap_or(f64::INFINITY);
+                            worst = worst.max(best);
+                        }
+                        rows.push((
+                            worst,
+                            oriented.edge.id,
+                            length,
+                            oriented.edge.curve.degree,
+                            uses.get(&oriented.edge.id).copied().unwrap_or(0),
+                        ));
+                    }
+                }
+            }
+            rows.sort_by(|left, right| right.0.total_cmp(&left.0));
+            rows.dedup_by(|a, b| a.1 == b.1);
+            println!("  稜ごとの浮き（厳密な射影で測っています）");
+            for (float, id, length, degree, shared) in rows.iter().take(5) {
+                println!(
+                    "    稜 {id}: 浮き {float:.3e}、長さ {length:.6}、次数 {degree}、共有 {shared} 面"
+                );
+            }
+        }
+
         let (same_small, nearest_small) = correspondence(small_solid);
         println!(
             "  割合の対応: 同じ割合での最悪 {same_small:.3e}、**稜までの最短の最悪 {nearest_small:.3e}**（桁 {small}）"
