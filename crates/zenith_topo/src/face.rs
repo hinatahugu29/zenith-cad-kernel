@@ -1000,6 +1000,20 @@ fn project_edge_to_nurbs_pcurve(
         }
     }
 
+    // **細分が何で止まったかを出す口**（`ZENITH_PCURVE_WHY=1`）。
+    //
+    // 4-235 で「p-curve が稜から離れる量が、桁 0.01 で 1.078e-6」と分かった
+    // ので、**止めどころなのか、点数の上限なのか、射影の精度なのか**を
+    // 分けるために置きます。実測（4-236）: **点は 9 点、射影の最悪は
+    // 1.2e-11〜1.3e-9、止めどころは 1.000e-6**——止めているのは弦の許容です。
+    if std::env::var_os("ZENITH_PCURVE_WHY").is_some() {
+        eprintln!(
+            "PCURVEWHY 稜 {} 点 {}（上限 {MAX_POINTS}）、止めどころ {deflection:.3e}、射影の最悪 {max_distance:.3e}、受け入れ幅 {on_surface_limit:.3e}",
+            edge.edge.id,
+            parameters.len()
+        );
+    }
+
     if max_distance > on_surface_limit {
         return Err(format!(
             "Edge {} projection to NURBS surface exceeds tolerance; max distance {max_distance:.6e}",

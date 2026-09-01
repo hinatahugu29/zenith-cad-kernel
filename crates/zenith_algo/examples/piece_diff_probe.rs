@@ -139,14 +139,27 @@ fn main() {
         // 変えても同じ大きさのまま残り、小さい模型ほど相対では効きます。**
         // コードは変えずに、いまある `validate_pcurves` で測ります。
         let pcurve_worst = |solid: &Solid| -> f64 {
-            faces_of(solid)
-                .iter()
-                .filter_map(|face| {
-                    face.validate_pcurves(&tol, 8)
-                        .ok()
-                        .map(|report| report.max_distance)
-                })
-                .fold(0.0f64, f64::max)
+            let mut worst = 0.0f64;
+            let mut worst_kind = "-";
+            for face in faces_of(solid) {
+                let Ok(report) = face.validate_pcurves(&tol, 8) else {
+                    continue;
+                };
+                if report.max_distance > worst {
+                    worst = report.max_distance;
+                    // **どの種類の面が最悪値を出しているか。** 平面の p-curve は
+                    // uv では直線なので、稜が曲がっていればその膨らみぶん外れます。
+                    worst_kind = match &face.geometry {
+                        zenith_topo::FaceGeometry::Plane(_) => "平面",
+                        zenith_topo::FaceGeometry::Nurbs(_) => "曲面",
+                        _ => "その他",
+                    };
+                }
+            }
+            if worst > 0.0 {
+                println!("    最悪を出したのは {worst_kind} の面");
+            }
+            worst
         };
         let big_pcurve = pcurve_worst(big_solid);
         let small_pcurve = pcurve_worst(small_solid);
