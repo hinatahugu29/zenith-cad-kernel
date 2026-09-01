@@ -169,6 +169,18 @@ fn main() {
             println!(
                 "  **恒等式**: |A∪B|+|A∩B|-(|A|+|B|) = {first:.3e}、|A＼B|+|A∩B|-|A| = {second:.3e}"
             );
+            // **中身の無い恒等式を、緑と数えないこと**（4-267）。
+            //
+            // 差が空で積が A 丸ごとなら、`0 + |A| - |A| = 0` は**必ず**閉じます。
+            // 何も測っていません。実測: `linkrods.step` がこれで、**部品は
+            // 切り手の z 範囲からはみ出しているのに**積が部品全体を返して
+            // いました（分類の誤り）。4-211 と同じ形の落とし穴です。
+            let empty_difference = difference.abs() <= va.abs() * 1e-9;
+            let whole_intersection = (intersection - va).abs() <= va.abs() * 1e-9;
+            if empty_difference && whole_intersection {
+                println!("  **この恒等式は中身がありません**——差が空で積が A 丸ごとなので、必ず閉じます。");
+                println!("  **切り手が部品を丸ごと含んでいるか、分類が間違っています。**");
+            }
         } else {
             println!("  **恒等式**: 3演算そろわないので測れません");
         }
