@@ -663,22 +663,28 @@ fn match_nurbs_boundary_pcurve(
     // 近道で作られている p-curve は1つも変わりません**——実測でそれに
     // 4回連続で気づけませんでした。
     let why = std::env::var_os("ZENITH_PCURVE_WHY").is_some();
+    // **稜の中点も出します**（4-252）。番号は実行ごとに変わるので、**同じ
+    // 切り口かどうかは幾何で照合します**（4-247）。
+    let fingerprint = || {
+        let middle = edge.evaluate_normalized(0.5);
+        format!("({:.9},{:.9},{:.9})", middle.x, middle.y, middle.z)
+    };
     if let Ok(curve) = match_nurbs_outer_boundary_pcurve(edge, surface, tol, samples_per_edge) {
         if why {
-            eprintln!("PCURVEPATH 稜 {} : パッチの縁に合わせた", edge.edge.id);
+            eprintln!("PCURVEPATH {} : パッチの縁に合わせた", fingerprint());
         }
         return Ok(curve);
     }
 
     if let Ok(curve) = match_affine_patch_pcurve(edge, surface, tol) {
         if why {
-            eprintln!("PCURVEPATH 稜 {} : アフィンなパッチ", edge.edge.id);
+            eprintln!("PCURVEPATH {} : アフィンなパッチ", fingerprint());
         }
         return Ok(curve);
     }
 
     if why {
-        eprintln!("PCURVEPATH 稜 {} : 射影して当てはめた", edge.edge.id);
+        eprintln!("PCURVEPATH {} : 射影して当てはめた", fingerprint());
     }
     project_edge_to_nurbs_pcurve(edge, surface, tol, samples_per_edge)
 }
