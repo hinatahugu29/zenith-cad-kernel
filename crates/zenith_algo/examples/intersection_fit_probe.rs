@@ -50,8 +50,34 @@ fn distance_to_surface(face: &Face, point: Point3) -> Option<f64> {
     }
 }
 
+/// 桁を変えた同じ形。**当てはめの誤差が絶対か相対かを見るため**です（4-229）。
+///
+/// `scale_sweep_probe` で恒等式が破れるのは、この組の桁 0.01 以下だけです。
+/// 交線の当てはめが**絶対の公差で止まっている**なら、桁を 100 分の1にしても
+/// 誤差は同じ大きさのまま残り、**相対では 100 倍粗く**なります。
+fn rod_through_the_hole(s: f64) -> (Solid, Solid) {
+    let torus = PrimitiveBuilder::make_torus(12.0 * s, 4.0 * s).unwrap();
+    let rod = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(9.0 * s, 40.0 * s).unwrap(),
+        Vec3::new(0.0, 0.0, -20.0 * s),
+    );
+    (torus, rod)
+}
+
 fn placements() -> Vec<Placement> {
     vec![
+        Placement {
+            name: "torus x cylinder (rod, scale 1)",
+            build: || rod_through_the_hole(1.0),
+        },
+        Placement {
+            name: "torus x cylinder (rod, scale 0.1)",
+            build: || rod_through_the_hole(0.1),
+        },
+        Placement {
+            name: "torus x cylinder (rod, scale 0.01)",
+            build: || rod_through_the_hole(0.01),
+        },
         Placement {
             name: "box x cylinder (through drill)",
             build: || {
