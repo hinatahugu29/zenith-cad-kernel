@@ -415,13 +415,26 @@ impl Face {
             // **1点目だけ全域を粗く見て、あとは直前の結果を種にします**
             // （4-164）。ループが変わったら種は捨てます——別の輪の点は
             // 遠いことがあるので、悪い出発点になります。
+            // **この面が、自分でどこまでと言っているか**も見ます（4-266）。
+            //
+            // 面は `tolerance` を持っています。ビルダーの出力は 1e-6 なので
+            // 何も変わりませんが、**読んだファイルの面**は、そのファイルの
+            // 粗さを持ち歩けます。実測（4-265）: OCCT が配る `linkrods.step`
+            // は、位相は無傷なのに**境界が曲面から 4.145e-4 外れる**ために
+            // 「立体ではない」と落ちていました。
+            //
+            // **全体の公差を緩めるのとは違います。** 緩めるとビルダーの出力
+            // まで緩みます。ここは**その面が申告した値**を上限に使うだけです。
+            // `regularize.rs` が稜で同じことをしています
+            // （`tol.linear.max(edge.tolerance)`）。
+            let allowance = tol.linear.max(self.tolerance);
             let mut seed: Option<Point2> = None;
             for point in points {
                 report.sampled_point_count += 1;
-                let (distance, landed) = self.distance_to_surface(point, seed, tol.linear);
+                let (distance, landed) = self.distance_to_surface(point, seed, allowance);
                 seed = landed;
                 report.max_distance = report.max_distance.max(distance);
-                if distance > tol.linear {
+                if distance > allowance {
                     report.off_surface_point_count += 1;
                     report.errors.push(format!(
                         "Face {} boundary point on {loop_name} loop is off surface by {distance:.6e}",

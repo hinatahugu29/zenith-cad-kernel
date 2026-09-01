@@ -342,6 +342,11 @@ impl StepImporter {
     ///
     /// **緩めっぱなしにはしません。** 天井は `1e-3` mm です。それを超える
     /// 申告は、もう「不確かさ」ではなく別の問題なので、既定のまま断ります。
+    /// 読み込みで受ける粗さの天井。これを超えたら公差の話ではありません。
+    fn import_ceiling() -> f64 {
+        1e-3
+    }
+
     fn import_tolerance(ctx: &ImportContext) -> Tolerance {
         const CEILING: f64 = 1e-3;
         let mut tol = Tolerance::default();
@@ -2235,7 +2240,45 @@ impl StepImporter {
                 }
             }
 
-            let face = Face::new(geom, outer, inner_wires, orientation, 1e-6);
+            // **その面がどこまで正しいかを、測って持たせます**（4-266）。
+            //
+            // これまでは 1e-6 の決め打ちでした。ところが実務のファイルは、
+            // **自分の申告より粗い**ことがあります——実測（4-265）:
+            // `screw.step` は不確かさ 1e-6 と宣言しながら境界が 2.946e-4
+            // ずれ（**294 倍**）、`linkrods.step` は 2e-5 宣言で 4.145e-4
+            // （**20 倍**）でした。
+            //
+            // **全体の公差を緩めるのではなく、その面に書いておきます。**
+            // 下流の検証は `tol.linear.max(face.tolerance)` を使うので
+            // （`validate_boundary_on_surface`）、**ビルダーの出力は 1e-6 の
+            // まま**で、読んだ面だけがその粗さを持ち歩きます。
+            //
+            // **上限は `import_tolerance` の天井（1e-3）です。** それを超える
+            // 面は、公差の話ではなく**別の曲面**なので、これまでどおり断ります
+            // （4-263 が名指しします）。
+            let measured = {
+                let probe = Face::new(
+                    geom.clone(),
+                    outer.clone(),
+                    inner_wires.clone(),
+                    orientation,
+                    1e-6,
+                );
+                probe
+                    .validate_boundary_on_surface(&Self::import_tolerance(ctx), 8)
+                    .max_distance
+            };
+            let carried = if measured.is_finite() {
+                measured.max(1e-6).min(Self::import_ceiling())
+            } else {
+                1e-6
+            };
+            if std::env::var_os("ZENITH_STEP_WHY").is_some() && carried > 1e-6 {
+                eprintln!(
+                    "STEPWHY ADVANCED_FACE #{face_id} は自分の粗さ {carried:.6e} を持ち歩きます（実測 {measured:.6e}）"
+                );
+            }
+            let face = Face::new(geom, outer, inner_wires, orientation, carried);
             ctx.faces.insert(face_id, face.clone());
             return Ok(face);
         }
