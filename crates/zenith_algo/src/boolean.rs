@@ -252,6 +252,70 @@ impl BooleanEngine {
     /// The raw boolean pipeline, without the correctness gate.
     ///
     /// Intended for diagnosing the pipeline itself; callers that need a
+    /// 入口で立体を断るとき、**どの検査で落ちたか**を言う。
+    ///
+    /// これまでは「位相が不正」の一言でした。ところが実測（4-265）:
+    /// OCCT が配る `linkrods.step` を読むと、**開いたワイヤ 0、相手のいない
+    /// 稜 0、非多様体 0、同じ向き 0、潰れた稜 0、稜の端と頂点の差
+    /// 8.951e-16**——**位相は無傷**で、落ちていたのは
+    /// **「境界が曲面から外れ 255 件（最大 4.145e-4）」だけ**でした。
+    ///
+    /// **位相の話ではなく、公差の話です。** 一言で「位相が不正」と言うと、
+    /// 読む人は位相を疑いに行きます（4-263 と同じ形）。
+    fn reject_invalid_input(which: &str, solid: &Solid, tol: &Tolerance) -> Result<(), String> {
+        if solid.is_topologically_valid(tol) {
+            return Ok(());
+        }
+        let report = solid.outer_shell.validate_closed(tol);
+        let mut reasons: Vec<String> = Vec::new();
+        let mut note = |count: usize, name: &str| {
+            if count > 0 {
+                reasons.push(format!("{name} {count}"));
+            }
+        };
+        note(report.open_wire_count, "open wires");
+        note(report.unmatched_edge_use_count, "unmatched edge uses");
+        note(report.non_manifold_edge_use_count, "non-manifold edge uses");
+        note(
+            report.same_direction_edge_use_count,
+            "same-direction edge uses",
+        );
+        note(report.duplicate_edge_use_count, "duplicate edge uses");
+        note(report.duplicate_face_count, "duplicate faces");
+        note(report.degenerate_face_count, "degenerate faces");
+        note(report.degenerate_edge_use_count, "degenerate edge uses");
+        note(
+            report.planar_face_orientation_mismatch_count,
+            "planar faces facing the wrong way",
+        );
+        note(
+            report.edge_curve_endpoint_mismatch_count,
+            "edge curves not meeting their vertices",
+        );
+        if report.off_surface_boundary_count > 0 {
+            reasons.push(format!(
+                "boundary points off their surface {} (worst {:.3e})",
+                report.off_surface_boundary_count, report.max_boundary_surface_distance
+            ));
+        }
+        if report.pcurve_mismatch_count > 0 {
+            reasons.push(format!(
+                "p-curves off their edges {} (worst {:.3e})",
+                report.pcurve_mismatch_count, report.max_pcurve_distance
+            ));
+        }
+        if reasons.is_empty() {
+            reasons.push(format!(
+                "{} error(s) with no counted category",
+                report.errors.len()
+            ));
+        }
+        Err(format!(
+            "Exact B-Rep boolean input {which} does not validate as a closed shell: {}",
+            reasons.join(", ")
+        ))
+    }
+
     /// trustworthy solid should use [`Self::boolean_solids_exact_result`].
     pub fn boolean_solids_exact_result_unverified(
         solid_a: &Solid,
@@ -262,17 +326,11 @@ impl BooleanEngine {
         if std::ptr::eq(solid_a, solid_b)
             && matches!(op, BooleanOpType::Union | BooleanOpType::Intersection)
         {
-            if !solid_a.is_topologically_valid(tol) {
-                return Err("Exact B-Rep boolean input A is not topologically valid".to_string());
-            }
+            Self::reject_invalid_input("A", solid_a, tol)?;
             return Ok(ExactBooleanResult::single(solid_a.clone()));
         }
-        if !solid_a.is_topologically_valid(tol) {
-            return Err("Exact B-Rep boolean input A is not topologically valid".to_string());
-        }
-        if !solid_b.is_topologically_valid(tol) {
-            return Err("Exact B-Rep boolean input B is not topologically valid".to_string());
-        }
+        Self::reject_invalid_input("A", solid_a, tol)?;
+        Self::reject_invalid_input("B", solid_b, tol)?;
 
         // 他所から来た立体は、こちらのビルダーとは別の持ち方をしています。
         // 平面を B-spline で、全周を1枚の面で持つ。形は同じでも、この
