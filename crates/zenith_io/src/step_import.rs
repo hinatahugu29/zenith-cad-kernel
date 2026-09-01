@@ -1609,7 +1609,45 @@ impl StepImporter {
             }
         }
 
-        Self::get_surface(ctx, id)
+        // **決め打ちに落ちたら、そこに面が乗っているか測ります**（4-263）。
+        //
+        // 落ちた先は 90度 × 90度の決め打ちパッチです。面がそこに乗っていな
+        // ければ、**境界が丸ごと外れた曲面**が黙って出来ます——実測
+        // （4-260）: `screw.step` のトーラス面で **87** 離れていました。
+        // それを下流へ渡すと、検証が「境界が曲面から外れている」と 72 件
+        // 並べます。**読めなかったことが、読めなかったとして出てきません。**
+        //
+        // **もっともらしい答えより、できないと言う**（3-2）。ここで測って、
+        // 乗っていなければ**その曲面を名指しして断ります**。
+        //
+        // **測ってから断るので、いま通っているものは動きません**——決め打ち
+        // でも面が乗っているなら、これまでどおり通ります。
+        let surface = Self::get_surface(ctx, id)?;
+        if let Some(distance) = Self::boundary_off_surface(&surface, boundary_points) {
+            let extent = boundary_extent_of(boundary_points).max(1.0);
+            if distance > extent * 1e-3 {
+                return Err(format!(
+                    "Surface #{id} {} could not be rebuilt to cover its face: the boundary is off the fallback patch by {distance:.6e} (allowed {:.6e} for an extent of {extent:.6})",
+                    raw.name,
+                    extent * 1e-3
+                ));
+            }
+        }
+        Ok(surface)
+    }
+
+    /// 境界の点が、その曲面からどれだけ離れているか。曲面でなければ `None`。
+    fn boundary_off_surface(surface: &FaceGeometry, boundary_points: &[Point3]) -> Option<f64> {
+        let FaceGeometry::Nurbs(nurbs) = surface else {
+            return None;
+        };
+        let mut worst = 0.0f64;
+        for point in boundary_points {
+            let projection =
+                zenith_geom::ExtremumEngine::point_to_surface(*point, nurbs, 32, 1e-9).ok()?;
+            worst = worst.max(projection.distance);
+        }
+        Some(worst)
     }
 
     fn get_surface(ctx: &mut ImportContext, id: u64) -> Result<FaceGeometry, String> {
@@ -3377,6 +3415,17 @@ fn cylinder_patch_for_boundary(
 /// now depends on how far along the axis the row sits. A face that runs to the
 /// apex gives a zero radius at that end, which is a degenerate row rather than
 /// a failure.
+/// 境界の点が広がっている大きさ。判定の尺度に使います。
+fn boundary_extent_of(points: &[Point3]) -> f64 {
+    let mut worst = 0.0f64;
+    for (index, a) in points.iter().enumerate() {
+        for b in points.iter().skip(index + 1) {
+            worst = worst.max((a - b).norm());
+        }
+    }
+    worst
+}
+
 fn cone_patch_for_boundary(
     origin: Point3,
     z_dir: Vec3,
