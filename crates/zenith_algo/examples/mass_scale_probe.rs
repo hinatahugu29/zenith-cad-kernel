@@ -10,15 +10,15 @@
 //!
 //! # どう分けるか
 //!
-//! **1つの立体を作って縮める**のがいちばん綺麗ですが、**このカーネルは
-//! B-Rep を縮められません**——`BrepTransform::transform_solid` は剛体変換しか
-//! 受け付けません（`B-Rep transform must be rigid`）。**これ自体が実用の
-//! 欠落です**（模型を拡大縮小するのは基本の操作です。4-231 に記録）。
+//! 測り方は2つあります。**どちらも見ます。**
 //!
-//! そこで**素形状は桁ごとに作ります**。円柱もトーラスも、寸法を `s` 倍して
-//! 作れば**厳密に相似**なので、混ざりません。**体積は `s³` 倍になるはず**で、
-//! ならなければ崩れているのは**積分の側**です。
-use zenith_algo::{MassCalculator, PrimitiveBuilder};
+//! - **桁ごとに作る**（寸法を `s` 倍して作る。厳密に相似）
+//! - **作った立体を縮める**（`BrepTransform::scale_solid`。4-232 で通るように
+//!   しました。それまでは剛体変換しか受け付けませんでした）
+//!
+//! **どちらも体積は `s³` 倍になるはず**です。ならなければ、崩れているのは
+//! **積分の側**か、**縮め方**です。
+use zenith_algo::{BrepTransform, MassCalculator, PrimitiveBuilder};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
 
@@ -70,10 +70,10 @@ fn main() {
     println!("同じ立体を縮めても、体積が s^3 どおりか（形は変えていません）");
     println!();
     println!(
-        "{:<34}{:>8}{:>20}{:>16}  {}",
-        "subject", "scale", "volume / s^3", "relative", "verdict"
+        "{:<34}{:>8}{:>20}{:>16}{:>16}  {}",
+        "subject", "scale", "volume / s^3", "作り直し", "縮めた", "verdict"
     );
-    println!("{}", "-".repeat(96));
+    println!("{}", "-".repeat(112));
 
     let mut worst = 0.0f64;
     let mut worst_where = String::new();
@@ -97,15 +97,37 @@ fn main() {
             let relative = ((measured - reference) / reference).abs();
             if relative > worst {
                 worst = relative;
-                worst_where = format!("{} / scale {scale}", subject.name);
+                worst_where = format!("{} / scale {scale}（作り直し）", subject.name);
+            }
+            // **縮めたほうも測ります**（4-232）。同じ立体を縮めるので、
+            // ブーリアンの結果でも使えます。
+            let shrunk_relative = BrepTransform::scale_solid(&reference_solid, scale)
+                .ok()
+                .map(|solid| {
+                    let value = volume(&solid) / scale.powi(3);
+                    ((value - reference) / reference).abs()
+                });
+            if let Some(value) = shrunk_relative {
+                if value > worst {
+                    worst = value;
+                    worst_where = format!("{} / scale {scale}（縮めた）", subject.name);
+                }
             }
             println!(
-                "{:<34}{:>8}{:>20.9}{:>16.3e}  {}",
+                "{:<34}{:>8}{:>20.9}{:>16.3e}{:>16}  {}",
                 subject.name,
                 scale,
                 measured,
                 relative,
-                if relative <= 1e-9 { "ok" } else { "**ずれ**" }
+                match shrunk_relative {
+                    Some(value) => format!("{value:.3e}"),
+                    None => "縮められない".to_string(),
+                },
+                if relative <= 1e-9 && shrunk_relative.map(|v| v <= 1e-9).unwrap_or(false) {
+                    "ok"
+                } else {
+                    "**ずれ**"
+                }
             );
         }
         println!();

@@ -2811,7 +2811,7 @@ fn test_exact_brep_boolean_cuts_rotated_cylinder_lengthwise() {
 }
 
 #[test]
-fn test_rigid_transform_preserves_brep_and_rejects_scaling() {
+fn test_similarity_transform_preserves_brep_and_rejects_non_uniform_scaling() {
     let tol = Tolerance::default();
     let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(10.0, 30.0).unwrap();
 
@@ -2838,8 +2838,39 @@ fn test_rigid_transform_preserves_brep_and_rejects_scaling() {
         }
     }
 
+    // **一様な拡大縮小は通ります**（4-232）。円は円のままなので、断る理由
+    // （円が楕円になる）が当てはまりません。体積はちょうど `s³` 倍です。
     let scaling = zenith_math::Transform3::from_scale(2.0);
-    assert!(zenith_algo::BrepTransform::transform_solid(&cylinder, &scaling).is_err());
+    let scaled = zenith_algo::BrepTransform::transform_solid(&cylinder, &scaling)
+        .expect("一様な拡大縮小は通るはず");
+    assert!(scaled.is_topologically_valid(&tol));
+    let params = zenith_tess::TessellationParams {
+        u_divisions: 32,
+        v_divisions: 32,
+    };
+    let before = zenith_algo::MassCalculator::compute_from_brep(&cylinder, &params).volume;
+    let after = zenith_algo::MassCalculator::compute_from_brep(&scaled, &params).volume;
+    assert!(
+        ((after / before) - 8.0).abs() < 1e-9,
+        "体積が s^3 になっていない: {}",
+        after / before
+    );
+    // 側面は、2倍の半径の真円柱のまま。
+    for face in &scaled.outer_shell.faces {
+        let FaceGeometry::Nurbs(surface) = &face.geometry else {
+            continue;
+        };
+        for step in 0..=8 {
+            let point = surface.evaluate(step as f64 / 8.0, 0.5);
+            let radial = (point - Point3::new(0.0, 0.0, point.z)).norm();
+            assert!((radial - 20.0).abs() < 1e-9, "radius drifted to {radial}");
+        }
+    }
+
+    // **非一様な拡大縮小は、いまも断ります**——円が楕円になります。
+    let mut stretch = zenith_math::Transform3::identity();
+    stretch.matrix[(0, 0)] = 2.0;
+    assert!(zenith_algo::BrepTransform::transform_solid(&cylinder, &stretch).is_err());
 }
 
 #[test]

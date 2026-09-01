@@ -43,41 +43,57 @@ impl BrepTransform {
         )
     }
 
-    /// Applies a rigid transform (rotation plus translation) to a solid.
+    /// Applies a similarity transform (rotation, translation and **uniform
+    /// scaling**) to a solid.
     ///
-    /// Rigid transforms map every supported geometry class onto itself: NURBS
-    /// control points move with the body, weights are unchanged, and a plane
-    /// stays a plane. Non-rigid transforms are rejected because they would turn
-    /// circles into ellipses and offsets into non-offsets, which the current
-    /// geometry recognizers do not model.
+    /// Similarities map every supported geometry class onto itself: NURBS
+    /// control points move with the body, weights are unchanged, a plane stays
+    /// a plane, and **a circle stays a circle**. Tolerances move with the
+    /// factor, so a shrunk model is judged as finely as the original was.
+    ///
+    /// **Non-uniform** scaling is still rejected: it would turn circles into
+    /// ellipses and offsets into non-offsets, which the current geometry
+    /// recognizers do not model.
+    ///
+    /// **一様な拡大縮小は、長らく一緒に断られていました**（4-232）。断る理由
+    /// （円が楕円になる）は**非一様のほうにだけ当てはまります**。模型の拡大
+    /// 縮小は基本の操作なので、そこだけ通します。
     pub fn transform_solid(solid: &Solid, transform: &Transform3) -> Result<Solid, String> {
-        ensure_rigid(transform)?;
+        let scale = ensure_similar(transform)?;
         Ok(Solid::new(
-            Self::transform_shell_unchecked(&solid.outer_shell, transform),
+            Self::transform_shell_unchecked(&solid.outer_shell, transform, scale),
             solid
                 .inner_shells
                 .iter()
-                .map(|shell| Self::transform_shell_unchecked(shell, transform))
+                .map(|shell| Self::transform_shell_unchecked(shell, transform, scale))
                 .collect(),
         ))
     }
 
+    /// **一様に拡大縮小する**（4-231）。回転も移動もしません。
+    ///
+    /// 単位を変える、他所のデータに合わせる、図面の縮尺を変える——**模型を
+    /// 扱ううえで基本の操作**です。公差も一緒に倍率で動かします。
+    pub fn scale_solid(solid: &Solid, factor: f64) -> Result<Solid, String> {
+        Self::transform_solid(solid, &Transform3::from_scale(factor))
+    }
+
     pub fn transform_shell(shell: &Shell, transform: &Transform3) -> Result<Shell, String> {
-        ensure_rigid(transform)?;
-        Ok(Self::transform_shell_unchecked(shell, transform))
+        let scale = ensure_similar(transform)?;
+        Ok(Self::transform_shell_unchecked(shell, transform, scale))
     }
 
     pub fn transform_face(face: &Face, transform: &Transform3) -> Result<Face, String> {
-        ensure_rigid(transform)?;
-        Ok(transform_face_unchecked(face, transform))
+        let scale = ensure_similar(transform)?;
+        Ok(transform_face_unchecked(face, transform, scale))
     }
 
-    fn transform_shell_unchecked(shell: &Shell, transform: &Transform3) -> Shell {
+    fn transform_shell_unchecked(shell: &Shell, transform: &Transform3, scale: f64) -> Shell {
         Shell::new(
             shell
                 .faces
                 .iter()
-                .map(|face| transform_face_unchecked(face, transform))
+                .map(|face| transform_face_unchecked(face, transform, scale))
                 .collect(),
             shell.is_closed,
         )
@@ -90,8 +106,8 @@ impl BrepTransform {
 
     /// 単一エッジの剛体変換（曲線の次数・重みを保ったまま移す）
     pub fn transform_edge(edge: &Edge, transform: &Transform3) -> Result<Edge, String> {
-        ensure_rigid(transform)?;
-        Ok(transform_edge(edge, transform))
+        let scale = ensure_similar(transform)?;
+        Ok(transform_edge(edge, transform, scale))
     }
 
     pub fn reverse_shell_orientation(shell: &Shell) -> Shell {
@@ -252,24 +268,41 @@ fn translate_control_point(control_point: ControlPoint3, offset: Vec3) -> Contro
     ControlPoint3::new(control_point.point + offset, control_point.weight)
 }
 
-fn ensure_rigid(transform: &Transform3) -> Result<(), String> {
-    const RIGID_TOLERANCE: f64 = 1e-9;
+/// 相似変換（回転・移動・**一様な拡大縮小**）だけを通し、その倍率を返す。
+///
+/// **一様なら形は保たれます。** 制御点は倍率どおりに動き、重みは変わらず、
+/// 円は円のまま、直交していた軸は直交したままです。**一様でない拡大縮小は
+/// 通しません**——円が楕円になり、解析曲面として持っているものが持てなく
+/// なります。
+///
+/// **長らく剛体だけを通していました**（4-231）。模型の拡大縮小は基本の操作
+/// （単位を変える、他所のデータに合わせる、縮尺を変える）なのに、
+/// `B-Rep transform must be rigid` で断っていました。
+fn ensure_similar(transform: &Transform3) -> Result<f64, String> {
+    const SIMILARITY_TOLERANCE: f64 = 1e-9;
 
     let axes = [
         transform.transform_vector(&Vec3::new(1.0, 0.0, 0.0)),
         transform.transform_vector(&Vec3::new(0.0, 1.0, 0.0)),
         transform.transform_vector(&Vec3::new(0.0, 0.0, 1.0)),
     ];
+    let scale = axes[0].norm();
+    if !(scale.is_finite() && scale > 0.0) {
+        return Err("B-Rep transform must not collapse the model".to_string());
+    }
     for (index, axis) in axes.iter().enumerate() {
-        if (axis.norm() - 1.0).abs() > RIGID_TOLERANCE {
+        // **倍率が軸ごとに違えば、一様ではありません。**
+        if (axis.norm() - scale).abs() > SIMILARITY_TOLERANCE * scale.max(1.0) {
             return Err(format!(
-                "B-Rep transform must be rigid; axis {index} is scaled by {}",
+                "B-Rep transform must be a similarity; axis {index} is scaled by {} but axis 0 by {scale}",
                 axis.norm()
             ));
         }
         for other in axes.iter().skip(index + 1) {
-            if axis.dot(other).abs() > RIGID_TOLERANCE {
-                return Err("B-Rep transform must be rigid; axes are not orthogonal".to_string());
+            if axis.dot(other).abs() > SIMILARITY_TOLERANCE * scale * scale {
+                return Err(
+                    "B-Rep transform must be a similarity; axes are not orthogonal".to_string()
+                );
             }
         }
     }
@@ -277,19 +310,21 @@ fn ensure_rigid(transform: &Transform3) -> Result<(), String> {
         return Err("B-Rep transform must preserve handedness".to_string());
     }
 
-    Ok(())
+    Ok(scale)
 }
 
-fn transform_face_unchecked(face: &Face, transform: &Transform3) -> Face {
+fn transform_face_unchecked(face: &Face, transform: &Transform3, scale: f64) -> Face {
     Face::new(
         transform_face_geometry(&face.geometry, transform),
-        transform_wire(&face.outer_wire, transform),
+        transform_wire(&face.outer_wire, transform, scale),
         face.inner_wires
             .iter()
-            .map(|wire| transform_wire(wire, transform))
+            .map(|wire| transform_wire(wire, transform, scale))
             .collect(),
         face.orientation,
-        face.tolerance,
+        // **公差も倍率で動かします。** 縮めた模型に元の公差を残すと、相対では
+        // そのぶん緩くなります。
+        face.tolerance * scale,
     )
 }
 
@@ -355,26 +390,34 @@ fn transform_face_geometry(geometry: &FaceGeometry, transform: &Transform3) -> F
     }
 }
 
-fn transform_wire(wire: &Wire, transform: &Transform3) -> Wire {
+fn transform_wire(wire: &Wire, transform: &Transform3, scale: f64) -> Wire {
     Wire::new(
         wire.edges
             .iter()
-            .map(|edge| OrientedEdge::new(transform_edge(&edge.edge, transform), edge.orientation))
+            .map(|edge| {
+                OrientedEdge::new(
+                    transform_edge(&edge.edge, transform, scale),
+                    edge.orientation,
+                )
+            })
             .collect(),
     )
 }
 
-fn transform_edge(edge: &Edge, transform: &Transform3) -> Edge {
+fn transform_edge(edge: &Edge, transform: &Transform3, scale: f64) -> Edge {
     Edge::new(
         transform_nurbs_curve(&edge.curve, transform),
-        transform_vertex(&edge.start_vertex, transform),
-        transform_vertex(&edge.end_vertex, transform),
-        edge.tolerance,
+        transform_vertex(&edge.start_vertex, transform, scale),
+        transform_vertex(&edge.end_vertex, transform, scale),
+        edge.tolerance * scale,
     )
 }
 
-fn transform_vertex(vertex: &Vertex, transform: &Transform3) -> Vertex {
-    Vertex::new(transform.transform_point(&vertex.point), vertex.tolerance)
+fn transform_vertex(vertex: &Vertex, transform: &Transform3, scale: f64) -> Vertex {
+    Vertex::new(
+        transform.transform_point(&vertex.point),
+        vertex.tolerance * scale,
+    )
 }
 
 fn transform_nurbs_curve(curve: &NurbsCurve3, transform: &Transform3) -> NurbsCurve3 {
