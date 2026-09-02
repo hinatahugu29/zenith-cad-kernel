@@ -2121,6 +2121,13 @@ impl BrepIntersectionBuilder {
 
 #[derive(Debug, Clone, Copy)]
 struct StitchEdgeUse {
+    /// **この稜を出した面の番号**（4-292）。
+    ///
+    /// 座標だけでは「どの面の片が合っていないか」が言えません。相手のいない
+    /// 稜が 56 本あっても、**それが何枚の面から来ているのか**——1枚が丸ごと
+    /// 浮いているのか、多くの面が1本ずつ足りないのか——で、次に見る場所が
+    /// 変わります。診断にしか使いません。
+    face_id: u64,
     start: Point3,
     end: Point3,
     /// 稜の途中の点。**端点だけでは稜を見分けられません。**
@@ -4745,8 +4752,9 @@ fn diagnose_selected_face_stitching(
                         touching(use_.end)
                     );
                     eprintln!(
-                        "STITCHWHY unmatched {:?} ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9}) len {:.9}",
+                        "STITCHWHY unmatched {:?} 面 {} ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9}) len {:.9}",
                         use_.operand,
+                        use_.face_id,
                         use_.start.x,
                         use_.start.y,
                         use_.start.z,
@@ -4868,6 +4876,7 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
     for piece in pieces {
         collect_wire_stitch_edge_uses(
             &piece.face.outer_wire,
+            piece.face.id,
             piece.reverse_orientation,
             piece.operand,
             &mut edge_uses,
@@ -4875,6 +4884,7 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
         for wire in &piece.face.inner_wires {
             collect_wire_stitch_edge_uses(
                 wire,
+                piece.face.id,
                 piece.reverse_orientation,
                 piece.operand,
                 &mut edge_uses,
@@ -4887,6 +4897,7 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
 
 fn collect_wire_stitch_edge_uses(
     wire: &Wire,
+    face_id: u64,
     reverse_orientation: bool,
     operand: BooleanOperand,
     edge_uses: &mut Vec<StitchEdgeUse>,
@@ -4898,6 +4909,7 @@ fn collect_wire_stitch_edge_uses(
         let middle = edge.evaluate_normalized(0.5);
         if reverse_orientation {
             edge_uses.push(StitchEdgeUse {
+                face_id,
                 start: end,
                 end: start,
                 middle,
@@ -4905,6 +4917,7 @@ fn collect_wire_stitch_edge_uses(
             });
         } else {
             edge_uses.push(StitchEdgeUse {
+                face_id,
                 start,
                 end,
                 middle,
