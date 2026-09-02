@@ -1931,6 +1931,32 @@ fn repair_interior_t_junctions(
                     }
                 }
                 let Some((_, middle)) = best else {
+                    // **直せなかった辺を言います**（4-290）。辺の上に頂点が
+                    // 無ければ、割る相手がいません——**片側の三角形がそもそも
+                    // 無い**ということです。
+                    if std::env::var_os("ZENITH_EARCUT_WHY").is_some() {
+                        // **いちばん近い頂点が、どれだけ外れているか**も出します。
+                        // 「乗っていない」のか「許容が厳しすぎる」のかは、
+                        // 距離を見ないと分かりません。
+                        let ab = uvs[b] - uvs[a];
+                        let length = ab.norm().max(f64::MIN_POSITIVE);
+                        let mut nearest = f64::MAX;
+                        for candidate in 0..uvs.len() {
+                            if candidate == a || candidate == b {
+                                continue;
+                            }
+                            let t = (uvs[candidate] - uvs[a]).dot(&ab) / (length * length);
+                            if !(0.0..=1.0).contains(&t) {
+                                continue;
+                            }
+                            let foot = Point2::new(uvs[a].x + ab.x * t, uvs[a].y + ab.y * t);
+                            nearest = nearest.min((uvs[candidate] - foot).norm());
+                        }
+                        eprintln!(
+                            "EARCUTWHY     T 字を直せない ({:.6},{:.6})-({:.6},{:.6}): いちばん近い頂点は辺から {nearest:.3e}（許容 {allowance:.3e}）",
+                            uvs[a].x, uvs[a].y, uvs[b].x, uvs[b].y
+                        );
+                    }
                     continue;
                 };
                 // 向きを保ったまま2枚に。
