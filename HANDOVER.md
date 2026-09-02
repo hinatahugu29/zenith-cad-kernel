@@ -1,7 +1,7 @@
 # 引継書 — Zenith CAD Kernel
 
 **最終更新**: 2026年9月3日
-**現在の作業ブランチ**: `codex/tess-edge-contract`（2026/09/03 時点で `origin/main` から **32 コミット先行**。**この数はすぐ古くなります**——下の `git rev-list --count origin/main..HEAD` を打ってください）
+**現在の作業ブランチ**: `codex/tess-edge-contract`（2026/09/03 時点で `origin/main` から **35 コミット先行**。**この数はすぐ古くなります**——下の `git rev-list --count origin/main..HEAD` を打ってください）
 **実装・検証の基準**: `origin/main` の `f3815de`
 **ライセンス**: **MPL-2.0**（[`LICENSE`](LICENSE)。2026/08/30 に定めました）
 
