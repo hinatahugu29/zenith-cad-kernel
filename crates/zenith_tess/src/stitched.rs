@@ -902,6 +902,71 @@ fn patch_mesh(
             "EARCUTWHY   面積 多角形 {polygon_area:.9} / 三角形 {triangle_area:.9}（差 {:.3e}）、             境界でないのに1回しか使われない辺 {lonely} 本",
             (triangle_area - polygon_area).abs() / polygon_area.abs().max(f64::MIN_POSITIVE)
         );
+        // **輪そのものが、uv で自分と交わっていないか**（4-287）。
+        //
+        // 交わっていれば earcut は成り立ちません。実測（OCCT の
+        // `linkrods.step`）: 三角形の面積の和が多角形の 1.57 倍になり、
+        // 境界の辺が 11 本欠けていました。**下流の手当てをいくら足しても
+        // 直りません**——入力が多角形になっていないからです。
+        let crosses = |a: Point2, b: Point2, c: Point2, d: Point2| {
+            let side = |p: Point2, q: Point2, r: Point2| {
+                (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
+            };
+            let (d1, d2) = (side(a, b, c), side(a, b, d));
+            let (d3, d4) = (side(c, d, a), side(c, d, b));
+            (d1 * d2 < 0.0) && (d3 * d4 < 0.0)
+        };
+        let mut ring_edges: Vec<(usize, usize)> = Vec::new();
+        for range in &ring_ranges {
+            let count = range.len();
+            for offset in 0..count {
+                ring_edges.push((range.start + offset, range.start + (offset + 1) % count));
+            }
+        }
+        let mut crossings = 0usize;
+        let mut first_crossing: Option<((usize, usize), (usize, usize))> = None;
+        for left in 0..ring_edges.len() {
+            for right in (left + 1)..ring_edges.len() {
+                let (a, b) = ring_edges[left];
+                let (c, d) = ring_edges[right];
+                if a == c || a == d || b == c || b == d {
+                    continue;
+                }
+                if crosses(uvs[a], uvs[b], uvs[c], uvs[d]) {
+                    crossings += 1;
+                    if first_crossing.is_none() {
+                        first_crossing = Some((ring_edges[left], ring_edges[right]));
+                    }
+                }
+            }
+        }
+        if crossings > 0 {
+            let ((a, b), (c, d)) = first_crossing.unwrap_or(((0, 0), (0, 0)));
+            let place = |index: usize| {
+                for range in &ring_ranges {
+                    if range.contains(&index) {
+                        return format!("{}/{}", index - range.start, range.len());
+                    }
+                }
+                "?".to_string()
+            };
+            eprintln!(
+                "EARCUTWHY   **輪が uv で自分と交わっています**: {crossings} 組。                 例 [{}]({:.6},{:.6})-[{}]({:.6},{:.6}) と [{}]({:.6},{:.6})-[{}]({:.6},{:.6})",
+                place(a),
+                uvs[a].x,
+                uvs[a].y,
+                place(b),
+                uvs[b].x,
+                uvs[b].y,
+                place(c),
+                uvs[c].x,
+                uvs[c].y,
+                place(d),
+                uvs[d].x,
+                uvs[d].y
+            );
+        }
+
         // **本数だけでは直せません。** どこかを言います。境界の点かどうかも。
         let on_boundary = |index: usize| ring_ranges.iter().any(|r| r.contains(&index));
         for (key, _) in uses
