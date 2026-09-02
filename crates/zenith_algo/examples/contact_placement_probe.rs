@@ -1021,10 +1021,10 @@ fn main() {
             // `ZENITH_PROGRESS=1` を付けると、5秒ごとに「経過と、その間に
             // 増えた仕事量」が出ます。**返ってこないときに、遅いだけなのか
             // 進んでいないのかが分かります。**
-            let (outcome, seconds) = zenith_geom::progress::timed(
-                &format!("{} {label}", case.name),
-                || BooleanEngine::boolean_solids_exact_result(&case.a, &case.b, op, &tol),
-            );
+            let (outcome, seconds) =
+                zenith_geom::progress::timed(&format!("{} {label}", case.name), || {
+                    BooleanEngine::boolean_solids_exact_result(&case.a, &case.b, op, &tol)
+                });
             // **遅い演算は、黙っていても名指しします。** 待たされたときに
             // 「どれが重いのか」を後から探さずに済みます。
             if seconds >= slow_seconds {

@@ -191,7 +191,13 @@ fn main() {
                 let (pa, pb) = (mesh.positions[*a as usize], mesh.positions[*b as usize]);
                 println!(
                     "    穴の一例: ({:.9},{:.9},{:.9}) -> ({:.9},{:.9},{:.9}) 長さ {:.3e}",
-                    pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, (pb - pa).norm()
+                    pa.x,
+                    pa.y,
+                    pa.z,
+                    pb.x,
+                    pb.y,
+                    pb.z,
+                    (pb - pa).norm()
                 );
             }
             // **稜は、本当に面どうしで共有されているか**（4-277）。
@@ -203,9 +209,7 @@ fn main() {
             let mut edge_uses: std::collections::HashMap<u64, usize> =
                 std::collections::HashMap::new();
             for face in &subject.outer_shell.faces {
-                for wire in
-                    std::iter::once(&face.outer_wire).chain(face.inner_wires.iter())
-                {
+                for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
                     for oriented in &wire.edges {
                         *edge_uses.entry(oriented.edge.id).or_insert(0) += 1;
                     }
@@ -255,9 +259,7 @@ fn main() {
                     for segment in &pcurves.outer_loop.segments {
                         let (t0, t1) = segment.curve.param_range();
                         for step in 0..8 {
-                            let a = segment
-                                .curve
-                                .evaluate(t0 + (t1 - t0) * step as f64 / 8.0);
+                            let a = segment.curve.evaluate(t0 + (t1 - t0) * step as f64 / 8.0);
                             let b = segment
                                 .curve
                                 .evaluate(t0 + (t1 - t0) * (step + 1) as f64 / 8.0);
@@ -265,14 +267,22 @@ fn main() {
                         }
                     }
                     area *= 0.5;
-                    let oriented = if face.orientation.is_forward() { area } else { -area };
+                    let oriented = if face.orientation.is_forward() {
+                        area
+                    } else {
+                        -area
+                    };
                     if oriented <= 0.0 {
                         bad += 1;
                         if listed.len() < 4 {
                             listed.push(format!(
                                 "面 {}（{}、符号付き面積 {oriented:.3e}）",
                                 face.id,
-                                if face.orientation.is_forward() { "正" } else { "逆" }
+                                if face.orientation.is_forward() {
+                                    "正"
+                                } else {
+                                    "逆"
+                                }
                             ));
                         }
                     }
@@ -291,9 +301,7 @@ fn main() {
             {
                 let mut users: std::collections::BTreeMap<u64, Vec<u64>> = Default::default();
                 for face in &subject.outer_shell.faces {
-                    for wire in
-                        std::iter::once(&face.outer_wire).chain(face.inner_wires.iter())
-                    {
+                    for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
                         for oriented in &wire.edges {
                             users.entry(oriented.edge.id).or_default().push(face.id);
                         }
@@ -359,9 +367,7 @@ fn main() {
             // `ZENITH_PROGRESS=15` なら 15 秒ごとに「経過と、その間に増えた
             // 仕事量」が出ます。**仕事量が増えていなければ、収束しない輪の
             // 中にいます。** 待つのをやめたあとも、この行だけが手掛かりです。
-            let _beat = zenith_geom::progress::Heartbeat::start(format!(
-                "{name} {label}"
-            ));
+            let _beat = zenith_geom::progress::Heartbeat::start(format!("{name} {label}"));
             let (sender, receiver) = std::sync::mpsc::channel();
             let (a, b) = (subject.clone(), cutter.clone());
             std::thread::spawn(move || {
@@ -473,12 +479,7 @@ fn main() {
                                 .solids
                                 .iter()
                                 .map(|solid| {
-                                    solid
-                                        .outer_shell
-                                        .faces
-                                        .iter()
-                                        .map(|face| face.id)
-                                        .collect()
+                                    solid.outer_shell.faces.iter().map(|face| face.id).collect()
                                 })
                                 .collect();
                             for left in 0..ids.len() {

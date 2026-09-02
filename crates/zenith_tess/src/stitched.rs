@@ -817,6 +817,10 @@ fn patch_mesh(
     // **それでも残る境界の辺は、横切っている辺を入れ替えて通します**（4-209）。
     force_missing_boundary_edges(&uvs, &ring_ranges, &mut triangles);
 
+    // **面の内側に残った T 字の継ぎ目を直します**（4-286）。境界の辺には
+    // 3段の手当てがありましたが、内側には無く、黙って通っていました。
+    repair_interior_t_junctions(&uvs, &ring_ranges, &mut triangles);
+
     // **境界の辺が全部そろっているかを数えます**（`ZENITH_EARCUT_WHY=1`）。
     //
     // リングの連続する2点を結ぶ辺は、三角形分割に必ず現れなければなりません。
@@ -848,6 +852,84 @@ fn patch_mesh(
             "EARCUTWHY   境界の辺 {total} 本のうち {missing} 本が三角形分割に無い（三角形 {}）",
             triangles.len()
         );
+
+        // **境界の辺がそろっていても、中が埋まっているとは限りません**（4-286）。
+        //
+        // 面積で突き合わせます。三角形の面積の和が多角形の面積より小さければ
+        // **抜けている**、大きければ**重なっている**。どちらもメッシュの穴に
+        // なります。**辺の数だけを見ていたので、この差が見えていませんでした。**
+        let ring_area = |range: &std::ops::Range<usize>| {
+            let count = range.len();
+            let mut twice = 0.0;
+            for offset in 0..count {
+                let a = uvs[range.start + offset];
+                let b = uvs[range.start + (offset + 1) % count];
+                twice += a.x * b.y - b.x * a.y;
+            }
+            twice * 0.5
+        };
+        let polygon_area: f64 = ring_ranges.iter().map(ring_area).sum::<f64>().abs();
+        let triangle_area: f64 = triangles
+            .iter()
+            .map(|t| {
+                let (a, b, c) = (uvs[t[0]], uvs[t[1]], uvs[t[2]]);
+                ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5
+            })
+            .sum();
+        // **その面の中だけで相手のいない辺**（境界の辺を除く）。これが
+        // メッシュの穴になります。
+        let mut on_ring: std::collections::HashSet<(usize, usize)> = Default::default();
+        for range in &ring_ranges {
+            let count = range.len();
+            for offset in 0..count {
+                let a = range.start + offset;
+                let b = range.start + (offset + 1) % count;
+                on_ring.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
+        let mut uses: std::collections::HashMap<(usize, usize), usize> = Default::default();
+        for triangle in &triangles {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                *uses.entry(if a < b { (a, b) } else { (b, a) }).or_insert(0) += 1;
+            }
+        }
+        let lonely = uses
+            .iter()
+            .filter(|(key, count)| **count == 1 && !on_ring.contains(key))
+            .count();
+        eprintln!(
+            "EARCUTWHY   面積 多角形 {polygon_area:.9} / 三角形 {triangle_area:.9}（差 {:.3e}）、             境界でないのに1回しか使われない辺 {lonely} 本",
+            (triangle_area - polygon_area).abs() / polygon_area.abs().max(f64::MIN_POSITIVE)
+        );
+        // **本数だけでは直せません。** どこかを言います。境界の点かどうかも。
+        let on_boundary = |index: usize| ring_ranges.iter().any(|r| r.contains(&index));
+        for (key, _) in uses
+            .iter()
+            .filter(|(key, count)| **count == 1 && !on_ring.contains(key))
+            .take(8)
+        {
+            let (a, b) = (uvs[key.0], uvs[key.1]);
+            eprintln!(
+                "EARCUTWHY     相手のいない辺 ({:.6},{:.6})-({:.6},{:.6}) 添字 {}{} - {}{}",
+                a.x,
+                a.y,
+                b.x,
+                b.y,
+                key.0,
+                if on_boundary(key.0) {
+                    "（境界）"
+                } else {
+                    ""
+                },
+                key.1,
+                if on_boundary(key.1) {
+                    "（境界）"
+                } else {
+                    ""
+                }
+            );
+        }
         // **本数だけでは直せません。** どの辺かを名指しします。
         for range in &ring_ranges {
             let count = range.len();
@@ -963,6 +1045,14 @@ fn patch_mesh(
             false,
         );
         explain_flat("適応細分後", &triangles, &uvs);
+
+        // **細分のあとにも、同じ修理を掛けます**（4-286）。
+        //
+        // earcut 直後だけでは足りません。実測（OCCT の `screw.step` を
+        // `Regularizer` に通したもの）: earcut の段では相手のいない辺が
+        // **0 本**なのに、細分のあとに **14 本**できていました。細分は
+        // 三角形ごとに割るので、隣が割らなければそこが T 字になります。
+        repair_interior_t_junctions(&uvs, &ring_ranges, &mut triangles);
         if std::env::var_os("ZENITH_PATCH_WHY").is_some() {
             eprintln!(
                 "PATCHWHY   境界 {boundary_vertex_count} 点、earcut {before_refinement} 枚 -> 細分後 {} 枚（{:.1}倍）",
@@ -1108,8 +1198,31 @@ fn push_with_uv_winding(
     let c = uvs[triangle[2] as usize];
     let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
     if signed == 0.0 {
+        // **uv で潰れていても、3D では面積を持つ三角形があります**（4-286）。
+        //
+        // 実測（OCCT の `screw.step`）: uv の面積が 0 の三角形が 41 枚あり、
+        // **3D では合わせて 0.005672** の面積を持っていました。捨てると
+        // その辺が相手を失い、そのままメッシュの穴になります——実測で
+        // **10 枚捨てて、穴が 14 本**でした。
+        //
+        // uv から向きが決まらないだけなので、**3D の法線から決めます**。
+        // 頂点の法線は既に面の向きを織り込んである（`oriented_normal`）ので、
+        // それと揃えれば `forward` を別に見る必要はありません。
+        let reference = mesh.normals[triangle[0] as usize]
+            + mesh.normals[triangle[1] as usize]
+            + mesh.normals[triangle[2] as usize];
+        let facet = (p1 - p0).cross(&(p2 - p0));
         if why {
-            eprintln!("TESSWHY   EMITDROP uv-zero");
+            eprintln!(
+                "TESSWHY   EMITKEEP uv-zero（3D 面積 {:.3e}、法線との向き {:.3e}）",
+                facet.norm() * 0.5,
+                facet.dot(&reference)
+            );
+        }
+        if facet.dot(&reference) >= 0.0 {
+            mesh.indices.push(triangle);
+        } else {
+            mesh.indices.push([triangle[0], triangle[2], triangle[1]]);
         }
         return;
     }
@@ -1633,6 +1746,146 @@ fn split_edge_carrying_point(
 /// 制約付き三角形分割の教科書どおり、**その辺を横切っている辺を入れ替えて
 /// いきます**。凸でない四角形は入れ替えられないので、進まなくなったら
 /// 諦めます（黙って形を変えるより、欠けたまま置くほうが安全です）。
+/// **面の内側に残った T 字の継ぎ目**を直す。
+///
+/// # なぜ要るか
+///
+/// earcut は、**内側に一直線に並んだ点**があるところで、辺を重ねて置くことが
+/// あります。実測（4-286。OCCT の `screw.step` のねじ山の面）: パラメータ
+/// 領域の `v = 0.5` に、上の帯と下の谷が接する直線があり、そこで
+///
+/// ```text
+/// 相手のいない辺 (0.016345,0.500000)-(0.492646,0.500000)   ← 跨ぐ辺
+/// 相手のいない辺 (0.016345,0.500000)-(0.019901,0.500000)   ← その一部
+/// 相手のいない辺 (0.019901,0.500000)-(0.023430,0.500000)   ← その一部
+/// ```
+///
+/// のように、**長い辺と、その上に乗る短い辺が同居**していました。長い辺の
+/// 片側は三角形が1枚、もう片側は細かい三角形が並ぶので、**そこが縫合されず
+/// メッシュの穴になります**。この面だけで**穴 34 本**でした。
+///
+/// 境界の辺については既に3段の手当てがあります（4-85、4-86、4-207、4-209）。
+/// **内側は手当てが無く、黙って通っていました。**
+///
+/// # どう直すか
+///
+/// **1回しか使われていない辺のうち、境界でないもの**を探し、その辺の上に
+/// 別の頂点が乗っていたら、その辺を使っている三角形を割ります。**割るのは
+/// 壊れている辺だけ**なので、正しく張れている面には触れません。
+///
+/// 変わらなくなるまで繰り返します。割るたびに三角形は増えますが、頂点は
+/// 増えないので必ず止まります。
+fn repair_interior_t_junctions(
+    uvs: &[Point2],
+    ring_ranges: &[std::ops::Range<usize>],
+    triangles: &mut Vec<[usize; 3]>,
+) {
+    let mut on_ring: std::collections::HashSet<(usize, usize)> = Default::default();
+    for range in ring_ranges {
+        let count = range.len();
+        for offset in 0..count {
+            let a = range.start + offset;
+            let b = range.start + (offset + 1) % count;
+            on_ring.insert(if a < b { (a, b) } else { (b, a) });
+        }
+    }
+
+    // 辺の上に乗っているか。
+    //
+    // **物差しは領域の大きさで作ります。** 辺の長さで正規化すると、短い辺
+    // ほど厳しくなり、**跨がれている点をいちばん見つけたい場所**（点が
+    // 詰まっているところ）で見落とします。実測（4-286）: 長さ 3.5e-3 の辺で
+    // 許容が 3.5e-12 になり、5本を取りこぼしました。
+    let extent = {
+        let (mut lo, mut hi) = (
+            Point2::new(f64::MAX, f64::MAX),
+            Point2::new(f64::MIN, f64::MIN),
+        );
+        for point in uvs {
+            lo = Point2::new(lo.x.min(point.x), lo.y.min(point.y));
+            hi = Point2::new(hi.x.max(point.x), hi.y.max(point.y));
+        }
+        (hi - lo).norm().max(f64::MIN_POSITIVE)
+    };
+    let allowance = extent * 1e-9;
+    let on_segment = |a: Point2, b: Point2, c: Point2| {
+        let ab = b - a;
+        let length = ab.norm();
+        if length <= allowance {
+            return false;
+        }
+        let t = (c - a).dot(&ab) / (length * length);
+        // 端そのものは「乗っている」と数えません（割っても意味がないので）。
+        if t * length <= allowance || (1.0 - t) * length <= allowance {
+            return false;
+        }
+        let foot = Point2::new(a.x + ab.x * t, a.y + ab.y * t);
+        (c - foot).norm() <= allowance
+    };
+
+    for _round in 0..8 {
+        let mut uses: std::collections::HashMap<(usize, usize), usize> = Default::default();
+        for triangle in triangles.iter() {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                *uses.entry(if a < b { (a, b) } else { (b, a) }).or_insert(0) += 1;
+            }
+        }
+        let lonely: std::collections::HashSet<(usize, usize)> = uses
+            .into_iter()
+            .filter(|(key, count)| *count == 1 && !on_ring.contains(key))
+            .map(|(key, _)| key)
+            .collect();
+        if lonely.is_empty() {
+            return;
+        }
+
+        let mut split_any = false;
+        let mut out: Vec<[usize; 3]> = Vec::with_capacity(triangles.len() + 8);
+        for triangle in triangles.iter() {
+            let mut done = false;
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                let key = if a < b { (a, b) } else { (b, a) };
+                if !lonely.contains(&key) {
+                    continue;
+                }
+                // この辺の上に乗っている頂点のうち、**いちばん近い側**で割ります。
+                let apex = triangle[(corner + 2) % 3];
+                let mut best: Option<(f64, usize)> = None;
+                for candidate in 0..uvs.len() {
+                    if candidate == a || candidate == b || candidate == apex {
+                        continue;
+                    }
+                    if !on_segment(uvs[a], uvs[b], uvs[candidate]) {
+                        continue;
+                    }
+                    let distance = (uvs[candidate] - uvs[a]).norm();
+                    if best.is_none_or(|(d, _)| distance < d) {
+                        best = Some((distance, candidate));
+                    }
+                }
+                let Some((_, middle)) = best else {
+                    continue;
+                };
+                // 向きを保ったまま2枚に。
+                out.push([a, middle, apex]);
+                out.push([middle, b, apex]);
+                split_any = true;
+                done = true;
+                break;
+            }
+            if !done {
+                out.push(*triangle);
+            }
+        }
+        *triangles = out;
+        if !split_any {
+            return;
+        }
+    }
+}
+
 fn force_missing_boundary_edges(
     uvs: &[Point2],
     ring_ranges: &[std::ops::Range<usize>],
