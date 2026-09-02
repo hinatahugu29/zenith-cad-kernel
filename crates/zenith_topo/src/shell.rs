@@ -534,7 +534,22 @@ fn validate_planar_face_orientation(
                 normal += a.coords.cross(&b.coords);
             }
             let plane_normal = match &face.geometry {
-                FaceGeometry::Plane(plane) => plane.normal,
+                FaceGeometry::Plane(plane) => {
+                    // **uv の右ねじと、持っている法線が一致しているか**（4-281）。
+                    // p-curve の符号付き面積は `u × v` まわりで決まるので、
+                    // ここがずれていると符号だけが逆になります。
+                    let handed = plane.u_axis.cross(&plane.v_axis);
+                    let consistent = handed.normalize().dot(&plane.normal.normalize());
+                    eprintln!(
+                        "ORIENTWHY   平面の uv: u×v と法線の内積 {consistent:+.6}（{}）",
+                        if consistent > 0.0 {
+                            "一致"
+                        } else {
+                            "**逆。符号付き面積が裏返ります**"
+                        }
+                    );
+                    plane.normal
+                }
                 _ => zenith_math::Vec3::z(),
             };
             let agreement = if normal.norm() > 0.0 {
@@ -543,7 +558,12 @@ fn validate_planar_face_orientation(
                 0.0
             };
             eprintln!(
-                "ORIENTWHY 面 {face_index}: p-curve は {}、符号付き面積 {oriented_area:.6e}、面の向き {}、ワイヤの法線と平面の法線の内積 {agreement:+.6}（{}）",
+                "ORIENTWHY 面 {face_index}（{}）: p-curve は {}、符号付き面積 {oriented_area:.6e}、面の向き {}、ワイヤの法線との内積 {agreement:+.6}（{}）",
+                match &face.geometry {
+                    FaceGeometry::Plane(_) => "平面",
+                    FaceGeometry::Nurbs(_) => "**NURBS**",
+                    _ => "その他",
+                },
                 if face.pcurves.is_some() {
                     "**ファイル／取り込みが持たせたもの**"
                 } else {
@@ -558,7 +578,15 @@ fn validate_planar_face_orientation(
             );
         }
         report.errors.push(format!(
-            "Face {face_index} planar p-curve loop is inconsistent with face orientation; oriented area {oriented_area:.6e}"
+            // **「planar」と書いていました**（4-281）。この検査は NURBS の面も
+            // 見ます。実測でここに出た3枚は**すべて NURBS** で、文面を平面だと
+            // 読んで一度誤った記録を書きました（4-280 の訂正）。
+            "Face {face_index} {} p-curve loop is inconsistent with face orientation; oriented area {oriented_area:.6e}",
+            match &face.geometry {
+                FaceGeometry::Plane(_) => "planar",
+                FaceGeometry::Nurbs(_) => "NURBS",
+                _ => "surface",
+            }
         ));
     }
 }
