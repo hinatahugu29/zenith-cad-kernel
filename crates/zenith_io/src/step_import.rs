@@ -2312,12 +2312,42 @@ impl StepImporter {
             } else {
                 1e-6
             };
-            if std::env::var_os("ZENITH_STEP_WHY").is_some() && carried > 1e-6 {
+            // **p-curve の粗さは、別に測って別に持たせます**（4-285）。
+            //
+            // 上の `carried` は「稜が曲面からどれだけ外れているか」です。
+            // **検証が見るのは「p-curve と 3D の稜の差」**で、そこには
+            // **折れ線であることの誤差が上乗せ**されます——実測
+            // （`linkrods.step`）: 外れ 5.500e-4 に対し 5.636e-4（2.5% 上）。
+            //
+            // **測る面は `carried` を持たせて作ります。** 緩い面で測ると
+            // p-curve 自体が粗くなり、**測り方が自分の答えを変えます**
+            // （4-284 で実測して外しました）。
+            let pcurve_gap = {
+                let probe = Face::new(
+                    geom.clone(),
+                    outer.clone(),
+                    inner_wires.clone(),
+                    orientation,
+                    carried,
+                );
+                probe
+                    // **検証と同じ数の標本で測ります**（4-285）。検証は 37 点、
+                    // ここは 8 点でした。**少なく取れば小さく出ます**——実測で
+                    // 取り込みは 1e-12、検証は 5.6e-4 と、9 桁食い違いました。
+                    // **測る量だけでなく、測り方も揃えないと意味がありません。**
+                    .validate_pcurves(&Self::import_tolerance(ctx), 37)
+                    .map(|report| (report.max_distance - carried).max(0.0))
+                    .unwrap_or(0.0)
+                    .min(Self::import_ceiling())
+            };
+            if std::env::var_os("ZENITH_STEP_WHY").is_some() && (carried > 1e-6 || pcurve_gap > 0.0)
+            {
                 eprintln!(
-                    "STEPWHY ADVANCED_FACE #{face_id} は自分の粗さ {carried:.6e} を持ち歩きます（実測 {measured:.6e}）"
+                    "STEPWHY ADVANCED_FACE #{face_id} は自分の粗さ 稜 {carried:.6e} ＋ p-curve {pcurve_gap:.6e} を持ち歩きます（実測 {measured:.6e}）"
                 );
             }
-            let face = Face::new(geom, outer, inner_wires, orientation, carried);
+            let mut face = Face::new(geom, outer, inner_wires, orientation, carried);
+            face.pcurve_tolerance = pcurve_gap;
             ctx.faces.insert(face_id, face.clone());
             return Ok(face);
         }

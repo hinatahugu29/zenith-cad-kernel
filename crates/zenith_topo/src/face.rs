@@ -30,7 +30,18 @@ pub struct Face {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pcurves: Option<FacePcurves>,
     pub orientation: Orientation,
+    /// **稜が曲面からどれだけ外れているか**（4-266）。
     pub tolerance: f64,
+    /// **p-curve 自身の粗さ**（4-285）。
+    ///
+    /// 上の `tolerance` とは**別の量**です。`tolerance` は「稜が曲面から
+    /// どれだけ外れているか」、こちらは「その稜を写した p-curve が、折れ線
+    /// である以上どれだけ外れるか」。**検証が見るのは2つの和**なので、
+    /// 1つの数字に押し込むと必ずどちらかで落ちます（4-277、4-284）。
+    ///
+    /// 既定は 0。読み込みだけが実測して持たせます。
+    #[serde(default)]
+    pub pcurve_tolerance: f64,
     /// **一度作った p-curve を覚えておく場所**（4-274）。
     ///
     /// `pcurves()` は `&self` なので、`pcurves` が空だと**訊かれるたびに
@@ -66,6 +77,7 @@ impl Clone for Face {
             pcurves: self.pcurves.clone(),
             orientation: self.orientation,
             tolerance: self.tolerance,
+            pcurve_tolerance: self.pcurve_tolerance,
             derived_pcurves: self.derived_pcurves.clone(),
         }
     }
@@ -82,6 +94,7 @@ impl PartialEq for Face {
             && self.pcurves == other.pcurves
             && self.orientation == other.orientation
             && self.tolerance == other.tolerance
+            && self.pcurve_tolerance == other.pcurve_tolerance
     }
 }
 
@@ -152,6 +165,7 @@ impl Face {
             pcurves: None,
             orientation,
             tolerance,
+            pcurve_tolerance: 0.0,
             derived_pcurves: std::sync::OnceLock::new(),
         };
 
@@ -283,8 +297,20 @@ impl Face {
             return Err("NURBS p-curves can only be derived for NURBS faces".to_string());
         };
 
-        let outer_loop =
-            derive_wire_nurbs_boundary_pcurves(&self.outer_wire, surface, tol, samples_per_edge)?;
+        // **受け入れる幅は、稜の外れで決めます**（4-285）。
+        //
+        // ここが絶対 1e-5 だと、稜が 7e-5 外れている面は p-curve を作れず、
+        // **黙って共有しない経路へ落ちて**表示メッシュに穴が開きます（4-277）。
+        // **p-curve の粗さは足しません**——足すと「粗いから受け入れ幅が広がり、
+        // 広がったからもっと粗くなる」という輪になります（4-284 で実測）。
+        let accept = tol.linear.max(self.tolerance).max(1e-6) * 10.0;
+        let outer_loop = derive_wire_nurbs_boundary_pcurves(
+            &self.outer_wire,
+            surface,
+            tol,
+            samples_per_edge,
+            accept,
+        )?;
         let mut inner_loops = Vec::with_capacity(self.inner_wires.len());
         for wire in &self.inner_wires {
             inner_loops.push(derive_wire_nurbs_boundary_pcurves(
@@ -292,6 +318,7 @@ impl Face {
                 surface,
                 tol,
                 samples_per_edge,
+                accept,
             )?);
         }
 
@@ -366,6 +393,18 @@ impl Face {
         samples_per_edge: usize,
     ) -> Result<PcurveValidationReport, String> {
         let pcurves = self.pcurves(tol)?;
+        // **物差しは、稜の外れと p-curve の粗さの和です**（4-285）。
+        //
+        // 4-266 は姉妹関数だけを面の粗さに合わせ、こちらは全体の公差のまま
+        // でした。同じ面が、片方の検査では通り、もう片方で落ちます。そして
+        // **和にしないと、あと 2.5% で落ちます**（4-284 の `linkrods`）。
+        //
+        // 自分で作った立体は両方 1e-6 と 0 なので、**ここでは何も変わりません**。
+        let tol = &Tolerance {
+            linear: tol.linear.max(self.tolerance + self.pcurve_tolerance),
+            ..tol.clone()
+        };
+        let tol = &*tol;
         let mut report = PcurveValidationReport {
             sampled_point_count: 0,
             mismatch_count: 0,
@@ -600,11 +639,14 @@ fn derive_wire_nurbs_boundary_pcurves(
     surface: &NurbsSurface3,
     tol: &Tolerance,
     samples_per_edge: usize,
+    // **稜が曲面に乗っていると認める幅**（4-285）。呼ぶ側が面の粗さから決めます。
+    accept: f64,
 ) -> Result<FacePcurveLoop, String> {
     let mut segments = Vec::with_capacity(wire.edges.len());
 
     for oriented_edge in &wire.edges {
-        let curve = match_nurbs_boundary_pcurve(oriented_edge, surface, tol, samples_per_edge)?;
+        let curve =
+            match_nurbs_boundary_pcurve(oriented_edge, surface, tol, samples_per_edge, accept)?;
         segments.push(FacePcurveSegment {
             edge_id: oriented_edge.edge.id,
             orientation: oriented_edge.orientation,
@@ -737,6 +779,7 @@ fn match_nurbs_boundary_pcurve(
     surface: &NurbsSurface3,
     tol: &Tolerance,
     samples_per_edge: usize,
+    accept: f64,
 ) -> Result<NurbsCurve2, String> {
     // **どの道で作ったかを出します**（`ZENITH_PCURVE_WHY=1`。4-241）。
     //
@@ -819,7 +862,7 @@ fn match_nurbs_boundary_pcurve(
             patch_fingerprint()
         );
     }
-    project_edge_to_nurbs_pcurve(edge, surface, tol, samples_per_edge)
+    project_edge_to_nurbs_pcurve(edge, surface, tol, samples_per_edge, accept)
 }
 
 /// A surface whose parameters map to space by an affine transform.
@@ -1053,8 +1096,10 @@ fn project_edge_to_nurbs_pcurve(
     surface: &NurbsSurface3,
     tol: &Tolerance,
     samples_per_edge: usize,
+    accept: f64,
 ) -> Result<NurbsCurve2, String> {
-    let on_surface_limit = tol.linear.max(1e-6) * 10.0;
+    // **受け入れる幅は呼ぶ側が決めます**（4-285）。細かさは `tol` のまま。
+    let on_surface_limit = accept;
     // **閉包の外からも読めるようにします**（4-273）。割るのをやめる判断に要ります。
     let max_distance = std::cell::Cell::new(0.0f64);
 
