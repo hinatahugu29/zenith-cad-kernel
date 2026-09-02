@@ -730,7 +730,21 @@ fn settle_seam_segment_axis(
                         (coordinate(&control.point) - target).abs() <= edge_of_domain
                     })
                 };
-            at(min) || at(max)
+            // **端に混ざって乗っている区間も曖昧です**（4-288）。
+            //
+            // 「全部 min」でも「全部 max」でもないが、**どの制御点も min か
+            // max のどちらかに乗っている**——これは継ぎ目の上の区間が、
+            // 途中で反対側へ飛んでいる形です。実測（OCCT の `linkrods.step`）:
+            // 連続する境界標本が `u = 0.000000` と `u = 1.000000` になり、
+            // **境界の輪が uv で自分と交わって**いました（三角形の面積が多角形の
+            // 1.57 倍、重なり 12 本。4-287）。
+            //
+            // ここを漏らすと、寄せる相手として選ばれないので**そのまま残ります**。
+            let mixed = segment.curve.control_points.iter().all(|control| {
+                let value = coordinate(&control.point);
+                (value - min).abs() <= edge_of_domain || (value - max).abs() <= edge_of_domain
+            });
+            at(min) || at(max) || mixed
         })
         .collect();
     if ambiguous.iter().all(|flag| *flag) || ambiguous.iter().all(|flag| !*flag) {
