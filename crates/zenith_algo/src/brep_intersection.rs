@@ -2544,6 +2544,21 @@ fn plane_frame_axis(normal: Vec3) -> Option<Vec3> {
 }
 
 fn order_edges_into_closed_wire(edges: &[Edge], tol: &Tolerance) -> Result<Wire, String> {
+    // **1本で閉じている交線は、それだけでワイヤです**（4-289）。
+    //
+    // 平面が丸棒を横切ると、交線は閉じた1本になります。`< 3` で断っていたので、
+    // 輪として拾えるようにしたあとも（同じ 4-289）、ここで落ちていました
+    // ——**同じ条件が2か所にありました**。
+    if edges.len() == 1
+        && points_same_3d(
+            edges[0].start_vertex.point,
+            edges[0].end_vertex.point,
+            tol.linear,
+        )
+        && sampled_edge_extent(&edges[0]) > tol.linear
+    {
+        return Ok(Wire::new(vec![OrientedEdge::forward(edges[0].clone())]));
+    }
     if edges.len() < 3 {
         return Err("A cap loop needs at least three edges".to_string());
     }
@@ -2617,7 +2632,19 @@ fn collect_closed_intersection_edge_loops(
             loop_edges.push(edge);
         }
 
-        if loop_edges.len() >= 3 && points_same_3d(current_end, loop_start, tol.linear) {
+        // **1本で閉じている交線は、それだけで輪です**（4-289）。
+        //
+        // 平面が丸棒を横切ると、交線は**閉じた1本**になります（端が同じ点）。
+        // `>= 3` で弾いていたので、そういう輪は材料から丸ごと落ちていました
+        // ——実測（OCCT の `linkrods.step`）: 蓋の材料 10 本のうち **4 本**が
+        // これで、**蓋が1枚も作れず**ブーリアンが断られていました。
+        //
+        // **広がりを確かめてから通します。** 端が同じでも潰れているものは、
+        // 接触の記録であって輪ではありません（3-1 の規約）。
+        let closed = points_same_3d(current_end, loop_start, tol.linear);
+        let single_closed_loop =
+            loop_edges.len() == 1 && closed && sampled_edge_extent(&loop_edges[0]) > tol.linear;
+        if closed && (loop_edges.len() >= 3 || single_closed_loop) {
             loops.push(IntersectionEdgeLoop { edges: loop_edges });
         } else {
             skipped_edge_count += loop_edges.len();

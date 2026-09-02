@@ -27,10 +27,30 @@ impl CapBuilder {
         let mut normal = Vec3::new(0.0, 0.0, 0.0);
         let n_edges = wire.edges.len();
 
-        let mut pts = Vec::with_capacity(n_edges);
-        for oe in &wire.edges {
-            pts.push(oe.start_vertex().point);
+        // **稜が少ないときは、曲線から標本します**（4-289）。
+        //
+        // 集めているのは各稜の始点だけです。**閉じた1本の稜**（平面が丸棒を
+        // 横切ってできる輪）では点が1つしか取れず、Newell の法線が 0 になって
+        // 「Degenerate planar wire」で断っていました。実測（OCCT の
+        // `linkrods.step`）: 蓋の輪 8 本がすべてこれで落ち、**蓋が1枚も
+        // 作れず**ブーリアンが断られていました。
+        //
+        // **3本以上あるときは、これまでどおり始点だけ**を使います——同じ数を
+        // 返すので、いま通っているものは動きません。
+        let mut pts = Vec::with_capacity(n_edges.max(16));
+        if n_edges >= 3 {
+            for oe in &wire.edges {
+                pts.push(oe.start_vertex().point);
+            }
+        } else {
+            for oe in &wire.edges {
+                let samples = 16;
+                for step in 0..samples {
+                    pts.push(oe.evaluate_normalized(step as f64 / samples as f64));
+                }
+            }
         }
+        let n_edges = pts.len();
 
         for p in &pts {
             center.x += p.x;
