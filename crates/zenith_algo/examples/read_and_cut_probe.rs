@@ -237,6 +237,55 @@ fn main() {
                 .map(|(kind, count)| format!("{kind} {count}"))
                 .collect();
             println!("  面の種類: {}", listed.join("、"));
+            // **平面の輪の巻き方向**（4-279）。面の向きと合っているか。
+            // 合っていないと、外向き法線が材料の反対を向きます。
+            {
+                let tol = Tolerance::default();
+                let mut bad = 0usize;
+                let mut listed = Vec::new();
+                for face in &subject.outer_shell.faces {
+                    let zenith_topo::FaceGeometry::Plane(_) = &face.geometry else {
+                        continue;
+                    };
+                    let Ok(pcurves) = face.pcurves(&tol) else {
+                        continue;
+                    };
+                    // 符号付き面積（多角形近似）。
+                    let mut area = 0.0;
+                    for segment in &pcurves.outer_loop.segments {
+                        let (t0, t1) = segment.curve.param_range();
+                        for step in 0..8 {
+                            let a = segment
+                                .curve
+                                .evaluate(t0 + (t1 - t0) * step as f64 / 8.0);
+                            let b = segment
+                                .curve
+                                .evaluate(t0 + (t1 - t0) * (step + 1) as f64 / 8.0);
+                            area += a.x * b.y - a.y * b.x;
+                        }
+                    }
+                    area *= 0.5;
+                    let oriented = if face.orientation.is_forward() { area } else { -area };
+                    if oriented <= 0.0 {
+                        bad += 1;
+                        if listed.len() < 4 {
+                            listed.push(format!(
+                                "面 {}（{}、符号付き面積 {oriented:.3e}）",
+                                face.id,
+                                if face.orientation.is_forward() { "正" } else { "逆" }
+                            ));
+                        }
+                    }
+                }
+                println!(
+                    "  平面の輪: **向きが合わないもの {bad} 枚**{}",
+                    if listed.is_empty() {
+                        String::new()
+                    } else {
+                        format!("——{}", listed.join("、"))
+                    }
+                );
+            }
             // **稜ごとに、使っている面を並べます**（4-277）。継ぎ目が開いて
             // いるとき、**その稜を持つ2枚が同じ刻みで取っているか**を見ます。
             {
