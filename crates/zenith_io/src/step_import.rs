@@ -3774,13 +3774,71 @@ fn torus_patch_for_boundary(
 
     let (profile, profile_knots) =
         arc_profile(major_radius, 0.0, minor_radius, start_minor, minor_sweep);
-    revolve_profile(
+    let patch = revolve_profile(
         origin,
         axis,
         x_axis,
         y_axis,
         &profile,
         profile_knots,
+        2,
+        start_major + angle_offset,
+        major_sweep,
+    )?;
+
+    // **張ったパッチの法線が、トーラスの外向きと同じ側か**を確かめます（4-282）。
+    //
+    // 面の向き（`same_sense`）は「曲面の法線に対して」決まるので、**こちらが
+    // 張ったパッチの法線が内向きだと、境界の巻きの規約がひっくり返ります**。
+    // 実測（`screw.step`）: `TOROIDAL_SURFACE` から復元した **3枚とも**
+    // 裏返っていて、`p-curve loop is inconsistent with face orientation` の
+    // 3件はこれでした（4-281）。
+    //
+    // 直し方は**測ってから**です。真ん中で両方を出して、逆なら v を逆に回します。
+    let ((u0, u1), (v0, v1)) = patch.param_range();
+    let (um, vm) = ((u0 + u1) * 0.5, (v0 + v1) * 0.5);
+    let Some(patch_normal) = patch.normal(um, vm) else {
+        return Some(patch);
+    };
+    let middle = patch.evaluate(um, vm);
+    // トーラスの外向き法線: 芯の円の上のいちばん近い点から外へ。
+    let from_axis = middle - origin;
+    let axial = from_axis.dot(&axis);
+    let radial = from_axis - axis * axial;
+    if radial.norm() <= f64::EPSILON {
+        return Some(patch);
+    }
+    let core = origin + radial.normalize() * major_radius;
+    let outward = middle - core;
+    if outward.norm() <= f64::EPSILON {
+        return Some(patch);
+    }
+    let alignment = patch_normal.normalize().dot(&outward.normalize());
+    if std::env::var_os("ZENITH_ORIENT_WHY").is_some() {
+        eprintln!(
+            "ORIENTWHY   トーラスの復元: 法線と外向きの内積 {alignment:+.4}（{}）",
+            if alignment >= 0.0 { "そのまま" } else { "**裏返っていたので張り直します**" }
+        );
+    }
+    if alignment >= 0.0 {
+        return Some(patch);
+    }
+
+    // 裏返っていたので、**小円のほうを逆に回して**張り直します。
+    let (flipped_profile, flipped_knots) = arc_profile(
+        major_radius,
+        0.0,
+        minor_radius,
+        start_minor + minor_sweep,
+        -minor_sweep,
+    );
+    revolve_profile(
+        origin,
+        axis,
+        x_axis,
+        y_axis,
+        &flipped_profile,
+        flipped_knots,
         2,
         start_major + angle_offset,
         major_sweep,
