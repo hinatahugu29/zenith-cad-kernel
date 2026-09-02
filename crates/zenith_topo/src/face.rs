@@ -989,7 +989,8 @@ fn project_edge_to_nurbs_pcurve(
     samples_per_edge: usize,
 ) -> Result<NurbsCurve2, String> {
     let on_surface_limit = tol.linear.max(1e-6) * 10.0;
-    let mut max_distance: f64 = 0.0;
+    // **閉包の外からも読めるようにします**（4-273）。割るのをやめる判断に要ります。
+    let max_distance = std::cell::Cell::new(0.0f64);
 
     // **種を渡した答えは、面の上に乗っていたときだけ信じます**（4-164）。
     //
@@ -1001,7 +1002,7 @@ fn project_edge_to_nurbs_pcurve(
     // 辺は面の上にあるはずなので、`on_surface_limit` を超えた答えは
     // 採りません。超えたら全域を見直します——**そこは元の値段に戻るだけ**
     // で、悪くはなりません。
-    let mut project = |t: f64, seed: Option<Point2>| -> Result<Point2, String> {
+    let project = |t: f64, seed: Option<Point2>| -> Result<Point2, String> {
         let point = edge.evaluate_normalized(t);
         if let Some(uv) = seed {
             zenith_geom::work_counter::count_pcurve_projection();
@@ -1014,14 +1015,14 @@ fn project_edge_to_nurbs_pcurve(
                 tol.parametric,
             ) {
                 if projection.distance <= on_surface_limit {
-                    max_distance = max_distance.max(projection.distance);
+                    max_distance.set(max_distance.get().max(projection.distance));
                     return Ok(Point2::new(projection.u, projection.v));
                 }
             }
         }
         zenith_geom::work_counter::count_pcurve_projection();
         let projection = ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)?;
-        max_distance = max_distance.max(projection.distance);
+        max_distance.set(max_distance.get().max(projection.distance));
         Ok(Point2::new(projection.u, projection.v))
     };
 
@@ -1061,16 +1062,53 @@ fn project_edge_to_nurbs_pcurve(
     const MAX_POINTS: usize = 4096;
     const MAX_PASSES: usize = 24;
     for _pass in 0..MAX_PASSES {
+        // **答えが決まったら、そこで止めます**（4-273）。
+        //
+        // この関数は最後に `max_distance > on_surface_limit` なら `Err` を
+        // 返します。`max_distance` は最大値なので**減りません**——一度超えたら、
+        // あと何点置いても結論は変わりません。
+        //
+        // 止めずに割り続けていました。実測（`linkrods.step`）: p-curve を
+        // 作った 2,965 本のうち **482 本が上限 4096 点に張り付き**、その
+        // 射影の最悪は 3.3e-6〜4.2e-4（中央 1.2e-4）で、**受け入れ幅 1e-5 を
+        // 超えています**。1点ごとに射影を1回払うので、**結論の出ている稜に
+        // 稜あたり 4,000 回**払っていました（4-271 で「射影の 9割が p-curve の
+        // 導出」と測った、その中身です）。
+        if max_distance.get() > on_surface_limit {
+            break;
+        }
         let mut split_any = false;
         let mut index = 0;
         while index + 1 < parameters.len() && parameters.len() < MAX_POINTS {
+            // **答えが決まったら、その場で止めます**（4-273）。
+            // 周回の先頭だけで見ると、**1周のうちに上限まで行けてしまいます**
+            // ——実測で、周回の先頭に置いただけでは 4096 点に張り付く稜が
+            // 1本も減りませんでした。
+            if max_distance.get() > on_surface_limit {
+                break;
+            }
             let (t0, t1) = (parameters[index], parameters[index + 1]);
             let middle = (t0 + t1) * 0.5;
             let chord = uv_points[index] + (uv_points[index + 1] - uv_points[index]) * 0.5;
             let strayed =
                 (surface.evaluate(chord.x, chord.y) - edge.evaluate_normalized(middle)).norm();
 
-            if strayed <= deflection || (t1 - t0) <= 1e-9 {
+            // **届かない目標は追いません**（4-273）。
+            //
+            // 割って縮むのは**弦の誤差**です。**稜そのものが曲面から離れて
+            // いるぶん**は、いくら割っても縮みません——`strayed` は
+            // 「uv の中点を曲面に写した点」と「稜の中点」の距離なので、
+            // **稜と曲面の隔たりが床**になります。
+            //
+            // 実測（`linkrods.step`）: 上限 4096 点に張り付いた 2,525 本の
+            // うち **2,502 本は射影が受け入れ幅 1e-5 の内側**でした。
+            // **割るのが無駄だったのではなく、割っても届かない**——4-258 で
+            // 見た「細分しても縮まない」と同じ形です。
+            //
+            // ここが 0 に近い稜（自分で作った立体はほとんどそう）では、
+            // `deflection` がそのまま効くので**何も変わりません**。
+            let reachable = deflection.max(max_distance.get() * 1.05);
+            if strayed <= reachable || (t1 - t0) <= 1e-9 {
                 index += 1;
                 continue;
             }
@@ -1131,18 +1169,20 @@ fn project_edge_to_nurbs_pcurve(
             worst
         };
         eprintln!(
-            "PCURVEWHY 稜 {} 点 {}（上限 {MAX_POINTS}）、止めどころ {deflection:.3e}、射影の最悪 {max_distance:.3e}、受け入れ幅 {on_surface_limit:.3e}、曲面の差し渡し {span:.6}、制御点 {}x{}",
+            "PCURVEWHY 稜 {} 点 {}（上限 {MAX_POINTS}）、止めどころ {deflection:.3e}、射影の最悪 {:.3e}、受け入れ幅 {on_surface_limit:.3e}、曲面の差し渡し {span:.6}、制御点 {}x{}",
             edge.edge.id,
             parameters.len(),
+            max_distance.get(),
             surface.control_points.len(),
             surface.control_points.first().map(|row| row.len()).unwrap_or(0)
         );
     }
 
-    if max_distance > on_surface_limit {
+    if max_distance.get() > on_surface_limit {
         return Err(format!(
-            "Edge {} projection to NURBS surface exceeds tolerance; max distance {max_distance:.6e}",
-            edge.edge.id
+            "Edge {} projection to NURBS surface exceeds tolerance; max distance {:.6e}",
+            edge.edge.id,
+            max_distance.get()
         ));
     }
 
