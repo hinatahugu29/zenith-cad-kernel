@@ -2150,6 +2150,18 @@ impl StepImporter {
                     // FACE_BOUND の向きフラグ。.F. のとき、ループは書かれている
                     // のと逆向きに面を囲む。これを無視すると、辺が隣り合う面から
                     // 同じ向きに2度使われ、シェル検証が対で見つけられなくなる。
+                    // **2つの旗を並べて出します**（4-280）。面の向き
+                    // （`ADVANCED_FACE` の `same_sense`）と、境界の向き
+                    // （`FACE_BOUND` の旗）は**別のもの**で、取り込みは後者だけを
+                    // ワイヤに適用します。前者は `Face::orientation` に入ります。
+                    if std::env::var_os("ZENITH_ORIENT_WHY").is_some() {
+                        eprintln!(
+                            "ORIENTWHY 取り込み: 面 #{face_id} の {} 旗 {}（面の same_sense {}）",
+                            bound_raw.name,
+                            b_parts.get(2).map(|p| p.trim()).unwrap_or("?"),
+                            if same_sense { ".T." } else { ".F." }
+                        );
+                    }
                     if b_parts.len() >= 3 && b_parts[2].trim() == ".F." {
                         wire = Wire::new(
                             wire.edges
@@ -2212,6 +2224,33 @@ impl StepImporter {
             } else {
                 Orientation::Reversed
             };
+            // **旗と、実際の巻き方を並べます**（4-280）。
+            //
+            // 規約はこうです——境界は**面の法線**まわりに反時計回り。面の法線は
+            // `same_sense` が `.F.` なら曲面の法線の逆。したがって**曲面の法線
+            // まわりでは、`.T.` は反時計回り、`.F.` は時計回り**のはずです。
+            // 破れている面をここで名指しします。
+            if std::env::var_os("ZENITH_ORIENT_WHY").is_some() {
+                if let FaceGeometry::Plane(plane) = &geom {
+                    let points = outer.sample_points(24);
+                    let mut normal = zenith_math::Vec3::zeros();
+                    for index in 0..points.len() {
+                        let a = points[index];
+                        let b = points[(index + 1) % points.len()];
+                        normal += a.coords.cross(&b.coords);
+                    }
+                    if normal.norm() > 0.0 {
+                        let agreement = normal.normalize().dot(&plane.normal.normalize());
+                        let expected_positive = same_sense;
+                        let holds = (agreement > 0.0) == expected_positive;
+                        eprintln!(
+                            "ORIENTWHY 面 #{face_id}: same_sense {}、巻きと曲面の法線の内積 {agreement:+.4} → {}",
+                            if same_sense { ".T." } else { ".F." },
+                            if holds { "規約どおり" } else { "**規約が破れています**" }
+                        );
+                    }
+                }
+            }
             // **面ごとに、境界の点が曲面からどれだけ離れているかを出す口**
             // （`ZENITH_STEP_WHY=1`）。読めなかったファイルで、悪いのが曲線
             // なのか面なのかを分けたあと、**どの曲面の実体か**まで名指しする

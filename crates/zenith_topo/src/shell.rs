@@ -520,6 +520,43 @@ fn validate_planar_face_orientation(
     report.min_planar_face_oriented_area = report.min_planar_face_oriented_area.min(oriented_area);
     if oriented_area <= tol.parametric {
         report.planar_face_orientation_mismatch_count += 1;
+        // **どちらが裏返っているのかを名指しします**（4-280）。
+        //
+        // 符号だけでは、**ワイヤの巻きが逆**なのか**平面の法線が逆**なのかが
+        // 分かりません。3D のワイヤから法線を起こして、平面の法線と突き合わせ
+        // ます。同じ向きなら「巻きが逆」、逆向きなら「平面が逆」です。
+        if std::env::var_os("ZENITH_ORIENT_WHY").is_some() {
+            let points = face.outer_wire.sample_points(24);
+            let mut normal = zenith_math::Vec3::zeros();
+            for index in 0..points.len() {
+                let a = points[index];
+                let b = points[(index + 1) % points.len()];
+                normal += a.coords.cross(&b.coords);
+            }
+            let plane_normal = match &face.geometry {
+                FaceGeometry::Plane(plane) => plane.normal,
+                _ => zenith_math::Vec3::z(),
+            };
+            let agreement = if normal.norm() > 0.0 {
+                normal.normalize().dot(&plane_normal.normalize())
+            } else {
+                0.0
+            };
+            eprintln!(
+                "ORIENTWHY 面 {face_index}: p-curve は {}、符号付き面積 {oriented_area:.6e}、面の向き {}、ワイヤの法線と平面の法線の内積 {agreement:+.6}（{}）",
+                if face.pcurves.is_some() {
+                    "**ファイル／取り込みが持たせたもの**"
+                } else {
+                    "その場で投影したもの"
+                },
+                if face.orientation.is_forward() { "正" } else { "逆" },
+                if agreement > 0.0 {
+                    "同じ向き＝**ワイヤの巻きが逆**"
+                } else {
+                    "逆向き＝**平面の法線が逆**"
+                }
+            );
+        }
         report.errors.push(format!(
             "Face {face_index} planar p-curve loop is inconsistent with face orientation; oriented area {oriented_area:.6e}"
         ));
