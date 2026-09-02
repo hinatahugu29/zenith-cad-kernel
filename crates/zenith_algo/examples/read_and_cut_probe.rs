@@ -155,6 +155,107 @@ fn main() {
             bbox.max.z - bbox.min.z,
         );
         let va = volume(std::slice::from_ref(&subject));
+        // **読んだ立体そのものが水密か**（4-277）。切る前に見ます——ここが
+        // 開いていると、内外判定を使う検査が全部あてになりません（4-276）。
+        {
+            let params24 = zenith_tess::TessellationParams {
+                u_divisions: 24,
+                v_divisions: 24,
+            };
+            let mesh = zenith_tess::tessellate_solid(&subject, &params24);
+            let mut uses: std::collections::HashMap<(u32, u32), usize> =
+                std::collections::HashMap::new();
+            for triangle in &mesh.indices {
+                for step in 0..3 {
+                    let (a, b) = (triangle[step], triangle[(step + 1) % 3]);
+                    if a == b {
+                        continue;
+                    }
+                    let key = if a < b { (a, b) } else { (b, a) };
+                    *uses.entry(key).or_insert(0) += 1;
+                }
+            }
+            let open = uses.values().filter(|count| **count == 1).count();
+            let over = uses.values().filter(|count| **count > 2).count();
+            println!(
+                "  表示メッシュ: 三角形 {}、**穴（1回しか使われない稜） {open} 本**、重なり（3回以上） {over} 本",
+                mesh.indices.len()
+            );
+            // **穴の場所を1つ名指しします**（4-277）。座標が分かれば
+            // `ZENITH_RING_WATCH` で待ち伏せられます。
+            if let Some(((a, b), _)) = uses
+                .iter()
+                .filter(|(_, count)| **count == 1)
+                .min_by_key(|((a, b), _)| (*a, *b))
+            {
+                let (pa, pb) = (mesh.positions[*a as usize], mesh.positions[*b as usize]);
+                println!(
+                    "    穴の一例: ({:.9},{:.9},{:.9}) -> ({:.9},{:.9},{:.9}) 長さ {:.3e}",
+                    pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, (pb - pa).norm()
+                );
+            }
+            // **稜は、本当に面どうしで共有されているか**（4-277）。
+            //
+            // 縫合は「同じ稜の番号なら同じ点を出す」ことで継ぎ目を閉じます。
+            // 番号が面ごとに別なら、**同じ場所を別々に標本する**ので穴が
+            // 開きます。使われ方を数えれば分かります——閉じた立体では
+            // **どの稜もちょうど2回**使われるはずです。
+            let mut edge_uses: std::collections::HashMap<u64, usize> =
+                std::collections::HashMap::new();
+            for face in &subject.outer_shell.faces {
+                for wire in
+                    std::iter::once(&face.outer_wire).chain(face.inner_wires.iter())
+                {
+                    for oriented in &wire.edges {
+                        *edge_uses.entry(oriented.edge.id).or_insert(0) += 1;
+                    }
+                }
+            }
+            let once = edge_uses.values().filter(|count| **count == 1).count();
+            let twice = edge_uses.values().filter(|count| **count == 2).count();
+            let more = edge_uses.values().filter(|count| **count > 2).count();
+            println!(
+                "  B-Rep の稜: {} 本（**1面からしか使われない {once} 本**、2面 {twice} 本、3面以上 {more} 本）",
+                edge_uses.len()
+            );
+            // **面の種類の内訳**（4-277）。縫合の経路は平面と NURBS だけを
+            // 扱い、**それ以外は別の道**（`tessellate_face`）に落ちます。
+            // その道は面ごとに独立に標本するので、**継ぎ目が合いません**。
+            let mut kinds: std::collections::BTreeMap<&str, usize> = Default::default();
+            for face in &subject.outer_shell.faces {
+                let kind = match &face.geometry {
+                    zenith_topo::FaceGeometry::Plane(_) => "平面",
+                    zenith_topo::FaceGeometry::Nurbs(_) => "NURBS",
+                    zenith_topo::FaceGeometry::Coons(_) => "**Coons**",
+                    zenith_topo::FaceGeometry::Gordon(_) => "**Gordon**",
+                    zenith_topo::FaceGeometry::Triangular(_) => "**三角パッチ**",
+                };
+                *kinds.entry(kind).or_insert(0) += 1;
+            }
+            let listed: Vec<String> = kinds
+                .iter()
+                .map(|(kind, count)| format!("{kind} {count}"))
+                .collect();
+            println!("  面の種類: {}", listed.join("、"));
+            // **稜ごとに、使っている面を並べます**（4-277）。継ぎ目が開いて
+            // いるとき、**その稜を持つ2枚が同じ刻みで取っているか**を見ます。
+            {
+                let mut users: std::collections::BTreeMap<u64, Vec<u64>> = Default::default();
+                for face in &subject.outer_shell.faces {
+                    for wire in
+                        std::iter::once(&face.outer_wire).chain(face.inner_wires.iter())
+                    {
+                        for oriented in &wire.edges {
+                            users.entry(oriented.edge.id).or_default().push(face.id);
+                        }
+                    }
+                }
+                for (edge, faces) in users.iter().take(6) {
+                    println!("    稜 {edge}: 面 {faces:?}");
+                }
+            }
+        }
+
         println!(
             "  面 {}、体積 {va:.6}、差し渡し ({:.3}, {:.3}, {:.3})",
             face_count(&subject),

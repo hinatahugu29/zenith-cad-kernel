@@ -351,7 +351,21 @@ fn tessellate_face_stitched(
                 derived = with;
                 &derived
             }
-            Err(_) => return crate::surface_tess::tessellate_face(face, params),
+            Err(reason) => {
+                // **ここには診断がありませんでした**（4-277）。p-curve が
+                // 作れない面は**黙って共有しない経路へ落ち**、隣の面と
+                // 違う点を出すので継ぎ目が開きます。実測（`screw.step`）:
+                // 穴 326 本のうち 96 本が1枚の面から出ていました。
+                if std::env::var_os("ZENITH_TESS_WHY").is_some()
+                    || std::env::var_os("ZENITH_RING_WHY").is_some()
+                {
+                    eprintln!(
+                        "RINGWHY 面 {} は p-curve を作れないので共有しない経路へ: {reason}",
+                        face.id
+                    );
+                }
+                return crate::surface_tess::tessellate_face(face, params);
+            }
         }
     };
 
