@@ -21,7 +21,7 @@ pub enum FaceGeometry {
 }
 
 /// B-Rep フェイス（Face: 曲面 + 境界ワイヤ）
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Face {
     pub id: u64,
     pub geometry: FaceGeometry,
@@ -31,6 +31,58 @@ pub struct Face {
     pub pcurves: Option<FacePcurves>,
     pub orientation: Orientation,
     pub tolerance: f64,
+    /// **一度作った p-curve を覚えておく場所**（4-274）。
+    ///
+    /// `pcurves()` は `&self` なので、`pcurves` が空だと**訊かれるたびに
+    /// 作り直します**。実測（`linkrods.step` の和、20秒の窓）: **作り直し
+    /// 4,493 回に対し、持っていたのは 666 回**。1回あたり射影を約 62 回
+    /// 払うので、**その時間のほとんどが作り直しに消えていました**。
+    ///
+    /// **形の一部ではありません**（同じ面から必ず同じものが出ます）。
+    /// なので比較にも直列化にも入れず、複製したら空から始めます。
+    #[serde(skip)]
+    derived_pcurves: std::sync::OnceLock<FacePcurves>,
+}
+
+impl Clone for Face {
+    /// **覚えたぶんも一緒に複製します。**
+    ///
+    /// p-curve は面の形（曲面と境界のワイヤ）だけで決まり、それは複製で
+    /// そのまま写ります。**既にある `pcurves` 欄も複製している**ので、
+    /// 扱いを揃えます——片方だけ落とすと、複製のたびに作り直しに戻ります。
+    ///
+    /// 実測（`linkrods.step` の和、20秒の窓）: 落とすと**作り直し 5,532 回**
+    /// が残りました。この経路は面をよく複製します。
+    ///
+    /// **複製したあとにワイヤを差し替えるなら、両方とも古くなります。**
+    /// それは `pcurves` 欄に元からある前提で、ここで新しく生まれた危険では
+    /// ありません。
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            geometry: self.geometry.clone(),
+            outer_wire: self.outer_wire.clone(),
+            inner_wires: self.inner_wires.clone(),
+            pcurves: self.pcurves.clone(),
+            orientation: self.orientation,
+            tolerance: self.tolerance,
+            derived_pcurves: self.derived_pcurves.clone(),
+        }
+    }
+}
+
+impl PartialEq for Face {
+    /// **覚えたぶんは比べません。** 形の一部ではないので、持っているか
+    /// どうかで面が違うことにはなりません。
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.geometry == other.geometry
+            && self.outer_wire == other.outer_wire
+            && self.inner_wires == other.inner_wires
+            && self.pcurves == other.pcurves
+            && self.orientation == other.orientation
+            && self.tolerance == other.tolerance
+    }
 }
 
 /// Face 境界と支持曲面の検証結果
@@ -100,6 +152,7 @@ impl Face {
             pcurves: None,
             orientation,
             tolerance,
+            derived_pcurves: std::sync::OnceLock::new(),
         };
 
         match &face.geometry {
@@ -251,14 +304,27 @@ impl Face {
     /// 保持済みp-curveがあればそれを使い、なければFace種別に応じて導出する。
     pub fn pcurves(&self, tol: &Tolerance) -> Result<FacePcurves, String> {
         if let Some(pcurves) = &self.pcurves {
+            zenith_geom::work_counter::count_pcurve_cache_hit();
             return Ok(pcurves.clone());
         }
+        // **一度作ったものを覚えておきます**（4-274）。`&self` しか無いので
+        // `OnceLock` を使います。**同じ面からは同じものしか出ない**ので、
+        // 覚えても答えは変わりません。
+        if let Some(pcurves) = self.derived_pcurves.get() {
+            zenith_geom::work_counter::count_pcurve_cache_hit();
+            return Ok(pcurves.clone());
+        }
+        zenith_geom::work_counter::count_pcurve_derivation();
 
-        match &self.geometry {
+        let derived = match &self.geometry {
             FaceGeometry::Plane(_) => self.derive_plane_pcurves(),
             FaceGeometry::Nurbs(_) => self.derive_nurbs_boundary_pcurves(tol, 8),
             _ => Err("p-curves are not implemented for this face geometry".to_string()),
-        }
+        }?;
+        // 失敗は覚えません（作れない理由が公差に依るので、次は違うかも
+        // しれません）。**作れたものだけ**を置きます。
+        let _ = self.derived_pcurves.set(derived.clone());
+        Ok(derived)
     }
 
     /// Plane Face にp-curveを保持させる。

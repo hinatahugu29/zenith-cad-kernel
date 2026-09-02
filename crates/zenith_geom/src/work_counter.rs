@@ -27,6 +27,11 @@ static POINT_SURFACE_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
 static PCURVE_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
 /// **境界が曲面に乗っているかを見るための射影**（4-271）。
 static BOUNDARY_CHECK_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **p-curve を作り直した回数**（4-274）。`Face::pcurves` は `&self` なので、
+/// 覚えられません。持っていない面に何度も訊くと、そのつど作り直します。
+static PCURVE_DERIVATIONS: AtomicU64 = AtomicU64::new(0);
+/// うち、既に持っていたので作らずに済んだ回数。
+static PCURVE_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
 static POINT_SURFACE_COARSE_SEARCHES: AtomicU64 = AtomicU64::new(0);
 static PROJECTION_NEWTON_ITERATIONS: AtomicU64 = AtomicU64::new(0);
 static PROJECTION_DAMPING_TRIALS: AtomicU64 = AtomicU64::new(0);
@@ -56,6 +61,10 @@ pub struct WorkCounters {
     pub pcurve_projections: u64,
     /// うち、境界が曲面に乗っているかを見るためのもの。
     pub boundary_check_projections: u64,
+    /// **p-curve を作り直した回数**（4-274）。
+    pub pcurve_derivations: u64,
+    /// うち、既に持っていたので作らずに済んだ回数。
+    pub pcurve_cache_hits: u64,
     /// そのうち、出発点を渡されずに全域を粗く見た回数。
     ///
     /// 1回につき 17x17 の格子と8段の詰めで 353 回の曲面評価を払う。
@@ -120,6 +129,12 @@ impl WorkCounters {
             boundary_check_projections: self
                 .boundary_check_projections
                 .saturating_sub(earlier.boundary_check_projections),
+            pcurve_derivations: self
+                .pcurve_derivations
+                .saturating_sub(earlier.pcurve_derivations),
+            pcurve_cache_hits: self
+                .pcurve_cache_hits
+                .saturating_sub(earlier.pcurve_cache_hits),
             point_surface_coarse_searches: self
                 .point_surface_coarse_searches
                 .saturating_sub(earlier.point_surface_coarse_searches),
@@ -157,6 +172,8 @@ pub fn snapshot() -> WorkCounters {
         point_surface_projections: POINT_SURFACE_PROJECTIONS.load(Ordering::Relaxed),
         pcurve_projections: PCURVE_PROJECTIONS.load(Ordering::Relaxed),
         boundary_check_projections: BOUNDARY_CHECK_PROJECTIONS.load(Ordering::Relaxed),
+        pcurve_derivations: PCURVE_DERIVATIONS.load(Ordering::Relaxed),
+        pcurve_cache_hits: PCURVE_CACHE_HITS.load(Ordering::Relaxed),
         point_surface_coarse_searches: POINT_SURFACE_COARSE_SEARCHES.load(Ordering::Relaxed),
         projection_newton_iterations: PROJECTION_NEWTON_ITERATIONS.load(Ordering::Relaxed),
         projection_damping_trials: PROJECTION_DAMPING_TRIALS.load(Ordering::Relaxed),
@@ -219,6 +236,16 @@ pub fn count_seed_search() {
 /// **`point_to_surface` は呼ばれた回数しか数えていませんでした**（4-270）。
 /// 自由曲面を箱で切ると 190 万回呼ばれますが、**どこから呼ばれているか**が
 /// 分からないと、どこを直せばよいかが決まりません。
+/// p-curve を作り直した。
+pub fn count_pcurve_derivation() {
+    PCURVE_DERIVATIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 既に持っていたので作らずに済んだ。
+pub fn count_pcurve_cache_hit() {
+    PCURVE_CACHE_HITS.fetch_add(1, Ordering::Relaxed);
+}
+
 pub fn count_pcurve_projection() {
     PCURVE_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
 }

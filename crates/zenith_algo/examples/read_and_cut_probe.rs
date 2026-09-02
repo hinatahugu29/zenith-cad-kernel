@@ -205,6 +205,13 @@ fn main() {
                 .ok()
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(120);
+            // **返らないときに、進んでいるかどうかを出します**（4-272）。
+            // `ZENITH_PROGRESS=15` なら 15 秒ごとに「経過と、その間に増えた
+            // 仕事量」が出ます。**仕事量が増えていなければ、収束しない輪の
+            // 中にいます。** 待つのをやめたあとも、この行だけが手掛かりです。
+            let _beat = zenith_geom::progress::Heartbeat::start(format!(
+                "{name} {label}"
+            ));
             let (sender, receiver) = std::sync::mpsc::channel();
             let (a, b) = (subject.clone(), cutter.clone());
             std::thread::spawn(move || {
