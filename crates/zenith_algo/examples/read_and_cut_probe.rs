@@ -238,9 +238,78 @@ fn main() {
                         result.solids.len()
                     );
                 }
+                Err(reason) if reason.contains("inside-out or collapsed") => {
+                    // **裏返った立体を名指しします**（4-275）。断り文には
+                    // 番号と体積しか出ないので、**それがどこにある何なのか**
+                    // が分かりません。空洞（内側の殻）を別の立体として
+                    // 返していないかを、その場で見られるようにします。
+                    println!("  {label:<13} 断られた（裏返り）:");
+                    for line in reason.split("; ") {
+                        println!("    {line}");
+                    }
+                    let tol = Tolerance::default();
+                    if let Ok(again) =
+                        // **検証を通さない口で取り直します**——通すと同じ
+                        // ところで断られて、中身が見られません。
+                        BooleanEngine::boolean_solids_exact_result_unverified(
+                            &subject, &cutter, op, &tol,
+                        )
+                    {
+                        for (index, solid) in again.solids.iter().enumerate() {
+                            let bbox = solid.bounding_box();
+                            let params = zenith_tess::TessellationParams {
+                                u_divisions: 24,
+                                v_divisions: 24,
+                            };
+                            let volume =
+                                zenith_algo::MassCalculator::compute_from_brep(solid, &params)
+                                    .volume;
+                            // **その殻が、ほかの立体の中にあるか**（4-275）。
+                            // 空洞なら、別の立体ではなく**内側の殻**として
+                            // 返すべきものです。範囲だけでは決まらないので、
+                            // 殻の上の点を使って包含を見ます。
+                            let mut inside_of = String::from("-");
+                            // **重心を使います**（4-275）。稜の上の点は境界
+                            // そのものなので、包含の判定が当てになりません。
+                            let properties =
+                                zenith_algo::MassCalculator::compute_from_brep(solid, &params);
+                            let probe_point = Some(properties.center_of_mass);
+                            if let Some(point) = probe_point {
+                                for (other_index, other) in again.solids.iter().enumerate() {
+                                    if other_index == index {
+                                        continue;
+                                    }
+                                    let mesh = zenith_tess::tessellate_solid(
+                                        other,
+                                        &zenith_tess::TessellationParams {
+                                            u_divisions: 24,
+                                            v_divisions: 24,
+                                        },
+                                    );
+                                    if BooleanEngine::is_point_inside_mesh(point, &mesh) {
+                                        inside_of = format!("立体 {other_index} の中");
+                                    }
+                                }
+                            }
+                            println!(
+                                "      立体 {index}: 体積 {volume:+.6}、面 {}、内側の殻 {}、{inside_of}、範囲 ({:.3}, {:.3}, {:.3})〜({:.3}, {:.3}, {:.3})",
+                                solid.outer_shell.faces.len(),
+                                solid.inner_shells.len(),
+                                bbox.min.x, bbox.min.y, bbox.min.z,
+                                bbox.max.x, bbox.max.y, bbox.max.z
+                            );
+                        }
+                    }
+                }
                 Err(reason) => {
-                    let short: String = reason.chars().take(90).collect();
-                    println!("  {label:<13} 断られた: {short}");
+                    // **断り文は切り詰めません**（4-275）。90 字で切っていた
+                    // ので、検証が何を見て断ったのかが読めませんでした——
+                    // `volume A=..., B=839` で切れており、肝心の**どの検査が
+                    // 落ちたか**が消えていました。**直す側が読むのは末尾です。**
+                    println!("  {label:<13} 断られた:");
+                    for line in reason.split("; ") {
+                        println!("    {line}");
+                    }
                 }
             }
         }
