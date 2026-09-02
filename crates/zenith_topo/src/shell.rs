@@ -557,6 +557,37 @@ fn validate_planar_face_orientation(
             } else {
                 0.0
             };
+            // **UV で確かめます**（4-283）。3D のベクトル面積は曲面の上では
+            // 使えないので（4-282）、**p-curve の点を曲面へ写し、そこでの
+            // 法線と、隣り合う3点の作る向き**を突き合わせます。
+            //
+            // 見るのは1点だけで足ります——「UV で反時計回り」と「その点で
+            // 曲面の法線まわりに反時計回り」は、**パッチの UV が右手系なら
+            // 同じこと**です。ずれていれば、そこが原因です。
+            if let FaceGeometry::Nurbs(surface) = &face.geometry {
+                if let Some(segment) = pcurves.outer_loop.segments.first() {
+                    let (t0, t1) = segment.curve.param_range();
+                    let a = segment.curve.evaluate(t0);
+                    let b = segment.curve.evaluate(t0 + (t1 - t0) * 0.5);
+                    let mid = zenith_math::Point2::new((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
+                    if let Some(normal) = surface.normal(mid.x, mid.y) {
+                        let du = surface.evaluate(mid.x + 1e-6, mid.y)
+                            - surface.evaluate(mid.x - 1e-6, mid.y);
+                        let dv = surface.evaluate(mid.x, mid.y + 1e-6)
+                            - surface.evaluate(mid.x, mid.y - 1e-6);
+                        let handed = du.cross(&dv);
+                        eprintln!(
+                            "ORIENTWHY   UV の手: ∂u×∂v と法線の内積 {:+.4}（{}）",
+                            handed.normalize().dot(&normal.normalize()),
+                            if handed.normalize().dot(&normal.normalize()) > 0.0 {
+                                "右手系"
+                            } else {
+                                "**左手系。UV の符号がひっくり返ります**"
+                            }
+                        );
+                    }
+                }
+            }
             eprintln!(
                 "ORIENTWHY 面 {face_index}（{}）: p-curve は {}、符号付き面積 {oriented_area:.6e}、面の向き {}、ワイヤの法線との内積 {agreement:+.6}（{}）",
                 match &face.geometry {
