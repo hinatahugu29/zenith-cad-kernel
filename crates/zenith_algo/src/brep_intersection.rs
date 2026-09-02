@@ -4721,6 +4721,29 @@ fn diagnose_selected_face_stitching(
                             "STITCHWHY   いちばん近い相手 {operand:?} 中点まで {distance:.9} 長さ {length:.9}"
                         );
                     }
+                    // **端点に何本つながっているか**（4-292）。
+                    //
+                    // 閉じた殻では、どの頂点にも少なくとも2本の稜が集まります。
+                    // **1本しか来ていない端**は、そこで割られた側と割られて
+                    // いない側が食い違っている印（T 字の頂点）です。相手までの
+                    // 距離だけでは、「位置がずれている」のか「そもそも割られて
+                    // いない」のかが分かりません。
+                    let touching = |point: Point3| {
+                        edge_uses
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, other)| {
+                                *j != i
+                                    && (points_same_3d(other.start, point, tol.linear)
+                                        || points_same_3d(other.end, point, tol.linear))
+                            })
+                            .count()
+                    };
+                    eprintln!(
+                        "STITCHWHY   端につながる他の稜: 始点 {} 本、終点 {} 本",
+                        touching(use_.start),
+                        touching(use_.end)
+                    );
                     eprintln!(
                         "STITCHWHY unmatched {:?} ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9}) len {:.9}",
                         use_.operand,
