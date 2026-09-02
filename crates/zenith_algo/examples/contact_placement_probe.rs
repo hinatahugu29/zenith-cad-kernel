@@ -964,6 +964,13 @@ fn main() {
     let mut identity_worst = 0.0f64;
     let mut identity_worst_case: &str = "-";
     let mut identity_checked = 0usize;
+    // **どの演算にどれだけ掛かったか**（4-272）。最後に重い順で出します。
+    let mut op_seconds: Vec<(f64, &str, &str)> = Vec::new();
+    // ここを超えたら、その場で名指しします。`ZENITH_SLOW_SECONDS` で変えられます。
+    let slow_seconds: f64 = std::env::var("ZENITH_SLOW_SECONDS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(30.0);
     let mut identity_vacuous = 0usize;
 
     println!("接触している配置（規約: 接触は、それ自体では位相を作らない）");
@@ -1009,7 +1016,21 @@ fn main() {
                 .map(|needle| label.contains(needle))
                 .unwrap_or(true)
         }) {
-            let outcome = BooleanEngine::boolean_solids_exact_result(&case.a, &case.b, op, &tol);
+            // **1演算ずつ、掛かった時間と進み具合を出せるようにします**（4-272）。
+            //
+            // `ZENITH_PROGRESS=1` を付けると、5秒ごとに「経過と、その間に
+            // 増えた仕事量」が出ます。**返ってこないときに、遅いだけなのか
+            // 進んでいないのかが分かります。**
+            let (outcome, seconds) = zenith_geom::progress::timed(
+                &format!("{} {label}", case.name),
+                || BooleanEngine::boolean_solids_exact_result(&case.a, &case.b, op, &tol),
+            );
+            // **遅い演算は、黙っていても名指しします。** 待たされたときに
+            // 「どれが重いのか」を後から探さずに済みます。
+            if seconds >= slow_seconds {
+                eprintln!("SLOW {} {label}: {seconds:.1} 秒", case.name);
+            }
+            op_seconds.push((seconds, case.name, label));
 
             // **引数を入れ替えても同じ答えのはずです**（和と積は可換）。
             //
@@ -1186,6 +1207,25 @@ fn main() {
     }
 
     println!("{}", "-".repeat(118));
+    // **時間の内訳**（4-272）。合計と、重かった演算を並べます。
+    // **速さを比べるための数字ではありません**——待たされたときに
+    // 「どれが重いのか」をすぐ言えるようにするためのものです。
+    if !op_seconds.is_empty() {
+        let total: f64 = op_seconds.iter().map(|(seconds, _, _)| seconds).sum();
+        op_seconds.sort_by(|left, right| right.0.total_cmp(&left.0));
+        println!(
+            "**時間**: 演算 {} 件で合計 {:.1} 秒（1件あたり平均 {:.2} 秒）。重い順に:",
+            op_seconds.len(),
+            total,
+            total / op_seconds.len() as f64
+        );
+        for (seconds, name, label) in op_seconds.iter().take(5) {
+            println!(
+                "  {seconds:>8.1} 秒  {name} {label}（全体の {:.1}%）",
+                seconds / total.max(f64::MIN_POSITIVE) * 100.0
+            );
+        }
+    }
     if std::env::var_os("ZENITH_CONTACT_SWAP").is_some() {
         println!("引数を入れ替えたときの食い違い: **{swap_mismatch} 件**（和と積のみ）");
     }

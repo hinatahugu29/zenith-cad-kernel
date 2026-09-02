@@ -151,6 +151,15 @@ fn placements() -> Vec<Placement> {
     ]
 }
 
+/// 演算の名前。時間の行に出します。
+fn op_name(op: BooleanOpType) -> &'static str {
+    match op {
+        BooleanOpType::Union => "union",
+        BooleanOpType::Difference => "difference",
+        BooleanOpType::Intersection => "intersection",
+    }
+}
+
 fn main() {
     let tol = Tolerance::default();
     // 4桁ぶん振ります。1 が mm 級、100 が建築級。
@@ -173,10 +182,10 @@ fn main() {
     println!("大きさの桁を振って、同じ形を測る（恒等式は相対で見ます）");
     println!();
     println!(
-        "{:<40}{:>8}{:>10}{:>16}{:>10}  {}",
-        "placement", "scale", "returned", "identity (rel)", "n-manifold", "verdict"
+        "{:<40}{:>8}{:>10}{:>16}{:>10}{:>9}  {}",
+        "placement", "scale", "returned", "identity (rel)", "n-manifold", "秒", "verdict"
     );
-    println!("{}", "-".repeat(104));
+    println!("{}", "-".repeat(113));
 
     let mut broken = 0usize;
     let mut non_manifold = 0usize;
@@ -193,10 +202,17 @@ fn main() {
             .map(|needle| placement.name.contains(needle))
             .unwrap_or(true)
     }) {
+        // ここを超えたら、その場で名指しします（`ZENITH_SLOW_SECONDS`）。
+        let slow_seconds: f64 = std::env::var("ZENITH_SLOW_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(60.0);
         for scale in scales.into_iter().chain(watched) {
             let gated = scales.contains(&scale);
             let (a, b) = (placement.build)(scale);
             let mut returned = 0usize;
+            // **この桁に掛かった時間**（4-272）。
+            let mut spent = 0.0f64;
             let mut volumes = [0.0f64; 3];
             let mut all_returned = true;
             let mut bad_edges = 0usize;
@@ -209,7 +225,23 @@ fn main() {
             .into_iter()
             .enumerate()
             {
-                match BooleanEngine::boolean_solids_exact_result(&a, &b, op, &tol) {
+                // **1演算ずつ時間を出します**（4-272）。この掃き出しは桁の
+                // 小さいところで1配置 20 分かかることがあり、**どの桁の
+                // どの演算で消えているのか**が分からないと待つしかありません。
+                // `ZENITH_PROGRESS=1` を付ければ、途中の進み具合も出ます。
+                let (outcome, seconds) = zenith_geom::progress::timed(
+                    &format!("{} scale {scale} {}", placement.name, op_name(op)),
+                    || BooleanEngine::boolean_solids_exact_result(&a, &b, op, &tol),
+                );
+                if seconds >= slow_seconds {
+                    eprintln!(
+                        "SLOW {} scale {scale} {}: {seconds:.1} 秒",
+                        placement.name,
+                        op_name(op)
+                    );
+                }
+                spent += seconds;
+                match outcome {
                     Ok(result) => {
                         returned += 1;
                         volumes[index] = total_volume(&result.solids);
@@ -245,7 +277,7 @@ fn main() {
             }
 
             println!(
-                "{:<40}{:>8}{:>10}{:>16}{:>10}  {}",
+                "{:<40}{:>8}{:>10}{:>16}{:>10}{:>9}  {}",
                 placement.name,
                 scale,
                 format!("{returned}/3"),
@@ -255,6 +287,8 @@ fn main() {
                     "-".to_string()
                 },
                 bad_edges,
+                // **その桁に掛かった秒数**（3演算の合計。4-272）。
+                format!("{spent:.1}"),
                 match (identity_bad, bad_edges > 0, all_returned, gated) {
                     (true, _, _, true) => "**恒等式が破れた**",
                     (_, true, _, true) => "**非多様体を返した**",
@@ -267,7 +301,7 @@ fn main() {
         }
     }
 
-    println!("{}", "-".repeat(104));
+    println!("{}", "-".repeat(113));
     println!(
         "恒等式の破れ {broken} 件、非多様体を返したもの {non_manifold} 件、断り {refused} 件。\
          残差の最悪 {worst_residual:.3e}（{worst_where}）。"

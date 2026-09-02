@@ -10,6 +10,7 @@ pub mod nurbs_curve;
 pub mod nurbs_curve_2d;
 pub mod nurbs_surface;
 pub mod offset;
+pub mod progress;
 pub mod ssi;
 pub mod ssi_march;
 pub mod surface;
