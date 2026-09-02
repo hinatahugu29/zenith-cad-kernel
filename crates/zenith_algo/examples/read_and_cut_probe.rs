@@ -255,6 +255,101 @@ fn main() {
                             &subject, &cutter, op, &tol,
                         )
                     {
+                        // **答えの体積を、ブーリアンに依らずに決めます**（4-276）。
+                        //
+                        // 符号付きの和（579.89）と、絶対値の和（1056.07）の
+                        // どちらが正しいのかは、**A と B だけを見れば決まります**。
+                        // A の範囲に点をばらまき、**A の中にあって B の外**に
+                        // ある割合を数えれば、それが |A＼B| です。
+                        // **決定的にするため、種を固定した格子＋ずらし**で撒きます。
+                        {
+                            let params24 = zenith_tess::TessellationParams {
+                                u_divisions: 24,
+                                v_divisions: 24,
+                            };
+                            let mesh_a = zenith_tess::tessellate_solid(&subject, &params24);
+                            let mesh_b = zenith_tess::tessellate_solid(&cutter, &params24);
+                            let bbox = subject.bounding_box();
+                            let span = bbox.max - bbox.min;
+                            let steps = 60usize;
+                            let (mut in_a, mut in_a_not_b) = (0u64, 0u64);
+                            for ix in 0..steps {
+                                for iy in 0..steps {
+                                    for iz in 0..steps {
+                                        // 格子の真ん中を採る（面に乗りにくい）。
+                                        let point = zenith_math::Point3::new(
+                                            bbox.min.x + span.x * (ix as f64 + 0.5) / steps as f64,
+                                            bbox.min.y + span.y * (iy as f64 + 0.5) / steps as f64,
+                                            bbox.min.z + span.z * (iz as f64 + 0.5) / steps as f64,
+                                        );
+                                        if !BooleanEngine::is_point_inside_mesh(point, &mesh_a) {
+                                            continue;
+                                        }
+                                        in_a += 1;
+                                        if !BooleanEngine::is_point_inside_mesh(point, &mesh_b) {
+                                            in_a_not_b += 1;
+                                        }
+                                    }
+                                }
+                            }
+                            let cell = span.x * span.y * span.z / (steps * steps * steps) as f64;
+                            // **この口が信用できるかを、先に確かめます。**
+                            // 点の数え方は光線の交差回数で決めるので、
+                            // **メッシュに穴があると当てになりません**。
+                            // A の体積は面積分で分かっているので、突き合わせます。
+                            let sampled_a = in_a as f64 * cell;
+                            let exact_a =
+                                zenith_algo::MassCalculator::compute_from_brep(&subject, &params24)
+                                    .volume;
+                            let gap = (sampled_a - exact_a).abs() / exact_a.abs().max(1e-30);
+                            println!(
+                                "      **点で数えた体積**: A {sampled_a:.3}（面積分では {exact_a:.3}、ずれ {:.1}%）、A＼B {:.3}",
+                                gap * 100.0,
+                                in_a_not_b as f64 * cell
+                            );
+                            if gap > 0.02 {
+                                println!(
+                                    "      **この数え方は使えません**——メッシュに穴があると光線の数え方が狂います。**ブーリアンの検証も同じ数え方です**"
+                                );
+                            }
+                        }
+
+                        // **同じ面が2つの殻に入っていないか**（4-276）。
+                        // 入っていれば**二重被覆**です（4-137 で一度見た形）。
+                        // 面の番号は割った断片にも引き継がれるので、番号で
+                        // 突き合わせれば分かります。
+                        {
+                            let ids: Vec<Vec<u64>> = again
+                                .solids
+                                .iter()
+                                .map(|solid| {
+                                    solid
+                                        .outer_shell
+                                        .faces
+                                        .iter()
+                                        .map(|face| face.id)
+                                        .collect()
+                                })
+                                .collect();
+                            for left in 0..ids.len() {
+                                for right in (left + 1)..ids.len() {
+                                    let shared: Vec<u64> = ids[left]
+                                        .iter()
+                                        .filter(|id| ids[right].contains(id))
+                                        .copied()
+                                        .collect();
+                                    println!(
+                                        "      立体 {left} と {right} で**同じ番号の面** {} 枚{}",
+                                        shared.len(),
+                                        if shared.is_empty() {
+                                            String::new()
+                                        } else {
+                                            format!("（{shared:?}）")
+                                        }
+                                    );
+                                }
+                            }
+                        }
                         for (index, solid) in again.solids.iter().enumerate() {
                             let bbox = solid.bounding_box();
                             let params = zenith_tess::TessellationParams {
