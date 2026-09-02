@@ -29,6 +29,17 @@ use zenith_math::{Tolerance, Vec3};
 use zenith_tess::TessellationParams;
 use zenith_topo::Solid;
 
+/// **表示メッシュと検査で共通に使う刻み**（4-290）。
+///
+/// ここを1か所にまとめてあります。**同じ立体を別の刻みで測って数字を並べる
+/// と、片方だけを見た人が読み違えます。**
+fn display_params() -> TessellationParams {
+    TessellationParams {
+        u_divisions: 24,
+        v_divisions: 24,
+    }
+}
+
 fn params() -> TessellationParams {
     TessellationParams {
         u_divisions: 32,
@@ -51,14 +62,18 @@ fn face_count(solid: &Solid) -> usize {
 }
 
 /// メッシュの稜のうち、ちょうど2枚に共有されていない本数。
+/// **表示メッシュと同じ刻みで測ります**（4-290）。
+///
+/// ここは長く 16 分割で、表示メッシュのほうは 24 分割でした。同じ立体に
+/// ついて「穴 0 本」と「非多様体 45 本」が並び、**ブーリアンが壊したように
+/// 読めます**——実際は刻みの違いで、45 本は**読んだ立体そのもの**に出て
+/// いました（和・差・積はそれを引き継いでいるだけ）。**私はそう読み違え
+/// ました。**
+///
+/// **物差しは1つにします。** 刻みを変えて測りたいときは、変えたことを
+/// 書いてください。
 fn non_manifold_edges(solid: &Solid) -> usize {
-    let mesh = zenith_tess::tessellate_solid(
-        solid,
-        &TessellationParams {
-            u_divisions: 16,
-            v_divisions: 16,
-        },
-    );
+    let mesh = zenith_tess::tessellate_solid(solid, &display_params());
     let mut uses: std::collections::HashMap<(u32, u32), usize> = std::collections::HashMap::new();
     for triangle in &mesh.indices {
         for step in 0..3 {
@@ -158,10 +173,7 @@ fn main() {
         // **読んだ立体そのものが水密か**（4-277）。切る前に見ます——ここが
         // 開いていると、内外判定を使う検査が全部あてになりません（4-276）。
         {
-            let params24 = zenith_tess::TessellationParams {
-                u_divisions: 24,
-                v_divisions: 24,
-            };
+            let params24 = display_params();
             let mesh = zenith_tess::tessellate_solid(&subject, &params24);
             let mut uses: std::collections::HashMap<(u32, u32), usize> =
                 std::collections::HashMap::new();
