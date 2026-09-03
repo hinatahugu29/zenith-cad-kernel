@@ -759,6 +759,12 @@ impl FaceSplitter {
             // 行って戻る巡回は、囲む面積が 0 になります。稜の本数を一緒に
             // 言えば、「同じ辺を2回使っていないか」がその場で分かります。
             let ring = format!(", 外周の稜 {} 本", pieces[index].outer_wire.edges.len());
+            // **点の並びをそのまま出す口**（4-304）。広がりは足りているのに
+            // 符号が消えるので、**どこかで同じ道を逆向きに2度通っています**。
+            // 要約した数字では、それがどの辺なのか永遠に分かりません。
+            if std::env::var_os("ZENITH_UV_DUMP").is_some() {
+                dump_uv_loop(&pieces[index]);
+            }
             return Err(format!(
                 "{label}: piece {index} encloses no area ({area:.3e} of {:.3e}{spread}{ring}), so this is not a split",
                 check.original
@@ -1170,6 +1176,29 @@ fn move_traversal_end(
 ///
 /// **面積 0 の言い訳ではなく、潰れ方の名前**です（4-304）。どちらかが 0 なら
 /// 領域ではなく線で、原因は巡回の取り違えではなく p-curve の側にあります。
+/// 面の外周 p-curve を、**辺ごとに端点と中点**で並べて出す。
+///
+/// 診断にしか使いません（4-304）。
+fn dump_uv_loop(face: &Face) {
+    let pcurves = match &face.geometry {
+        zenith_topo::FaceGeometry::Plane(_) => face.plane_pcurves().ok(),
+        _ => face.pcurves(&Tolerance::default()).ok(),
+    };
+    let Some(pcurves) = pcurves else {
+        eprintln!("UVDUMP p-curve が取れません");
+        return;
+    };
+    for (index, pcurve) in pcurves.outer_loop.segments.iter().enumerate() {
+        let (t0, t1) = pcurve.curve.param_range();
+        let at = |fraction: f64| pcurve.curve.evaluate(t0 + (t1 - t0) * fraction);
+        let (start, middle, end) = (at(0.0), at(0.5), at(1.0));
+        eprintln!(
+            "UVDUMP 辺 {index}: ({:.4} {:.4}) -> ({:.4} {:.4}) -> ({:.4} {:.4})",
+            start.x, start.y, middle.x, middle.y, end.x, end.y
+        );
+    }
+}
+
 fn uv_spread(face: &Face) -> Option<(f64, f64)> {
     let pcurves = match &face.geometry {
         zenith_topo::FaceGeometry::Plane(_) => face.plane_pcurves().ok()?,
