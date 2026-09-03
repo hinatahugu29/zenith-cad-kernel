@@ -559,9 +559,69 @@ impl FaceSplitter {
         }
 
         let count = edges.len() as f64;
+        // **継ぎ目をまたいで一周する切り込み**（4-304）。
+        //
+        // 閉じた曲面から来た面は、境界に**継ぎ目の辺を2本**持ちます。3D では
+        // 同じ線なので、そこを通る点は**巡回上の2か所**に居ます。
+        // `locate_on_wire` はいちばん近い1か所しか返さないので、円柱を一周
+        // する交線は**両端が同じ所に落ち**、「both ends land at the same
+        // place」で断られていました。
+        //
+        // **穴ではありません。** 一周する切り込みは面を上下2つに分けます
+        // ——片方は「切り込み＋継ぎ目の辺 A」、もう片方は「切り込み＋継ぎ目の
+        // 辺 B」で閉じます。ずらす先を**別の辺の上**に取れば、下の `walk` が
+        // そのまま2つを出します。
+        //
+        // 実測（`linkrods.step`、4-304）: 断られた 4 本の輪はすべて
+        // 「始点も終点も境界の辺 2 本の上」でした。
+        let (from, to) = if ((to - from).rem_euclid(count))
+            .min((from - to).rem_euclid(count))
+            <= 1e-9
+        {
+            let moved = locate_on_wire_avoiding(&face.outer_wire, end, from as usize, limit);
+            if std::env::var_os("ZENITH_SPLIT_WHY").is_some() {
+                eprintln!(
+                    "SEAMSPLITWHY 境界の辺 {} 本、from {:.4} to {:.4} → ずらし先 {:?}",
+                    edges.len(),
+                    from,
+                    to,
+                    moved
+                );
+            }
+            match moved {
+                Some(other) => (from, other),
+                None => (from, to),
+            }
+        } else {
+            (from, to)
+        };
         let separation = ((to - from).rem_euclid(count)).min((from - to).rem_euclid(count));
+
         if separation <= 1e-9 {
-            return Err("both ends of the splitting curve land at the same place".to_string());
+            // **同じ場所に見えるだけかもしれません**（4-304）。
+            //
+            // 閉じた曲面から来た面は、境界に**継ぎ目の辺を2本**持ちます。
+            // 3D では同じ線なので、そこを通る点は**巡回上の2か所**に居ます。
+            // `locate_on_wire` はいちばん近い1か所しか返さないので、
+            // 継ぎ目をまたいで一周する切り込みは、両端が同じ所に落ちます。
+            //
+            // **数えて言います。** 「同じ場所」なのか「2か所あるのに1つしか
+            // 見ていない」のかで、直す先がまったく違います。
+            let places = |point: Point3| -> usize {
+                edges
+                    .iter()
+                    .filter(|oriented| {
+                        ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 128, 1e-13)
+                            .map(|projection| projection.distance <= limit)
+                            .unwrap_or(false)
+                    })
+                    .count()
+            };
+            return Err(format!(
+                "both ends of the splitting curve land at the same place (start sits on {} boundary edges, end on {})",
+                places(start),
+                places(end)
+            ));
         }
 
         // 3. 巡回を2本に割り、それぞれを切り込みで閉じる。
@@ -1089,6 +1149,45 @@ fn move_traversal_end(
 ///
 /// 割合は曲線の媒介変数で測る。弧長ではないが、同じ物差しで一貫していれば
 /// 巡回を割るには足りる。
+/// `avoid` 番の辺**以外**で、点がいちばん近く乗る巡回座標。
+///
+/// 継ぎ目の2本目を選ぶためのものです（4-304）。`limit` より遠ければ
+/// 「他には無い」と答えます——**近いから選ぶ**のであって、
+/// **他が無いから選ぶ**のではありません。
+fn locate_on_wire_avoiding(wire: &Wire, point: Point3, avoid: usize, limit: f64) -> Option<f64> {
+    let mut best: Option<(f64, f64)> = None;
+    for (index, oriented) in wire.edges.iter().enumerate() {
+        if index == avoid {
+            continue;
+        }
+        let Ok(projection) = ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 128, 1e-13)
+        else {
+            continue;
+        };
+        if projection.distance > limit {
+            continue;
+        }
+        let (t0, t1) = oriented.edge.curve.param_range();
+        if (t1 - t0).abs() <= f64::EPSILON {
+            continue;
+        }
+        let raw = ((projection.parameter - t0) / (t1 - t0)).clamp(0.0, 1.0);
+        let fraction = if oriented.orientation.is_forward() {
+            raw
+        } else {
+            1.0 - raw
+        };
+        if best
+            .as_ref()
+            .map(|(_, distance)| projection.distance < *distance)
+            .unwrap_or(true)
+        {
+            best = Some((index as f64 + fraction, projection.distance));
+        }
+    }
+    best.map(|(position, _)| position)
+}
+
 fn locate_on_wire(wire: &Wire, point: Point3, tol: &Tolerance) -> Option<(f64, f64)> {
     let mut best: Option<(f64, f64)> = None;
     for (index, oriented) in wire.edges.iter().enumerate() {
