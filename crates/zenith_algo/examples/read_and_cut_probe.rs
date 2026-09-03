@@ -203,6 +203,44 @@ fn main() {
                     probe.indices.len(),
                     if open + over > 0 { "  **水密ではありません**" } else { "" }
                 );
+                // **壊れている場所を座標で出します**（`ZENITH_SEAM_WHY=1`。4-298）。
+                //
+                // 本数だけでは直せません。**継ぎ目の上か、面の内側か**は座標を
+                // 見ないと決まらず、そこから `ZENITH_RING_WATCH` へ渡せます。
+                if std::env::var_os("ZENITH_SEAM_WHY").is_some() && open + over > 0 {
+                    let mut listed: Vec<((u32, u32), usize)> = uses
+                        .iter()
+                        .filter(|(_, count)| **count != 2)
+                        .map(|(key, count)| (*key, *count))
+                        .collect();
+                    listed.sort_by_key(|((a, b), _)| (*a, *b));
+                    // **何点から出ているか**を先に言います（4-302）。
+                    // 1点なら、その頂点のまわりだけの話です。
+                    let mut ends: std::collections::HashSet<(i64, i64, i64)> = Default::default();
+                    let key_of = |p: zenith_math::Point3| {
+                        (
+                            (p.x * 1e6).round() as i64,
+                            (p.y * 1e6).round() as i64,
+                            (p.z * 1e6).round() as i64,
+                        )
+                    };
+                    for ((a, b), _) in listed.iter() {
+                        ends.insert(key_of(probe.positions[*a as usize]));
+                        ends.insert(key_of(probe.positions[*b as usize]));
+                    }
+                    println!(
+                        "      壊れた稜 {} 本は、**{} 個の点**につながっています",
+                        listed.len(),
+                        ends.len()
+                    );
+                    for ((a, b), count) in listed.iter().take(4) {
+                        let (pa, pb) = (probe.positions[*a as usize], probe.positions[*b as usize]);
+                        println!(
+                            "      使用 {count} 回: ({:.6},{:.6},{:.6}) -> ({:.6},{:.6},{:.6}) 長さ {:.3e}",
+                            pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, (pb - pa).norm()
+                        );
+                    }
+                }
             }
             let mut uses: std::collections::HashMap<(u32, u32), usize> =
                 std::collections::HashMap::new();
