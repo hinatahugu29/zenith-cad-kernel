@@ -574,6 +574,7 @@ impl FaceSplitter {
         //
         // 実測（`linkrods.step`、4-304）: 断られた 4 本の輪はすべて
         // 「始点も終点も境界の辺 2 本の上」でした。
+        let mut moved_across_seam = false;
         let (from, to) = if ((to - from).rem_euclid(count))
             .min((from - to).rem_euclid(count))
             <= 1e-9
@@ -589,7 +590,10 @@ impl FaceSplitter {
                 );
             }
             match moved {
-                Some(other) => (from, other),
+                Some(other) => {
+                    moved_across_seam = true;
+                    (from, other)
+                }
                 None => (from, to),
             }
         } else {
@@ -661,23 +665,64 @@ impl FaceSplitter {
             })
             .collect();
 
-        let mut first = forward;
-        first.extend(cut_backward);
-        let mut second = backward;
-        second.extend(cut_forward);
+        // **どちらの巡回に、どちら向きの切り込みを付けるか**（4-304）。
+        //
+        // 普通は 3D の端点で決まります。**継ぎ目でずらしたときだけ決まりません**
+        // ——両端は 3D で**同じ点**なので、どちらの組み合わせでもワイヤは
+        // 閉じます。片方は正しい2領域、もう片方は**往復して面積 0** の巡回に
+        // なります。実測（`linkrods.step`）: uv で `u=0` と `u=1` が1か所だけ
+        // 飛び、面積が 1.110e-16 になっていました。
+        //
+        // **閉性では選べないので、面積で選びます。** 通るほうを採り、
+        // どちらも通らなければ**最初の組み合わせの理由で断ります**——
+        // 「試したが両方だめ」を「割れた」に化けさせません。
+        let pairings: &[bool] = if moved_across_seam {
+            &[false, true]
+        } else {
+            &[false]
+        };
 
-        let pieces: Vec<Face> = [first, second]
-            .into_iter()
-            .map(|wire_edges| {
-                Face::new(
-                    face.geometry.clone(),
-                    Wire::new(wire_edges),
-                    Vec::new(),
-                    face.orientation,
-                    face.tolerance,
-                )
-            })
-            .collect();
+        let build = |swap: bool| -> Vec<Face> {
+            let (a, b) = if swap {
+                (cut_forward.clone(), cut_backward.clone())
+            } else {
+                (cut_backward.clone(), cut_forward.clone())
+            };
+            let mut first = forward.clone();
+            first.extend(a);
+            let mut second = backward.clone();
+            second.extend(b);
+            [first, second]
+                .into_iter()
+                .map(|wire_edges| {
+                    Face::new(
+                        face.geometry.clone(),
+                        Wire::new(wire_edges),
+                        Vec::new(),
+                        face.orientation,
+                        face.tolerance,
+                    )
+                })
+                .collect()
+        };
+
+        let mut pieces = build(pairings[0]);
+        for swap in pairings.iter().skip(1) {
+            if Self::checked_areas("split_by_chain", face, &pieces).is_ok() {
+                break;
+            }
+            let alternative = build(*swap);
+            if Self::checked_areas("split_by_chain", face, &alternative).is_ok() {
+                if std::env::var_os("ZENITH_SPLIT_WHY").is_some() {
+                    eprintln!(
+                        "SEAMSPLITWHY 切り込みの向きを入れ替えたら面積が通りました（swap={swap}）"
+                    );
+                }
+                pieces = alternative;
+                break;
+            }
+        }
+        let pieces = pieces;
 
         for (index, piece) in pieces.iter().enumerate() {
             if piece.outer_wire.edges.len() < 2 {
