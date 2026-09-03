@@ -747,8 +747,20 @@ impl FaceSplitter {
             ));
         }
         if let Some((index, area)) = null_piece(&check) {
+            // **潰れ方を一緒に言います**（4-304）。面積 0 だけでは
+            // 「領域を取り違えた」のか「uv で線に潰れた」のかが分かりません。
+            // 継ぎ目をまたぐ切り込みでは後者を疑っています——一周する曲線を
+            // 継ぎ目のある曲面へ落とすと、標本が同じ `u` に寄ります。
+            // **`u` か `v` の広がりが 0 なら、潰れているのは p-curve です。**
+            let spread = uv_spread(&pieces[index])
+                .map(|(u, v)| format!(", uv の広がり u {u:.3e} v {v:.3e}"))
+                .unwrap_or_default();
+            // **潰れていないのに 0 なら、符号で打ち消しています**（4-304）。
+            // 行って戻る巡回は、囲む面積が 0 になります。稜の本数を一緒に
+            // 言えば、「同じ辺を2回使っていないか」がその場で分かります。
+            let ring = format!(", 外周の稜 {} 本", pieces[index].outer_wire.edges.len());
             return Err(format!(
-                "{label}: piece {index} encloses no area ({area:.3e} of {:.3e}), so this is not a split",
+                "{label}: piece {index} encloses no area ({area:.3e} of {:.3e}{spread}{ring}), so this is not a split",
                 check.original
             ));
         }
@@ -1154,6 +1166,35 @@ fn move_traversal_end(
 /// 継ぎ目の2本目を選ぶためのものです（4-304）。`limit` より遠ければ
 /// 「他には無い」と答えます——**近いから選ぶ**のであって、
 /// **他が無いから選ぶ**のではありません。
+/// 面の外周 p-curve が uv でどれだけ広がっているか。
+///
+/// **面積 0 の言い訳ではなく、潰れ方の名前**です（4-304）。どちらかが 0 なら
+/// 領域ではなく線で、原因は巡回の取り違えではなく p-curve の側にあります。
+fn uv_spread(face: &Face) -> Option<(f64, f64)> {
+    let pcurves = match &face.geometry {
+        zenith_topo::FaceGeometry::Plane(_) => face.plane_pcurves().ok()?,
+        _ => face.pcurves(&Tolerance::default()).ok()?,
+    };
+    let mut min = zenith_math::Point2::new(f64::INFINITY, f64::INFINITY);
+    let mut max = zenith_math::Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for pcurve in pcurves.outer_loop.segments.iter() {
+        for step in 0..=16 {
+            let uv = pcurve.curve.evaluate(
+                pcurve.curve.param_range().0
+                    + (pcurve.curve.param_range().1 - pcurve.curve.param_range().0)
+                        * (step as f64 / 16.0),
+            );
+            min = zenith_math::Point2::new(min.x.min(uv.x), min.y.min(uv.y));
+            max = zenith_math::Point2::new(max.x.max(uv.x), max.y.max(uv.y));
+        }
+    }
+    if min.x.is_finite() && max.x.is_finite() {
+        Some((max.x - min.x, max.y - min.y))
+    } else {
+        None
+    }
+}
+
 fn locate_on_wire_avoiding(wire: &Wire, point: Point3, avoid: usize, limit: f64) -> Option<f64> {
     let mut best: Option<(f64, f64)> = None;
     for (index, oriented) in wire.edges.iter().enumerate() {
