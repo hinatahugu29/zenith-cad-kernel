@@ -175,6 +175,35 @@ fn main() {
         {
             let params24 = display_params();
             let mesh = zenith_tess::tessellate_solid(&subject, &params24);
+            // **刻みを振って測ります**（4-296）。24 で 0 でも、16 では
+            // 45 本残っていました（4-290）。**「見えなくなった」と「直った」は
+            // 別**なので、範囲で見ます。
+            for divisions in [8usize, 12, 16, 20, 24, 32, 48] {
+                let params = zenith_tess::TessellationParams {
+                    u_divisions: divisions,
+                    v_divisions: divisions,
+                };
+                let probe = zenith_tess::tessellate_solid(&subject, &params);
+                let mut uses: std::collections::HashMap<(u32, u32), usize> =
+                    std::collections::HashMap::new();
+                for triangle in &probe.indices {
+                    for step in 0..3 {
+                        let (a, b) = (triangle[step], triangle[(step + 1) % 3]);
+                        if a == b {
+                            continue;
+                        }
+                        let key = if a < b { (a, b) } else { (b, a) };
+                        *uses.entry(key).or_insert(0) += 1;
+                    }
+                }
+                let open = uses.values().filter(|count| **count == 1).count();
+                let over = uses.values().filter(|count| **count > 2).count();
+                println!(
+                    "  {divisions:>3} 分割: 三角形 {:>6}、穴 {open:>4} 本、重なり {over:>4} 本{}",
+                    probe.indices.len(),
+                    if open + over > 0 { "  **水密ではありません**" } else { "" }
+                );
+            }
             let mut uses: std::collections::HashMap<(u32, u32), usize> =
                 std::collections::HashMap::new();
             for triangle in &mesh.indices {
@@ -253,6 +282,28 @@ fn main() {
                 .map(|(kind, count)| format!("{kind} {count}"))
                 .collect();
             println!("  面の種類: {}", listed.join("、"));
+            // **番号と種類を並べます**（4-296）。壊れる面を名指しできたとき、
+            // それが何の面かをすぐ引けるように。
+            if std::env::var_os("ZENITH_FACE_KIND_WHY").is_some() {
+                for face in &subject.outer_shell.faces {
+                    let kind = match &face.geometry {
+                        zenith_topo::FaceGeometry::Plane(_) => "平面".to_string(),
+                        zenith_topo::FaceGeometry::Nurbs(surface) => format!(
+                            "NURBS {}x{}",
+                            surface.control_points.len(),
+                            surface.control_points.first().map(|r| r.len()).unwrap_or(0)
+                        ),
+                        _ => "その他".to_string(),
+                    };
+                    println!(
+                        "    面 {}: {kind}、稜 {}、内側の輪 {}、粗さ {:.3e}",
+                        face.id,
+                        face.outer_wire.edges.len(),
+                        face.inner_wires.len(),
+                        face.tolerance
+                    );
+                }
+            }
             // **平面の輪の巻き方向**（4-279）。面の向きと合っているか。
             // 合っていないと、外向き法線が材料の反対を向きます。
             {
