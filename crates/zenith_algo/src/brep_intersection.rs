@@ -8275,7 +8275,20 @@ fn curve_parameter_of_point(
         }
     }
     let t = 0.5 * (low + high);
-    if (curve.evaluate(t) - point).norm() > tol.linear * 10.0 {
+    let gap = (curve.evaluate(t) - point).norm();
+    if gap > tol.linear * 10.0 {
+        // **どれだけ届かなかったか**を出します（4-303）。読んだ立体は面が
+        // 5.6e-4 まで粗さを持つので（4-285）、**絶対 1e-5 では刻み込めない**
+        // 可能性があります。刻めなければ、片方だけが割ったまま残ります。
+        // **惜しかったものだけを出します。** 全部出すと 41,672 行になり、
+        // そのほとんどは「そもそも別の場所にある点」です（実測: 外れの中央値
+        // 0.54）。**見たいのは、受け入れ幅のすぐ外にいるもの**です。
+        if std::env::var_os("ZENITH_IMPRINT_WHY").is_some() && gap < tol.linear * 1000.0 {
+            eprintln!(
+                "IMPRINTWHY 稜に刻めませんでした: 外れ {gap:.6e}（受け入れ {:.6e}）",
+                tol.linear * 10.0
+            );
+        }
         return None;
     }
 
