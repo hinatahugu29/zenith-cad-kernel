@@ -120,11 +120,19 @@ fn boundary_bounding_box(solid: &zenith_topo::Solid) -> Option<zenith_math::Boun
 fn main() {
     let tol = Tolerance::default();
     let samples = ["screw.step", "linkrods.step"];
+    // **1ファイルだけ回す口**（4-304）。`linkrods` を1回追うのに
+    // `screw` の 8〜48 分割まで回すと、毎回 2 分よけいに待ちます。
+    // 診断を何度も振るときは `ZENITH_READ_CUT_ONLY=linkrods` のように
+    // 名前の一部を渡してください。**門としては既定（全部）で回します。**
+    let only = std::env::var("ZENITH_READ_CUT_ONLY").unwrap_or_default();
 
     println!("読んだ立体（OCCT の配布データ）を切る（9-H の H8）");
     println!();
 
     for name in samples {
+        if !only.is_empty() && !name.contains(only.as_str()) {
+            continue;
+        }
         let path = occt_sample(name);
         let solids = match StepImporter::import_solids_from_file(&path) {
             Ok(solids) => solids,

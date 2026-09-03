@@ -1834,19 +1834,47 @@ impl BrepIntersectionBuilder {
             }
             let mut chain_faces = vec![face.clone()];
             let mut applied: usize = 0;
-            for chain in chains.iter() {
+            for (chain_index, chain) in chains.iter().enumerate() {
+                // **鎖ごとに1行にまとめます**（4-304）。
+                //
+                // 下の断り文は**面片ごと**に出ます。鎖は割ったあとの片すべてに
+                // 当て直されるので、「別の片に属する鎖」も必ず1回は
+                // 「境界から離れている」と断られます。**その1行だけを読むと、
+                // 交線が短いように見えます**——実測でそう読みかけました。
+                //
+                // 知りたいのは「この鎖は**どこかで**当たったか」と、
+                // 当たらなかったときの**いちばん惜しかった外れ**です。
+                let mut chain_applied = 0usize;
+                let mut best_gap = f64::INFINITY;
                 let mut next_faces = Vec::new();
                 for current_face in chain_faces {
+                    // **閉じた輪は、鎖の分割では表せません**（4-304）。
+                    //
+                    // 刻印は `split_face_by_edges` の入口で1度だけ試して
+                    // いましたが、そこには**届いた交線が丸ごと**渡ります。
+                    // `linkrods.step` では 12 本が 4 つの輪に分かれており、
+                    // まとめて渡すと「Cap edges do not form a continuous
+                    // loop」で必ず落ちます。**輪ごとに試さないと当たりません。**
                     match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
                         Ok((pieces, report))
                             if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
                         {
                             applied += 1;
+                            chain_applied += 1;
                             next_faces.extend(pieces);
                         }
                         // **理由を捨てない。** ここは最後の受け皿なので、
                         // 断られた理由が読めないと、次に測るところが決まらない。
                         other => {
+                            if let Err(reason) = &other {
+                                if let Some(gap) = reason
+                                    .strip_prefix("the splitting curve ends ")
+                                    .and_then(|rest| rest.split(' ').next())
+                                    .and_then(|number| number.parse::<f64>().ok())
+                                {
+                                    best_gap = best_gap.min(gap);
+                                }
+                            }
                             if why {
                                 match &other {
                                     Ok((pieces, report)) => eprintln!(
@@ -1864,6 +1892,24 @@ impl BrepIntersectionBuilder {
                             }
                             next_faces.push(current_face)
                         }
+                    }
+                }
+                if why {
+                    if chain_applied > 0 {
+                        eprintln!(
+                            "CHAINWHY 鎖 {chain_index}（{} 本）: 当たった {chain_applied} 回",
+                            chain.len()
+                        );
+                    } else if best_gap.is_finite() {
+                        eprintln!(
+                            "CHAINWHY 鎖 {chain_index}（{} 本）: **どの片にも当たらず**、いちばん惜しい外れ {best_gap:.3e}",
+                            chain.len()
+                        );
+                    } else {
+                        eprintln!(
+                            "CHAINWHY 鎖 {chain_index}（{} 本）: **どの片にも当たらず**、境界の外れではない理由",
+                            chain.len()
+                        );
                     }
                 }
                 chain_faces = next_faces;
@@ -4747,17 +4793,45 @@ fn diagnose_selected_face_stitching(
                         .iter()
                         .enumerate()
                         .filter(|(j, _)| *j != i)
-                        .map(|(_, other)| {
-                            (
-                                (other.middle - use_.middle).norm(),
-                                other.operand,
-                                (other.end - other.start).norm(),
-                            )
-                        })
+                        .map(|(_, other)| ((other.middle - use_.middle).norm(), other))
                         .min_by(|left, right| left.0.total_cmp(&right.0));
-                    if let Some((distance, operand, length)) = nearest {
+                    if let Some((distance, other)) = nearest {
+                        let length = (other.end - other.start).norm();
                         eprintln!(
-                            "STITCHWHY   いちばん近い相手 {operand:?} 中点まで {distance:.9} 長さ {length:.9}"
+                            "STITCHWHY   いちばん近い相手 {:?} 中点まで {distance:.9} 長さ {length:.9}",
+                            other.operand
+                        );
+                        // **同じ線の上に乗っているのか**（4-304）。中点が
+                        // 一致していても、それだけでは「相手の弦の真ん中に
+                        // 居る」としか言えません。**A の端点が相手の弦から
+                        // どれだけ離れているか**を測れば、「割り方の食い違い」
+                        // （＝同じ線の上に乗っている）と「別の線」（＝乗って
+                        // いない）が分かれます。
+                        let to_segment = |point: Point3| {
+                            let direction = other.end - other.start;
+                            let squared = direction.norm_squared();
+                            if squared <= 0.0 {
+                                return (point - other.start).norm();
+                            }
+                            let t = ((point - other.start).dot(&direction) / squared)
+                                .clamp(0.0, 1.0);
+                            (point - (other.start + direction * t)).norm()
+                        };
+                        eprintln!(
+                            "STITCHWHY   その相手の弦まで: 始点 {:.9} 終点 {:.9} 中点 {:.9}",
+                            to_segment(use_.start),
+                            to_segment(use_.end),
+                            to_segment(use_.middle)
+                        );
+                        eprintln!(
+                            "STITCHWHY   その相手 面 {} ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9})",
+                            other.face_id,
+                            other.start.x,
+                            other.start.y,
+                            other.start.z,
+                            other.end.x,
+                            other.end.y,
+                            other.end.z
                         );
                     }
                     // **端点に何本つながっているか**（4-292）。
