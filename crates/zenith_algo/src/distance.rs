@@ -671,3 +671,91 @@ fn point_in_loop(pcurve_loop: &zenith_topo::FacePcurveLoop, uv: Point2) -> bool 
     }
     inside
 }
+
+
+#[cfg(test)]
+mod near_boundary_tests {
+    use super::*;
+
+    /// **安くした道が、元の道と同じ答えを出すか**（4-294）。
+    ///
+    /// `has_boundary_within` は「近いものが1つでもあるか」だけを見ます。
+    /// `boundary_projections` は**すべての面へ全域射影して全部集める**ので、
+    /// 同じ問いに桁違いの値段を払います（実測: `linkrods.step` の和で、
+    /// 射影の 100% がそこでした）。
+    ///
+    /// **速いほうが安全なのは、答えが同じときだけです。** 面の囲みで捨てる
+    /// のも、見つかったら止めるのも、答えを変えないはずですが、**それは
+    /// 測って確かめること**です。
+    fn agrees(point: Point3, solid: &Solid, limit: f64) -> bool {
+        let cheap = has_boundary_within(point, solid, limit);
+        let thorough = boundary_projections(point, solid)
+            .iter()
+            .any(|projection| projection.distance <= limit);
+        cheap == thorough
+    }
+
+    #[test]
+    fn the_cheap_near_boundary_test_agrees_with_the_thorough_one() {
+        let solid = crate::PrimitiveBuilder::make_torus(12.0, 4.0).expect("torus");
+        // **境界の内・外・上**を、格子で広く取ります。1点だけ通しても
+        // 意味がありません（4-115 の「範囲を振る」）。
+        let mut checked = 0usize;
+        for ix in -3..=3 {
+            for iy in -3..=3 {
+                for iz in -2..=2 {
+                    let point = Point3::new(
+                        ix as f64 * 5.0,
+                        iy as f64 * 5.0,
+                        iz as f64 * 2.5,
+                    );
+                    // **上限も振ります。** 上限で答えが変わる点こそ、
+                    // 囲みで捨てる判断が効くところです。
+                    for limit in [1e-6, 1e-3, 0.1, 1.0, 5.0] {
+                        assert!(
+                            agrees(point, &solid, limit),
+                            "点 {point:?}、上限 {limit} で答えが違います"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked >= 700, "測った数が少なすぎます: {checked}");
+    }
+
+    #[test]
+    fn it_also_agrees_on_a_solid_with_a_cavity() {
+        // 空洞のある立体でも同じであること——内側の殻を見落とすと、
+        // **中に居る点で答えが変わります**。
+        let outer = crate::PrimitiveBuilder::make_box(20.0, 20.0, 20.0).expect("box");
+        let inner = crate::BrepTransform::translate_solid(
+            &crate::PrimitiveBuilder::make_box(6.0, 6.0, 6.0).expect("inner"),
+            zenith_math::Vec3::new(7.0, 7.0, 7.0),
+        );
+        let tol = Tolerance::default();
+        let Ok(result) = crate::BooleanEngine::boolean_solids_exact_result(
+            &outer,
+            &inner,
+            crate::BooleanOpType::Difference,
+            &tol,
+        ) else {
+            // 断られたら、この検体では測れません。**黙って通しません。**
+            panic!("空洞を作る差が断られました");
+        };
+        let solid = result.solids.first().expect("立体が1つ返る");
+        for ix in 0..=4 {
+            for iy in 0..=4 {
+                for iz in 0..=4 {
+                    let point = Point3::new(ix as f64 * 5.0, iy as f64 * 5.0, iz as f64 * 5.0);
+                    for limit in [1e-6, 0.5, 2.0] {
+                        assert!(
+                            agrees(point, solid, limit),
+                            "空洞つき: 点 {point:?}、上限 {limit} で答えが違います"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
