@@ -782,6 +782,41 @@ fn patch_mesh(
     // **自分で共線を判定して外すのではなく、落とされたものを測って挿し
     // 戻します。** 判定を二重に持つと、earcut の基準と食い違ったときに
     // また壊れます（4-85 で1度やって悪化しました）。
+    // **境界の稜が、2枚以上に使われていないか**（4-300）。
+    //
+    // 1枚の面の中では、境界の稜は**ちょうど1枚**が使うはずです。段の前後で
+    // 数えると、重なりがどこで生まれたかが挟み撃ちできます——実測
+    // （`screw.step` のねじ山の面、32 分割）: **earcut の直後は 0 本**、
+    // **修復の段のあとで 8〜55 本**。**犯人は修復の段です。**
+    let count_boundary_overuse = |triangles: &[[usize; 3]], stage: &str| {
+        if std::env::var_os("ZENITH_OVERLAP_WHY").is_none() {
+            return;
+        }
+        let mut uses: std::collections::HashMap<(usize, usize), usize> = Default::default();
+        for triangle in triangles.iter() {
+            for corner in 0..3 {
+                let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                *uses.entry(if a < b { (a, b) } else { (b, a) }).or_insert(0) += 1;
+            }
+        }
+        let mut over = 0usize;
+        for range in &ring_ranges {
+            let count = range.len();
+            for offset in 0..count {
+                let a = range.start + offset;
+                let b = range.start + (offset + 1) % count;
+                let key = if a < b { (a, b) } else { (b, a) };
+                if uses.get(&key).copied().unwrap_or(0) > 1 {
+                    over += 1;
+                }
+            }
+        }
+        if over > 0 {
+            eprintln!("OVERLAPWHY {stage}: 境界の稜が2枚以上に使われている {over} 本");
+        }
+    };
+    count_boundary_overuse(&triangles, "earcut の直後");
+
     reinsert_dropped_boundary_points(&uvs, &ring_ranges, &mut triangles);
     explain_flat("境界点挿し戻し後", &triangles, &uvs);
     repair_boundary_ears(
@@ -820,6 +855,8 @@ fn patch_mesh(
     // **面の内側に残った T 字の継ぎ目を直します**（4-286）。境界の辺には
     // 3段の手当てがありましたが、内側には無く、黙って通っていました。
     repair_interior_t_junctions(&uvs, &ring_ranges, &mut triangles);
+
+    count_boundary_overuse(&triangles, "修復の段のあと");
 
     // **境界の辺が全部そろっているかを数えます**（`ZENITH_EARCUT_WHY=1`）。
     //
