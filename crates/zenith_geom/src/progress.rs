@@ -124,11 +124,21 @@ impl Heartbeat {
                         || step.face_integrals > 0
                         || step.uv_triangulations > 0;
                     eprintln!(
-                        "PROGRESS [{label}] 経過 {:.0} 秒: 曲面評価 +{}、射影 +{}（うち p-curve +{}）、辿り +{}、面の積分 +{}、p-curve 作り直し +{}（持っていた +{}）  {}",
+                        "PROGRESS [{label}] 経過 {:.0} 秒: 曲面評価 +{}、射影 +{}（p-curve +{}、境界の検証 +{}、粗い全域 +{}、法線 +{}、片の法線 +{}、種探し +{}、面を切る +{}、接する曲面 +{}、着地 +{}、当てはめ +{}、その他 +{}）、辿り +{}、面の積分 +{}、p-curve 作り直し +{}（持っていた +{}）  {}",
                         started.elapsed().as_secs_f64(),
                         step.surface_evaluations,
                         step.point_surface_projections,
                         step.pcurve_projections,
+                        step.boundary_check_projections,
+                        step.point_surface_coarse_searches,
+                        step.normal_projections,
+                        step.piece_normal_projections,
+                        step.seed_on_patch_projections,
+                        step.section_split_projections,
+                        step.tangent_patch_projections,
+                        step.land_on_curve_projections,
+                        step.worst_distance_projections,
+                        step.other_projections,
                         step.marching_newton_iterations,
                         step.face_integrals,
                         step.pcurve_derivations,

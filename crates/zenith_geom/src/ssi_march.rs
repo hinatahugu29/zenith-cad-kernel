@@ -338,6 +338,7 @@ impl IntersectionMarcher {
         tol: &Tolerance,
     ) -> Option<[f64; 4]> {
         let point = s1.evaluate(seed_u, seed_v);
+        crate::work_counter::count_land_on_curve_projection();
         let projection = { ExtremumEngine::point_to_surface(point, s2, 64, 1e-13).ok()? };
         let mut state = [seed_u, seed_v, projection.u, projection.v];
 
@@ -1718,7 +1719,10 @@ impl IntersectionMarcher {
                     ),
                     // 最初の1点だけは、どこから始めるべきか分からないので
                     // 全域を粗く見る。
-                    None => ExtremumEngine::point_to_surface(sample.point, surface, 64, 1e-13),
+                    None => {
+                        crate::work_counter::count_worst_distance_projection();
+                        ExtremumEngine::point_to_surface(sample.point, surface, 64, 1e-13)
+                    }
                 };
                 if let Ok(projection) = projection {
                     worst = worst.max(projection.distance);

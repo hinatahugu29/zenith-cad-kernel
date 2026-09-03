@@ -3643,6 +3643,7 @@ fn split_patch_face_by_section_edge(
     // 分割線が本当にこの面の上にあるか。曲面の種類を問わず、投影して測る。
     let scale = sampled_edge_extent(split_edge).max(1.0);
     for point in sample_curve_points(&split_edge.curve, 12) {
+        zenith_geom::work_counter::count_section_split_projection();
         let projection = { ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric) }
             .map_err(|err| format!("Section edge could not be projected: {err}"))?;
         if projection.distance > tol.linear * 10.0 * scale {
@@ -4449,9 +4450,9 @@ fn classify_face_against_mesh(
         let Some(solid) = other else {
             return false;
         };
-        crate::distance::boundary_projections(point, solid)
-            .iter()
-            .any(|projection| projection.distance <= tol.linear * 100.0)
+        // **近いものが1つあれば足ります**（4-294）。全部の面へ全域射影して
+        // 集めるのは高すぎます——実測でここが律速でした。
+        crate::distance::has_boundary_within(point, solid, tol.linear * 100.0)
     };
     if near(sample) {
         // **1点で触れていることは、重なっていることではありません。**
@@ -4686,6 +4687,37 @@ fn diagnose_selected_face_stitching(
     let mut unmatched_edge_use_count = 0;
     let mut non_manifold_edge_use_count = 0;
     let mut same_direction_edge_use_count = 0;
+
+    // **座標で待ち伏せる口**（`ZENITH_STITCH_WATCH="x,y,z"`。4-294）。
+    //
+    // 「相手のいない稜」だけを出しても、**その場所に誰がいるのか**が分かり
+    // ません。指定した点のそばを通る稜を、**合っているものも含めて**全部
+    // 出します。口の円に壁の面が来ているか、といった問いはこれで決まります。
+    if let Some(watch) = std::env::var("ZENITH_STITCH_WATCH").ok().and_then(|value| {
+        let parts: Vec<f64> = value
+            .split(',')
+            .filter_map(|part| part.trim().parse().ok())
+            .collect();
+        (parts.len() == 3).then(|| Point3::new(parts[0], parts[1], parts[2]))
+    }) {
+        for use_ in edge_uses.iter() {
+            let near = [use_.start, use_.end, use_.middle]
+                .iter()
+                .map(|point| (point - watch).norm())
+                .fold(f64::INFINITY, f64::min);
+            if near > 0.6 {
+                continue;
+            }
+            eprintln!(
+                "STITCHWATCH {:?} 面 {} ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6}) mid ({:.6} {:.6} {:.6}) 近さ {near:.6}",
+                use_.operand,
+                use_.face_id,
+                use_.start.x, use_.start.y, use_.start.z,
+                use_.end.x, use_.end.y, use_.end.z,
+                use_.middle.x, use_.middle.y, use_.middle.z
+            );
+        }
+    }
 
     for i in 0..edge_uses.len() {
         let mates: Vec<usize> = edge_uses
@@ -7631,7 +7663,10 @@ fn revolution_patches_touch_at_a_point(
         };
         let point = patch_a.base_center + axis * touch + direction * (radius_a(touch) * sign);
         let on_both = [surface_a, surface_b].iter().all(|surface| {
-            ExtremumEngine::point_to_surface(point, surface, 64, 1e-13)
+            {
+                zenith_geom::work_counter::count_tangent_patch_projection();
+                ExtremumEngine::point_to_surface(point, surface, 64, 1e-13)
+            }
                 .map(|projection| projection.distance <= limit)
                 .unwrap_or(false)
         });
@@ -7712,6 +7747,7 @@ fn intersect_tangent_cylinder_patches(
     for step in 0..=8 {
         let point = start + (end - start) * (step as f64 / 8.0);
         for patch in [surface_a, surface_b] {
+            zenith_geom::work_counter::count_tangent_patch_projection();
             let Ok(projection) = ExtremumEngine::point_to_surface(point, patch, 64, 1e-13) else {
                 return None;
             };
@@ -8695,6 +8731,7 @@ fn piece_normal_at(
             plane.normal.try_normalize(1e-12)?
         }
         FaceGeometry::Nurbs(surface) => {
+            zenith_geom::work_counter::count_piece_normal_projection();
             let projection =
                 { ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric).ok()? };
             // 乗っていなければ、同じ場所の面ではありません。
@@ -9617,6 +9654,7 @@ fn frame_across(direction: Vec3) -> (Vec3, Vec3) {
 
 /// 点が乗っているところでの、面の法線。
 fn surface_normal_at(patch: &NurbsSurface3, point: Point3) -> Option<Vec3> {
+    zenith_geom::work_counter::count_normal_projection();
     let projection = ExtremumEngine::point_to_surface(point, patch, 64, 1e-13).ok()?;
     let (_, du, dv) = patch.evaluate_derivatives_1st(projection.u, projection.v);
     du.cross(&dv).try_normalize_safe(1e-12)
@@ -9766,6 +9804,7 @@ fn face_patch(face: &Face) -> Option<NurbsSurface3> {
 
 /// 点がパッチの上に乗っていれば、その `(u, v)` を返す。
 fn seed_on_patch(patch: &NurbsSurface3, point: Point3, tol: &Tolerance) -> Option<(f64, f64)> {
+    zenith_geom::work_counter::count_seed_on_patch_projection();
     let projection = { ExtremumEngine::point_to_surface(point, patch, 64, 1e-13).ok()? };
     // 辿りの端点は交線の上に丸め誤差ぶんだけ乗っています。実測で 2.4e-5。
     // 公差そのものでは締めすぎるので、辿りの精度に合わせます。

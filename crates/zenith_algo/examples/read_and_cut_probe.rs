@@ -335,9 +335,31 @@ fn main() {
 
         // **半分に食い込む箱**で切ります。中心を通す置き方は、面をいちばん
         // 多く割ります。
+        //
+        // **既定は「普通の置き方」です**（4-294）。それまでは切り手の側面を
+        // **立体の境界面そのもの**（`bbox.min.x` と `bbox.max.x`）に置いて
+        // いました。**そこは必ず端の特徴に接します**——実測（`linkrods.step`）:
+        // 切り手の面 `x = 8.145285` が、穴の口の円（中心 7.75、半径 0.395285）に
+        // **ちょうど接して**いました（`7.75 + 0.395285 = 8.145285`）。
+        // **接触はこのカーネルがいちばん手を焼く配置**で（3-1、3-N）、
+        // H8 は**いちばん難しい置き方だけ**を測っていたことになります。
+        //
+        // 側面を内側へ 3% 寄せ、切る高さも半分ちょうどから外します。
+        // **難しい置き方も測れるように、`ZENITH_CUT_TANGENT=1` で戻せます。**
+        let tangent = std::env::var_os("ZENITH_CUT_TANGENT").is_some();
+        let (inset, height) = if tangent { (0.0, 0.5) } else { (0.03, 0.47) };
         let cutter = BrepTransform::translate_solid(
-            &PrimitiveBuilder::make_box(span.x, span.y, span.z * 0.5).expect("cutter"),
-            Vec3::new(bbox.min.x, bbox.min.y, bbox.min.z + span.z * 0.25),
+            &PrimitiveBuilder::make_box(
+                span.x * (1.0 - inset * 2.0),
+                span.y * (1.0 - inset * 2.0),
+                span.z * height,
+            )
+            .expect("cutter"),
+            Vec3::new(
+                bbox.min.x + span.x * inset,
+                bbox.min.y + span.y * inset,
+                bbox.min.z + span.z * (height * 0.5),
+            ),
         );
         let vb = volume(std::slice::from_ref(&cutter));
 

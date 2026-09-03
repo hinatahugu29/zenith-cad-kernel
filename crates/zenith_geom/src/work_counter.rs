@@ -29,6 +29,22 @@ static PCURVE_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
 static BOUNDARY_CHECK_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
 /// **p-curve を作り直した回数**（4-274）。`Face::pcurves` は `&self` なので、
 /// 覚えられません。持っていない面に何度も訊くと、そのつど作り直します。
+/// **面の法線を求めるための射影**（4-294）。種を渡さないので1回が重い。
+static NORMAL_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **片の法線を求めるための射影**（4-294）。
+static PIECE_NORMAL_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **種を探すための射影**（4-294）。
+static SEED_ON_PATCH_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **面を切る段の射影**（4-294）。
+static SECTION_SPLIT_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **接する曲面どうしを調べる射影**（4-294）。
+static TANGENT_PATCH_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **交線に着地させるための射影**（4-294）。
+static LAND_ON_CURVE_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **交線の当てはめを測るための射影**（4-294）。
+static WORST_DISTANCE_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
+/// **まだ名前の付いていない射影**（4-294）。残りの呼び元をまとめて数えます。
+static OTHER_PROJECTIONS: AtomicU64 = AtomicU64::new(0);
 static PCURVE_DERIVATIONS: AtomicU64 = AtomicU64::new(0);
 /// うち、既に持っていたので作らずに済んだ回数。
 static PCURVE_CACHE_HITS: AtomicU64 = AtomicU64::new(0);
@@ -61,6 +77,22 @@ pub struct WorkCounters {
     pub pcurve_projections: u64,
     /// うち、境界が曲面に乗っているかを見るためのもの。
     pub boundary_check_projections: u64,
+    /// 面の法線を求めるための射影（4-294）。
+    pub normal_projections: u64,
+    /// 片の法線を求めるための射影（4-294）。
+    pub piece_normal_projections: u64,
+    /// 種を探すための射影（4-294）。
+    pub seed_on_patch_projections: u64,
+    /// 面を切る段の射影（4-294）。
+    pub section_split_projections: u64,
+    /// 接する曲面どうしを調べる射影（4-294）。
+    pub tangent_patch_projections: u64,
+    /// 交線に着地させるための射影（4-294）。
+    pub land_on_curve_projections: u64,
+    /// 交線の当てはめを測るための射影（4-294）。
+    pub worst_distance_projections: u64,
+    /// まだ名前の付いていない射影（4-294）。
+    pub other_projections: u64,
     /// **p-curve を作り直した回数**（4-274）。
     pub pcurve_derivations: u64,
     /// うち、既に持っていたので作らずに済んだ回数。
@@ -129,6 +161,30 @@ impl WorkCounters {
             boundary_check_projections: self
                 .boundary_check_projections
                 .saturating_sub(earlier.boundary_check_projections),
+            normal_projections: self
+                .normal_projections
+                .saturating_sub(earlier.normal_projections),
+            piece_normal_projections: self
+                .piece_normal_projections
+                .saturating_sub(earlier.piece_normal_projections),
+            seed_on_patch_projections: self
+                .seed_on_patch_projections
+                .saturating_sub(earlier.seed_on_patch_projections),
+            section_split_projections: self
+                .section_split_projections
+                .saturating_sub(earlier.section_split_projections),
+            tangent_patch_projections: self
+                .tangent_patch_projections
+                .saturating_sub(earlier.tangent_patch_projections),
+            land_on_curve_projections: self
+                .land_on_curve_projections
+                .saturating_sub(earlier.land_on_curve_projections),
+            worst_distance_projections: self
+                .worst_distance_projections
+                .saturating_sub(earlier.worst_distance_projections),
+            other_projections: self
+                .other_projections
+                .saturating_sub(earlier.other_projections),
             pcurve_derivations: self
                 .pcurve_derivations
                 .saturating_sub(earlier.pcurve_derivations),
@@ -172,6 +228,14 @@ pub fn snapshot() -> WorkCounters {
         point_surface_projections: POINT_SURFACE_PROJECTIONS.load(Ordering::Relaxed),
         pcurve_projections: PCURVE_PROJECTIONS.load(Ordering::Relaxed),
         boundary_check_projections: BOUNDARY_CHECK_PROJECTIONS.load(Ordering::Relaxed),
+        normal_projections: NORMAL_PROJECTIONS.load(Ordering::Relaxed),
+        piece_normal_projections: PIECE_NORMAL_PROJECTIONS.load(Ordering::Relaxed),
+        seed_on_patch_projections: SEED_ON_PATCH_PROJECTIONS.load(Ordering::Relaxed),
+        section_split_projections: SECTION_SPLIT_PROJECTIONS.load(Ordering::Relaxed),
+        tangent_patch_projections: TANGENT_PATCH_PROJECTIONS.load(Ordering::Relaxed),
+        land_on_curve_projections: LAND_ON_CURVE_PROJECTIONS.load(Ordering::Relaxed),
+        worst_distance_projections: WORST_DISTANCE_PROJECTIONS.load(Ordering::Relaxed),
+        other_projections: OTHER_PROJECTIONS.load(Ordering::Relaxed),
         pcurve_derivations: PCURVE_DERIVATIONS.load(Ordering::Relaxed),
         pcurve_cache_hits: PCURVE_CACHE_HITS.load(Ordering::Relaxed),
         point_surface_coarse_searches: POINT_SURFACE_COARSE_SEARCHES.load(Ordering::Relaxed),
@@ -236,6 +300,46 @@ pub fn count_seed_search() {
 /// **`point_to_surface` は呼ばれた回数しか数えていませんでした**（4-270）。
 /// 自由曲面を箱で切ると 190 万回呼ばれますが、**どこから呼ばれているか**が
 /// 分からないと、どこを直せばよいかが決まりません。
+/// まだ名前の付いていない呼び元から射影した。
+pub fn count_other_projection() {
+    OTHER_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 交線に着地させるために射影した。
+pub fn count_land_on_curve_projection() {
+    LAND_ON_CURVE_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 交線の当てはめを測るために射影した。
+pub fn count_worst_distance_projection() {
+    WORST_DISTANCE_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 面を切る段で射影した。
+pub fn count_section_split_projection() {
+    SECTION_SPLIT_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 接する曲面どうしを調べるために射影した。
+pub fn count_tangent_patch_projection() {
+    TANGENT_PATCH_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 面の法線を求めるために射影した。
+pub fn count_normal_projection() {
+    NORMAL_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 片の法線を求めるために射影した。
+pub fn count_piece_normal_projection() {
+    PIECE_NORMAL_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 種を探すために射影した。
+pub fn count_seed_on_patch_projection() {
+    SEED_ON_PATCH_PROJECTIONS.fetch_add(1, Ordering::Relaxed);
+}
+
 /// p-curve を作り直した。
 pub fn count_pcurve_derivation() {
     PCURVE_DERIVATIONS.fetch_add(1, Ordering::Relaxed);

@@ -439,6 +439,14 @@ pub struct BoundaryProjection {
 /// 外向き法線は支持曲面の法線を面の向きで反転したもの。テッセレーションが
 /// 三角形の向きを決めるときと同じ規則（`zenith_tess` の `oriented_normal`）。
 pub fn nearest_boundary_projection(point: Point3, solid: &Solid) -> Option<BoundaryProjection> {
+    zenith_geom::work_counter::count_seed_on_patch_projection();
+    if std::env::var_os("ZENITH_DISTANCE_WHY").is_some() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            eprintln!("DISTANCEWHY 呼ばれました:
+{}", std::backtrace::Backtrace::force_capture());
+        });
+    }
     boundary_projections(point, solid)
         .into_iter()
         .reduce(|best, candidate| {
@@ -456,6 +464,45 @@ pub fn nearest_boundary_projection(point: Point3, solid: &Solid) -> Option<Bound
 /// そこで面ごと捨てていたので、直方体の角の外にいる点はどの面にも足を持たず、
 /// 立体そのものへの距離が出ませんでした（6面すべてが「自分の長方形の外」と
 /// 答える）。捨てるのではなく寄せるのが正しく、寄せた先が本当の最近点です。
+/// **その点の近くに境界があるか**だけを見る（4-294）。
+///
+/// `boundary_projections` は**すべての面へ全域射影**して、いちばん近い所を
+/// 全部集めます。**「近いものが1つでもあるか」しか要らないとき、それは
+/// 高すぎます**——曲面1枚につき 17x17 の格子と8段の詰め（曲面評価 353 回）を
+/// 払うので、37 枚の立体で 1 点あたり 1万回を超えます。
+///
+/// 実測（`linkrods.step` の和、30 秒の窓）: 射影 68,394 回のうち **63,442 回**が
+/// この道の「粗い全域」でした。**辿りも積分も終わったあとに、ここだけで
+/// 曲面評価が 2,600 万回**回っています。
+///
+/// 同じ答えを、2つの手当てで安く出します。
+///
+/// - **面の囲みで先に捨てる**。囲みまでの距離が上限を超えていれば、その面の
+///   どこも上限より近くはなりません（囲みは面を含むので、これは安全です）
+/// - **見つかったら止める**。全部集める必要はありません
+pub(crate) fn has_boundary_within(point: Point3, solid: &Solid, limit: f64) -> bool {
+    for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
+        for face in &shell.faces {
+            let bbox = face.bounding_box();
+            // 囲みまでの距離（外にいるときだけ正）。
+            let outside = zenith_math::Vec3::new(
+                (bbox.min.x - point.x).max(0.0).max(point.x - bbox.max.x),
+                (bbox.min.y - point.y).max(0.0).max(point.y - bbox.max.y),
+                (bbox.min.z - point.z).max(0.0).max(point.z - bbox.max.z),
+            );
+            if outside.norm() > limit {
+                continue;
+            }
+            if let Some(projection) = face_projection(point, face) {
+                if projection.distance <= limit {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub(crate) fn boundary_projections(point: Point3, solid: &Solid) -> Vec<BoundaryProjection> {
     let mut projections = Vec::new();
 
@@ -529,6 +576,7 @@ fn support_foot(point: Point3, face: &zenith_topo::Face) -> Option<(Point3, Poin
             ))
         }
         FaceGeometry::Nurbs(surface) => {
+            zenith_geom::work_counter::count_other_projection();
             let projection = { ExtremumEngine::point_to_surface(point, surface, 48, 1e-12).ok()? };
             // **極では `normal` が `None` を返します。** 回転面の軸上にある点は
             // 最近点がちょうど極になるので、そのままだと「この面には足が無い」
