@@ -498,7 +498,13 @@ impl FaceSplitter {
             return Self::split_one(face, &chain[0], tol);
         }
 
-        let ordered = order_chain(chain, tol)?;
+        let ordered = match order_chain(chain, tol) {
+            Ok(ordered) => ordered,
+            Err(reason) => {
+                report_closed_chain(face, chain, &reason);
+                return Err(reason);
+            }
+        };
         Self::split_with_ordered_cut(face, &ordered, tol)
     }
 
@@ -1051,6 +1057,45 @@ fn order_closed_loop(loop_edges: &[Edge], tol: &Tolerance) -> Result<Vec<Oriente
         return Err("the cut does not come back to where it started".to_string());
     }
     Ok(ordered)
+}
+
+/// 端が無くて並べられなかった鎖について、**面の境界からどれだけ離れて
+/// いるか**を出す（`ZENITH_CLOSED_CHAIN_WHY=1`。4-305）。
+///
+/// # なぜこれを出すのか
+///
+/// `linkrods.step` は、当たらなかった鎖 15 本のうち **7 本が閉じた輪**です
+/// （4-304）。**輪が面の境界を通っているなら**、それは穴ではなく面を2つに
+/// 分ける切り込みで、境界の上の頂点でほどけば `order_chain` を通せます。
+///
+/// **その修理を書いて測ったら、何も動きませんでした**（4-305。相手のいない
+/// 稜 164 → 164、面片 45／28／19 も断り文も1バイト違わず）。**ほどく場所が
+/// 1つも見つからなかった**からです。つまり**輪は面の内部で閉じています**。
+///
+/// そこで、修理は入れずに**測り口だけ残します**。次に見るのはここの数字
+/// ——**いちばん近い頂点でも境界からどれだけ離れているか**です。
+fn report_closed_chain(face: &Face, chain: &[Edge], reason: &str) {
+    if std::env::var_os("ZENITH_CLOSED_CHAIN_WHY").is_none() {
+        return;
+    }
+    let mut nearest = f64::INFINITY;
+    for edge in chain {
+        for point in [edge.start_vertex.point, edge.end_vertex.point] {
+            for oriented in &face.outer_wire.edges {
+                if let Ok(projection) =
+                    ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 128, 1e-13)
+                {
+                    nearest = nearest.min(projection.distance);
+                }
+            }
+        }
+    }
+    eprintln!(
+        "CLOSEDCHAIN 鎖 {} 本: 境界までいちばん近い頂点で {:.6e}（{}）",
+        chain.len(),
+        nearest,
+        reason.chars().take(80).collect::<String>()
+    );
 }
 
 fn order_chain(chain: &[Edge], tol: &Tolerance) -> Result<Vec<OrientedEdge>, String> {
