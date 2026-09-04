@@ -4860,6 +4860,96 @@ fn diagnose_selected_face_stitching(
     tol: &Tolerance,
 ) -> SelectedFaceStitchReport {
     let edge_uses = collect_stitch_edge_uses(pieces);
+
+    // **穴の縁が、他に何回使われているか**（`ZENITH_HOLE_WHY=1`。4-318）。
+    //
+    // 4-317 で、和の非多様体 9 本が **4-306 の刻んだ穴そのもの**だと分かり
+    // ました。**穴の縁は、それ自体で 1 回**使われます。閉じた殻なら、
+    // **他がちょうど 1 回**使って 2 回になります。**他が 2 回使っていれば
+    // 3 回**——非多様体です。
+    //
+    // **数える単位は稜です。輪ではありません。** 最初に輪ごとの合計で
+    // 数えて外しました——A 269 は 4 本で「相手側 7 回」となり、平均すれば
+    // 1.75 回で健全に見えます。**中身は「2 回が 3 本、1 回が 1 本」**で、
+    // 3 本が非多様体でした。**合計は、混ざったものを隠します。**
+    //
+    // ここは**数えるだけ**です。判断（開けない・畳む・別の場所で開ける）は、
+    // この形が**別の立体でも同じか**を確かめてからにしてください
+    // （4-115。1つの立体で決めた規則は、次の立体で外れます）。
+    if std::env::var_os("ZENITH_HOLE_WHY").is_some() {
+        for piece in pieces.iter() {
+            for (loop_index, wire) in piece.face.inner_wires.iter().enumerate() {
+                let mut histogram: std::collections::BTreeMap<(usize, usize), usize> =
+                    std::collections::BTreeMap::new();
+                for oriented in wire.edges.iter() {
+                    let start = oriented.start_vertex().point;
+                    let end = oriented.end_vertex().point;
+                    let middle = oriented.evaluate_normalized(0.5);
+                    let matching = edge_uses.iter().filter(|use_| {
+                        if use_.face_id == piece.face.id {
+                            return false;
+                        }
+                        let same = (points_same_3d(use_.start, start, tol.linear)
+                            && points_same_3d(use_.end, end, tol.linear))
+                            || (points_same_3d(use_.start, end, tol.linear)
+                                && points_same_3d(use_.end, start, tol.linear));
+                        same && points_same_3d(use_.middle, middle, tol.linear)
+                    });
+                    let mut own = 0usize;
+                    let mut other = 0usize;
+                    for use_ in matching {
+                        if use_.operand == piece.operand {
+                            own += 1;
+                        } else {
+                            other += 1;
+                        }
+                    }
+                    *histogram.entry((own, other)).or_insert(0) += 1;
+                }
+                let shape: Vec<String> = histogram
+                    .iter()
+                    .map(|((own, other), count)| format!("自分 {own}／相手 {other}: {count} 本"))
+                    .collect();
+                // **判定は、2つのデータで確かめてから書きました**（4-318）。
+                //
+                // 最初は「他が 2 回なら非多様体」と書いて、**自作の立体
+                // 104 個中 28 個に反証されました**——どれも門は緑です。
+                // 原因は**自分側と相手側を混ぜた**ことでした。「自分 1／
+                // 相手 1」は他が 2 回ですが、**健全な形**です。
+                //
+                // 区別して数え直すと、緑の 104 個は**例外なく
+                // 「相手 ≤ 1」かつ「自分＋相手 ≥ 1」**でした。
+                // `linkrods.step` で外れるのは **6 本だけ**——面 269 の
+                // 「自分 0／相手 2」が 3 本（和の非多様体 9 回ぶん、
+                // 3 本 × 3 回）と、面 441 の「自分 0／相手 0」が 3 本
+                // （差と積で浮く 3 本）です。
+                //
+                // **1つの立体で決めた規則は次で外れます**（4-115）。
+                // ここは 2 つで確かめましたが、**まだ 2 つです。**
+                let crowded = histogram.keys().any(|(_, other)| *other >= 2);
+                let lonely = histogram.keys().any(|(own, other)| *own + *other == 0);
+                let verdict = if crowded {
+                    "**相手が 2 枚——縁が 3 回使われます**"
+                } else if lonely {
+                    "**誰も使っていない縁があります**"
+                } else {
+                    "閉じます"
+                };
+                let total: usize = histogram
+                    .iter()
+                    .map(|((own, other), count)| (own + other + 1) * count)
+                    .sum();
+                eprintln!(
+                    "HOLEWHY {:?} 面 {} の内側の輪 {loop_index}（{} 本）: {}（縁も入れた延べ {total} 回）→ {verdict}",
+                    piece.operand,
+                    piece.face.id,
+                    wire.edges.len(),
+                    shape.join("、")
+                );
+            }
+        }
+    }
+
     let mut matched_edge_pair_count = 0;
     let mut unmatched_edge_use_count = 0;
     let mut non_manifold_edge_use_count = 0;
