@@ -798,6 +798,23 @@ impl BrepIntersectionBuilder {
         // そのまま縫うと同じ稜を4回使うことになるので、ここで解消する。
         resolve_coincident_face_pieces(&mut selected_face_pieces, tol);
 
+        // **縁の使われ方が揃わない穴を畳む**（4-319）。
+        //
+        // 4-306 が刻んだ穴のうち、**相手と噛み合っていないもの**がここで
+        // 落ちます。7 つの門すべてで測ってから既定にしました
+        // ——`ZENITH_KEEP_MIXED_HOLES=1` で止められます。
+        //
+        // | | 4-306 の直前 | 4-306〜4-318 | ここ |
+        // | :--- | :--- | :--- | :--- |
+        // | 相手のいない稜（和／差／積） | 56／56／48 | 47／50／42 | **48／48／42** |
+        // | **非多様体** | 0／0／0 | **9**／0／0 | **0／0／0** |
+        //
+        // **4-306 が持ち込んだ重い失敗（4-316）が消え**、軽いほうも
+        // 4-306 の直前より減っています。
+        if std::env::var_os("ZENITH_KEEP_MIXED_HOLES").is_none() {
+            drop_mixed_hole_rims(&mut selected_face_pieces, tol);
+        }
+
         // 隣り合う面の片方だけが辺の途中で切られていると、辺の長さが食い違って
         // 縫合が合わない。相手が持つ頂点を境界辺へ刻み込んで対応させる。
         // 面の形は変わらず、境界に頂点が増えるだけ。
@@ -4869,10 +4886,23 @@ pub struct HoleRimUseShape {
 }
 
 impl HoleRimUseShape {
-    /// **輪の中で形が揃っていないか。** これが、いまのところ唯一
-    /// 生き残っている見分け方です（4-318）。
+    /// **輪の中で、縁の使われ方の「合計」が揃っていないか**（4-319）。
+    ///
+    /// **誰が相手かは揃っていなくて構いません。** 4-318 では (自分, 相手) の
+    /// 組で揃っているかを見ていましたが、**通っている演算に反例があります**
+    /// ——`tilted_cutter_test` の `revolved_ring / tilted drill / Difference`
+    /// は「自分 0／相手 1」3 本＋「自分 1／相手 0」3 本で、**組は混ざるのに
+    /// 合計はどの稜も 1** です。これを畳むと、**通っていた差が断られます**。
+    ///
+    /// 壊れている 2 つは、**合計が揃いません**——`linkrods.step` の
+    /// 面 269 は {1, 2}（3 回使われる稜が 3 本）、面 441 は {0, 1}
+    /// （誰も使わない稜が 3 本）。
     pub fn is_mixed(&self) -> bool {
-        self.histogram.len() > 1
+        let mut totals = std::collections::BTreeSet::new();
+        for (own, other) in self.histogram.keys() {
+            totals.insert(own + other);
+        }
+        totals.len() > 1
     }
 }
 
@@ -4945,6 +4975,78 @@ pub fn hole_rim_use_shapes(
         }
     }
     shapes
+}
+
+/// **縁の使われ方が揃わない穴を畳む**（4-319。`ZENITH_KEEP_MIXED_HOLES=1` で止まる）。
+///
+/// 健全な穴の縁は、**どの稜も同じ回数だけ**他に使われます（4-318、4-319）。
+/// **誰が相手かは揃っていなくて構いません**——`tilted_cutter_test` の
+/// `revolved_ring / tilted drill` は「自分 0／相手 1」と「自分 1／相手 0」が
+/// 混ざりますが、**合計はどの稜も 1** で、通っています。そこを畳むと
+/// **通っていた差が断られました**（実測）。
+///
+/// 揃わないのは `linkrods.step` の 2 個だけで、**その 2 個が壊れている
+/// 2 個**です——面 269 は合計 {1, 2}（3 回使われる稜が 3 本＝和の非多様体
+/// 9 回）、面 441 は合計 {0, 1}（誰も使わない稜が 3 本＝差と積で浮く 3 本）。
+///
+/// 畳むというのは、**刻んだ穴を無かったことにする**ことです。穴を持つ面から
+/// 内側のワイヤを外し、**その輪を外周として持つ相方の片**も一緒に落とします
+/// ——片方だけ外すと、相方が宙に浮きます。
+fn drop_mixed_hole_rims(pieces: &mut Vec<SelectedBooleanFacePiece>, tol: &Tolerance) {
+    let mixed: Vec<(u64, usize)> = hole_rim_use_shapes(pieces, tol)
+        .into_iter()
+        .filter(|shape| shape.is_mixed())
+        .map(|shape| (shape.face_id, shape.loop_index))
+        .collect();
+    if mixed.is_empty() {
+        return;
+    }
+
+    // 落とす前に、輪の姿を控えます。**相方はこれで見分けます。**
+    let mut rims: Vec<Vec<Point3>> = Vec::new();
+    for (face_id, loop_index) in &mixed {
+        if let Some(piece) = pieces.iter().find(|piece| piece.face.id == *face_id) {
+            if let Some(wire) = piece.face.inner_wires.get(*loop_index) {
+                rims.push(
+                    wire.edges
+                        .iter()
+                        .map(|oriented| oriented.evaluate_normalized(0.5))
+                        .collect(),
+                );
+            }
+        }
+    }
+
+    for (face_id, loop_index) in mixed.iter().rev() {
+        if let Some(piece) = pieces.iter_mut().find(|piece| piece.face.id == *face_id) {
+            if *loop_index < piece.face.inner_wires.len() {
+                piece.face.inner_wires.remove(*loop_index);
+            }
+        }
+    }
+
+    // **相方を落とします。** 外周の中点が、畳んだ輪の中点と全部一致する片。
+    pieces.retain(|piece| {
+        let middles: Vec<Point3> = piece
+            .face
+            .outer_wire
+            .edges
+            .iter()
+            .map(|oriented| oriented.evaluate_normalized(0.5))
+            .collect();
+        !rims.iter().any(|rim| {
+            rim.len() == middles.len()
+                && rim.iter().all(|point| {
+                    middles
+                        .iter()
+                        .any(|middle| points_same_3d(*middle, *point, tol.linear))
+                })
+        })
+    });
+
+    if std::env::var_os("ZENITH_HOLE_WHY").is_some() {
+        eprintln!("HOLEDROP 混ざった穴を {} 個畳みました", mixed.len());
+    }
 }
 
 fn diagnose_selected_face_stitching(
