@@ -1855,7 +1855,36 @@ impl BrepIntersectionBuilder {
                     // `linkrods.step` では 12 本が 4 つの輪に分かれており、
                     // まとめて渡すと「Cap edges do not form a continuous
                     // loop」で必ず落ちます。**輪ごとに試さないと当たりません。**
-                    match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
+                    //
+                    // **輪ごとに渡すのは、内側の輪でも同じです**（4-306）。
+                    // 下の「最後の受け皿」は `split_by_interior_loop` を
+                    // 呼んでいましたが、**交線を丸ごと**渡していました。
+                    // `linkrods.step` では 32 本が 4 つの輪に分かれており、
+                    // `order_closed_loop` は必ず落ちます。**4-304 で
+                    // `split_by_chain` に入れたのと同じ誤りが、こちらに
+                    // 残っていました。**
+                    //
+                    // 閉じた輪が面の内部で閉じていることは測ってあります
+                    // （4-305。境界まで 0.345 ちょうど）。**切り込みでは
+                    // なく穴**なので、ここで拾います。
+                    let outcome = match crate::FaceSplitter::split_by_chain(&current_face, chain, tol)
+                    {
+                        Err(reason) => {
+                            match crate::FaceSplitter::split_by_interior_loop(
+                                &current_face,
+                                chain,
+                                tol,
+                            ) {
+                                // **元の理由のまま断ります。** 内側の輪でも
+                                // ないなら、「開けなかった」を別の理由に
+                                // 化けさせません。
+                                Err(_) => Err(reason),
+                                ok => ok,
+                            }
+                        }
+                        ok => ok,
+                    };
+                    match outcome {
                         Ok((pieces, report))
                             if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
                         {
