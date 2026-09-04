@@ -5069,6 +5069,37 @@ fn diagnose_selected_face_stitching(
                             face.face.outer_wire.edges.len(),
                             face.face.inner_wires.len()
                         );
+                        // **その面の巡回をそのまま出す口**（`ZENITH_FACE_DUMP=269`。
+                        // 4-317）。本数と種類だけでは、**割られるべきものが
+                        // 巻き込まれている**のか、**もともとそういう形**なのかが
+                        // 分かりません。要約ではなく**点の並び**が要ります
+                        // （4-304 で同じことを学びました）。
+                        if std::env::var("ZENITH_FACE_DUMP")
+                            .ok()
+                            .and_then(|value| value.parse::<u64>().ok())
+                            == Some(use_.face_id)
+                        {
+                            for (index, oriented) in
+                                face.face.outer_wire.edges.iter().enumerate()
+                            {
+                                let start = oriented.start_vertex().point;
+                                let end = oriented.end_vertex().point;
+                                eprintln!(
+                                    "FACEDUMP 外周 {index}: ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})",
+                                    start.x, start.y, start.z, end.x, end.y, end.z
+                                );
+                            }
+                            for (loop_index, wire) in face.face.inner_wires.iter().enumerate() {
+                                for (index, oriented) in wire.edges.iter().enumerate() {
+                                    let start = oriented.start_vertex().point;
+                                    let end = oriented.end_vertex().point;
+                                    eprintln!(
+                                        "FACEDUMP 内側 {loop_index}-{index}: ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})",
+                                        start.x, start.y, start.z, end.x, end.y, end.z
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
