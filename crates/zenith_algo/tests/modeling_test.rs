@@ -6371,3 +6371,84 @@ fn test_g2_surface_blend() {
     let p_mid = g2_blend.evaluate(0.5, 0.5);
     assert!(p_mid.y > 0.0 && p_mid.y < 10.0);
 }
+
+
+/// 穴の縁の「揃っているか」が、**わざと壊すと落ちる**ことを押さえます（4-318）。
+///
+/// この見分け方は、**3 回外したあとの 4 つ目**です。緑の門で輪 944 個が
+/// 揃い、`linkrods.step` の壊れている 2 個だけが混ざる、というところまでは
+/// 測りましたが、**それは「いま揃っている」を確かめただけ**です。
+/// **揃わなくなったときに気づけるか**は、別の問いです。
+///
+/// **通ることを確かめただけのテストは、通り続けるだけです**（4-301）。
+/// ここでは、選ばれた面片を**1枚落として**、混ざりが出ることを見ます。
+#[test]
+fn a_hole_rim_is_uniform_until_a_piece_goes_missing() {
+    let tol = Tolerance::default();
+    // 板を貫く穴。円柱は XY 原点中心なので、箱の真ん中まで動かして
+    // **完全に貫通**させます——四分の一だけ噛んでいる置き方では、
+    // 内側のワイヤ（穴）ができません。
+    let plate = zenith_algo::PrimitiveBuilder::make_box(10.0, 10.0, 4.0).unwrap();
+    let drill = zenith_algo::BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_cylinder(2.0, 10.0).unwrap(),
+        zenith_math::Vec3::new(5.0, 5.0, -3.0),
+    );
+
+    let assembly = zenith_algo::BrepIntersectionBuilder::collect_boolean_shell_assembly(
+        &plate,
+        &drill,
+        zenith_algo::BooleanOpType::Difference,
+        &tol,
+    );
+    let pieces = assembly.assembly.selected_face_pieces;
+
+    let shapes = zenith_algo::hole_rim_use_shapes(&pieces, &tol);
+    assert!(
+        !shapes.is_empty(),
+        "板を貫いたのだから、穴の縁が1つは出るはずです。0 なら測る対象が\
+         無く、下の反証も意味を持ちません"
+    );
+    assert!(
+        shapes.iter().all(|shape| !shape.is_mixed()),
+        "健全な差では、穴の縁は全部の稜が同じ使われ方をします: {:?}",
+        shapes
+            .iter()
+            .filter(|shape| shape.is_mixed())
+            .collect::<Vec<_>>()
+    );
+
+    // **わざと壊します。** 穴の縁を使っている面片を1枚落とすと、その輪の
+    // 稜のうち**落とした面が触れていた分だけ**数が減り、輪の中で形が
+    // 揃わなくなります。ここが落ちなければ、この見分け方は何も見ていません。
+    let rim = shapes
+        .iter()
+        .find(|shape| shape.edge_count >= 2)
+        .expect("縁が2本以上の穴が要ります");
+    let rim_face_id = rim.face_id;
+    let victim = pieces
+        .iter()
+        .position(|piece| {
+            piece.face.id != rim_face_id
+                && piece.face.outer_wire.edges.iter().any(|oriented: &zenith_topo::OrientedEdge| {
+                    let middle = oriented.evaluate_normalized(0.5);
+                    pieces
+                        .iter()
+                        .filter(|other| other.face.id == rim_face_id)
+                        .flat_map(|other| other.face.inner_wires.iter())
+                        .flat_map(|wire| wire.edges.iter())
+                        .any(|rim_edge: &zenith_topo::OrientedEdge| {
+                            (rim_edge.evaluate_normalized(0.5) - middle).norm() <= tol.linear
+                        })
+                })
+        })
+        .expect("穴の縁に触れている面片が1枚は要ります");
+
+    let mut broken = pieces.clone();
+    broken.remove(victim);
+    let after = zenith_algo::hole_rim_use_shapes(&broken, &tol);
+    assert!(
+        after.iter().any(|shape| shape.is_mixed()),
+        "面片を1枚落としても混ざりが出ないなら、この見分け方は壊れ方を\
+         見ていません（4-318）。落とした面片: {victim}、縁: {rim:?}"
+    );
+}

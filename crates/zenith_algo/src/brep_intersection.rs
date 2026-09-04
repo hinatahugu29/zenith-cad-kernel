@@ -4855,6 +4855,98 @@ fn keep_piece(
     }
 }
 
+/// 穴（内側のワイヤ）の縁1本が、**他の面片に何回使われているか**の分布。
+///
+/// 自分側と相手側は**分けて数えます**。混ぜると外します（下の注記）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct HoleRimUseShape {
+    pub operand: BooleanOperand,
+    pub face_id: u64,
+    pub loop_index: usize,
+    pub edge_count: usize,
+    /// `(自分側の回数, 相手側の回数) -> その形の稜の本数`。
+    pub histogram: std::collections::BTreeMap<(usize, usize), usize>,
+}
+
+impl HoleRimUseShape {
+    /// **輪の中で形が揃っていないか。** これが、いまのところ唯一
+    /// 生き残っている見分け方です（4-318）。
+    pub fn is_mixed(&self) -> bool {
+        self.histogram.len() > 1
+    }
+}
+
+/// 選ばれた面片の**穴の縁**を、稜ごと・自分側と相手側に分けて数える（4-318）。
+///
+/// **ここに着くまでに 3 回外しました。どれも「一致したところで止めた」形**
+/// です。
+///
+/// 1. **輪ごとに合計した。** `linkrods.step` の面 269 は「相手側 7 回」＝
+///    平均 1.75 回で、健全に見えます。中身は「2 回が 3 本、1 回が 1 本」
+///    でした。**合計は、混ざったものを隠します。**
+/// 2. **自分側と相手側を混ぜた。**「他が 2 回なら非多様体」は、
+///    `contact_placement_probe`（門は緑）の 104 個中 **28 個**に反証されました
+///    ——**「自分 1／相手 1」は健全**です。**直したつもりで、前より粗い
+///    数え方にしていました。**
+/// 3. **「自分 0／相手 2」を犯人とした。** `linkrods` では**数まで一致**します
+///    （3 本 × 3 回 = 和の非多様体 9 回）。**そこで止めていたら入れていました。**
+///    他の門を見たら、**緑のデータに 48 個**ありました（`screw` 4、
+///    `rechained` 8、`foreign_cross_pair` 36）。
+///
+/// **生き残ったのは [`HoleRimUseShape::is_mixed`] だけ**です。5 つの緑の門で
+/// **輪 944 個すべてが揃い**（`contact` 104、`rechained` 147、
+/// `foreign_cross_pair` 423、`scale_sweep` 252、`screw` 18。**混ざり 0**）、
+/// `linkrods.step` は 10 個中 **2 個が混ざり**——**その 2 個が壊れている 2 個**
+/// です。
+///
+/// **944 対 2 でも規則ではありません**（4-115）。動きは変えていません。
+pub fn hole_rim_use_shapes(
+    pieces: &[SelectedBooleanFacePiece],
+    tol: &Tolerance,
+) -> Vec<HoleRimUseShape> {
+    let edge_uses = collect_stitch_edge_uses(pieces);
+    let mut shapes = Vec::new();
+    for piece in pieces.iter() {
+        for (loop_index, wire) in piece.face.inner_wires.iter().enumerate() {
+            let mut histogram: std::collections::BTreeMap<(usize, usize), usize> =
+                std::collections::BTreeMap::new();
+            for oriented in wire.edges.iter() {
+                let start = oriented.start_vertex().point;
+                let end = oriented.end_vertex().point;
+                let middle = oriented.evaluate_normalized(0.5);
+                let mut own = 0usize;
+                let mut other = 0usize;
+                for use_ in edge_uses.iter() {
+                    if use_.face_id == piece.face.id {
+                        continue;
+                    }
+                    let same = (points_same_3d(use_.start, start, tol.linear)
+                        && points_same_3d(use_.end, end, tol.linear))
+                        || (points_same_3d(use_.start, end, tol.linear)
+                            && points_same_3d(use_.end, start, tol.linear));
+                    if !same || !points_same_3d(use_.middle, middle, tol.linear) {
+                        continue;
+                    }
+                    if use_.operand == piece.operand {
+                        own += 1;
+                    } else {
+                        other += 1;
+                    }
+                }
+                *histogram.entry((own, other)).or_insert(0) += 1;
+            }
+            shapes.push(HoleRimUseShape {
+                operand: piece.operand,
+                face_id: piece.face.id,
+                loop_index,
+                edge_count: wire.edges.len(),
+                histogram,
+            });
+        }
+    }
+    shapes
+}
+
 fn diagnose_selected_face_stitching(
     pieces: &[SelectedBooleanFacePiece],
     tol: &Tolerance,
@@ -4863,96 +4955,29 @@ fn diagnose_selected_face_stitching(
 
     // **穴の縁が、他に何回使われているか**（`ZENITH_HOLE_WHY=1`。4-318）。
     //
-    // 4-317 で、和の非多様体 9 本が **4-306 の刻んだ穴そのもの**だと分かり
-    // ました。**穴の縁は、それ自体で 1 回**使われます。閉じた殻なら、
-    // **他がちょうど 1 回**使って 2 回になります。**他が 2 回使っていれば
-    // 3 回**——非多様体です。
-    //
-    // **数える単位は稜です。輪ではありません。** 最初に輪ごとの合計で
-    // 数えて外しました——A 269 は 4 本で「相手側 7 回」となり、平均すれば
-    // 1.75 回で健全に見えます。**中身は「2 回が 3 本、1 回が 1 本」**で、
-    // 3 本が非多様体でした。**合計は、混ざったものを隠します。**
-    //
-    // ここは**数えるだけ**です。判断（開けない・畳む・別の場所で開ける）は、
-    // この形が**別の立体でも同じか**を確かめてからにしてください
-    // （4-115。1つの立体で決めた規則は、次の立体で外れます）。
+    // 数え方は [`hole_rim_use_shapes`] にあります。**そこに書いた注記が本体**
+    // です——ここまでに 3 回外しており、どの外し方も「一致したところで
+    // 止めた」形でした。
     if std::env::var_os("ZENITH_HOLE_WHY").is_some() {
-        for piece in pieces.iter() {
-            for (loop_index, wire) in piece.face.inner_wires.iter().enumerate() {
-                let mut histogram: std::collections::BTreeMap<(usize, usize), usize> =
-                    std::collections::BTreeMap::new();
-                for oriented in wire.edges.iter() {
-                    let start = oriented.start_vertex().point;
-                    let end = oriented.end_vertex().point;
-                    let middle = oriented.evaluate_normalized(0.5);
-                    let matching = edge_uses.iter().filter(|use_| {
-                        if use_.face_id == piece.face.id {
-                            return false;
-                        }
-                        let same = (points_same_3d(use_.start, start, tol.linear)
-                            && points_same_3d(use_.end, end, tol.linear))
-                            || (points_same_3d(use_.start, end, tol.linear)
-                                && points_same_3d(use_.end, start, tol.linear));
-                        same && points_same_3d(use_.middle, middle, tol.linear)
-                    });
-                    let mut own = 0usize;
-                    let mut other = 0usize;
-                    for use_ in matching {
-                        if use_.operand == piece.operand {
-                            own += 1;
-                        } else {
-                            other += 1;
-                        }
-                    }
-                    *histogram.entry((own, other)).or_insert(0) += 1;
-                }
-                let shape: Vec<String> = histogram
-                    .iter()
-                    .map(|((own, other), count)| format!("自分 {own}／相手 {other}: {count} 本"))
-                    .collect();
-                // **判定に着くまでに 3 回外しました**（4-318）。
-                //
-                // 1. **輪ごとに合計した。** 面 269 は「相手側 7 回」＝平均
-                //    1.75 回で健全に見えます。中身は「2 回が 3 本、1 回が
-                //    1 本」でした。**合計は、混ざったものを隠します。**
-                // 2. **自分側と相手側を混ぜた。**「他が 2 回なら非多様体」は、
-                //    `contact_placement_probe`（緑）の 104 個中 28 個に
-                //    反証されました。**「自分 1／相手 1」は健全**です。
-                // 3. **「自分 0／相手 2」なら非多様体、とした。** これも
-                //    外れです——`screw.step` に 4 個、`rechained` に 8 個、
-                //    `foreign_cross_pair` に 36 個あり、**どれも門は緑**です。
-                //
-                // **生き残ったのは「揃っているか」だけ**です。5 つの緑の門で
-                // **輪 944 個すべてが1種類の形**（`contact` 104、`rechained` 147、
-                // `foreign_cross_pair` 423、`scale_sweep` 252、`screw` 18。
-                // **混ざり 0**）。`linkrods.step` は 10 個中 **2 個が混ざり**、
-                // **その 2 個が壊れている 2 個**です。
-                //
-                // - 面 269: 「自分 0／相手 1」1 本 ＋「自分 0／相手 2」3 本
-                //   → 和の非多様体 **3 本 × 3 回 = 9 回**（4-316 の実測と一致）
-                // - 面 441: 「自分 0／相手 0」3 本 ＋「自分 0／相手 1」1 本
-                //   → 差と積で浮く **3 本**（4-317）
-                //
-                // **944 対 2 で残っていますが、それでも規則ではありません。**
-                // **3 回外したあとの4つ目**です。動きは変えていません（4-115）。
-                let mixed = histogram.len() > 1;
-                let verdict = if mixed {
+        for shape in hole_rim_use_shapes(pieces, tol) {
+            let spread: Vec<String> = shape
+                .histogram
+                .iter()
+                .map(|((own, other), count)| format!("自分 {own}／相手 {other}: {count} 本"))
+                .collect();
+            eprintln!(
+                "HOLEWHY {:?} 面 {} の内側の輪 {}（{} 本）: {} → {}",
+                shape.operand,
+                shape.face_id,
+                shape.loop_index,
+                shape.edge_count,
+                spread.join("、"),
+                if shape.is_mixed() {
                     "**縁の形が混ざっています**"
                 } else {
                     "揃っています"
-                };
-                let total: usize = histogram
-                    .iter()
-                    .map(|((own, other), count)| (own + other + 1) * count)
-                    .sum();
-                eprintln!(
-                    "HOLEWHY {:?} 面 {} の内側の輪 {loop_index}（{} 本）: {}（縁も入れた延べ {total} 回）→ {verdict}",
-                    piece.operand,
-                    piece.face.id,
-                    wire.edges.len(),
-                    shape.join("、")
-                );
-            }
+                }
+            );
         }
     }
 
