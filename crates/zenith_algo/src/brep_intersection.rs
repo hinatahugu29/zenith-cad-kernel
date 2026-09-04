@@ -5059,7 +5059,7 @@ fn diagnose_selected_face_stitching(
                         .find(|candidate| candidate.face.id == use_.face_id)
                     {
                         eprintln!(
-                            "STITCHWHY   面 {} は {}、外周の稜 {} 本、内側の輪 {} 個",
+                            "STITCHWHY   面 {} は {}、外周の稜 {} 本、内側の輪 {} 個、位置 {:?}、向き反転 {}",
                             use_.face_id,
                             match &face.face.geometry {
                                 FaceGeometry::Plane(_) => "平面",
@@ -5067,7 +5067,9 @@ fn diagnose_selected_face_stitching(
                                 _ => "その他",
                             },
                             face.face.outer_wire.edges.len(),
-                            face.face.inner_wires.len()
+                            face.face.inner_wires.len(),
+                            face.location,
+                            face.reverse_orientation
                         );
                         // **その面の巡回をそのまま出す口**（`ZENITH_FACE_DUMP=269`。
                         // 4-317）。本数と種類だけでは、**割られるべきものが
