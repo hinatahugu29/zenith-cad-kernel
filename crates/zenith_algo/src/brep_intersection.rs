@@ -1683,6 +1683,64 @@ impl BrepIntersectionBuilder {
             faces = next_faces;
         }
 
+        // **1本ずつの段を出たところで、何が残っているかを出します**
+        // （`ZENITH_LEFTOVER_WHY=1`。4-315）。
+        //
+        // 下の2つの鎖の段は、どちらも **`applied_split_count == 0` のとき
+        // だけ**走ります。**少しでも割れた面は、どの鎖の段にも来ません。**
+        // 実測（`linkrods.step` の切り口の平面）でそうなっており、
+        // **閉じた輪を穴として入れる機会が一度もありません**でした。
+        //
+        // ここの1行で、その面が**どちらへ行くか**が決まります。
+        if std::env::var_os("ZENITH_LEFTOVER_WHY").is_some() {
+            eprintln!(
+                "LEFTOVERWHY {} 面: 交線 {} 本 → 当たった {}、当たらなかった {}、片 {} 枚 → {}",
+                if matches!(face.geometry, FaceGeometry::Plane(_)) {
+                    "平面"
+                } else {
+                    "曲面"
+                },
+                split_edges.len(),
+                applied_split_count,
+                leftover.len(),
+                faces.len(),
+                if applied_split_count == 0 {
+                    "鎖の段へ"
+                } else {
+                    "**鎖の段へ行きません**（少しでも割れたので、ここで返ります）"
+                }
+            );
+        }
+
+        // **余りを鎖にまとめて、穴として入るかを見ます**（4-315）。
+        //
+        // ここは**測るだけ**です。入れて測ったら**1バイトも動きません**
+        // でした（相手のいない稜 47/50/46、閉じた円 4/4/4、いずれも素と
+        // 同じ）。**なぜ入らないのかを残します。**
+        if std::env::var_os("ZENITH_LEFTOVER_WHY").is_some() && !leftover.is_empty() {
+            let chains = group_edges_into_chains(&deduplicate_split_edges(&leftover, tol), tol);
+            for chain in &chains {
+                if chain.len() < 2 {
+                    continue;
+                }
+                for (piece_index, current_face) in faces.iter().enumerate() {
+                    match crate::FaceSplitter::split_by_interior_loop(current_face, chain, tol) {
+                        Ok((pieces, report)) => eprintln!(
+                            "LEFTOVERWHY   余り {} 本 → 片 {piece_index}: 片 {} 枚、面積残差 {:.3e}",
+                            chain.len(),
+                            pieces.len(),
+                            report.area_residual
+                        ),
+                        Err(reason) => eprintln!(
+                            "LEFTOVERWHY   余り {} 本 → 片 {piece_index}: {}",
+                            chain.len(),
+                            reason.chars().take(80).collect::<String>()
+                        ),
+                    }
+                }
+            }
+        }
+
         // 1本ずつではどれも面を横断できなかった平面に限り、内部の角で繋がった
         // 交線を鎖にまとめて切り込みとして試す。面の境界に沿って走る交線は
         // 切り込みではないので、鎖に混ぜる前に外す。
