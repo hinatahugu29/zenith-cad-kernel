@@ -2293,6 +2293,36 @@ fn split_planar_face_by_interior_loops(
     }
 
     let extraction = collect_closed_intersection_edge_loops(split_edges, tol);
+    // **輪に属さない稜が1本でもあると、丸ごと諦めます**（4-310 で測る口を
+    // 足しました）。交線に**閉じた輪と開いた鎖が混ざる**と、輪のほうも
+    // 入りません。`linkrods.step` がそれに当たるかを、まず出します。
+    if std::env::var_os("ZENITH_SPLIT_WHY").is_some() {
+        eprintln!(
+            "PLANARLOOPWHY 平面の内側の輪: 稜 {} 本 → 輪 {} 個、輪に入らなかった稜 {} 本{}",
+            split_edges.len(),
+            extraction.loops.len(),
+            extraction.skipped_edge_count,
+            if extraction.loops.is_empty() {
+                "（輪が無いので諦めます）"
+            } else if extraction.skipped_edge_count > 0 {
+                "（**輪はあるのに、余りがあるので丸ごと諦めます**）"
+            } else {
+                ""
+            }
+        );
+    }
+    // **余りがあったら、丸ごと諦めます。** ここを緩めてはいけません
+    // （4-310 で測りました）。
+    //
+    // `linkrods.step` の切り口の平面は **輪 2 個・余り 10〜12 本**で、
+    // **輪があるのに1つも入りません**。それが 4-309 の「相手のいない
+    // 閉じた円」の相手が居ない理由です。**そこで緩めて測ったら、悪く
+    // なりました**——相手のいない稜 47/50/46 → **55/56/54**、当たった
+    // 分割 37 → **29**。
+    //
+    // **ここは「輪だけ入れて早く返る」ので、余った鎖が捨てられます。**
+    // 直すなら、緩めるのではなく**余った鎖も同じ流れで当てる**ように
+    // してください。
     if extraction.loops.is_empty() || extraction.skipped_edge_count > 0 {
         return None;
     }
