@@ -102,6 +102,23 @@ CAD カーネルは長らく「個人が手を出す領域ではない」とさ�
 
 置き換えを名乗るには、まだ足りません。**足りない場所は、上に書いたとおりです。**
 
+## どの文書が何なのか
+
+**このリポジトリは、計画と実測をはっきり分けています。** 混ぜると、読む人には
+全部が「できている」に見えるからです。
+
+| 文書 | 何が書いてあるか | 計画／実測 |
+| :--- | :--- | :--- |
+| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 303 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
+| [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) | **主張を自分で測り直す手順。**どのコマンドで何を数えたか | **実測** |
+| [`KERNEL_SPECS.md`](KERNEL_SPECS.md) | いまの仕様と実装範囲 | 実測 |
+| [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) | 機能一覧と制限 | 実測 |
+| [`ROADMAP.md`](ROADMAP.md) | **これから何を作るかの地図** | **計画** |
+| [`ZENITH_KERNEL_EXPLAINER.md`](ZENITH_KERNEL_EXPLAINER.md) | **初日（2026/08/19）に描いた絵。**当たった所と外れた所が分かる | **計画（記録として保存）** |
+| [`FREECAD_VALIDATION_REPORT.md`](FREECAD_VALIDATION_REPORT.md) | 他カーネル（FreeCAD / OCCT）との突き合わせ | 実測 |
+
+**数字が食い違っていたら、`HANDOVER.md` を信じてください。**
+
 ---
 
 ## 作業案内（ここから下は、手を動かす人向けです）
