@@ -140,7 +140,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 
 | 何を測ったか | 結果 | 再現コマンド |
 | :--- | :--- | :--- |
-| ワークスペース全テスト | **114 バイナリ / 629 テスト 100% 合格**（0 failed, 0 ignored。2026/08/28 夕の実測） | `cargo test --release --workspace --exclude zenith_py` |
+| ワークスペース全テスト | **137 バイナリ / 695 テスト 100% 合格**（0 failed, 0 ignored, 警告 0。2026/09/04 実測。8/28 は 114 / 629 でした） | `cargo test --release --workspace --exclude zenith_py` |
 | コンパイラ警告 | **0** | `cargo build --release --workspace --exclude zenith_py` |
 | ビルダー監査 | **24/24 クリーン**（解析解との差は最悪 6.3e-13、歯車 1.99e-9） | `--example builder_audit` |
 | 平面を NURBS で持つ面 | **全23ビルダーで0枚** | `--example planar_face_audit` |
