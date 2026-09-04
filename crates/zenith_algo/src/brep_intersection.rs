@@ -5035,9 +5035,10 @@ fn diagnose_selected_face_stitching(
                 if std::env::var_os("ZENITH_STITCH_WHY").is_some() {
                     let use_ = &edge_uses[i];
                     eprintln!(
-                        "STITCHWHY non-manifold x{} {:?} ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9})",
+                        "STITCHWHY non-manifold x{} {:?} 面 {} ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9}) mid ({:.9} {:.9} {:.9})",
                         count + 1,
                         use_.operand,
+                        use_.face_id,
                         use_.start.x,
                         use_.start.y,
                         use_.start.z,
@@ -5048,6 +5049,27 @@ fn diagnose_selected_face_stitching(
                         use_.middle.y,
                         use_.middle.z
                     );
+                    // **その面の素性も出します**（4-316）。3回使われている
+                    // 稜そのものより、**どちらの面が余分か**が知りたいので、
+                    // 面の種類と外周の稜の本数を添えます。相手が何枚に
+                    // 割れているかで、一致の判定（1枚 対 1枚）が届くか
+                    // どうかが決まります。
+                    if let Some(face) = pieces
+                        .iter()
+                        .find(|candidate| candidate.face.id == use_.face_id)
+                    {
+                        eprintln!(
+                            "STITCHWHY   面 {} は {}、外周の稜 {} 本、内側の輪 {} 個",
+                            use_.face_id,
+                            match &face.face.geometry {
+                                FaceGeometry::Plane(_) => "平面",
+                                FaceGeometry::Nurbs(_) => "NURBS",
+                                _ => "その他",
+                            },
+                            face.face.outer_wire.edges.len(),
+                            face.face.inner_wires.len()
+                        );
+                    }
                 }
             }
         }
