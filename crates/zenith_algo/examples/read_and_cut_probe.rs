@@ -192,7 +192,14 @@ fn main() {
             let only_divisions: Option<usize> = std::env::var("ZENITH_READ_CUT_DIVISIONS")
                 .ok()
                 .and_then(|value| value.parse().ok());
-            for divisions in [8usize, 12, 16, 20, 24, 32, 48] {
+            // **自作の立体と同じ 10 通りにします**（4-347）。
+            //
+            // ここは長いあいだ 7 通り（8・12・16・20・24・32・48）でした。
+            // **`mesh_density_probe` は自作の立体を 10 通りで測っています**
+            // ——**6・10・64 を、読んだファイルでは一度も測っていません**
+            // でした。**測り方が非対称なら、片方だけ緑に見えます**
+            // （4-296 の「24 が緑だったのは偶然」と同じ穴）。
+            for divisions in [6usize, 8, 10, 12, 16, 20, 24, 32, 48, 64] {
                 if let Some(want) = only_divisions {
                     if divisions != want {
                         continue;
