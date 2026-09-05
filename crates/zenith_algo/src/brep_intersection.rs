@@ -588,6 +588,39 @@ impl BrepIntersectionBuilder {
         let mut edges_by_face_a: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
         let mut edges_by_face_b: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
 
+        // **交線が、どの面の組から出たか**（`ZENITH_CAND_WHY=1`。4-321）。
+        //
+        // 縫合の側から「相手のいない稜」を追うと、**同じ2点のあいだに弧と
+        // ほぼ直線が並んでいる**ところまでは見えますが（4-320）、**それぞれを
+        // 誰が出したか**が分かりません。直線を作る道は3つあり、**どれも正しい
+        // 場面があります**——平面が円柱の母線を含めば、交線は本当に直線です。
+        // **面の組が分かるまで、原因は書けません。**
+        //
+        // 中点も出します。**端点だけでは、同じ2点を結ぶ別々の弧を見分けられ
+        // ません**（4-65。4-320 でまた踏みました）。
+        if std::env::var_os("ZENITH_CAND_WHY").is_some() {
+            for candidate in edge_candidates.iter() {
+                let start = candidate.edge.start_vertex.point;
+                let end = candidate.edge.end_vertex.point;
+                let middle = candidate.edge.curve.evaluate(
+                    (candidate.edge.curve.param_range().0
+                        + candidate.edge.curve.param_range().1)
+                        * 0.5,
+                );
+                let chord_middle = Point3::from((start.coords + end.coords) * 0.5);
+                eprintln!(
+                    "CANDWHY A面{} x B面{}: ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6}) mid ({:.6} {:.6} {:.6}) 弦 {:.6} 膨らみ {:.6}",
+                    candidate.face_a_index,
+                    candidate.face_b_index,
+                    start.x, start.y, start.z,
+                    end.x, end.y, end.z,
+                    middle.x, middle.y, middle.z,
+                    (end - start).norm(),
+                    (middle - chord_middle).norm()
+                );
+            }
+        }
+
         for candidate in edge_candidates {
             edges_by_face_a
                 .entry(candidate.face_a_index)
