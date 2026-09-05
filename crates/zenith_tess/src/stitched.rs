@@ -442,6 +442,15 @@ fn tessellate_face_stitched(
                     b.z,
                     (b - a).norm()
                 );
+                // **中点も出します**（4-334）。端点だけでは、その稜が
+                // **まっすぐか曲がっているか**が分かりません。実測で
+                // 「点が面の境界の外にある」と読みかけましたが、**稜が
+                // 膨らんでいれば、その点は稜の上**です。
+                let middle = oriented.evaluate_normalized(0.5);
+                eprintln!(
+                    "FACEEDGE   その中点 ({:.6},{:.6},{:.6})",
+                    middle.x, middle.y, middle.z
+                );
             }
         }
     }
