@@ -140,7 +140,16 @@ fn explain_face_owners(mesh: &TriangleMesh, owners: &[(u64, std::ops::Range<usiz
         }
     }
     let bad: Vec<_> = uses.iter().filter(|(_, tris)| tris.len() != 2).collect();
-    eprintln!("OWNERWHY 非多様体の稜 {} 本", bad.len());
+    // **「非多様体」だけでは足りません**（4-330）。ここが数えているのは
+    // **使われ方が 2 回でない稜**で、**穴（1回）も入ります**。名前が
+    // 実態と違うと、穴を追っているときに「非多様体 0 本」と出て、
+    // **見ていない**と思ってしまいます。
+    let holes = bad.iter().filter(|(_, tris)| tris.len() == 1).count();
+    eprintln!(
+        "OWNERWHY 使われ方が 2 回でない稜 {} 本（うち穴 {holes} 本、重なり {} 本）",
+        bad.len(),
+        bad.len() - holes
+    );
     for (id, range) in owners {
         eprintln!(
             "OWNERWHY   面 {id} の三角形は {}..{}",
