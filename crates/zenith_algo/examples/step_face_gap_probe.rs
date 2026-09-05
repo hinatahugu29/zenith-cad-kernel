@@ -257,6 +257,29 @@ fn main() {
             }
             let _ = (index, face);
         }
+        // **境界そのものが、その面の曲面からどれだけ浮いているか**（4-328）。
+        //
+        // 切り詰めは「境界までの距離が 0 になる所」を探しますが、実測では
+        // **5.193e-4 までしか近づけません**（4-326）。**交線は曲面の上に
+        // 乗っている**（1.3e-7。上で測りました）ので、**境界のほうが曲面から
+        // 浮いていれば、交点で 0 にならないのは当たり前**です。
+        for (index, face) in [(*left_index, left), (*right_index, right)] {
+            let mut worst = 0.0f64;
+            for oriented in face.outer_wire.edges.iter() {
+                for step in 0..=32 {
+                    let point = oriented.evaluate_normalized(step as f64 / 32.0);
+                    if let Some(distance) = distance_to_surface(face, point, &tol) {
+                        worst = worst.max(distance);
+                    }
+                }
+            }
+            println!(
+                "  面 {index} の**境界が自分の曲面から浮いている最大**: {worst:.9}（申告 {:.3e}）",
+                face.tolerance
+            );
+        }
+        println!();
+
         // **p-curve と 3D の境界は一致しているか**（4-325）。
         //
         // 上の2つは噛み合いません——**uv ではトリムの外**なのに、
