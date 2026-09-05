@@ -1021,6 +1021,42 @@ fn patch_mesh(
 
         // **本数だけでは直せません。** どこかを言います。境界の点かどうかも。
         let on_boundary = |index: usize| ring_ranges.iter().any(|r| r.contains(&index));
+
+        // **孤立した辺があるなら、輪のその線の上を並べて出します**（4-331）。
+        //
+        // 実測（4-330）: 孤立した 6 本は**すべて `v = 0.500000` ちょうど**で、
+        // 添字は **9・11・13 と 80・86**——**輪の離れた場所どうし**でした。
+        // **境界が同じ線を行って戻っている**なら、行きと帰りが**対**に
+        // なっているはずです。**対なら、同じ稜として扱う道が使えます。**
+        //
+        // 対かどうかは、**輪の順に並べて見ないと分かりません。**
+        if uses
+            .iter()
+            .any(|(key, count)| *count == 1 && !on_ring.contains(key))
+        {
+            let lines: std::collections::BTreeSet<u64> = uses
+                .iter()
+                .filter(|(key, count)| **count == 1 && !on_ring.contains(key))
+                .flat_map(|(key, _)| [uvs[key.0].y, uvs[key.1].y])
+                .map(|v| (v * 1e9).round() as u64)
+                .collect();
+            for line in lines {
+                let target = line as f64 / 1e9;
+                let mut on_line: Vec<String> = Vec::new();
+                for range in ring_ranges.iter() {
+                    for index in range.clone() {
+                        if (uvs[index].y - target).abs() <= 1e-9 {
+                            on_line.push(format!("{index}:u={:.6}", uvs[index].x));
+                        }
+                    }
+                }
+                eprintln!(
+                    "EARCUTWHY     v={target:.6} の上の境界点 {} 個（輪の順）: {}",
+                    on_line.len(),
+                    on_line.join(" ")
+                );
+            }
+        }
         for (key, _) in uses
             .iter()
             .filter(|(key, count)| **count == 1 && !on_ring.contains(key))
