@@ -3546,7 +3546,19 @@ fn clip_edge_ends_to_face_trim(
 ) -> Option<Edge> {
     let curve = &edge.curve;
     let (t0, t1) = curve.param_range();
-    let on_boundary = tol.linear.max(1e-6);
+    // **受け入れ幅は、その面が持ち歩く粗さに合わせます**（4-326。規約 4-266）。
+    //
+    // 長いあいだ 1e-6 固定でした。**自分で作った立体はそれで足ります**が、
+    // 読んだ STEP の面は自分の粗さを持ち歩きます——実測（`linkrods.step` の
+    // 面 108）: 粗さ 2.002e-4 ＋ p-curve 4.423e-5 に対し、交線が境界へ
+    // 近づく最小は **5.193e-4**。**1e-6 では 519 倍届きません。**
+    //
+    // 物差しは**稜の外れと p-curve の粗さの和**です（4-285。`validate_pcurves`
+    // と同じ）。1つの数字に押し込むと、どちらかで落ちます。
+    let on_boundary = tol
+        .linear
+        .max(1e-6)
+        .max(face.tolerance + face.pcurve_tolerance);
     let start_gap = distance_to_outer_wire(face, curve.evaluate(t0));
     let end_gap = distance_to_outer_wire(face, curve.evaluate(t1));
     let want_start = clip_start && start_gap > on_boundary;
@@ -3555,7 +3567,14 @@ fn clip_edge_ends_to_face_trim(
         return None;
     }
 
-    let steps = 64usize;
+    // **標本は 64 では足りませんでした**（4-326）。
+    //
+    // 実測（面 108）: **64 標本での最接近 0.019398、1024 標本では
+    // 0.000519**——**37 倍**違います。**狭い落ち込みを跨いで**いました。
+    // 下の黄金分割は「落ち込みを挟めていること」が前提なので、挟めなければ
+    // 何も見つかりません。**「境界を跨いでいない」と読みかけました**
+    // （4-324）——**標本が粗かっただけ**です。
+    let steps = 512usize;
     let at = |index: usize| t0 + (t1 - t0) * index as f64 / steps as f64;
     let gaps: Vec<f64> = (0..=steps)
         .map(|index| distance_to_outer_wire(face, curve.evaluate(at(index))))
@@ -3579,8 +3598,25 @@ fn clip_edge_ends_to_face_trim(
         // 打ちようがなく、後者なら受け入れ幅の話です。
         if std::env::var_os("ZENITH_CLIPTRIM_WHY").is_some() {
             let closest = gaps.iter().cloned().fold(f64::INFINITY, f64::min);
+            // **細かく取り直します**（4-326）。64 標本では、**狭い落ち込みを
+            // 跨いでしまう**かもしれません。境界を跨いでいるなら、どこかで
+            // 距離が 0 になるはずです。**1024 で見て落ちないなら、跨いで
+            // いません。**
+            let fine = (0..=1024)
+                .map(|index| {
+                    distance_to_outer_wire(
+                        face,
+                        curve.evaluate(t0 + (t1 - t0) * index as f64 / 1024.0),
+                    )
+                })
+                .fold(f64::INFINITY, f64::min);
+
+            // **1行にまとめます**（4-326）。**ブーリアンは並列に走ります**
+            // ——2行に分けて出すと、**別の呼び出しの行と隣り合い**、対応が
+            // 崩れます。実際に「同じ呼び出しのはずが 0.019 と 2.732」という
+            // 読めない組を作りました。**関係のある数は、同じ行に出す。**
             eprintln!(
-                "CLIPTRIMWHY 面 {}: 境界への最接近 {closest:.9}、受け入れ幅 {on_boundary:.9}（面の粗さ {:.3e} / p-curve {:.3e}）",
+                "CLIPTRIMWHY 面 {}: 境界への最接近 {closest:.9}（64 標本）/ {fine:.9}（1024 標本）、受け入れ幅 {on_boundary:.9}（面の粗さ {:.3e} / p-curve {:.3e}）",
                 face.id, face.tolerance, face.pcurve_tolerance
             );
         }
