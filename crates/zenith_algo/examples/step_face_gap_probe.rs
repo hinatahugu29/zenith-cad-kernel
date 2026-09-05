@@ -399,6 +399,66 @@ fn main() {
         println!();
     }
 
+    // **3D の稜と、p-curve を曲面へ写したものは、どちらが「本当のトリム」か**
+    // （4-346）。
+    //
+    // 4-343 で行き止まりました——**稜が曲面から浮いている**ので、交線が
+    // 境界へ近づける最小が **1.141e-4** から下がりません。
+    //
+    // **ただしトリムの実体は p-curve** です。**p-curve を曲面へ写した線**は、
+    // 定義上その曲面の上にあります。**そちらまでの距離なら 0 になるはず**
+    // ——それが本当なら、**測る相手を変えるだけ**で行き止まりが解けます。
+    {
+        let name = "linkrods.step";
+        let path = occt_sample(name);
+        if let Ok(solids) = StepImporter::import_solids_from_file(&path) {
+            if let Some(subject) = solids
+                .iter()
+                .max_by_key(|solid| face_count(solid))
+                .map(|solid| Regularizer::hold_like_our_own(solid, &tol))
+            {
+                let faces = faces_in_order(&subject);
+                // 4-342 で測った、切り詰めた交線の端。
+                let point = Point3::new(7.302400, 3.018500, 1.410000);
+                if let Some(face) = faces.get(35) {
+                    let mut to_wire = f64::MAX;
+                    for oriented in face.outer_wire.edges.iter() {
+                        if let Ok(projection) = ExtremumEngine::point_to_curve(
+                            point,
+                            &oriented.edge.curve,
+                            128,
+                            1e-13,
+                        ) {
+                            to_wire = to_wire.min(projection.distance);
+                        }
+                    }
+                    let mut to_pcurve = f64::MAX;
+                    if let (FaceGeometry::Nurbs(surface), Ok(pcurves)) =
+                        (&face.geometry, face.pcurves(&tol))
+                    {
+                        for segment in pcurves.outer_loop.segments.iter() {
+                            let (a, b) = segment.curve.param_range();
+                            for step in 0..=512 {
+                                let uv = segment
+                                    .curve
+                                    .evaluate(a + (b - a) * (step as f64 / 512.0));
+                                let on_surface = surface.evaluate(uv.x, uv.y);
+                                to_pcurve = to_pcurve.min((on_surface - point).norm());
+                            }
+                        }
+                    }
+                    println!();
+                    println!(
+                        "{name} 面35 の切り詰めた端 ({:.4},{:.4},{:.4}) から:",
+                        point.x, point.y, point.z
+                    );
+                    println!("  **3D の稜**まで        {to_wire:.9}");
+                    println!("  **p-curve を写した線**まで {to_pcurve:.9}");
+                }
+            }
+        }
+    }
+
     // **全部の面で、境界がどれだけ曲面から浮いているか**（4-344）。
     //
     // 4-343 で「取り込みの段で境界曲線を曲面へ落とす」を次の手に置きました。
