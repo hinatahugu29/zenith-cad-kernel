@@ -257,6 +257,61 @@ fn main() {
             }
             let _ = (index, face);
         }
+        // **その稜が、面のトリムをどこで出入りするか**（4-341）。
+        //
+        // 4-340 で矛盾が残りました——**B の縁が A 面 35 の内部を通るなら
+        // `A面35 × B面5` の交線はあるはず**なのに、**囲み箱が 0.67 離れて
+        // 組にすらなりません**（4-323）。**交線が長すぎる**のが本命です。
+        //
+        // 交線を密に標本し、**トリムの中にいる区間**を出します。**中に
+        // いる区間の端**が、その面での本当の交線の端です。
+        {
+            let ends = [
+                Point3::new(7.994676, 2.821477, 1.410000),
+                Point3::new(3.381585, 3.172162, 1.410000),
+            ];
+            let target = right; // 面 35 側
+            let mut runs: Vec<(f64, f64)> = Vec::new();
+            let mut current: Option<f64> = None;
+            const STEPS: usize = 400;
+            for step in 0..=STEPS {
+                let t = step as f64 / STEPS as f64;
+                let point = Point3::from(ends[0].coords.lerp(&ends[1].coords, t));
+                let inside = in_trim(target, point).unwrap_or(false);
+                match (inside, current) {
+                    (true, None) => current = Some(t),
+                    (false, Some(start)) => {
+                        runs.push((start, t));
+                        current = None;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(start) = current {
+                runs.push((start, 1.0));
+            }
+            println!(
+                "  面 {right_index} のトリムの中にいる区間（弦を 400 分割、t は始点からの割合）: {}",
+                if runs.is_empty() {
+                    "**1 つもありません**".to_string()
+                } else {
+                    runs.iter()
+                        .map(|(a, b)| format!("[{a:.3}, {b:.3}]"))
+                        .collect::<Vec<_>>()
+                        .join("、")
+                }
+            );
+            for (a, b) in runs.iter() {
+                let pa = Point3::from(ends[0].coords.lerp(&ends[1].coords, *a));
+                let pb = Point3::from(ends[0].coords.lerp(&ends[1].coords, *b));
+                println!(
+                    "    ({:.6},{:.6},{:.6}) → ({:.6},{:.6},{:.6})",
+                    pa.x, pa.y, pa.z, pb.x, pb.y, pb.z
+                );
+            }
+        }
+        println!();
+
         // **境界そのものが、その面の曲面からどれだけ浮いているか**（4-328）。
         //
         // 切り詰めは「境界までの距離が 0 になる所」を探しますが、実測では
