@@ -1266,4 +1266,17 @@ fn main() {
         eprintln!("GATE ERROR: {unimplemented} operations were refused as \"not implemented yet\"");
         std::process::exit(1);
     }
+    // **メッシュの非多様体も赤にします**（4-349）。
+    //
+    // **ここは長いあいだ、数えて印字するだけ**でした——「掛けると常設ゲートが
+    // 赤で止まる」からです（4-116）。**その理由は、もう無くなっています**——
+    // 着手前の 11演算・最大165本が、4-116〜4-131 と 4-197 で **0 件**になり、
+    // **135 件が立体を返して、そのすべてでメッシュ非多様体 0** です。
+    //
+    // **0 だと書いてあるのに落ちない検査は、通したことになりません**
+    // （4-348 と同じ話です）。**ラチェットを掛けます。**
+    if mesh_broken > 0 {
+        eprintln!("GATE ERROR: mesh non-manifold edges detected: {mesh_broken} cases");
+        std::process::exit(1);
+    }
 }

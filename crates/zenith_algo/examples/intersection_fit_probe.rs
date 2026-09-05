@@ -269,9 +269,21 @@ fn main() {
     println!("（`project_edge_to_nurbs_pcurve` の `on_surface_limit`）。そこから先は");
     println!("面積の検算が受け皿へ落ち、**トリムを知らない素のパッチ**を測ります（4-214）。");
     println!();
-    println!("**門にはしていません。** まず数を見るためのものです。");
+    // **門にしました**（4-349）。**1e-5 は選んだ数ではありません**——
+    // `project_edge_to_nurbs_pcurve` の `on_surface_limit` そのもので、
+    // **超えた交線は、それを境界に持つ面の p-curve を取れなくします**（4-214）。
+    // **壊れる場所が分かっている境目**なので、印字するだけにしておく理由が
+    // ありません。実測は 1段目・2段目とも **0 本**です。
+    println!("**門です**（4-349）。1本でも 1e-5 を超えたら exit 1 にします。");
 
-    second_stage(&tol);
+    let stage_two_over = second_stage(&tol);
+    if total_over > 0 || stage_two_over > 0 {
+        eprintln!(
+            "GATE ERROR: {} intersection edges lie farther than 1e-5 from a supporting surface (stage 1: {total_over}, stage 2: {stage_two_over})",
+            total_over + stage_two_over
+        );
+        std::process::exit(1);
+    }
 }
 
 /// **2段目も同じ物差しで測ります。**
@@ -279,7 +291,7 @@ fn main() {
 /// 1段目（ビルダーの出力どうし）は上の表のとおりよく合っています。ところが
 /// 4-214 が拾った 1.895788e-5 は、**ブーリアンの結果をもう一度切ったとき**の
 /// 交線でした。そこが違うなら、違いは「面が割れていること」にあります。
-fn second_stage(tol: &Tolerance) {
+fn second_stage(tol: &Tolerance) -> usize {
     println!();
     println!("{}", "=".repeat(112));
     println!("2段目——ブーリアンの結果を、もう一度切ったときの交線");
@@ -431,4 +443,5 @@ fn second_stage(tol: &Tolerance) {
         "2段目の交線 {total_edges} 本のうち、**{total_over} 本**が 1e-5 を超えています。\
          最悪 {worst_overall:.3e}（{worst_overall_where}）。"
     );
+    total_over
 }
