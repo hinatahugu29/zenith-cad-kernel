@@ -399,6 +399,48 @@ fn main() {
         println!();
     }
 
+    // **全部の面で、境界がどれだけ曲面から浮いているか**（4-344）。
+    //
+    // 4-343 で「取り込みの段で境界曲線を曲面へ落とす」を次の手に置きました。
+    // **落とす前に、どれだけの面がどれだけ浮いているか**を知らないと、
+    // 効くかどうかも、壊すかどうかも分かりません。
+    for name in ["screw.step", "linkrods.step"] {
+        let path = occt_sample(name);
+        let Ok(solids) = StepImporter::import_solids_from_file(&path) else {
+            continue;
+        };
+        let Some(subject) = solids
+            .iter()
+            .max_by_key(|solid| face_count(solid))
+            .map(|solid| Regularizer::hold_like_our_own(solid, &tol))
+        else {
+            continue;
+        };
+        let faces = faces_in_order(&subject);
+        let mut floats: Vec<(f64, f64)> = Vec::new();
+        for face in faces.iter() {
+            let mut worst = 0.0f64;
+            for oriented in face.outer_wire.edges.iter() {
+                for step in 0..=32 {
+                    let point = oriented.evaluate_normalized(step as f64 / 32.0);
+                    if let Some(distance) = distance_to_surface(face, point, &tol) {
+                        worst = worst.max(distance);
+                    }
+                }
+            }
+            floats.push((worst, face.tolerance));
+        }
+        let floating = floats.iter().filter(|(w, _)| *w > 1e-9).count();
+        let worst = floats.iter().map(|(w, _)| *w).fold(0.0f64, f64::max);
+        let over = floats.iter().filter(|(w, t)| w > t).count();
+        println!();
+        println!(
+            "{name}: 面 {} 枚のうち、境界が曲面から浮いているもの **{floating} 枚**（最大 {worst:.9}）、**自分の申告を超えるもの {over} 枚**",
+            floats.len()
+        );
+    }
+    println!();
+
     println!("**これは診断です。赤にはしません。** 読んだファイルが自分の申告より");
     println!("粗いことは実際にあります（4-266）。ここで見たいのは、食い違いが");
     println!("**ファイルの側にあるのか、交線の求め方の側にあるのか**です。");
