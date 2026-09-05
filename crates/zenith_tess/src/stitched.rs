@@ -71,7 +71,7 @@ pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> 
         mesh.merge(&inner_mesh);
     }
 
-    let survivors = weld(&mut mesh, crate::surface_tess::WELD_TOLERANCE);
+    let survivors = weld(&mut mesh, crate::surface_tess::WELD_TOLERANCE, &owners);
     if attribute {
         explain_face_owners(&mesh, &owners, &survivors);
     }
@@ -690,6 +690,24 @@ fn patch_mesh(
         if rings.len() == 1 {
             if let Some(mesh) = grid_patch(rings, surface, orientation, params) {
                 zenith_geom::work_counter::count_grid_patch();
+                // **格子の道でも重複を数えます**（4-336）。段ごとの数えは
+                // earcut の道にしか入っていません——**面 21 はこちらを
+                // 通ります**（輪が 1 本）。
+                if std::env::var_os("ZENITH_DUP_WHY").is_some() {
+                    let mut seen: std::collections::HashMap<[u32; 3], usize> = Default::default();
+                    for triangle in &mesh.indices {
+                        let mut key = *triangle;
+                        key.sort_unstable();
+                        *seen.entry(key).or_insert(0) += 1;
+                    }
+                    let doubled = seen.values().filter(|count| **count > 1).count();
+                    if doubled > 0 {
+                        eprintln!(
+                            "DUPSTAGE 格子パッチの出口: 同じ3頂点の三角形が {doubled} 組（三角形 {} 枚）",
+                            mesh.indices.len()
+                        );
+                    }
+                }
                 return mesh;
             }
         }
@@ -827,6 +845,28 @@ fn patch_mesh(
     // 数えると、重なりがどこで生まれたかが挟み撃ちできます——実測
     // （`screw.step` のねじ山の面、32 分割）: **earcut の直後は 0 本**、
     // **修復の段のあとで 8〜55 本**。**犯人は修復の段です。**
+    // **同じ三角形が 2 枚ないか**（`ZENITH_DUP_WHY=1`。4-336）。
+    //
+    // **辺の使われ方では見つかりません**——同じ三角形が 2 枚あると、辺は
+    // 2 回ずつ増え、**「ちょうど 2 回」に見えてすり抜けます**。実測
+    // （`screw.step` の面 21、4-335）: 同じ耳を 2 枚出しており、溶接が
+    // 落として穴になっていました。**面ごとの検査を全部通っています。**
+    let count_duplicate_triangles = |triangles: &[[usize; 3]], stage: &str| {
+        if std::env::var_os("ZENITH_DUP_WHY").is_none() {
+            return;
+        }
+        let mut seen: std::collections::HashMap<[usize; 3], usize> = Default::default();
+        for triangle in triangles {
+            let mut key = *triangle;
+            key.sort_unstable();
+            *seen.entry(key).or_insert(0) += 1;
+        }
+        let doubled: usize = seen.values().filter(|count| **count > 1).count();
+        if doubled > 0 {
+            eprintln!("DUPSTAGE {stage}: 同じ3頂点の三角形が {doubled} 組");
+        }
+    };
+
     let count_boundary_overuse = |triangles: &[[usize; 3]], stage: &str| {
         if std::env::var_os("ZENITH_OVERLAP_WHY").is_none() {
             return;
@@ -855,10 +895,12 @@ fn patch_mesh(
         }
     };
     count_boundary_overuse(&triangles, "earcut の直後");
+    count_duplicate_triangles(&triangles, "earcut の直後");
 
     reinsert_dropped_boundary_points(&uvs, &ring_ranges, &mut triangles);
     explain_flat("境界点挿し戻し後", &triangles, &uvs);
     count_boundary_overuse(&triangles, "境界点の挿し戻しのあと");
+    count_duplicate_triangles(&triangles, "境界点の挿し戻しのあと");
     repair_boundary_ears(
         &uvs,
         rings,
@@ -869,6 +911,7 @@ fn patch_mesh(
     );
     explain_flat("極小 ear 修復後", &triangles, &uvs);
     count_boundary_overuse(&triangles, "耳の修理のあと");
+    count_duplicate_triangles(&triangles, "耳の修理のあと");
 
     // 修復で直らなかった耳を外し、空いた境界を張り直す。
     //
@@ -882,26 +925,31 @@ fn patch_mesh(
         explain_flat("潰れた耳を外して張り直した後", &triangles, &uvs);
     }
     count_boundary_overuse(&triangles, "潰れた耳を張り直したあと");
+    count_duplicate_triangles(&triangles, "潰れた耳を張り直したあと");
 
     // **辺の上に乗ったまま置き去りになった境界の点を挿し戻します**（4-209）。
     // 上の挿し戻しは「両隣を結ぶ辺」が要るので、一直線の境界では効きません。
     insert_unused_boundary_points_on_straddled_edges(&uvs, &ring_ranges, &mut triangles);
     count_boundary_overuse(&triangles, "またいだ辺への挿し戻しのあと");
+    count_duplicate_triangles(&triangles, "またいだ辺への挿し戻しのあと");
 
     // **境界の辺が抜けている穴を埋めます**（4-207）。挿し戻しと耳の修理を
     // 通っても、「点は使われているのに辺だけ無い」形が残ります。
     fill_missing_boundary_edges(&uvs, &ring_ranges, &mut triangles);
     count_boundary_overuse(&triangles, "抜けた境界の辺を埋めたあと");
+    count_duplicate_triangles(&triangles, "抜けた境界の辺を埋めたあと");
 
     // **それでも残る境界の辺は、横切っている辺を入れ替えて通します**（4-209）。
     force_missing_boundary_edges(&uvs, &ring_ranges, &mut triangles);
     count_boundary_overuse(&triangles, "境界の辺を通したあと");
+    count_duplicate_triangles(&triangles, "境界の辺を通したあと");
 
     // **面の内側に残った T 字の継ぎ目を直します**（4-286）。境界の辺には
     // 3段の手当てがありましたが、内側には無く、黙って通っていました。
     repair_interior_t_junctions(&uvs, &ring_ranges, &mut triangles);
 
     count_boundary_overuse(&triangles, "修復の段のあと");
+    count_duplicate_triangles(&triangles, "修復の段のあと");
 
     // **境界の辺が全部そろっているかを数えます**（`ZENITH_EARCUT_WHY=1`）。
     //
@@ -1469,7 +1517,11 @@ fn oriented_normal(
 /// いると、**落ちた数だけずれます**——`explain_face_owners` が長いあいだ
 /// そうなっており、**注記のほうが「並び順を変えない」と嘘をついて**
 /// いました。
-fn weld(mesh: &mut TriangleMesh, tolerance: f64) -> Vec<usize> {
+fn weld(
+    mesh: &mut TriangleMesh,
+    tolerance: f64,
+    owners: &[(u64, std::ops::Range<usize>)],
+) -> Vec<usize> {
     let tol = tolerance.max(1e-12);
     let tol_sq = tol * tol;
     let cell_size = tol;
@@ -1609,10 +1661,21 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) -> Vec<usize> {
                     positions[mapped[1] as usize],
                     positions[mapped[2] as usize],
                 );
+                // **面もその場で言います**（4-336）。番号を後から範囲へ
+                // 当て直すと、**範囲の組を取り違えます**——実際に一度
+                // 取り違えました（4-335 の追記）。
+                let face_of = |index: usize| -> Option<u64> {
+                    owners
+                        .iter()
+                        .find(|(_, range)| range.contains(&index))
+                        .map(|(id, _)| *id)
+                };
                 eprintln!(
-                    "DUPWHY 三角形 {} は {} と同じ3頂点 ({:.4} {:.4} {:.4}) ({:.4} {:.4} {:.4}) ({:.4} {:.4} {:.4})",
+                    "DUPWHY 三角形 {} (面 {:?}) は {} (面 {:?}) と同じ3頂点 ({:.4} {:.4} {:.4}) ({:.4} {:.4} {:.4}) ({:.4} {:.4} {:.4})",
                     triangle_index,
+                    face_of(triangle_index),
                     first,
+                    face_of(first),
                     p0.x, p0.y, p0.z,
                     p1.x, p1.y, p1.z,
                     p2.x, p2.y, p2.z
