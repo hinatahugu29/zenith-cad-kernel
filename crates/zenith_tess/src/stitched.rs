@@ -1652,6 +1652,26 @@ fn weld(
         let key = sorted_triangle(mapped);
         if let Some(first) = seen.get(&key).copied() {
             duplicated += 1;
+            // **同じ三角形は、両方落とします**（4-338。`ZENITH_KEEP_ONE_DUP=1`
+            // で片方だけ落とす昔の振る舞いに戻ります）。
+            //
+            // 2 枚の面が同じ耳を作ると、共有する稜は **4 回**使われます
+            // （それぞれの耳 1 回＋それぞれの隣の三角形 1 回）。**1 枚だけ
+            // 落とすと 3 回**——実測の非多様体そのものです。**両方落とせば
+            // 2 回**に戻ります。
+            //
+            // **同じ場所を 2 枚が覆っているなら、1 枚残すのではなく 0 枚**
+            // です。**残した 1 枚は、どちらの面の隣とも噛み合いません。**
+            //
+            // 実測（`screw.step`、2026/09/06）: これで**7 通りの刻みすべてが
+            // 水密**になりました（壊れの合計 21 → **0**）。7 つの門は数字も
+            // 1 つ違いません。
+            if std::env::var_os("ZENITH_KEEP_ONE_DUP").is_none() {
+                if let Some(position) = survivors.iter().position(|s| *s == first) {
+                    survivors.remove(position);
+                    indices.remove(position);
+                }
+            }
             if collapse_why {
                 // **同じ3頂点の三角形を2枚出したのはどこか。**
                 // 溶接前の三角形の添字で言う。面ごとの範囲と突き合わせれば、
@@ -1933,6 +1953,16 @@ fn drop_flat_boundary_triangles(
             let twice_area = (pb - pa).cross(&(pc - pa)).norm();
             if twice_area > crate::surface_tess::WELD_TOLERANCE * crate::surface_tess::WELD_TOLERANCE
             {
+                // **残した耳を、全部出す口**（`ZENITH_EAR_WHY=1`。4-338）。
+                // **2 例では規則を書けません**（4-337）。**隣が覆っている耳と
+                // 覆っていない耳**が混ざっているので、まず**全部の座標**を
+                // 集めて、`ear_side_probe` に掛けられるようにします。
+                if std::env::var_os("ZENITH_EAR_WHY").is_some() {
+                    eprintln!(
+                        "EARWHY 残した耳 ({:.6},{:.6},{:.6}) ({:.6},{:.6},{:.6}) ({:.6},{:.6},{:.6}) 3D面積x2 {twice_area:.3e}",
+                        pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z
+                    );
+                }
                 return true;
             }
         }
