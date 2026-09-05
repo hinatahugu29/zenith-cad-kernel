@@ -736,8 +736,8 @@ impl BrepIntersectionBuilder {
         }
 
         PlanarOperandBatchSplits {
-            splits_a: collect_batch_splits_for_faces(faces_a, edges_by_face_a, tol),
-            splits_b: collect_batch_splits_for_faces(faces_b, edges_by_face_b, tol),
+            splits_a: collect_batch_splits_for_faces(faces_a, edges_by_face_a, tol, "A"),
+            splits_b: collect_batch_splits_for_faces(faces_b, edges_by_face_b, tol, "B"),
         }
     }
 
@@ -2450,6 +2450,7 @@ fn collect_batch_splits_for_faces(
     faces: &[Face],
     edges_by_face: BTreeMap<usize, Vec<Edge>>,
     tol: &Tolerance,
+    side: &str,
 ) -> Vec<PlanarFaceBatchSplit> {
     // **面の番号つきで、割れたかどうかを出す口**（`ZENITH_BATCH_WHY=1`。4-322）。
     //
@@ -2466,7 +2467,7 @@ fn collect_batch_splits_for_faces(
             if why {
                 match &outcome {
                     Ok(result) => eprintln!(
-                        "BATCHWHY 面{face_index}: 交線 {} 本 → 当たった {}、飛ばした {}、片 {} 枚{}",
+                        "BATCHWHY {side}面{face_index}: 交線 {} 本 → 当たった {}、飛ばした {}、片 {} 枚{}",
                         split_edges.len(),
                         result.applied_split_count,
                         result.skipped_split_count,
@@ -2478,13 +2479,37 @@ fn collect_batch_splits_for_faces(
                         }
                     ),
                     Err(reason) => eprintln!(
-                        "BATCHWHY 面{face_index}: 交線 {} 本 → **断られた**: {}",
+                        "BATCHWHY {side}面{face_index}: 交線 {} 本 → **断られた**: {}",
                         split_edges.len(),
                         reason.chars().take(120).collect::<String>()
                     ),
                 }
             }
             let result = outcome.ok()?;
+            // **相手の面が同じ交線で割れたか**を、あとで突き合わせられるよう
+            // 稜の中点も出します（4-340）。**片側の面しか言わない診断では、
+            // 「片側だけ通った」のか「両方通らない」のかが分かりません。**
+            //
+            // 中点で照合します——**端点だけでは、同じ 2 点を結ぶ別々の弧を
+            // 見分けられません**（4-65、4-320）。
+            if why {
+                for edge in split_edges.iter() {
+                    let middle = edge.curve.evaluate(
+                        (edge.curve.param_range().0 + edge.curve.param_range().1) * 0.5,
+                    );
+                    eprintln!(
+                        "BATCHEDGE {side}面{face_index} {} 交線の中点 ({:.6} {:.6} {:.6})",
+                        if result.applied_split_count > 0 {
+                            "割れた"
+                        } else {
+                            "割れず"
+                        },
+                        middle.x,
+                        middle.y,
+                        middle.z
+                    );
+                }
+            }
             (result.applied_split_count > 0).then_some(PlanarFaceBatchSplit {
                 face_index,
                 split_edge_count: split_edges.len(),
