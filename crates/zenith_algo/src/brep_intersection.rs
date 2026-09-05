@@ -3572,6 +3572,18 @@ fn clip_edge_ends_to_face_trim(
         }
     }
     if crossings.is_empty() {
+        // **なぜ切れなかったかを出します**（`ZENITH_CLIPTRIM_WHY=1`。4-324）。
+        //
+        // 「切れなかった」だけでは、**境界を跨いでいない**のか
+        // **跨いでいるのに届かなかった**のかが分かりません。前者なら手の
+        // 打ちようがなく、後者なら受け入れ幅の話です。
+        if std::env::var_os("ZENITH_CLIPTRIM_WHY").is_some() {
+            let closest = gaps.iter().cloned().fold(f64::INFINITY, f64::min);
+            eprintln!(
+                "CLIPTRIMWHY 面 {}: 境界への最接近 {closest:.9}、受け入れ幅 {on_boundary:.9}（面の粗さ {:.3e} / p-curve {:.3e}）",
+                face.id, face.tolerance, face.pcurve_tolerance
+            );
+        }
         return None;
     }
     crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
