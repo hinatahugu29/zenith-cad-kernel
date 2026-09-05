@@ -846,7 +846,7 @@ fn patch_mesh(
     // 点が3点より多く一直線に並ぶと手が出ません**——入れ替えた先も同じ直線の
     // 上なので、潰れた枚数が減らないからです。そこで潰れたままの耳を外して
     // 点を「使われていない」状態へ戻し、同じ受け皿に扇で張り直させます。
-    let dropped = drop_flat_boundary_triangles(&uvs, &ring_ranges, &mut triangles);
+    let dropped = drop_flat_boundary_triangles(&uvs, &ring_ranges, surface, &mut triangles);
     if dropped > 0 {
         reinsert_dropped_boundary_points(&uvs, &ring_ranges, &mut triangles);
         explain_flat("潰れた耳を外して張り直した後", &triangles, &uvs);
@@ -1055,6 +1055,34 @@ fn patch_mesh(
                     on_line.len(),
                     on_line.join(" ")
                 );
+                // **3D で潰れているかを、その場で測ります**（4-332）。
+                //
+                // uv で幅ゼロでも、**曲面がその線を折り返していれば 3D では
+                // 帯に幅があり**、三角形が要ります。逆に**3D でも潰れて
+                // いれば**、両側は同じ線で、**溶接で 1 本にするのが筋**です。
+                // **どちらかが決まるまで、埋める道にも溶接する道にも
+                // 進めません**（4-329 で一度払っています）。
+                if let Some(surface) = surface {
+                    let ((_, _), (v_lo, v_hi)) = surface.param_range();
+                    let step = (v_hi - v_lo) * 1e-3;
+                    let mut worst = 0.0f64;
+                    let mut sampled = 0usize;
+                    for range in ring_ranges.iter() {
+                        for index in range.clone() {
+                            if (uvs[index].y - target).abs() > 1e-9 {
+                                continue;
+                            }
+                            let u = uvs[index].x;
+                            let above = surface.evaluate(u, (target + step).min(v_hi));
+                            let below = surface.evaluate(u, (target - step).max(v_lo));
+                            worst = worst.max((above - below).norm());
+                            sampled += 1;
+                        }
+                    }
+                    eprintln!(
+                        "EARCUTWHY       その線をまたいだ 3D の隔たり: 最大 {worst:.9}（{sampled} 点、v を ±{step:.3e} 動かして）"
+                    );
+                }
             }
         }
         for (key, _) in uses
@@ -1753,9 +1781,21 @@ fn degenerate_side_counts(counts: &[usize]) -> Option<(usize, usize)> {
 /// - 3頂点が同じ境界リングに乗っている
 ///
 /// の両方を満たすものだけです。内部の頂点を含む三角形には触れません。
+/// uv で潰れた「耳」を外す。**ただし 3D でも潰れているものだけ**（4-332）。
+///
+/// ここは長いあいだ **uv だけ**を見ていました。**uv で共線でも、曲面の上では
+/// 曲がっていることがあります**——実測（`screw.step` の面 21）: `v = 0.5` の
+/// 上に**連続する境界点が 17 点ずつ 3 か所**あり、uv では完全に共線ですが、
+/// **曲面は潰れていません**（`v` を ±1e-3 動かすと 3D で 0.0141 動く）。
+/// そこを落とすと、**3D では面積のある三角形が消え、穴になります**。
+///
+/// **4-286 と同じ一族**です（「uv で潰れた三角形を出口で捨てていた——3D では
+/// 面積 0.005672 を持つ 41 枚」）。**あのときは出口を直し、ここは残って
+/// いました。**
 fn drop_flat_boundary_triangles(
     uvs: &[Point2],
     ring_ranges: &[std::ops::Range<usize>],
+    surface: Option<&zenith_geom::NurbsSurface3>,
     triangles: &mut Vec<[usize; 3]>,
 ) -> usize {
     let mut u_min = f64::INFINITY;
@@ -1777,6 +1817,16 @@ fn drop_flat_boundary_triangles(
         let area2 = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
         if area2.abs() > flat_eps {
             return true;
+        }
+        // **3D で面積を持つなら残します**（4-332）。
+        if let Some(surface) = surface {
+            let p = |uv: Point2| surface.evaluate(uv.x, uv.y);
+            let (pa, pb, pc) = (p(a), p(b), p(c));
+            let twice_area = (pb - pa).cross(&(pc - pa)).norm();
+            if twice_area > crate::surface_tess::WELD_TOLERANCE * crate::surface_tess::WELD_TOLERANCE
+            {
+                return true;
+            }
         }
         !ring_ranges
             .iter()
