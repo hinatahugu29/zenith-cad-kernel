@@ -186,7 +186,18 @@ fn main() {
             // **刻みを振って測ります**（4-296）。24 で 0 でも、16 では
             // 45 本残っていました（4-290）。**「見えなくなった」と「直った」は
             // 別**なので、範囲で見ます。
+            // **刻みを1つに絞る口**（4-329。`ZENITH_READ_CUT_DIVISIONS=16`）。
+            // 壊れる刻みを診断つきで追うとき、7 通り全部の出力が混ざると
+            // 読めません。**門としては既定（7 通り）で回します。**
+            let only_divisions: Option<usize> = std::env::var("ZENITH_READ_CUT_DIVISIONS")
+                .ok()
+                .and_then(|value| value.parse().ok());
             for divisions in [8usize, 12, 16, 20, 24, 32, 48] {
+                if let Some(want) = only_divisions {
+                    if divisions != want {
+                        continue;
+                    }
+                }
                 let params = zenith_tess::TessellationParams {
                     u_divisions: divisions,
                     v_divisions: divisions,

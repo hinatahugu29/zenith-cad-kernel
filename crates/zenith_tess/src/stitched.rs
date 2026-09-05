@@ -819,6 +819,7 @@ fn patch_mesh(
 
     reinsert_dropped_boundary_points(&uvs, &ring_ranges, &mut triangles);
     explain_flat("境界点挿し戻し後", &triangles, &uvs);
+    count_boundary_overuse(&triangles, "境界点の挿し戻しのあと");
     repair_boundary_ears(
         &uvs,
         rings,
@@ -828,6 +829,7 @@ fn patch_mesh(
         &mut triangles,
     );
     explain_flat("極小 ear 修復後", &triangles, &uvs);
+    count_boundary_overuse(&triangles, "耳の修理のあと");
 
     // 修復で直らなかった耳を外し、空いた境界を張り直す。
     //
@@ -840,17 +842,21 @@ fn patch_mesh(
         reinsert_dropped_boundary_points(&uvs, &ring_ranges, &mut triangles);
         explain_flat("潰れた耳を外して張り直した後", &triangles, &uvs);
     }
+    count_boundary_overuse(&triangles, "潰れた耳を張り直したあと");
 
     // **辺の上に乗ったまま置き去りになった境界の点を挿し戻します**（4-209）。
     // 上の挿し戻しは「両隣を結ぶ辺」が要るので、一直線の境界では効きません。
     insert_unused_boundary_points_on_straddled_edges(&uvs, &ring_ranges, &mut triangles);
+    count_boundary_overuse(&triangles, "またいだ辺への挿し戻しのあと");
 
     // **境界の辺が抜けている穴を埋めます**（4-207）。挿し戻しと耳の修理を
     // 通っても、「点は使われているのに辺だけ無い」形が残ります。
     fill_missing_boundary_edges(&uvs, &ring_ranges, &mut triangles);
+    count_boundary_overuse(&triangles, "抜けた境界の辺を埋めたあと");
 
     // **それでも残る境界の辺は、横切っている辺を入れ替えて通します**（4-209）。
     force_missing_boundary_edges(&uvs, &ring_ranges, &mut triangles);
+    count_boundary_overuse(&triangles, "境界の辺を通したあと");
 
     // **面の内側に残った T 字の継ぎ目を直します**（4-286）。境界の辺には
     // 3段の手当てがありましたが、内側には無く、黙って通っていました。
@@ -1882,6 +1888,33 @@ fn repair_interior_t_junctions(
     ring_ranges: &[std::ops::Range<usize>],
     triangles: &mut Vec<[usize; 3]>,
 ) {
+    // **既定では走りません**（4-329。`ZENITH_T_REPAIR=1` で入ります）。
+    //
+    // この段は 4-286 で足しました。**当時は効いていました**（読んだ STEP の
+    // 表示メッシュの穴が 14／34 → 0／0）。**そのあと 4-288 で継ぎ目を直し、
+    // 土台が変わりました。**
+    //
+    // 段ごとに数えたら、**境界の稜の使い過ぎを作っているのはここだけ**
+    // でした（手前の 6 段はすべて 0、ここで 8 本）。外して刻みを振ると、
+    // **壊れる 4 つの刻みすべてで、外したほうが良い**と出ます
+    // （`screw.step`、2026/09/05 実測。穴／重なり）:
+    //
+    // | 分割 | 入れる | **外す** |
+    // | ---: | :--- | :--- |
+    // | 16 | 3 / **42** | 34 / **0** |
+    // | 20 | 7 / **19** | **6** / **0** |
+    // | 32 | 8 / **113** | 35 / **6** |
+    // | 48 | **118** / **162** | **66** / **0** |
+    //
+    // 壊れの合計は **472 → 147**（3.2 分の 1）。**重なり（3回以上使われる
+    // 稜）はほぼ消えます。** 7 つの門は入れても外しても全部緑で、数字も
+    // 1 つ違いません——**動くのは読んだ STEP の刻みだけ**です。
+    //
+    // **消さずに残すのは、当時効いていたからです。** 土台がまた変われば、
+    // 戻す価値が出るかもしれません。
+    if std::env::var_os("ZENITH_T_REPAIR").is_none() {
+        return;
+    }
     let mut on_ring: std::collections::HashSet<(usize, usize)> = Default::default();
     for range in ring_ranges {
         let count = range.len();
