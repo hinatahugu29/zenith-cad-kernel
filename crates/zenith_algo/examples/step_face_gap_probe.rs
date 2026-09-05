@@ -113,6 +113,23 @@ fn main() {
             right.tolerance,
             right.pcurve_tolerance
         );
+        // **番号は2種類あります**（4-325）。`face_a_index` は並び順、
+        // `Face::id` は位相の番号です。**診断がどちらを出しているかを
+        // 確かめずに読むと、別の面の数字を追います**——実際に追いました。
+        println!(
+            "  番号: 面{left_index} の id は {}、面{right_index} の id は {}",
+            left.id, right.id
+        );
+        println!(
+            "  外周の稜: 面 {left_index} は {} 本、面 {right_index} は {} 本",
+            left.outer_wire.edges.len(),
+            right.outer_wire.edges.len()
+        );
+        println!(
+            "  **内側の輪**: 面 {left_index} は {} 個、面 {right_index} は {} 個",
+            left.inner_wires.len(),
+            right.inner_wires.len()
+        );
         println!(
             "  2点の隔たり: {:.9}",
             (right_point - left_point).norm()
@@ -180,6 +197,110 @@ fn main() {
                 "  ← 稜を共有していません"
             }
         );
+        println!();
+
+        // **その点は、面のトリムの中にあるか**（4-325）。
+        //
+        // 4-324 で、交線の端が**面の囲みを 0.94 出ている**のに**外周には
+        // 一度も 0.0194 より近づかない**と測れました。**境界を跨がずに面から
+        // 出ている**——トリムされた面では起こらないはずの形です。
+        //
+        // **トリムの中にあるかを直接見れば決まります。** 外なら、交線が面を
+        // はみ出して作られています（SSI か候補の切り詰めの側）。
+        let in_trim = |face: &Face, point: Point3| -> Option<bool> {
+            let FaceGeometry::Nurbs(surface) = &face.geometry else {
+                return None;
+            };
+            let projection =
+                ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric).ok()?;
+            let pcurves = face.pcurves(&tol).ok()?;
+            let mut polygon: Vec<(f64, f64)> = Vec::new();
+            for segment in pcurves.outer_loop.segments.iter() {
+                let (a, b) = segment.curve.param_range();
+                for step in 0..24 {
+                    let uv = segment.curve.evaluate(a + (b - a) * (step as f64 / 24.0));
+                    polygon.push((uv.x, uv.y));
+                }
+            }
+            if polygon.len() < 3 {
+                return None;
+            }
+            let (u, v) = (projection.u, projection.v);
+            let mut inside = false;
+            let count = polygon.len();
+            for index in 0..count {
+                let (x1, y1) = polygon[index];
+                let (x2, y2) = polygon[(index + 1) % count];
+                if (y1 > v) != (y2 > v) {
+                    let cross = x1 + (v - y1) / (y2 - y1) * (x2 - x1);
+                    if cross > u {
+                        inside = !inside;
+                    }
+                }
+            }
+            Some(inside)
+        };
+        for (label, index, face, point) in [
+            ("面 1 側の点", *left_index, left, left_point),
+            ("面 35 側の点", *right_index, right, right_point),
+        ] {
+            for (target_index, target) in [(*left_index, left), (*right_index, right)] {
+                match in_trim(target, *point) {
+                    Some(true) => println!(
+                        "  {label} は 面 {target_index} の**トリムの中**にあります"
+                    ),
+                    Some(false) => println!(
+                        "  {label} は 面 {target_index} の**トリムの外**です"
+                    ),
+                    None => println!("  {label} → 面 {target_index}: トリムを読めません"),
+                }
+            }
+            let _ = (index, face);
+        }
+        // **p-curve と 3D の境界は一致しているか**（4-325）。
+        //
+        // 上の2つは噛み合いません——**uv ではトリムの外**なのに、
+        // **3D では外周に 0.0194 より近づかない**（4-324）。uv でトリムを
+        // 出るなら、3D では境界の近くを通るはずです。**片方が嘘をついて
+        // います。**
+        // **p-curve と 3D の境界は一致しているか**（4-325）。
+        //
+        // 上の2つは噛み合いません——**uv ではトリムの外**なのに、
+        // **3D では外周に 0.0194 より近づかない**（4-324）。uv でトリムを
+        // 出るなら、3D では境界の近くを通るはずです。**片方が嘘をついて
+        // います。**
+        // **交線が丸ごとトリムの外なら、境界を跨がないのは当たり前です**（4-325）。
+        //
+        // 端だけでなく、始点・中点・終点を当てます。**端点だけでは、
+        // 出入りしているのか丸ごと外なのかが分かりません。**
+        for (label, point) in [
+            ("交線の始点", Point3::new(7.994676, 2.821477, 1.410000)),
+            ("交線の中点", Point3::new(5.662277, 3.049389, 1.410000)),
+            ("交線の終点", Point3::new(3.381585, 3.172162, 1.410000)),
+        ] {
+            let in_out = match in_trim(right, point) {
+                Some(true) => "トリムの**中**",
+                Some(false) => "トリムの**外**",
+                None => "トリムを読めません",
+            };
+            println!(
+                "  {label}: {in_out}、外周まで {:.9}",
+                nearest_on_wire(right, point)
+            );
+        }
+        println!();
+
+        for (index, face) in [(*left_index, left), (*right_index, right)] {
+            match face.validate_pcurves(&tol, 37) {
+                Ok(report) => println!(
+                    "  面 {index} の p-curve と 3D 境界: 食い違い {} 件、最大 {:.9}（許容 {:.3e}）",
+                    report.mismatch_count,
+                    report.max_distance,
+                    face.tolerance + face.pcurve_tolerance
+                ),
+                Err(reason) => println!("  面 {index} の p-curve を検査できません: {reason}"),
+            }
+        }
         println!();
 
         for (label, point) in [("面 1 側の点", left_point), ("面 35 側の点", right_point)] {
