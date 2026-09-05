@@ -2348,12 +2348,40 @@ fn collect_batch_splits_for_faces(
     edges_by_face: BTreeMap<usize, Vec<Edge>>,
     tol: &Tolerance,
 ) -> Vec<PlanarFaceBatchSplit> {
+    // **面の番号つきで、割れたかどうかを出す口**（`ZENITH_BATCH_WHY=1`。4-322）。
+    //
+    // `LEFTOVERWHY`（4-315）は「平面／曲面」としか言わないので、**どの面が
+    // 割れなかったか**が分かりません。縫合の側から追うと**面の番号**まで
+    // 絞れているのに（4-321 で A 面 1・面 35 まで来ました）、割る側の出力と
+    // **番号が繋がっていませんでした**。
+    let why = std::env::var_os("ZENITH_BATCH_WHY").is_some();
     edges_by_face
         .into_iter()
         .filter_map(|(face_index, split_edges)| {
             let face = faces.get(face_index)?;
-            let result =
-                BrepIntersectionBuilder::split_face_by_edges(face, &split_edges, tol).ok()?;
+            let outcome = BrepIntersectionBuilder::split_face_by_edges(face, &split_edges, tol);
+            if why {
+                match &outcome {
+                    Ok(result) => eprintln!(
+                        "BATCHWHY 面{face_index}: 交線 {} 本 → 当たった {}、飛ばした {}、片 {} 枚{}",
+                        split_edges.len(),
+                        result.applied_split_count,
+                        result.skipped_split_count,
+                        result.faces.len(),
+                        if result.applied_split_count == 0 {
+                            "  ← **割れていません**"
+                        } else {
+                            ""
+                        }
+                    ),
+                    Err(reason) => eprintln!(
+                        "BATCHWHY 面{face_index}: 交線 {} 本 → **断られた**: {}",
+                        split_edges.len(),
+                        reason.chars().take(120).collect::<String>()
+                    ),
+                }
+            }
+            let result = outcome.ok()?;
             (result.applied_split_count > 0).then_some(PlanarFaceBatchSplit {
                 face_index,
                 split_edge_count: split_edges.len(),
