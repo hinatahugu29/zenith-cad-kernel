@@ -276,8 +276,13 @@ impl BrepIntersectionBuilder {
                         eprintln!(
                             "PAIRWHY A面{face_a_index} x B面{face_b_index}: **囲み箱への切り詰めで消えた**"
                         );
-                    } else if clip_candidate_to_planar_trims(support.unwrap().0, face_a, face_b, tol)
-                        .is_none()
+                    } else if clip_candidate_to_planar_trims(
+                        support.unwrap().0,
+                        face_a,
+                        face_b,
+                        tol,
+                    )
+                    .is_none()
                     {
                         eprintln!(
                             "PAIRWHY A面{face_a_index} x B面{face_b_index}: **トリムへの切り詰めで消えた**"
@@ -335,13 +340,12 @@ impl BrepIntersectionBuilder {
                         .map(|kind| (kind, analytic))
                     })
                     .and_then(|(kind, analytic)| {
-                        clip_candidate_to_planar_trims(kind, face_a, face_b, tol)
-                            .map(|kind| {
-                                (
-                                    split_candidate_at_trim_crossings(kind, face_a, face_b, tol),
-                                    analytic,
-                                )
-                            })
+                        clip_candidate_to_planar_trims(kind, face_a, face_b, tol).map(|kind| {
+                            (
+                                split_candidate_at_trim_crossings(kind, face_a, face_b, tol),
+                                analytic,
+                            )
+                        })
                     })
                 {
                     candidates.push(FaceIntersectionCandidate {
@@ -711,8 +715,7 @@ impl BrepIntersectionBuilder {
                 let start = candidate.edge.start_vertex.point;
                 let end = candidate.edge.end_vertex.point;
                 let middle = candidate.edge.curve.evaluate(
-                    (candidate.edge.curve.param_range().0
-                        + candidate.edge.curve.param_range().1)
+                    (candidate.edge.curve.param_range().0 + candidate.edge.curve.param_range().1)
                         * 0.5,
                 );
                 let chord_middle = Point3::from((start.coords + end.coords) * 0.5);
@@ -2109,37 +2112,37 @@ impl BrepIntersectionBuilder {
                     // 閉じた輪が面の内部で閉じていることは測ってあります
                     // （4-305。境界まで 0.345 ちょうど）。**切り込みでは
                     // なく穴**なので、ここで拾います。
-                    let outcome = match crate::FaceSplitter::split_by_chain(&current_face, chain, tol)
-                    {
-                        Err(reason) => {
-                            match crate::FaceSplitter::split_by_interior_loop(
-                                &current_face,
-                                chain,
-                                tol,
-                            ) {
-                                // **元の理由のまま断ります。** 内側の輪でも
-                                // ないなら、「開けなかった」を別の理由に
-                                // 化けさせません。
-                                //
-                                // **ただし、捨てはしません**（4-306）。断り文を
-                                // 元のままにすると、**内側の輪として何を断られた
-                                // のかが読めなくなります**——実測でそうなり、
-                                // 「閉じた輪 9 本がまだ落ちる」理由が見えません
-                                // でした。診断のときだけ、両方を出します。
-                                Err(inner) => {
-                                    if why {
-                                        eprintln!(
-                                            "CHAINWHY   内側の輪としても断られました: {}",
-                                            inner.chars().take(120).collect::<String>()
-                                        );
+                    let outcome =
+                        match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
+                            Err(reason) => {
+                                match crate::FaceSplitter::split_by_interior_loop(
+                                    &current_face,
+                                    chain,
+                                    tol,
+                                ) {
+                                    // **元の理由のまま断ります。** 内側の輪でも
+                                    // ないなら、「開けなかった」を別の理由に
+                                    // 化けさせません。
+                                    //
+                                    // **ただし、捨てはしません**（4-306）。断り文を
+                                    // 元のままにすると、**内側の輪として何を断られた
+                                    // のかが読めなくなります**——実測でそうなり、
+                                    // 「閉じた輪 9 本がまだ落ちる」理由が見えません
+                                    // でした。診断のときだけ、両方を出します。
+                                    Err(inner) => {
+                                        if why {
+                                            eprintln!(
+                                                "CHAINWHY   内側の輪としても断られました: {}",
+                                                inner.chars().take(120).collect::<String>()
+                                            );
+                                        }
+                                        Err(reason)
                                     }
-                                    Err(reason)
+                                    ok => ok,
                                 }
-                                ok => ok,
                             }
-                        }
-                        ok => ok,
-                    };
+                            ok => ok,
+                        };
                     match outcome {
                         Ok((pieces, report))
                             if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
@@ -5472,8 +5475,8 @@ fn diagnose_selected_face_stitching(
                             if squared <= 0.0 {
                                 return (point - other.start).norm();
                             }
-                            let t = ((point - other.start).dot(&direction) / squared)
-                                .clamp(0.0, 1.0);
+                            let t =
+                                ((point - other.start).dot(&direction) / squared).clamp(0.0, 1.0);
                             (point - (other.start + direction * t)).norm()
                         };
                         eprintln!(
@@ -5609,9 +5612,7 @@ fn diagnose_selected_face_stitching(
                             .and_then(|value| value.parse::<u64>().ok())
                             == Some(use_.face_id)
                         {
-                            for (index, oriented) in
-                                face.face.outer_wire.edges.iter().enumerate()
-                            {
+                            for (index, oriented) in face.face.outer_wire.edges.iter().enumerate() {
                                 let start = oriented.start_vertex().point;
                                 let end = oriented.end_vertex().point;
                                 eprintln!(
@@ -6900,10 +6901,8 @@ fn clip_candidate_to_face_bboxes(
         // その 9 枚は、**「交線 1 本を渡されて 1 つも割れない面」10 枚と
         // 一致**します（4-322）。B 側は全部 1e-8 以下です——平面なので
         // `Line` として切り詰められていました。
-        FaceIntersectionKind::Curve { edge } => {
-            clip_edge_to_bboxes(edge, bbox_a, bbox_b, tol)
-                .map(|edge| FaceIntersectionKind::Curve { edge })
-        }
+        FaceIntersectionKind::Curve { edge } => clip_edge_to_bboxes(edge, bbox_a, bbox_b, tol)
+            .map(|edge| FaceIntersectionKind::Curve { edge }),
         FaceIntersectionKind::Curves { edges } => {
             let clipped: Vec<Edge> = edges
                 .into_iter()
@@ -8764,8 +8763,8 @@ fn revolution_patches_touch_at_a_point(
                 zenith_geom::work_counter::count_tangent_patch_projection();
                 ExtremumEngine::point_to_surface(point, surface, 64, 1e-13)
             }
-                .map(|projection| projection.distance <= limit)
-                .unwrap_or(false)
+            .map(|projection| projection.distance <= limit)
+            .unwrap_or(false)
         });
         if on_both {
             if std::env::var_os("ZENITH_POINT_TOUCH_WHY").is_some() {

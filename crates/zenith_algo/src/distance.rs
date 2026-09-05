@@ -443,8 +443,11 @@ pub fn nearest_boundary_projection(point: Point3, solid: &Solid) -> Option<Bound
     if std::env::var_os("ZENITH_DISTANCE_WHY").is_some() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
-            eprintln!("DISTANCEWHY 呼ばれました:
-{}", std::backtrace::Backtrace::force_capture());
+            eprintln!(
+                "DISTANCEWHY 呼ばれました:
+{}",
+                std::backtrace::Backtrace::force_capture()
+            );
         });
     }
     boundary_projections(point, solid)
@@ -672,7 +675,6 @@ fn point_in_loop(pcurve_loop: &zenith_topo::FacePcurveLoop, uv: Point2) -> bool 
     inside
 }
 
-
 #[cfg(test)]
 mod near_boundary_tests {
     use super::*;
@@ -704,11 +706,7 @@ mod near_boundary_tests {
         for ix in -3..=3 {
             for iy in -3..=3 {
                 for iz in -2..=2 {
-                    let point = Point3::new(
-                        ix as f64 * 5.0,
-                        iy as f64 * 5.0,
-                        iz as f64 * 2.5,
-                    );
+                    let point = Point3::new(ix as f64 * 5.0, iy as f64 * 5.0, iz as f64 * 2.5);
                     // **上限も振ります。** 上限で答えが変わる点こそ、
                     // 囲みで捨てる判断が効くところです。
                     for limit in [1e-6, 1e-3, 0.1, 1.0, 5.0] {

@@ -581,30 +581,28 @@ impl FaceSplitter {
         // 実測（`linkrods.step`、4-304）: 断られた 4 本の輪はすべて
         // 「始点も終点も境界の辺 2 本の上」でした。
         let mut moved_across_seam = false;
-        let (from, to) = if ((to - from).rem_euclid(count))
-            .min((from - to).rem_euclid(count))
-            <= 1e-9
-        {
-            let moved = locate_on_wire_avoiding(&face.outer_wire, end, from as usize, limit);
-            if std::env::var_os("ZENITH_SPLIT_WHY").is_some() {
-                eprintln!(
-                    "SEAMSPLITWHY 境界の辺 {} 本、from {:.4} to {:.4} → ずらし先 {:?}",
-                    edges.len(),
-                    from,
-                    to,
-                    moved
-                );
-            }
-            match moved {
-                Some(other) => {
-                    moved_across_seam = true;
-                    (from, other)
+        let (from, to) =
+            if ((to - from).rem_euclid(count)).min((from - to).rem_euclid(count)) <= 1e-9 {
+                let moved = locate_on_wire_avoiding(&face.outer_wire, end, from as usize, limit);
+                if std::env::var_os("ZENITH_SPLIT_WHY").is_some() {
+                    eprintln!(
+                        "SEAMSPLITWHY 境界の辺 {} 本、from {:.4} to {:.4} → ずらし先 {:?}",
+                        edges.len(),
+                        from,
+                        to,
+                        moved
+                    );
                 }
-                None => (from, to),
-            }
-        } else {
-            (from, to)
-        };
+                match moved {
+                    Some(other) => {
+                        moved_across_seam = true;
+                        (from, other)
+                    }
+                    None => (from, to),
+                }
+            } else {
+                (from, to)
+            };
         let separation = ((to - from).rem_euclid(count)).min((from - to).rem_euclid(count));
 
         if separation <= 1e-9 {
@@ -1320,7 +1318,8 @@ fn locate_on_wire_avoiding(wire: &Wire, point: Point3, avoid: usize, limit: f64)
         if index == avoid {
             continue;
         }
-        let Ok(projection) = ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 128, 1e-13)
+        let Ok(projection) =
+            ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 128, 1e-13)
         else {
             continue;
         };

@@ -13,12 +13,12 @@
 //! **これは診断です。** 赤にはしません——測って、どちらが潰れているかを
 //! 言うだけです。
 
+use std::path::PathBuf;
 use zenith_algo::Regularizer;
 use zenith_geom::ExtremumEngine;
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance};
 use zenith_topo::{Face, FaceGeometry, Solid};
-use std::path::PathBuf;
 
 fn occt_sample(name: &str) -> PathBuf {
     PathBuf::from(concat!(
@@ -101,7 +101,9 @@ fn main() {
             points[2].z
         );
         // 3D での面積。**ここが 0 なら、そもそもどちらも作らなくてよい**。
-        let twice_3d = (points[1] - points[0]).cross(&(points[2] - points[0])).norm();
+        let twice_3d = (points[1] - points[0])
+            .cross(&(points[2] - points[0]))
+            .norm();
         println!("  3D での面積の 2 倍: {twice_3d:.9}");
 
         // **3 点すべてが乗っている面を拾います。** 平面も NURBS も同じ扱い。
@@ -110,7 +112,10 @@ fn main() {
                 FaceGeometry::Plane(plane) => {
                     let offset = point - plane.origin;
                     let distance = offset.dot(&plane.normal).abs();
-                    Some(((offset.dot(&plane.u_axis), offset.dot(&plane.v_axis)), distance))
+                    Some((
+                        (offset.dot(&plane.u_axis), offset.dot(&plane.v_axis)),
+                        distance,
+                    ))
                 }
                 FaceGeometry::Nurbs(surface) => {
                     ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)

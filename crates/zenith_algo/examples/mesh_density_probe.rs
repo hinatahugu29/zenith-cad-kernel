@@ -86,7 +86,12 @@ fn main() {
     for (name, a, b, op) in [
         ("torus - rod", &torus, &rod, BooleanOpType::Difference),
         ("torus + rod", &torus, &rod, BooleanOpType::Union),
-        ("box x tilted torus", &boxa, &tilted, BooleanOpType::Difference),
+        (
+            "box x tilted torus",
+            &boxa,
+            &tilted,
+            BooleanOpType::Difference,
+        ),
         ("cone x sphere", &cone, &sphere, BooleanOpType::Intersection),
     ] {
         if let Ok(result) = BooleanEngine::boolean_solids_exact_result(a, b, op, &tol) {
@@ -115,7 +120,14 @@ fn main() {
             if total > 0 {
                 bad_here += 1;
             }
-            print!("{:>8}", if total == 0 { "-".to_string() } else { total.to_string() });
+            print!(
+                "{:>8}",
+                if total == 0 {
+                    "-".to_string()
+                } else {
+                    total.to_string()
+                }
+            );
         }
         if bad_here > 0 {
             broken += 1;
@@ -137,8 +149,10 @@ fn main() {
     println!();
     println!("**数字は「ちょうど2枚に共有されていない稜」の本数です。** 0 でなければ");
     println!("STL に書けません。**1つの刻みだけを見るのは測り方の穴です**——");
-    println!("読んだ `screw.step` は、24 分割だけを見ていた頃は水密に見えて、
-16・20・32・48 で壊れていました（4-296。2026/09/06 に全刻みで 0 になりました）。");
+    println!(
+        "読んだ `screw.step` は、24 分割だけを見ていた頃は水密に見えて、
+16・20・32・48 で壊れていました（4-296。2026/09/06 に全刻みで 0 になりました）。"
+    );
 
     if broken > 0 {
         std::process::exit(1);

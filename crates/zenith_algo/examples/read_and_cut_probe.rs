@@ -228,7 +228,11 @@ fn main() {
                 println!(
                     "  {divisions:>3} 分割: 三角形 {:>6}、穴 {open:>4} 本、重なり {over:>4} 本{}",
                     probe.indices.len(),
-                    if open + over > 0 { "  **水密ではありません**" } else { "" }
+                    if open + over > 0 {
+                        "  **水密ではありません**"
+                    } else {
+                        ""
+                    }
                 );
                 // **壊れている場所を座標で出します**（`ZENITH_SEAM_WHY=1`。4-298）。
                 //

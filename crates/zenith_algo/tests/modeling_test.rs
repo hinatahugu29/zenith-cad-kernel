@@ -6372,7 +6372,6 @@ fn test_g2_surface_blend() {
     assert!(p_mid.y > 0.0 && p_mid.y < 10.0);
 }
 
-
 /// 穴の縁の「揃っているか」が、**わざと壊すと落ちる**ことを押さえます（4-318）。
 ///
 /// この見分け方は、**3 回外したあとの 4 つ目**です。緑の門で輪 944 個が
@@ -6425,23 +6424,27 @@ fn a_hole_rim_is_uniform_until_a_piece_goes_missing() {
         .find(|shape| shape.edge_count >= 2)
         .expect("縁が2本以上の穴が要ります");
     let rim_face_id = rim.face_id;
-    let victim = pieces
-        .iter()
-        .position(|piece| {
-            piece.face.id != rim_face_id
-                && piece.face.outer_wire.edges.iter().any(|oriented: &zenith_topo::OrientedEdge| {
-                    let middle = oriented.evaluate_normalized(0.5);
-                    pieces
-                        .iter()
-                        .filter(|other| other.face.id == rim_face_id)
-                        .flat_map(|other| other.face.inner_wires.iter())
-                        .flat_map(|wire| wire.edges.iter())
-                        .any(|rim_edge: &zenith_topo::OrientedEdge| {
-                            (rim_edge.evaluate_normalized(0.5) - middle).norm() <= tol.linear
-                        })
-                })
-        })
-        .expect("穴の縁に触れている面片が1枚は要ります");
+    let victim =
+        pieces
+            .iter()
+            .position(|piece| {
+                piece.face.id != rim_face_id
+                    && piece.face.outer_wire.edges.iter().any(
+                        |oriented: &zenith_topo::OrientedEdge| {
+                            let middle = oriented.evaluate_normalized(0.5);
+                            pieces
+                                .iter()
+                                .filter(|other| other.face.id == rim_face_id)
+                                .flat_map(|other| other.face.inner_wires.iter())
+                                .flat_map(|wire| wire.edges.iter())
+                                .any(|rim_edge: &zenith_topo::OrientedEdge| {
+                                    (rim_edge.evaluate_normalized(0.5) - middle).norm()
+                                        <= tol.linear
+                                })
+                        },
+                    )
+            })
+            .expect("穴の縁に触れている面片が1枚は要ります");
 
     let mut broken = pieces.clone();
     broken.remove(victim);

@@ -14,12 +14,12 @@
 //! **これは診断です。** 赤にはしません——読んだファイルが自分の申告より
 //! 粗いことは実際にあり（4-266）、それ自体は欠陥ではありません。
 
+use std::path::PathBuf;
 use zenith_algo::Regularizer;
 use zenith_geom::ExtremumEngine;
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance};
 use zenith_topo::{Face, FaceGeometry, Solid};
-use std::path::PathBuf;
 
 fn occt_sample(name: &str) -> PathBuf {
     PathBuf::from(concat!(
@@ -130,10 +130,7 @@ fn main() {
             left.inner_wires.len(),
             right.inner_wires.len()
         );
-        println!(
-            "  2点の隔たり: {:.9}",
-            (right_point - left_point).norm()
-        );
+        println!("  2点の隔たり: {:.9}", (right_point - left_point).norm());
         println!();
 
         // **境界どうしがどれだけ離れているか**（4-321）。
@@ -246,12 +243,10 @@ fn main() {
         ] {
             for (target_index, target) in [(*left_index, left), (*right_index, right)] {
                 match in_trim(target, *point) {
-                    Some(true) => println!(
-                        "  {label} は 面 {target_index} の**トリムの中**にあります"
-                    ),
-                    Some(false) => println!(
-                        "  {label} は 面 {target_index} の**トリムの外**です"
-                    ),
+                    Some(true) => {
+                        println!("  {label} は 面 {target_index} の**トリムの中**にあります")
+                    }
+                    Some(false) => println!("  {label} は 面 {target_index} の**トリムの外**です"),
                     None => println!("  {label} → 面 {target_index}: トリムを読めません"),
                 }
             }
@@ -423,12 +418,9 @@ fn main() {
                 if let Some(face) = faces.get(35) {
                     let mut to_wire = f64::MAX;
                     for oriented in face.outer_wire.edges.iter() {
-                        if let Ok(projection) = ExtremumEngine::point_to_curve(
-                            point,
-                            &oriented.edge.curve,
-                            128,
-                            1e-13,
-                        ) {
+                        if let Ok(projection) =
+                            ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 128, 1e-13)
+                        {
                             to_wire = to_wire.min(projection.distance);
                         }
                     }
@@ -439,9 +431,8 @@ fn main() {
                         for segment in pcurves.outer_loop.segments.iter() {
                             let (a, b) = segment.curve.param_range();
                             for step in 0..=512 {
-                                let uv = segment
-                                    .curve
-                                    .evaluate(a + (b - a) * (step as f64 / 512.0));
+                                let uv =
+                                    segment.curve.evaluate(a + (b - a) * (step as f64 / 512.0));
                                 let on_surface = surface.evaluate(uv.x, uv.y);
                                 to_pcurve = to_pcurve.min((on_surface - point).norm());
                             }

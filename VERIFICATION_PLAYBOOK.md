@@ -398,6 +398,7 @@ cargo test --release --workspace \
 | ツール | 種別 | 落ちたら |
 | :--- | :--- | :--- |
 | `cargo test` | **ゲート** | 直すか、取り下げる |
+| `cargo fmt --check --all` | **入れる前に回す**（4-350 で足しました） | 掛け直す。**テストも門も書式を見ません**——回さないと溜まります（2026/09/06 に 3 日ぶん・9 ファイル分たまっていました） |
 | `builder_audit` | **ゲート** | 同上 |
 | `boolean_envelope` の `wrong-result` | **ゲート（最重要）** | 絶対に入れない |
 | `freecad_cross_validate.py` | **ゲート**（非ゼロ終了） | 同上 |

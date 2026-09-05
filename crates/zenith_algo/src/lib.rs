@@ -60,16 +60,16 @@ pub use boolean::{
 pub use boolean_validation::{
     exact_inside, BooleanResultReport, BooleanResultVerifier, BooleanVerificationParams,
 };
+pub use brep_intersection::hole_rim_use_shapes;
 pub use brep_intersection::{
     BooleanFaceAssembly, BooleanFaceSelection, BooleanOperand, BooleanShellAssembly,
     BrepIntersectionBuilder, ClassifiedFacePiece, ClassifiedPlanarFaceSplitCandidate,
     FaceIntersectionCandidate, FaceIntersectionKind, FaceRegionLocation, HoleRimUseShape,
-    IntersectionEdgeCandidate,
-    IntersectionEdgeLoop, IntersectionEdgeLoopExtraction, PlanarCapGeneration,
-    PlanarFaceBatchSplit, PlanarFaceMultiSplitResult, PlanarFaceSplitCandidate,
-    PlanarOperandBatchSplits, SelectedBooleanFacePiece, SelectedFaceStitchReport,
+    IntersectionEdgeCandidate, IntersectionEdgeLoop, IntersectionEdgeLoopExtraction,
+    PlanarCapGeneration, PlanarFaceBatchSplit, PlanarFaceMultiSplitResult,
+    PlanarFaceSplitCandidate, PlanarOperandBatchSplits, SelectedBooleanFacePiece,
+    SelectedFaceStitchReport,
 };
-pub use brep_intersection::hole_rim_use_shapes;
 pub use brep_transform::BrepTransform;
 pub use cap::CapBuilder;
 pub use chamfer::ChamferBuilder;
