@@ -111,7 +111,12 @@ fn main() {
     let tol = Tolerance::default();
     let mut all_closed = true;
 
-    for divisions in [4usize, 6, 8, 10, 12, 16, 20, 24, 32] {
+    // **48・64 まで回します**（4-348）。ここは長らく **4〜32 の 9 通り**でしたが、
+    // 文書は「**4〜256 で open 0**」と書いています——**書いてあるのは 4-37 の
+    // 1 回きりの実測**で、**常設で回していたのは 32 まで**でした。
+    // **`mesh_density_probe` は 64 まで回しています**（4-297）。**同じ物差しに
+    // 揃えます**——測っていないものを測ったことにしないためです（4-347 と同じ）。
+    for divisions in [4usize, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64] {
         println!("--- {divisions} divisions per patch");
         all_closed &= probe(
             "box",
@@ -163,5 +168,10 @@ fn main() {
         println!("every mesh is closed: each edge is shared by exactly two triangles (watertight manifold)");
     } else {
         println!("at least one mesh is open along its edges; STL from it will not slice");
+        // **ここは門です**（4-348）。**それまでは、開いていると印字するだけで
+        // 終了コードは 0 でした**——**落ちない検査**は、通したことになりません。
+        // **自分で作った立体**なので、開いているならこちらの欠陥です
+        // （`mesh_density_probe` と同じ線引き。4-297）。
+        std::process::exit(1);
     }
 }

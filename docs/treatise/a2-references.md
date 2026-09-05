@@ -21,6 +21,6 @@ Zenith CAD Kernel リポジトリに常設されている自動検証プロー�
 | **`face_split_probe`** | 自由曲線による曲面パッチ分割（FaceSplitter） | 分割後の各面片の面積総和が元曲面面積と $1.46\times 10^{-13}$ で一致 |
 | **`ssi_probe`** | 曲面間幾何交差（SSI）の追跡精度と残差 | フィット交線が両曲面に $10^{-6}$ 以内で乗ること |
 | **`boolean_topology_probe`** | ブーリアン結果におけるエッジ実体共有性 | 共有されていない不正エッジが0本であること（Release Gate） |
-| **`mesh_watertight_probe`** | 4〜256分割における出力メッシュの完全密閉性 | open: 0, non-manifold: 0, degenerate: 0 |
+| **`mesh_watertight_probe`** | 出力メッシュの完全密閉性。**常設で回すのは 4〜64 分割の 11 通り**（4-348 で 32 → 64 へ広げ、**破れたら `exit 1` にしました**）。96〜256 は 4-37 の 1 回きりの実測です | open: 0, non-manifold: 0, degenerate: 0 |
 | **`foreign_distance_probe`** | 他カーネル立体に対する最近傍点・最短距離探索 | 36チェックすべてで閉じた式と一致（最悪 $3.55\times 10^{-15}$） |
 | **`export_mesh_suite` ＋ `tools/verify_mesh_exports.py`** | STL / OBJ / glTF / DXF を書き出し、**書いたファイルだけ**から解き直す | 8検体すべてで、辺がちょうど2枚の三角形に共有され、体積が B-Rep と合い、3形式が互いに一致し、DXF の層と向きが断面と合うこと（FreeCAD 不要・CI 収録） |

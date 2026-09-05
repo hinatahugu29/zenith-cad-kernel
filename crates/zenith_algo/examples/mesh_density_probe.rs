@@ -54,7 +54,9 @@ fn main() {
     let tol = Tolerance::default();
     // **粗いところと細かいところの両方**を見ます。**2 のべき乗だけにしない
     // でください**——16 と 24 で答えが違った（4-296）のは、そこが理由です。
-    let densities = [6usize, 8, 10, 12, 16, 20, 24, 32, 48, 64];
+    // **4 を足しました**（4-348）。`mesh_watertight_probe` は 4 から回して
+    // いるのに、ここは 6 からでした——**同じ物差しに揃えます**。実測は 0 です。
+    let densities = [4usize, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64];
 
     let torus = PrimitiveBuilder::make_torus(12.0, 4.0).expect("torus");
     let cylinder = PrimitiveBuilder::make_cylinder(9.0, 40.0).expect("cylinder");
@@ -135,7 +137,8 @@ fn main() {
     println!();
     println!("**数字は「ちょうど2枚に共有されていない稜」の本数です。** 0 でなければ");
     println!("STL に書けません。**1つの刻みだけを見るのは測り方の穴です**——");
-    println!("読んだ `screw.step` は 8・12・24 で水密なのに 16・20・32・48 で壊れます（4-296）。");
+    println!("読んだ `screw.step` は、24 分割だけを見ていた頃は水密に見えて、
+16・20・32・48 で壊れていました（4-296。2026/09/06 に全刻みで 0 になりました）。");
 
     if broken > 0 {
         std::process::exit(1);
