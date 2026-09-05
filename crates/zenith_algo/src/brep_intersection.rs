@@ -336,7 +336,12 @@ impl BrepIntersectionBuilder {
                     })
                     .and_then(|(kind, analytic)| {
                         clip_candidate_to_planar_trims(kind, face_a, face_b, tol)
-                            .map(|kind| (kind, analytic))
+                            .map(|kind| {
+                                (
+                                    split_candidate_at_trim_crossings(kind, face_a, face_b, tol),
+                                    analytic,
+                                )
+                            })
                     })
                 {
                     candidates.push(FaceIntersectionCandidate {
@@ -724,15 +729,41 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // **刻んだ小片は、その面のトリムの中にあるものだけ渡します**
+        // （4-342。`ZENITH_SPLIT_AT_TRIM=1` のときだけ）。
+        //
+        // 刻むだけでは足りません——**面の外にある小片まで渡すと、割る側は
+        // それを使おうとして失敗します**。実測: A 面 35 の交線は 1 → 3 本に
+        // なりましたが、**当たった数は 0 のまま**でした。
+        //
+        // 中点で見ます。**端は境界に乗っているので、内外が決まりません。**
+        let keep_for = |face: &Face, edge: &Edge| -> bool {
+            if std::env::var_os("ZENITH_SPLIT_AT_TRIM").is_none() {
+                return true;
+            }
+            let (t0, t1) = edge.curve.param_range();
+            let middle = edge.curve.evaluate((t0 + t1) * 0.5);
+            // **読めなければ渡します。** 「読めなかった」を「外」に
+            // 化けさせません（4-214 の流儀）。
+            point_inside_face_trim(face, middle, tol).unwrap_or(true)
+        };
         for candidate in edge_candidates {
-            edges_by_face_a
-                .entry(candidate.face_a_index)
-                .or_default()
-                .push(candidate.edge.clone());
-            edges_by_face_b
-                .entry(candidate.face_b_index)
-                .or_default()
-                .push(candidate.edge);
+            if let Some(face) = faces_a.get(candidate.face_a_index) {
+                if keep_for(face, &candidate.edge) {
+                    edges_by_face_a
+                        .entry(candidate.face_a_index)
+                        .or_default()
+                        .push(candidate.edge.clone());
+                }
+            }
+            if let Some(face) = faces_b.get(candidate.face_b_index) {
+                if keep_for(face, &candidate.edge) {
+                    edges_by_face_b
+                        .entry(candidate.face_b_index)
+                        .or_default()
+                        .push(candidate.edge);
+                }
+            }
         }
 
         PlanarOperandBatchSplits {
@@ -6660,6 +6691,172 @@ fn face_bboxes_intersect(
         (Some(a), Some(b)) => a.intersects(b, tol.linear),
         _ => true,
     }
+}
+
+/// **交線を、両側の面のトリム境界で刻む**（4-342。`ZENITH_SPLIT_AT_TRIM=1`）。
+///
+/// **同じ交線に、面ごとに違う「正しい長さ」があります**（4-341）。
+/// 実測（`linkrods.step` の `A面35 × B面1`）: B の面はその交線を端から端まで
+/// 含みますが、**A の面が含むのは真ん中の 45% だけ**です。**A の片と B の片が
+/// 別の稜を持つ**ので、縫合は絶対に合いません。
+///
+/// **どちらかを短くするのでは直りません。** 交線を**両側の出入りする点で
+/// 刻んで、同じ小片を共有**させます。
+///
+/// | 小片 | A | B |
+/// | :--- | :-: | :-: |
+/// | `7.9947 → 7.2796` | 外 | 中 |
+/// | `7.2796 → 5.2038` | **中** | **中** |
+/// | `5.2038 → 3.3816` | 外 | 中 |
+///
+/// **刻むと交線の本数が変わります。** 鎖の組み立てが別物になるので
+/// （4-306 と同じ場所）、**既定では入れていません。**
+fn split_candidate_at_trim_crossings(
+    kind: FaceIntersectionKind,
+    face_a: &Face,
+    face_b: &Face,
+    tol: &Tolerance,
+) -> FaceIntersectionKind {
+    if std::env::var_os("ZENITH_SPLIT_AT_TRIM").is_none() {
+        return kind;
+    }
+    let split_one = |edge: Edge| -> Vec<Edge> {
+        match split_edge_at_trim_crossings(&edge, face_a, face_b, tol) {
+            Some(pieces) if pieces.len() > 1 => pieces,
+            _ => vec![edge],
+        }
+    };
+    match kind {
+        FaceIntersectionKind::Curve { edge } => {
+            let pieces = split_one(edge);
+            if pieces.len() == 1 {
+                FaceIntersectionKind::Curve {
+                    edge: pieces.into_iter().next().expect("one piece"),
+                }
+            } else {
+                FaceIntersectionKind::Curves { edges: pieces }
+            }
+        }
+        FaceIntersectionKind::Curves { edges } => FaceIntersectionKind::Curves {
+            edges: edges.into_iter().flat_map(split_one).collect(),
+        },
+        other => other,
+    }
+}
+
+/// 点がその面のトリムの中にあるか。**読めなければ `None`**——
+/// 「読めなかった」を「外」に化けさせません（4-214 の流儀）。
+fn point_inside_face_trim(face: &Face, point: Point3, tol: &Tolerance) -> Option<bool> {
+    let uv = match &face.geometry {
+        FaceGeometry::Plane(plane) => project_to_plane_uv(point, plane),
+        FaceGeometry::Nurbs(surface) => {
+            let projection =
+                ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric).ok()?;
+            Point2::new(projection.u, projection.v)
+        }
+        _ => return None,
+    };
+    let pcurves = match &face.geometry {
+        FaceGeometry::Plane(_) => face.plane_pcurves().ok()?,
+        _ => face.pcurves(tol).ok()?,
+    };
+    // **多角形の粗さが、そのまま刻む場所の誤差になります**（4-342）。
+    // 1 区間 24 点では、境界までの外れが 1.375e-4 残りました。
+    const PER_SEGMENT: usize = 128;
+    let mut polygon: Vec<Point2> = Vec::new();
+    for segment in pcurves.outer_loop.segments.iter() {
+        let (a, b) = segment.curve.param_range();
+        for step in 0..PER_SEGMENT {
+            polygon.push(
+                segment
+                    .curve
+                    .evaluate(a + (b - a) * (step as f64 / PER_SEGMENT as f64)),
+            );
+        }
+    }
+    if polygon.len() < 3 {
+        return None;
+    }
+    Some(point_in_polygon_2d(uv, &polygon, tol.parametric))
+}
+
+/// 稜を、**どちらかの面のトリムの内外が入れ替わるところ**で刻む。
+fn split_edge_at_trim_crossings(
+    edge: &Edge,
+    face_a: &Face,
+    face_b: &Face,
+    tol: &Tolerance,
+) -> Option<Vec<Edge>> {
+    let (t0, t1) = edge.curve.param_range();
+    if !(t1 > t0) {
+        return None;
+    }
+    const SAMPLES: usize = 256;
+    let at = |index: usize| t0 + (t1 - t0) * (index as f64 / SAMPLES as f64);
+    let state = |t: f64| -> Option<(bool, bool)> {
+        let point = edge.curve.evaluate(t);
+        Some((
+            point_inside_face_trim(face_a, point, tol)?,
+            point_inside_face_trim(face_b, point, tol)?,
+        ))
+    };
+
+    let mut cuts: Vec<f64> = Vec::new();
+    let mut previous = state(at(0))?;
+    for index in 1..=SAMPLES {
+        let current = state(at(index))?;
+        if current != previous {
+            // **境目は二分で詰めます。** 標本の刻みのままだと、両側が
+            // 同じ点で刻めません——**同じ小片を共有させるのが目的**なので、
+            // そこが甘いと意味がありません。
+            let (mut outside, mut inside) = (at(index - 1), at(index));
+            for _ in 0..40 {
+                let middle = (outside + inside) * 0.5;
+                match state(middle) {
+                    Some(sample) if sample == previous => outside = middle,
+                    Some(_) => inside = middle,
+                    None => break,
+                }
+            }
+            cuts.push((outside + inside) * 0.5);
+            previous = current;
+        }
+    }
+    if cuts.is_empty() {
+        return None;
+    }
+
+    let mut pieces: Vec<Edge> = Vec::new();
+    let mut rest = edge.curve.clone();
+    let mut consumed = t0;
+    for cut in cuts {
+        let (lo, hi) = rest.param_range();
+        if cut <= lo + (hi - lo) * 1e-12 || cut >= hi - (hi - lo) * 1e-12 {
+            continue;
+        }
+        let (head, tail) = rest.split_at(cut)?;
+        pieces.push(edge_from_curve(head, tol)?);
+        rest = tail;
+        consumed = cut;
+    }
+    let _ = consumed;
+    pieces.push(edge_from_curve(rest, tol)?);
+    (pieces.len() > 1).then_some(pieces)
+}
+
+fn edge_from_curve(curve: NurbsCurve3, tol: &Tolerance) -> Option<Edge> {
+    let (lo, hi) = curve.param_range();
+    let start = curve.evaluate(lo);
+    let end = curve.evaluate(hi);
+    if (end - start).norm() <= tol.linear {
+        return None;
+    }
+    Some(Edge::new(
+        curve,
+        Vertex::new(start, tol.linear),
+        Vertex::new(end, tol.linear),
+        tol.linear,
+    ))
 }
 
 fn clip_candidate_to_face_bboxes(
