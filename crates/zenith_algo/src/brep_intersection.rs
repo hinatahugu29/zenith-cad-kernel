@@ -5119,6 +5119,43 @@ fn diagnose_selected_face_stitching(
         }
     }
 
+    // **面片ごとに、外周の何割が相手を失っているか**（`ZENITH_FLOAT_WHY=1`。4-320）。
+    //
+    // 稜の側から数えると「相手のいない稜が 42 本」としか言えません。
+    // **面の側から見ると、浮き方の型が分かれます**——外周が丸ごと浮いている
+    // 片（＝その面片自体が余分か、相方が丸ごと欠けている）と、一部だけが
+    // 浮いている片（＝割り方の食い違い）では、直す先が違います。
+    if std::env::var_os("ZENITH_FLOAT_WHY").is_some() {
+        let mut by_face: std::collections::BTreeMap<(u64, bool), (usize, usize)> =
+            std::collections::BTreeMap::new();
+        for (index, use_) in edge_uses.iter().enumerate() {
+            let matched = edge_uses.iter().enumerate().any(|(other, candidate)| {
+                other != index && same_undirected_stitch_edge(use_, candidate, tol.linear)
+            });
+            let slot = by_face
+                .entry((use_.face_id, matches!(use_.operand, BooleanOperand::A)))
+                .or_insert((0, 0));
+            slot.0 += 1;
+            if !matched {
+                slot.1 += 1;
+            }
+        }
+        for ((face_id, is_a), (total, lonely)) in by_face {
+            if lonely == 0 {
+                continue;
+            }
+            eprintln!(
+                "FLOATWHY {} 面 {face_id}: 稜 {total} 本のうち {lonely} 本が浮いている{}",
+                if is_a { "A" } else { "B" },
+                if lonely == total {
+                    " → **丸ごと浮いています**"
+                } else {
+                    ""
+                }
+            );
+        }
+    }
+
     for i in 0..edge_uses.len() {
         let mates: Vec<usize> = edge_uses
             .iter()
