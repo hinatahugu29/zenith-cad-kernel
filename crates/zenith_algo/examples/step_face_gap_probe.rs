@@ -439,6 +439,75 @@ fn main() {
             floats.len()
         );
     }
+    // **共有する稜は、両方の面から見てどれだけ浮いているか**（4-345）。
+    //
+    // 4-344 で「落とす先が面ごとに違う」と書きました。**本当にそうかを
+    // 測ります**——同じ稜を持つ 2 枚の面それぞれについて、その稜が
+    // 相手の曲面からどれだけ浮いているかを見ます。
+    //
+    // - **片方だけ浮いている** → **浮いていない側へ落とせばよい**
+    // - **両方浮いている** → **落とす先を決める話**になります
+    for name in ["screw.step", "linkrods.step"] {
+        let path = occt_sample(name);
+        let Ok(solids) = StepImporter::import_solids_from_file(&path) else {
+            continue;
+        };
+        let Some(subject) = solids
+            .iter()
+            .max_by_key(|solid| face_count(solid))
+            .map(|solid| Regularizer::hold_like_our_own(solid, &tol))
+        else {
+            continue;
+        };
+        let faces = faces_in_order(&subject);
+        // 稜を中点で束ね、**その稜そのもの**と、使っている面を集めます。
+        let mut by_edge: Vec<(Point3, Vec<usize>, zenith_topo::OrientedEdge)> = Vec::new();
+        for (index, face) in faces.iter().enumerate() {
+            for oriented in face.outer_wire.edges.iter() {
+                let middle = oriented.evaluate_normalized(0.5);
+                match by_edge
+                    .iter_mut()
+                    .find(|(point, _, _)| (*point - middle).norm() <= 1e-6)
+                {
+                    Some((_, owners, _)) => owners.push(index),
+                    None => by_edge.push((middle, vec![index], oriented.clone())),
+                }
+            }
+        }
+        let shared: Vec<_> = by_edge.iter().filter(|(_, o, _)| o.len() == 2).collect();
+        let mut both = 0usize;
+        let mut one = 0usize;
+        let mut neither = 0usize;
+        let mut worst_both = 0.0f64;
+        for (_, owners, oriented) in shared.iter() {
+            let mut gaps = [0.0f64; 2];
+            for (slot, owner) in owners.iter().enumerate() {
+                let face = &faces[*owner];
+                let mut worst = 0.0f64;
+                for step in 0..=16 {
+                    let point = oriented.evaluate_normalized(step as f64 / 16.0);
+                    if let Some(distance) = distance_to_surface(face, point, &tol) {
+                        worst = worst.max(distance);
+                    }
+                }
+                gaps[slot] = worst;
+            }
+            let floating = gaps.iter().filter(|g| **g > 1e-9).count();
+            match floating {
+                0 => neither += 1,
+                1 => one += 1,
+                _ => {
+                    both += 1;
+                    worst_both = worst_both.max(gaps[0].min(gaps[1]));
+                }
+            }
+        }
+        println!();
+        println!(
+            "{name}: 2 枚で共有する稜 {} 本——**どちらの面からも浮いていない {neither} 本**、**片方だけ浮いている {one} 本**、**両方浮いている {both} 本**（両方のときの小さいほうの最大 {worst_both:.9}）",
+            shared.len()
+        );
+    }
     println!();
 
     println!("**これは診断です。赤にはしません。** 読んだファイルが自分の申告より");
