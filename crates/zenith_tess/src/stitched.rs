@@ -71,9 +71,9 @@ pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> 
         mesh.merge(&inner_mesh);
     }
 
-    weld(&mut mesh, crate::surface_tess::WELD_TOLERANCE);
+    let survivors = weld(&mut mesh, crate::surface_tess::WELD_TOLERANCE);
     if attribute {
-        explain_face_owners(&mesh, &owners);
+        explain_face_owners(&mesh, &owners, &survivors);
     }
     mesh
 }
@@ -120,11 +120,22 @@ fn tessellate_shell_stitched_owned(
 ///
 /// 溶接は頂点を潰すだけで三角形の並び順を変えないので、溶接前に控えた範囲が
 /// そのまま使えます。
-fn explain_face_owners(mesh: &TriangleMesh, owners: &[(u64, std::ops::Range<usize>)]) {
+fn explain_face_owners(
+    mesh: &TriangleMesh,
+    owners: &[(u64, std::ops::Range<usize>)],
+    survivors: &[usize],
+) {
+    // **溶接は三角形を落とします**（4-333）。落とすので、**溶接後の番号は
+    // 溶接前の番号ではありません**。長いあいだ、ここは溶接前の範囲へ
+    // 直接当てており、**注記のほうが「並び順を変えない」と嘘をついて**
+    // いました。**落ちた数だけずれます。**
+    //
+    // `survivors[i]` が「溶接後の i 番は、溶接前の何番だったか」です。
     let face_of = |triangle: usize| -> Option<u64> {
+        let original = *survivors.get(triangle)?;
         owners
             .iter()
-            .find(|(_, range)| range.contains(&triangle))
+            .find(|(_, range)| range.contains(&original))
             .map(|(id, _)| *id)
     };
     let mut uses: BTreeMap<(u32, u32), Vec<usize>> = BTreeMap::new();
@@ -150,9 +161,19 @@ fn explain_face_owners(mesh: &TriangleMesh, owners: &[(u64, std::ops::Range<usiz
         bad.len(),
         bad.len() - holes
     );
+    eprintln!(
+        "OWNERWHY   溶接前 {} 枚 → 溶接後 {} 枚（落ちた {} 枚）",
+        owners.last().map(|(_, r)| r.end).unwrap_or(0),
+        mesh.indices.len(),
+        owners
+            .last()
+            .map(|(_, r)| r.end)
+            .unwrap_or(0)
+            .saturating_sub(mesh.indices.len())
+    );
     for (id, range) in owners {
         eprintln!(
-            "OWNERWHY   面 {id} の三角形は {}..{}",
+            "OWNERWHY   面 {id} の三角形は {}..{}（溶接前の番号）",
             range.start, range.end
         );
     }
@@ -1432,7 +1453,14 @@ fn oriented_normal(
 }
 
 /// 座標が一致する頂点を1つに束ね、面積0の三角形を落とす（27近傍空間ハッシュ）
-fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
+/// 頂点を溶接し、潰れた・退化した・重複した三角形を落とす。
+///
+/// **戻り値は、残った三角形が元の何番だったか**です（4-333）。
+/// **落とすので、番号は動きます。** 面の割り当てを溶接前の範囲で持って
+/// いると、**落ちた数だけずれます**——`explain_face_owners` が長いあいだ
+/// そうなっており、**注記のほうが「並び順を変えない」と嘘をついて**
+/// いました。
+fn weld(mesh: &mut TriangleMesh, tolerance: f64) -> Vec<usize> {
     let tol = tolerance.max(1e-12);
     let tol_sq = tol * tol;
     let cell_size = tol;
@@ -1504,6 +1532,9 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
 
     let mut seen: std::collections::HashMap<[u32; 3], usize> = Default::default();
     let mut indices = Vec::with_capacity(mesh.indices.len());
+    // **残った三角形が元の何番だったか**（4-333）。落とす段が3つあるので、
+    // 押し込むたびに控えます。
+    let mut survivors: Vec<usize> = Vec::with_capacity(mesh.indices.len());
     let (mut collapsed, mut flat, mut duplicated) = (0usize, 0usize, 0usize);
     let collapse_why = std::env::var_os("ZENITH_COLLAPSE_WHY").is_some();
     for (triangle_index, triangle) in mesh.indices.iter().enumerate() {
@@ -1581,10 +1612,11 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
         } else {
             seen.insert(key, triangle_index);
             indices.push(mapped);
+            survivors.push(triangle_index);
         }
     }
     let before_flaps = indices.len();
-    remove_redundant_flap_triangles(&mut indices);
+    remove_redundant_flap_triangles(&mut indices, &mut survivors);
     if std::env::var_os("ZENITH_TESS_WHY").is_some()
         && (collapsed + flat + duplicated + (before_flaps - indices.len())) > 0
     {
@@ -1598,6 +1630,7 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
     mesh.normals = normals;
     mesh.uvs = uvs;
     mesh.indices = indices;
+    survivors
 }
 
 /// 閉じた面に1枚だけ重なって付いたflapを除く。
@@ -1606,7 +1639,7 @@ fn weld(mesh: &mut TriangleMesh, tolerance: f64) {
 /// `[3, 3, 1]` の辺使用数を持つ三角形が1枚だけ残ることがある。この1枚を
 /// 外すと、過剰な2辺は3回から2回へ戻り、1回だけの対角線は消える。
 /// それ以外の使用数パターンには触れない。
-fn remove_redundant_flap_triangles(indices: &mut Vec<[u32; 3]>) {
+fn remove_redundant_flap_triangles(indices: &mut Vec<[u32; 3]>, survivors: &mut Vec<usize>) {
     loop {
         let mut edge_uses: BTreeMap<(u32, u32), usize> = BTreeMap::new();
         for triangle in indices.iter() {
@@ -1630,6 +1663,9 @@ fn remove_redundant_flap_triangles(indices: &mut Vec<[u32; 3]>) {
             return;
         };
         indices.remove(index);
+        if index < survivors.len() {
+            survivors.remove(index);
+        }
     }
 }
 
@@ -3611,7 +3647,7 @@ mod tests {
     fn a_single_flap_with_two_overused_edges_is_removed() {
         let mut triangles = vec![[0, 1, 3], [1, 0, 4], [1, 2, 5], [2, 1, 6], [0, 1, 2]];
 
-        remove_redundant_flap_triangles(&mut triangles);
+        remove_redundant_flap_triangles(&mut triangles, &mut Vec::new());
 
         assert_eq!(triangles.len(), 4);
         assert!(!triangles.contains(&[0, 1, 2]));
