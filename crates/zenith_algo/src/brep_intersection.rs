@@ -212,6 +212,13 @@ impl BrepIntersectionBuilder {
         let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_boundary_bbox).collect();
         let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_boundary_bbox).collect();
 
+        // **どの組が、どこで落ちたか**（`ZENITH_PAIR_WHY=1`。4-323）。
+        //
+        // 4-322 で「`A面35 × B面5` の交線があるはずなのに1本もない」まで
+        // 絞りました。**落ちる場所は3つ**あります——囲み箱、支持曲面どうしの
+        // 交わり、トリムへの切り詰め。**どこで落ちたかが分かるまで、直す先が
+        // 決まりません。**
+        let pair_why = std::env::var_os("ZENITH_PAIR_WHY").is_some();
         for (face_a_index, face_a) in faces_a.iter().enumerate() {
             for (face_b_index, face_b) in faces_b.iter().enumerate() {
                 if !face_bboxes_intersect(
@@ -219,7 +226,103 @@ impl BrepIntersectionBuilder {
                     bboxes_b[face_b_index].as_ref(),
                     tol,
                 ) {
+                    if pair_why {
+                        // **どれだけ足りないかも出します。** 「交わらない」だけでは、
+                        // **かすっている**のか**遠く離れている**のかが分かりません
+                        // ——直す先がまるで違います。
+                        let gap = match (
+                            bboxes_a[face_a_index].as_ref(),
+                            bboxes_b[face_b_index].as_ref(),
+                        ) {
+                            (Some(a), Some(b)) => {
+                                let axis = |a_min: f64, a_max: f64, b_min: f64, b_max: f64| {
+                                    if a_max < b_min {
+                                        b_min - a_max
+                                    } else if b_max < a_min {
+                                        a_min - b_max
+                                    } else {
+                                        0.0
+                                    }
+                                };
+                                format!(
+                                    "隔たり x {:.9} y {:.9} z {:.9}",
+                                    axis(a.min.x, a.max.x, b.min.x, b.max.x),
+                                    axis(a.min.y, a.max.y, b.min.y, b.max.y),
+                                    axis(a.min.z, a.max.z, b.min.z, b.max.z)
+                                )
+                            }
+                            _ => "囲み箱が取れない".to_string(),
+                        };
+                        eprintln!(
+                            "PAIRWHY A面{face_a_index} x B面{face_b_index}: 囲み箱が交わらない（{gap}）"
+                        );
+                    }
                     continue;
+                }
+                if pair_why {
+                    let support = intersect_face_supports(face_a, face_b, tol);
+                    if support.is_none() {
+                        eprintln!(
+                            "PAIRWHY A面{face_a_index} x B面{face_b_index}: **支持曲面どうしが交わらない**（囲み箱は交わる）"
+                        );
+                    } else if clip_candidate_to_face_bboxes(
+                        support.clone().unwrap().0,
+                        bboxes_a[face_a_index].as_ref(),
+                        bboxes_b[face_b_index].as_ref(),
+                        tol,
+                    )
+                    .is_none()
+                    {
+                        eprintln!(
+                            "PAIRWHY A面{face_a_index} x B面{face_b_index}: **囲み箱への切り詰めで消えた**"
+                        );
+                    } else if clip_candidate_to_planar_trims(support.unwrap().0, face_a, face_b, tol)
+                        .is_none()
+                    {
+                        eprintln!(
+                            "PAIRWHY A面{face_a_index} x B面{face_b_index}: **トリムへの切り詰めで消えた**"
+                        );
+                    } else {
+                        // **通った組の交線が、自分の面からどれだけはみ出すか**（4-323）。
+                        //
+                        // 囲み箱への切り詰めは `Line` にしか掛かっていません
+                        // （`clip_candidate_to_face_bboxes` の `other => Some(other)`）。
+                        // **曲面が絡む交線は、自分の面の外まで伸びたまま通ります。**
+                        // その端が別の面の上に落ちると、そこには組が無いので
+                        // **交線が足りないまま割ろうとして、境界に届かず断られます**
+                        // （4-322）。
+                        let outside = |bbox: Option<&BoundingBox3>, points: &[Point3]| -> f64 {
+                            let Some(bbox) = bbox else { return 0.0 };
+                            points.iter().fold(0.0f64, |worst, point| {
+                                let over = |value: f64, lo: f64, hi: f64| {
+                                    if value < lo {
+                                        lo - value
+                                    } else if value > hi {
+                                        value - hi
+                                    } else {
+                                        0.0
+                                    }
+                                };
+                                worst
+                                    .max(over(point.x, bbox.min.x, bbox.max.x))
+                                    .max(over(point.y, bbox.min.y, bbox.max.y))
+                                    .max(over(point.z, bbox.min.z, bbox.max.z))
+                            })
+                        };
+                        let ends = clip_candidate_to_planar_trims(
+                            intersect_face_supports(face_a, face_b, tol).unwrap().0,
+                            face_a,
+                            face_b,
+                            tol,
+                        )
+                        .map(|kind| candidate_end_points(&kind))
+                        .unwrap_or_default();
+                        let out_a = outside(bboxes_a[face_a_index].as_ref(), &ends);
+                        let out_b = outside(bboxes_b[face_b_index].as_ref(), &ends);
+                        eprintln!(
+                            "PAIRWHY A面{face_a_index} x B面{face_b_index}: 通った（端が A の箱の外へ {out_a:.9}、B の箱の外へ {out_b:.9}）"
+                        );
+                    }
                 }
                 if let Some((kind, analytic)) = intersect_face_supports(face_a, face_b, tol)
                     .and_then(|(kind, analytic)| {
@@ -6515,7 +6618,150 @@ fn clip_candidate_to_face_bboxes(
                 segment_end: point + direction * t_max,
             })
         }
+        // **曲線も、自分の面の囲みへ切り詰められます**（4-323。
+        // **既定では入れていません**——`ZENITH_CURVE_CLIP=1` で入ります）。
+        //
+        // ここは長いあいだ `other => Some(other)` でした——**`Line` だけを
+        // 切り詰め、曲面が絡む交線は素通り**です。素通りした交線は**自分の面の
+        // 外まで伸びたまま**割る段へ渡り、**境界に届かないので割れません**。
+        //
+        // 実測（`linkrods.step`、4-323）: 25 組のうち **9 組**で、交線の端が
+        // A 側の面の囲みを **0.032 〜 0.941** はみ出していました。そして
+        // その 9 枚は、**「交線 1 本を渡されて 1 つも割れない面」10 枚と
+        // 一致**します（4-322）。B 側は全部 1e-8 以下です——平面なので
+        // `Line` として切り詰められていました。
+        FaceIntersectionKind::Curve { edge } => {
+            clip_edge_to_bboxes(edge, bbox_a, bbox_b, tol)
+                .map(|edge| FaceIntersectionKind::Curve { edge })
+        }
+        FaceIntersectionKind::Curves { edges } => {
+            let clipped: Vec<Edge> = edges
+                .into_iter()
+                .filter_map(|edge| clip_edge_to_bboxes(edge, bbox_a, bbox_b, tol))
+                .collect();
+            (!clipped.is_empty()).then_some(FaceIntersectionKind::Curves { edges: clipped })
+        }
         other => Some(other),
+    }
+}
+
+/// 稜を、2つの囲みが重なるところへ切り詰める（4-323）。
+///
+/// **端だけを動かします。** 曲線の中ほどが箱を出て戻る形（弧が箱の角を
+/// またぐ）は、ここでは扱いません——**分けて返すと、交線の本数が変わり、
+/// 後段の鎖の組み立てが別物になります**。端が中に入っていれば、そのまま
+/// 通します。
+///
+/// **切り詰められないときは、元のまま返します。** 切り詰めに失敗したことを
+/// 「交わらない」に化けさせません（4-214 の流儀）。
+fn clip_edge_to_bboxes(
+    edge: Edge,
+    bbox_a: Option<&BoundingBox3>,
+    bbox_b: Option<&BoundingBox3>,
+    tol: &Tolerance,
+) -> Option<Edge> {
+    // **既定では切り詰めません**（4-323）。**入れたら悪化しました**——
+    // `linkrods.step` の相手のいない稜が **48/48/42 → 59/57/51**。
+    //
+    // **診断は当たっていて、直し方が外れ**です。囲み箱は**箱**であって
+    // 面の本当のトリムではないので、**箱の壁で切った端が、どこにも合わない
+    // 新しい頂点**になります。トリム（p-curve）で切るのが筋です。
+    //
+    // **消さずに残すのは、次の人が比べられるようにするため**です。
+    // `ZENITH_CURVE_CLIP=1` で入ります。
+    if std::env::var_os("ZENITH_CURVE_CLIP").is_none() {
+        return Some(edge);
+    }
+    let (Some(bbox_a), Some(bbox_b)) = (bbox_a, bbox_b) else {
+        return Some(edge);
+    };
+    let Some(overlap) = bbox_overlap_where_needed(bbox_a, bbox_b, tol.linear) else {
+        return Some(edge);
+    };
+
+    let (t0, t1) = edge.curve.param_range();
+    if !(t1 > t0) {
+        return Some(edge);
+    }
+    let inside = |t: f64| {
+        let point = edge.curve.evaluate(t);
+        point.x >= overlap.min.x - tol.linear
+            && point.x <= overlap.max.x + tol.linear
+            && point.y >= overlap.min.y - tol.linear
+            && point.y <= overlap.max.y + tol.linear
+            && point.z >= overlap.min.z - tol.linear
+            && point.z <= overlap.max.z + tol.linear
+    };
+    if inside(t0) && inside(t1) {
+        return Some(edge);
+    }
+
+    // 中に入っている標本を探す。**1点も無ければ、切り詰めません**——
+    // 「重なりが無い」と「見つけられなかった」を混ぜないためです。
+    const SAMPLES: usize = 128;
+    let at = |index: usize| t0 + (t1 - t0) * (index as f64 / SAMPLES as f64);
+    let first = (0..=SAMPLES).find(|index| inside(at(*index)))?;
+    let last = (0..=SAMPLES).rev().find(|index| inside(at(*index)))?;
+    if first >= last {
+        return Some(edge);
+    }
+
+    // **境目は二分で詰めます。** 標本の刻みのままだと、端が箱の内側へ
+    // 最大 (t1-t0)/128 ぶん引っ込み、**縫合で合わなくなります**。
+    let refine = |mut outside: f64, mut inside_t: f64| {
+        for _ in 0..40 {
+            let middle = (outside + inside_t) * 0.5;
+            if inside(middle) {
+                inside_t = middle;
+            } else {
+                outside = middle;
+            }
+        }
+        inside_t
+    };
+    let start = if first == 0 {
+        t0
+    } else {
+        refine(at(first - 1), at(first))
+    };
+    let end = if last == SAMPLES {
+        t1
+    } else {
+        refine(at(last + 1), at(last))
+    };
+    if !(end > start) {
+        return Some(edge);
+    }
+    if (start - t0).abs() <= f64::EPSILON && (end - t1).abs() <= f64::EPSILON {
+        return Some(edge);
+    }
+
+    let trimmed = trim_curve(&edge.curve, start, end)?;
+    let start_point = trimmed.evaluate(trimmed.param_range().0);
+    let end_point = trimmed.evaluate(trimmed.param_range().1);
+    if (end_point - start_point).norm() <= tol.linear {
+        return None;
+    }
+    Some(Edge::new(
+        trimmed,
+        Vertex::new(start_point, tol.linear),
+        Vertex::new(end_point, tol.linear),
+        tol.linear,
+    ))
+}
+
+/// 曲線を `[start, end]` に詰める。`split_at` を2回使うだけ。
+fn trim_curve(curve: &NurbsCurve3, start: f64, end: f64) -> Option<NurbsCurve3> {
+    let (t0, t1) = curve.param_range();
+    let tail = if start > t0 {
+        curve.split_at(start)?.1
+    } else {
+        curve.clone()
+    };
+    if end < t1 {
+        Some(tail.split_at(end)?.0)
+    } else {
+        Some(tail)
     }
 }
 
