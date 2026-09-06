@@ -60,6 +60,7 @@ pub use boolean::{
 pub use boolean_validation::{
     exact_inside, BooleanResultReport, BooleanResultVerifier, BooleanVerificationParams,
 };
+pub use brep_intersection::cylinder_patch_is_recognized;
 pub use brep_intersection::hole_rim_use_shapes;
 pub use brep_intersection::point_inside_face_trim_for_probe;
 pub use brep_intersection::{

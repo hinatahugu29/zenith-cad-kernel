@@ -8954,6 +8954,14 @@ fn fit_section_circle(curve: &NurbsCurve3, tol: &Tolerance) -> Option<(Point3, f
 /// Reading the control net directly, as this used to, required every ruling to
 /// be the same vector. That is true of a cylinder and false of a cone, so every
 /// cone was refused and no plane could be intersected with one.
+/// **診断から認識器を呼ぶための口**（4-372）。
+///
+/// `step_surface_shape_probe` は「次数と制御点の数」から**当てはまるかを
+/// 推し量って**いました。**推し量らずに、本物に訊きます。**
+pub fn cylinder_patch_is_recognized(surface: &NurbsSurface3, tol: &Tolerance) -> bool {
+    recognize_cylinder_patch(surface, tol).is_some()
+}
+
 fn recognize_cylinder_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<CylinderPatch> {
     if surface.degree_v != 1 || surface.degree_u != 2 {
         return None;
