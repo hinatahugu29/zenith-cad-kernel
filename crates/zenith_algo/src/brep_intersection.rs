@@ -7178,6 +7178,18 @@ fn split_candidate_at_trim_crossings(
 
 /// 点がその面のトリムの中にあるか。**読めなければ `None`**——
 /// 「読めなかった」を「外」に化けさせません（4-214 の流儀）。
+/// **診断から `point_inside_face_trim` を呼ぶための口**（4-364）。
+///
+/// **中身は同じもの**です。`trim_resolution_probe` が
+/// **「内外判定はどこまで細かく効くか」**を測るために要ります。
+pub fn point_inside_face_trim_for_probe(
+    face: &Face,
+    point: Point3,
+    tol: &Tolerance,
+) -> Option<bool> {
+    point_inside_face_trim(face, point, tol)
+}
+
 fn point_inside_face_trim(face: &Face, point: Point3, tol: &Tolerance) -> Option<bool> {
     let uv = match &face.geometry {
         FaceGeometry::Plane(plane) => project_to_plane_uv(point, plane),
@@ -7199,9 +7211,40 @@ fn point_inside_face_trim(face: &Face, point: Point3, tol: &Tolerance) -> Option
     if polygon.len() < 3 {
         return None;
     }
-    if !point_in_polygon_2d(uv, &polygon, tol.parametric) {
+    // **境界のすぐ近くは、粗い多角形では決まりません**（4-364）。
+    //
+    // 実測（半径 10 の円い境界、37 方向）: **縁から 1e-3 までは正しく、
+    // 1e-4 から間違えます**。しかも**内側の点を「外」と答えます**
+    // ——**多角形は曲線に内接する**ので、真の境界より内側に寄っているからです。
+    // 弦のたるみは 1 区間 128 点で **約 1.9e-4**（4-342 が測った 1.375e-4 と
+    // 同じ桁）。
+    //
+    // **押し出す手は効きません。** いちばん近い多角形の点から離れる向きへ
+    // 動かしても、**同じ多角形で測る限り同じ答え**です——偏りは取れません
+    // （4-364 で書いて、測って外しました）。
+    //
+    // **あいまいな帯にいるときだけ、引き直します。** 帯の幅は弦のたるみで、
+    // 点を細かくすれば**たるみは点数の 2 乗で小さくなります**——8 倍に
+    // すれば 64 分の 1 です。**2 回で 1.9e-4 → 4.6e-8** になります。
+    let mut inside = point_in_polygon_2d(uv, &polygon, tol.parametric);
+    let to_wire = distance_to_outer_wire(face, point);
+    let mut density = PER_SEGMENT;
+    for _ in 0..2 {
+        let sag = polygon_sagitta_bound(&polygon_at(&pcurves.outer_loop, density));
+        if !to_wire.is_finite() || to_wire > sag {
+            break;
+        }
+        density *= 8;
+        let finer = polygon_at(&pcurves.outer_loop, density);
+        if finer.len() < 3 {
+            break;
+        }
+        inside = point_in_polygon_2d(uv, &finer, tol.parametric);
+    }
+    if !inside {
         return Some(false);
     }
+
     // **穴の中は面の外です**（4-362）。
     //
     // **ここは 4-342 から今日まで、外周の輪しか見ていませんでした。**
@@ -7220,6 +7263,27 @@ fn point_inside_face_trim(face: &Face, point: Point3, tol: &Tolerance) -> Option
         }
     }
     Some(true)
+}
+
+/// **多角形の弦がたるむ量の上限**（4-364）。
+///
+/// 真の曲線は、弦より**外側**を通ります（凸なところでは）。どれだけ外かは
+/// **いちばん長い弦の 1/8**（半径 `r`、弦 `c` の弓の高さは
+/// `r - sqrt(r² - c²/4) ≈ c²/(8r)`）で上から押さえられます——`r >= c` を
+/// 使うと `c/8` です。**細かく取るほど小さくなります。**
+fn polygon_sagitta_bound(polygon: &[Point2]) -> f64 {
+    let mut longest = 0.0f64;
+    for index in 0..polygon.len() {
+        let from = polygon[index];
+        let to = polygon[(index + 1) % polygon.len()];
+        longest = longest.max((to - from).norm());
+    }
+    longest / 8.0
+}
+
+/// その輪を、指定の細かさで多角形にする。
+fn polygon_at(loop_data: &FacePcurveLoop, per_segment: usize) -> Vec<Point2> {
+    sample_pcurve_loop(loop_data, per_segment)
 }
 
 /// 稜を、**どちらかの面のトリムの内外が入れ替わるところ**で刻む。
@@ -7668,7 +7732,10 @@ fn clip_curve_to_both_planar_trims(
         pieces = pieces
             .iter()
             .flat_map(|piece| {
+                // **平面なら平面の切り方、曲面なら曲面の切り方**（4-361）。
+                // 曲面のほうは長らく素通りしていました。
                 clip_curve_to_planar_face_trim(piece, face, tol)
+                    .or_else(|| clip_curve_to_nurbs_face_trim(piece, face, tol))
                     .unwrap_or_else(|| vec![piece.clone()])
             })
             .collect();
@@ -7686,6 +7753,119 @@ fn clip_curve_to_both_planar_trims(
 ///
 /// `None` は「切る必要が無い、または切れない」で、呼び手は元のまま使う。
 /// 全部が外なら空の `Vec` を返す。
+/// **曲面の面のトリムでも交線を切る**（4-361。既定で走ります。
+/// `ZENITH_NO_NURBS_CLIP=1` で止まります）。
+///
+/// `clip_curve_to_planar_face_trim` は**平面の面しか切りません**——
+/// `FaceGeometry::Plane` でなければ `None` を返して素通りします。
+/// **`linkrods.step` は NURBS 31 枚・平面 6 枚**なので、**交線のほとんどは
+/// どの面のトリムでも切られていませんでした。**
+///
+/// 実測（4-361）: 面が割れないとき、**届かない端 285 件のうち 195 件（68%）が
+/// 面のトリムの外**にありました。**交線が面より長い**のです。
+///
+/// **やり方は 4-342 と同じ**です——密に標本して**内外が入れ替わるところ**で
+/// 割り、境目は**二分で 40 段**詰めます。内外は `point_inside_face_trim`
+/// （4-342）で見ます。**中にある区間だけ**を返します。
+fn clip_curve_to_nurbs_face_trim(edge: &Edge, face: &Face, tol: &Tolerance) -> Option<Vec<Edge>> {
+    // **既定では走りません**（4-366）。 で入ります。
+    //
+    // `linkrods` は良くなります（132 → 126）が、**連鎖ブーリアンが 2 つ
+    // 断られるようになります**（`rechained_boolean_probe`。
+    // `(cylinder - cylinder) then cut by a box` が 3/3 → 0/3）。
+    // **できていたことをできなくする取引**なので、既定にはしません。
+    if std::env::var_os("ZENITH_NURBS_CLIP").is_none() {
+        return None;
+    }
+    if !matches!(face.geometry, FaceGeometry::Nurbs(_)) {
+        return None;
+    }
+    let (t0, t1) = edge.curve.param_range();
+    if !(t1 > t0) {
+        return None;
+    }
+    const SAMPLES: usize = 128;
+    let at = |index: usize| t0 + (t1 - t0) * (index as f64 / SAMPLES as f64);
+    // **境界の上を走る交線は、捨てません**（4-365）。
+    //
+    // 同軸の円柱どうしは、**交線が面の境界そのものに乗ります**。
+    // 内外の判定は、そこでは**どちらとも言えません**——4-364 で判定を
+    // 鋭くしたぶん、**境界上の点が「外」と出て、交線ごと捨てていました**
+    // （`coaxial_cylinders_sharing_part_of_a_surface_combine_cleanly` が
+    // 落ちて分かりました）。
+    //
+    // **切る段の役目は「面の外へはみ出した分を落とす」ことだけ**です。
+    // **境界の上は、はみ出していません。**
+    let on_boundary = tol.linear;
+    let inside_at = |t: f64| {
+        let point = edge.curve.evaluate(t);
+        if distance_to_outer_wire(face, point) <= on_boundary {
+            return Some(true);
+        }
+        point_inside_face_trim(face, point, tol)
+    };
+
+    // **読めない点が 1 つでもあれば、切りません。** 「読めなかった」を
+    // 「外」に化けさせない（4-214 の流儀）——**切りすぎるより、切らない**。
+    let mut states: Vec<bool> = Vec::with_capacity(SAMPLES + 1);
+    for index in 0..=SAMPLES {
+        states.push(inside_at(at(index))?);
+    }
+    if states.iter().all(|inside| *inside) {
+        // 全部が中なら、切る必要はありません。
+        return None;
+    }
+    if states.iter().all(|inside| !*inside) {
+        // 全部が外なら、この面には渡しません。
+        return Some(Vec::new());
+    }
+
+    // 内外が入れ替わる位置を、二分で詰めます。
+    let mut cuts: Vec<f64> = Vec::new();
+    for index in 1..=SAMPLES {
+        if states[index] == states[index - 1] {
+            continue;
+        }
+        let (mut low, mut high) = (at(index - 1), at(index));
+        let low_state = states[index - 1];
+        for _ in 0..40 {
+            let middle = (low + high) * 0.5;
+            match inside_at(middle) {
+                Some(state) if state == low_state => low = middle,
+                Some(_) => high = middle,
+                None => break,
+            }
+        }
+        cuts.push((low + high) * 0.5);
+    }
+    if cuts.is_empty() {
+        return None;
+    }
+
+    // 区間ごとに切り出し、**中の区間だけ**を残します。
+    let mut bounds = vec![t0];
+    bounds.extend(cuts.iter().copied());
+    bounds.push(t1);
+    let mut pieces: Vec<Edge> = Vec::new();
+    for window in bounds.windows(2) {
+        let (from, to) = (window[0], window[1]);
+        if to - from <= (t1 - t0) * 1e-9 {
+            continue;
+        }
+        let middle = (from + to) * 0.5;
+        if inside_at(middle) != Some(true) {
+            continue;
+        }
+        let Some(curve) = subcurve_between(&edge.curve, from, to) else {
+            continue;
+        };
+        if let Some(piece) = edge_piece(curve, tol) {
+            pieces.push(piece);
+        }
+    }
+    Some(pieces)
+}
+
 fn clip_curve_to_planar_face_trim(edge: &Edge, face: &Face, tol: &Tolerance) -> Option<Vec<Edge>> {
     let FaceGeometry::Plane(plane) = &face.geometry else {
         return None;
