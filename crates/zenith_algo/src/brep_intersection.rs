@@ -11525,3 +11525,79 @@ fn point_inside_pcurve_loop(
     }
     None
 }
+
+#[cfg(test)]
+mod trim_tests {
+    use super::*;
+    use zenith_geom::PlaneSurface3;
+    use zenith_topo::{Orientation, Vertex};
+
+    /// 平面 z=0 の上に、四角い輪を 1 つ組む。
+    fn square_wire(half: f64, tol: f64) -> Wire {
+        let corners = [
+            Point3::new(-half, -half, 0.0),
+            Point3::new(half, -half, 0.0),
+            Point3::new(half, half, 0.0),
+            Point3::new(-half, half, 0.0),
+        ];
+        let mut edges = Vec::new();
+        for index in 0..4 {
+            let from = corners[index];
+            let to = corners[(index + 1) % 4];
+            let curve = NurbsCurve3::bspline_from_points(1, vec![from, to]).expect("直線");
+            edges.push(OrientedEdge::forward(Edge::new(
+                curve,
+                Vertex::new(from, tol),
+                Vertex::new(to, tol),
+                tol,
+            )));
+        }
+        Wire::new(edges)
+    }
+
+    /// **穴の中は、面の外です**（4-363。仕組みは 4-362）。
+    ///
+    /// `point_inside_face_trim` は外周の輪しか見ておらず、**穴の真ん中の点を
+    /// 「中」と答えていました**。平面の側（`clip_curve_to_planar_face_trim`）は
+    /// 最初から穴を見ています——**同じ面について、2 つの関数が逆のことを
+    /// 言っていました。**
+    ///
+    /// **4-362 では、この試験を書けませんでした**——`make_drilled_box` も
+    /// 板−円柱のブーリアンも、**内側の輪を持つ面を 1 枚も作りません**
+    /// （このリポジトリの立体は、穴を「割った面」で表します）。
+    /// **`Face` を直に組めば作れます。**
+    #[test]
+    fn a_point_in_a_hole_is_outside_the_face() {
+        let tol = Tolerance::default();
+        let plane = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .expect("平面");
+        let face = Face::new(
+            FaceGeometry::Plane(plane),
+            square_wire(10.0, tol.linear),
+            vec![square_wire(2.0, tol.linear)],
+            Orientation::Forward,
+            tol.linear,
+        );
+        assert_eq!(face.inner_wires.len(), 1, "検体に内側の輪がありません");
+
+        assert_eq!(
+            point_inside_face_trim(&face, Point3::new(5.0, 5.0, 0.0), &tol),
+            Some(true),
+            "材料の上の点は「中」のはずです"
+        );
+        assert_eq!(
+            point_inside_face_trim(&face, Point3::new(0.0, 0.0, 0.0), &tol),
+            Some(false),
+            "**穴の中が「中」と出ました。** 穴の中は面の外です（4-362）"
+        );
+        assert_eq!(
+            point_inside_face_trim(&face, Point3::new(20.0, 0.0, 0.0), &tol),
+            Some(false),
+            "外周の外の点は「外」のはずです"
+        );
+    }
+}
