@@ -230,11 +230,11 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ## 3. テストスイート検証結果
 
-2026年9月5日にワークスペース全体を Release 構成で回し、**696/696件の成功**を
+2026年9月7日にワークスペース全体を Release 構成で回し、**697/697件の成功**を
 確認しました。警告 0。
 
-- **総テスト数:** **137 テストバイナリ / 696 件 / 失敗 0 / 警告 0**（`cargo test --workspace --release` の実測。**2026/09/05**。696 になったのは 9/5 で、695 から 1 件足しました——穴の縁の見分け方を、**わざと壊すと落ちる**形で固定したものです。4-318）。**`zenith_py` を含みます**——2026/08/30 まで `--exclude zenith_py` で数えており、**Blender へ届く層を1度も測っていませんでした**（9-H の H1 でそこを門へ戻しました。HANDOVER 4-171）。**数え方で値が変わります**——どのコマンドで何を数えたかを、必ず一緒に書いてください（HANDOVER 4-115）
-- **常設プローブ（診断・ゲート）:** `crates/zenith_algo/examples` に **88 本**（2026/09/02 実測）。一覧と、それぞれ何を赤にするかは [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に。CI は `.github/workflows/gates.yml`
+- **総テスト数:** **137 テストバイナリ / 697 件 / 失敗 0 / 警告 0**（`cargo test --workspace --release` の実測。**2026/09/07**。697 になったのは 9/7 で、696 から 1 件足しました——**穴の中は面の外**であることを、**わざと壊すと落ちる**形で固定したものです（4-363。その前の 696 は 9/5 に穴の縁の見分け方を固定したもので、4-318）。**`zenith_py` を含みます**——2026/08/30 まで `--exclude zenith_py` で数えており、**Blender へ届く層を1度も測っていませんでした**（9-H の H1 でそこを門へ戻しました。HANDOVER 4-171）。**数え方で値が変わります**——どのコマンドで何を数えたかを、必ず一緒に書いてください（HANDOVER 4-115）
+- **常設プローブ（診断・ゲート）:** `crates/zenith_algo/examples` に **93 本**（2026/09/07 実測。`ls crates/zenith_algo/examples/*.rs | wc -l` で数えられます）。一覧と、それぞれ何を赤にするかは [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に。CI は `.github/workflows/gates.yml`
 - **外部カーネルとの突き合わせ:** FreeCAD 相互検証 27/27、ショーケース 54/54、書き戻し 7/7、IGES 5/5
 - **非STEP出力（STL / OBJ / glTF / DXF）:** 8/8（`py tools/verify_mesh_exports.py`。FreeCAD 不要で CI に入っている）
 - **Python 往復:** `tools/verify_solid_api.py`（B-Rep ハンドルの口）と `tools/verify_python_binding.py`（メッシュを返す旧い口）とも全合格
