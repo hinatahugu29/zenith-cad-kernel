@@ -1100,13 +1100,18 @@ impl BrepIntersectionBuilder {
         }
         selected_face_pieces.retain(|piece| piece.face.outer_wire.edges.len() >= 2);
 
-        // **含む／含まれる稜を刻みます**（4-356。`ZENITH_EDGE_IMPRINT=1`。
-        // **既定では走りません**）。
+        // **含む／含まれる稜を刻みます**（4-356。**既定で走ります**。
+        // `ZENITH_NO_EDGE_IMPRINT=1` で止まります。4-357）。
         //
         // **縫合を数える前に置きます。** 立体を組む段（`unify_coincident_edges`
         // の手前）に置いたら、**1 本も動きませんでした**——`linkrods` は
         // 縫合の段で断られるので、**組む段まで来ません**。
-        if std::env::var_os("ZENITH_EDGE_IMPRINT").is_some() {
+        //
+        // **既定にした根拠**（4-357）: 14 の門の出力を、入れる前と入れた後で
+        // **1 行ずつ突き合わせました**。**違ったのは時間だけ**です
+        // （`contact_placement_probe` の合計 234.0 → 239.1 秒、**2%**）。
+        // 恒等式も、体積も、面の数も、非多様体の数も**1 つも動きません**。
+        {
             let faces: Vec<Face> = selected_face_pieces
                 .iter()
                 .map(|piece| piece.face.clone())
@@ -6246,7 +6251,7 @@ fn reverse_face_orientation(face: &Face) -> Face {
 /// with two distinct edges along one seam, OpenCASCADE reads the result as an
 /// open shell rather than a solid. Unifying them here is the sewing step.
 /// **同じ弧の上に「丸ごと 1 本」と「半分ずつ 2 本」が並ぶのを直す**
-/// （4-356。`ZENITH_EDGE_IMPRINT=1` で入ります。**既定では走りません**）。
+/// （4-356。**既定で走ります**。`ZENITH_NO_EDGE_IMPRINT=1` で止まります。4-357）。
 ///
 /// 4-355 の実測では、`linkrods.step` の面 623 が**同じ弧の上に
 /// 0.095671（丸ごと）・0.062285（前半）・0.035110（後半）の 3 本**を
@@ -6260,7 +6265,7 @@ fn reverse_face_orientation(face: &Face) -> Face {
 /// **やること**: すべての稜の端点を集め、**別の稜の途中にある点**で
 /// その稜を割ります。割った小片は元の輪の並びに差し込みます。
 fn imprint_contained_edges(faces: Vec<Face>, tol: &Tolerance) -> Vec<Face> {
-    if std::env::var_os("ZENITH_EDGE_IMPRINT").is_none() {
+    if std::env::var_os("ZENITH_NO_EDGE_IMPRINT").is_some() {
         return faces;
     }
     // すべての端点。**同じ点は 1 つに寄せます**——寄せないと、同じ場所で
