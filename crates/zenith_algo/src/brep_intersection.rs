@@ -1100,6 +1100,23 @@ impl BrepIntersectionBuilder {
         }
         selected_face_pieces.retain(|piece| piece.face.outer_wire.edges.len() >= 2);
 
+        // **含む／含まれる稜を刻みます**（4-356。`ZENITH_EDGE_IMPRINT=1`。
+        // **既定では走りません**）。
+        //
+        // **縫合を数える前に置きます。** 立体を組む段（`unify_coincident_edges`
+        // の手前）に置いたら、**1 本も動きませんでした**——`linkrods` は
+        // 縫合の段で断られるので、**組む段まで来ません**。
+        if std::env::var_os("ZENITH_EDGE_IMPRINT").is_some() {
+            let faces: Vec<Face> = selected_face_pieces
+                .iter()
+                .map(|piece| piece.face.clone())
+                .collect();
+            let imprinted = imprint_contained_edges(faces, tol);
+            for (piece, face) in selected_face_pieces.iter_mut().zip(imprinted) {
+                piece.face = face;
+            }
+        }
+
         let stitch_report = diagnose_selected_face_stitching(&selected_face_pieces, tol);
 
         BooleanFaceSelection {
@@ -5603,6 +5620,13 @@ fn diagnose_selected_face_stitching(
                             let worst = on_carrier(other.start)
                                 .max(on_carrier(other.middle))
                                 .max(on_carrier(other.end));
+                            // **これは「同じ円／同じ直線に乗っているか」です**
+                            // ——**「含まれているか」ではありません**（4-356）。
+                            // 円は閉じているので、**反対側の点も乗っています**。
+                            // 「含まれているか」を厳密に見るのは
+                            // `imprint_contained_edges` のほうです（そちらは
+                            // `point_to_curve` の**パラメータが範囲内か**まで
+                            // 見ます）。**数を読み違えないでください。**
                             if worst <= tol.linear.max(1e-4) {
                                 riders += 1;
                                 worst_rider = worst_rider.min(worst);
@@ -5614,6 +5638,19 @@ fn diagnose_selected_face_stitching(
                                 }
                                 if (other.end - other.start).norm() < own_length * 0.999 {
                                     shorter += 1;
+                                    // **どの面から来た短い相手か**（4-355）。
+                                    // 4-354 の「隣が刻まれない」は 11 件で、
+                                    // **896 本を説明できません**。**残りが
+                                    // どの面の組で起きているか**を出します。
+                                    eprintln!(
+                                        "SUBARCPAIR {:?}面{} 稜長 {own_length:.6} ← {:?}面{} 稜長 {:.6}（ずれ {:.9}）",
+                                        use_.operand,
+                                        use_.face_id,
+                                        other.operand,
+                                        other.face_id,
+                                        (other.end - other.start).norm(),
+                                        worst
+                                    );
                                 }
                             }
                         }
@@ -6208,6 +6245,183 @@ fn reverse_face_orientation(face: &Face) -> Face {
 /// shell still closes, but edge *identity* is what a downstream kernel checks:
 /// with two distinct edges along one seam, OpenCASCADE reads the result as an
 /// open shell rather than a solid. Unifying them here is the sewing step.
+/// **同じ弧の上に「丸ごと 1 本」と「半分ずつ 2 本」が並ぶのを直す**
+/// （4-356。`ZENITH_EDGE_IMPRINT=1` で入ります。**既定では走りません**）。
+///
+/// 4-355 の実測では、`linkrods.step` の面 623 が**同じ弧の上に
+/// 0.095671（丸ごと）・0.062285（前半）・0.035110（後半）の 3 本**を
+/// 持っていました。**ずれは 0.000000000**——**公差の話ではなく、同じ曲線**
+/// です。丸ごとの 1 本は半分ずつの 2 本と長さが違うので照合が当たらず、
+/// **1 か所の不一致で 3 本があぶれます**。
+///
+/// `unify_coincident_edges` は**端点が一致する稜**しか束ねられません
+/// ——**片方がもう片方を含む**場合は素通りします。ここで刻みます。
+///
+/// **やること**: すべての稜の端点を集め、**別の稜の途中にある点**で
+/// その稜を割ります。割った小片は元の輪の並びに差し込みます。
+fn imprint_contained_edges(faces: Vec<Face>, tol: &Tolerance) -> Vec<Face> {
+    if std::env::var_os("ZENITH_EDGE_IMPRINT").is_none() {
+        return faces;
+    }
+    // すべての端点。**同じ点は 1 つに寄せます**——寄せないと、同じ場所で
+    // 何度も割ることになります。
+    let mut points: Vec<Point3> = Vec::new();
+    for face in faces.iter() {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in wire.edges.iter() {
+                for point in [
+                    oriented.edge.start_vertex.point,
+                    oriented.edge.end_vertex.point,
+                ] {
+                    if !points
+                        .iter()
+                        .any(|existing| points_same_3d(*existing, point, tol.linear))
+                    {
+                        points.push(point);
+                    }
+                }
+            }
+        }
+    }
+
+    let split_edge = |edge: &Edge, limit: f64| -> Option<Vec<Edge>> {
+        let (t0, t1) = edge.curve.param_range();
+        if !(t1 > t0) {
+            return None;
+        }
+        let mut cuts: Vec<f64> = Vec::new();
+        for point in points.iter() {
+            // **端の点では割りません。** そこは既に境目です。
+            if points_same_3d(*point, edge.start_vertex.point, limit)
+                || points_same_3d(*point, edge.end_vertex.point, limit)
+            {
+                continue;
+            }
+            let Ok(result) = ExtremumEngine::point_to_curve(*point, &edge.curve, 64, 1e-14) else {
+                continue;
+            };
+            if result.distance > limit {
+                continue;
+            }
+            let t = result.parameter;
+            if t <= t0 + (t1 - t0) * 1e-9 || t >= t1 - (t1 - t0) * 1e-9 {
+                continue;
+            }
+            if cuts
+                .iter()
+                .any(|existing| (existing - t).abs() <= (t1 - t0) * 1e-9)
+            {
+                continue;
+            }
+            cuts.push(t);
+        }
+        if cuts.is_empty() {
+            return None;
+        }
+        cuts.sort_by(f64::total_cmp);
+
+        let mut pieces: Vec<Edge> = Vec::new();
+        let mut rest = edge.curve.clone();
+        for cut in cuts {
+            let (lo, hi) = rest.param_range();
+            if cut <= lo + (hi - lo) * 1e-12 || cut >= hi - (hi - lo) * 1e-12 {
+                continue;
+            }
+            let (head, tail) = rest.split_at(cut)?;
+            pieces.push(edge_piece(head, tol)?);
+            rest = tail;
+        }
+        pieces.push(edge_piece(rest, tol)?);
+        (pieces.len() > 1).then_some(pieces)
+    };
+
+    let why = std::env::var_os("ZENITH_IMPRINT_WHY").is_some();
+    let mut cut_edges = 0usize;
+    let mut new_pieces = 0usize;
+    let mut seen_edges = 0usize;
+    let faces: Vec<Face> = faces
+        .into_iter()
+        .map(|face| {
+            // **その面が申告した粗さまでを「同じ点」と見ます**（4-266）。
+            let limit = tol.linear.max(face.tolerance + face.pcurve_tolerance);
+            let face_id = face.id;
+            let mut rebuild = |wire: &Wire| -> Wire {
+                let mut edges: Vec<OrientedEdge> = Vec::new();
+                for oriented in wire.edges.iter() {
+                    seen_edges += 1;
+                    match split_edge(&oriented.edge, limit) {
+                        Some(pieces) => {
+                            cut_edges += 1;
+                            new_pieces += pieces.len();
+                            if why {
+                                eprintln!(
+                                    "IMPRINTWHY 面{} の稜（長さ {:.6}）を {} 本に刻みました",
+                                    face_id,
+                                    (oriented.edge.end_vertex.point
+                                        - oriented.edge.start_vertex.point)
+                                        .norm(),
+                                    pieces.len()
+                                );
+                            }
+                            // **向きを保ちます。** 逆向きの稜なら、小片も
+                            // 逆順に並べます——輪の順番が崩れると、面が
+                            // 閉じなくなります。
+                            let mut oriented_pieces: Vec<OrientedEdge> = pieces
+                                .into_iter()
+                                .map(|piece| match oriented.orientation {
+                                    zenith_topo::Orientation::Forward => {
+                                        OrientedEdge::forward(piece)
+                                    }
+                                    zenith_topo::Orientation::Reversed => {
+                                        OrientedEdge::reversed(piece)
+                                    }
+                                })
+                                .collect();
+                            if oriented.orientation == zenith_topo::Orientation::Reversed {
+                                oriented_pieces.reverse();
+                            }
+                            edges.extend(oriented_pieces);
+                        }
+                        None => edges.push(oriented.clone()),
+                    }
+                }
+                Wire::new(edges)
+            };
+            // `derived_pcurves` は非公開なので、**元の面を書き換えます**
+            // ——組み立て直すと、面が持ち歩いている粗さや導出済みの
+            // p-curve が落ちます（4-266）。
+            let mut face = face;
+            let outer = rebuild(&face.outer_wire);
+            let inner: Vec<Wire> = face.inner_wires.iter().map(&mut rebuild).collect();
+            face.outer_wire = outer;
+            face.inner_wires = inner;
+            face
+        })
+        .collect();
+    if why {
+        eprintln!(
+            "IMPRINTWHY 稜 {seen_edges} 本のうち {cut_edges} 本を刻み、{new_pieces} 本になりました"
+        );
+    }
+    faces
+}
+
+/// 曲線から稜を 1 本。**短すぎるものは作りません。**
+fn edge_piece(curve: NurbsCurve3, tol: &Tolerance) -> Option<Edge> {
+    let (lo, hi) = curve.param_range();
+    let start = curve.evaluate(lo);
+    let end = curve.evaluate(hi);
+    if (end - start).norm() <= tol.linear {
+        return None;
+    }
+    Some(Edge::new(
+        curve,
+        Vertex::new(start, tol.linear),
+        Vertex::new(end, tol.linear),
+        tol.linear,
+    ))
+}
+
 fn unify_coincident_edges(faces: Vec<Face>, tol: &Tolerance) -> Vec<Face> {
     let mut canonical: Vec<Edge> = Vec::new();
 
