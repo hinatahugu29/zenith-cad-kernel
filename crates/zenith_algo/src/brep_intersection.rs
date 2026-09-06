@@ -1639,6 +1639,31 @@ impl BrepIntersectionBuilder {
             return Err("Split edge must lie on the planar face".to_string());
         }
 
+        // **届かない端は、面の外か、中か**（4-361。`ZENITH_INSIDE_WHY=1`）。
+        //
+        // 4-359 で、**届かない端はいちばん近い境界まで中央 1.046**（立体の
+        // 差し渡しは 5 mm ほど）と分かりました。**「少し足りない」ではない**
+        // なら、**外に飛び出しているのか、内側で止まっているのか**で
+        // 直し方が変わります。
+        //
+        // **内側で止まっているなら、それは正しい形かもしれません**——交線は
+        // **相手の面が終わったところで終わります**。**その先は、相手の面の
+        // 境界に沿って続く**べきものです。
+        if std::env::var_os("ZENITH_INSIDE_WHY").is_some() {
+            for (label, point) in [("始点", start), ("終点", end)] {
+                if locate_point_on_wire(boundary, point, tol).is_none() {
+                    let inside = point_inside_face_trim(face, point, tol);
+                    eprintln!(
+                        "INSIDEWHY {label}が境界に届きません: トリムの中か = {}",
+                        match inside {
+                            Some(true) => "中",
+                            Some(false) => "外",
+                            None => "読めません",
+                        }
+                    );
+                }
+            }
+        }
         let start_hit = locate_point_on_wire(boundary, start, tol)
             .ok_or_else(|| "Split edge start does not lie on the outer boundary".to_string())?;
         let end_hit = locate_point_on_wire(boundary, end, tol)
