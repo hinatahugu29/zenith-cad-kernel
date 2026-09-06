@@ -769,6 +769,88 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // **交線の端が、隣の面の境界に乗っていないか**（4-354。
+        // `ZENITH_NEIGHBOUR_WHY=1`）。
+        //
+        // 4-353 で、**同じ線を違う長さで使っているのは A どうし・B どうし**
+        // だと分かりました。**その仕組みの候補**がここです——面 F1 が交線で
+        // 割られると、**F1 の境界の途中に新しい頂点**ができます。**その境界を
+        // 共有する隣の面 F2 が同じ点で割られなければ**、F1 の片は「短い稜」を、
+        // F2 の片は「長い稜」を持ち、**2 本とも相手が見つかりません**。
+        //
+        // **数えるだけです。** 振る舞いは変えていません。
+        if std::env::var_os("ZENITH_NEIGHBOUR_WHY").is_some() {
+            for (side, faces, edges_by_face) in [
+                ("A", faces_a, &edges_by_face_a),
+                ("B", faces_b, &edges_by_face_b),
+            ] {
+                let mut landings = 0usize;
+                let mut unsplit_neighbours = 0usize;
+                for (owner, split_edges) in edges_by_face.iter() {
+                    for edge in split_edges {
+                        for end in [edge.start_vertex.point, edge.end_vertex.point] {
+                            for (index, face) in faces.iter().enumerate() {
+                                if index == *owner {
+                                    continue;
+                                }
+                                // 隣の面の境界に、その点が乗っているか。
+                                //
+                                // **標本で測ってはいけません**（4-354）。
+                                // 最初は 17 点で測って **0 件**が出ましたが、
+                                // **曲がった稜の上の点は、標本の間に落ちます**
+                                // ——4-326 で踏んだのと同じ穴です。
+                                // `point_to_curve` で**曲線そのもの**まで
+                                // 測ります。
+                                let on_wire = face
+                                    .outer_wire
+                                    .edges
+                                    .iter()
+                                    .chain(face.inner_wires.iter().flat_map(|w| w.edges.iter()))
+                                    .any(|oriented| {
+                                        zenith_geom::ExtremumEngine::point_to_curve(
+                                            end,
+                                            &oriented.edge.curve,
+                                            64,
+                                            1e-14,
+                                        )
+                                        .map(|result| {
+                                            result.distance
+                                                <= tol
+                                                    .linear
+                                                    .max(face.tolerance + face.pcurve_tolerance)
+                                        })
+                                        .unwrap_or(false)
+                                    });
+                                if !on_wire {
+                                    continue;
+                                }
+                                landings += 1;
+                                // **その隣の面は、同じ点で割られる予定があるか。**
+                                let will_split = edges_by_face.get(&index).is_some_and(|others| {
+                                    others.iter().any(|other| {
+                                        (other.start_vertex.point - end).norm()
+                                            <= tol.linear.max(1e-5)
+                                            || (other.end_vertex.point - end).norm()
+                                                <= tol.linear.max(1e-5)
+                                    })
+                                });
+                                if !will_split {
+                                    unsplit_neighbours += 1;
+                                    eprintln!(
+                                        "NEIGHBOURWHY {side} 面{owner} の交線の端 ({:.6} {:.6} {:.6}) が 面{index} の境界に乗っていますが、面{index} はそこで割られません",
+                                        end.x, end.y, end.z
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                eprintln!(
+                    "NEIGHBOURWHY {side}: 交線の端が隣の面の境界に乗った回数 {landings}、**そのうち隣が同じ点で割られないもの {unsplit_neighbours}**"
+                );
+            }
+        }
+
         PlanarOperandBatchSplits {
             splits_a: collect_batch_splits_for_faces(faces_a, edges_by_face_a, tol, "A"),
             splits_b: collect_batch_splits_for_faces(faces_b, edges_by_face_b, tol, "B"),
