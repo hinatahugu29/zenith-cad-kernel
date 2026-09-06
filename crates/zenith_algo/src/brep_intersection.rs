@@ -3411,6 +3411,15 @@ fn locate_point_on_wire(edges: &[OrientedEdge], point: Point3, tol: &Tolerance) 
     const REFINE_STEPS: usize = 80;
 
     let mut best: Option<(f64, WireHit)> = None;
+    // **届かなかったとき、いちばん近い稜まで何ぼだったか**（4-359。
+    // `ZENITH_ONWIRE_WHY=1`）。
+    //
+    // **1 本ずつ出してはいけません**——輪のほとんどの稜は「その点が乗って
+    // いない稜」なので、**当たり前に遠い**です。最初そう出して、
+    // **「99% が 0.1 以上」という無意味な表**を作りかけました。
+    // **見たいのは「どの稜にも乗らなかったとき、いちばん近いのはどれだけか」**
+    // です。
+    let mut nearest_miss = f64::INFINITY;
     for (edge_index, edge) in edges.iter().enumerate() {
         let distance_at = |t: f64| (edge.evaluate_normalized(t) - point).norm();
 
@@ -3439,6 +3448,7 @@ fn locate_point_on_wire(edges: &[OrientedEdge], point: Point3, tol: &Tolerance) 
 
         let t = 0.5 * (low + high);
         let distance = distance_at(t);
+        nearest_miss = nearest_miss.min(distance);
         if distance > tol.linear * 10.0 {
             continue;
         }
@@ -3447,6 +3457,13 @@ fn locate_point_on_wire(edges: &[OrientedEdge], point: Point3, tol: &Tolerance) 
         }
     }
 
+    if best.is_none() && nearest_miss.is_finite() && std::env::var_os("ZENITH_ONWIRE_WHY").is_some()
+    {
+        eprintln!(
+            "ONWIREWHY どの稜にも乗りません。いちばん近い稜まで {nearest_miss:.9}（受け入れ {:.9}）",
+            tol.linear * 10.0
+        );
+    }
     best.map(|(_, hit)| hit)
 }
 
