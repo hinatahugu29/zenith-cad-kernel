@@ -7195,21 +7195,31 @@ fn point_inside_face_trim(face: &Face, point: Point3, tol: &Tolerance) -> Option
     // **多角形の粗さが、そのまま刻む場所の誤差になります**（4-342）。
     // 1 区間 24 点では、境界までの外れが 1.375e-4 残りました。
     const PER_SEGMENT: usize = 128;
-    let mut polygon: Vec<Point2> = Vec::new();
-    for segment in pcurves.outer_loop.segments.iter() {
-        let (a, b) = segment.curve.param_range();
-        for step in 0..PER_SEGMENT {
-            polygon.push(
-                segment
-                    .curve
-                    .evaluate(a + (b - a) * (step as f64 / PER_SEGMENT as f64)),
-            );
-        }
-    }
+    let polygon = sample_pcurve_loop(&pcurves.outer_loop, PER_SEGMENT);
     if polygon.len() < 3 {
         return None;
     }
-    Some(point_in_polygon_2d(uv, &polygon, tol.parametric))
+    if !point_in_polygon_2d(uv, &polygon, tol.parametric) {
+        return Some(false);
+    }
+    // **穴の中は面の外です**（4-362）。
+    //
+    // **ここは 4-342 から今日まで、外周の輪しか見ていませんでした。**
+    // 同じことを平面の側（`clip_curve_to_planar_face_trim`）は最初から
+    // やっています——**「円環の平らなキャップに、穴を素通りする丸棒の側面が
+    // 作る円」**が、触れていないのに交線として通る、と書いてあります。
+    //
+    // **こちらだけが、穴を「中」と言っていました。**
+    for inner in pcurves.inner_loops.iter() {
+        let hole = sample_pcurve_loop(inner, PER_SEGMENT);
+        if hole.len() < 3 {
+            continue;
+        }
+        if point_in_polygon_2d(uv, &hole, tol.parametric) {
+            return Some(false);
+        }
+    }
+    Some(true)
 }
 
 /// 稜を、**どちらかの面のトリムの内外が入れ替わるところ**で刻む。
