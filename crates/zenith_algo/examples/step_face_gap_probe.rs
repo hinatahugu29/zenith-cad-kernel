@@ -530,6 +530,16 @@ fn main() {
         let mut one = 0usize;
         let mut neither = 0usize;
         let mut worst_both = 0.0f64;
+        // **面が自分で申告している粗さと比べます**（4-351）。
+        // **1e-9 で切ると、丸め誤差を「浮いている」と数えます**——実測で
+        // `linkrods` の「片方だけ浮いている 29 本」は**全部 1e-7 以下**で、
+        // **どの面の申告よりも小さい**ものでした（4-266 の物差し）。
+        let (mut d_neither, mut d_one, mut d_both) = (0usize, 0usize, 0usize);
+        let mut d_worst_both = 0.0f64;
+        // **曲面の粗さだけ**で測った場合も並べます。**物差しを 1 つしか
+        // 出さないと、それが「本当の数」に見えます**——3 つ並べれば、
+        // **どれを選んだかが読み手に見えます**。
+        let (mut s_neither, mut s_one, mut s_both) = (0usize, 0usize, 0usize);
         for (_, owners, oriented) in shared.iter() {
             let mut gaps = [0.0f64; 2];
             for (slot, owner) in owners.iter().enumerate() {
@@ -543,7 +553,73 @@ fn main() {
                 }
                 gaps[slot] = worst;
             }
+            // **面が持ち歩く粗さは 2 つあります**（4-266）——曲面そのものの
+            // 粗さと、p-curve の粗さ。**境界が曲面に乗っているか**を見るときは
+            // **両方が効きます**（4-326 で分割の受け入れにも同じ和を使いました）。
+            let declared = [
+                faces[owners[0]].tolerance + faces[owners[0]].pcurve_tolerance,
+                faces[owners[1]].tolerance + faces[owners[1]].pcurve_tolerance,
+            ];
+            if std::env::var_os("ZENITH_OVER_DECLARED_WHY").is_some()
+                && gaps
+                    .iter()
+                    .zip(declared.iter())
+                    .filter(|(gap, limit)| *gap > *limit)
+                    .count()
+                    == 2
+            {
+                let start = oriented.evaluate_normalized(0.0);
+                let end = oriented.evaluate_normalized(1.0);
+                println!(
+                    "  OVERDECL {name} 面 {} と面 {}: 浮き {:.9} / {:.9}、申告 {:.9} / {:.9}、長さ {:.6}、({:.4},{:.4},{:.4})→({:.4},{:.4},{:.4})",
+                    faces[owners[0]].id, faces[owners[1]].id,
+                    gaps[0], gaps[1], declared[0], declared[1],
+                    (end - start).norm(),
+                    start.x, start.y, start.z, end.x, end.y, end.z
+                );
+            }
+            match gaps
+                .iter()
+                .zip(declared.iter())
+                .filter(|(gap, limit)| *gap > *limit)
+                .count()
+            {
+                0 => d_neither += 1,
+                1 => d_one += 1,
+                _ => {
+                    d_both += 1;
+                    d_worst_both = d_worst_both.max(gaps[0].min(gaps[1]));
+                }
+            }
+            match gaps
+                .iter()
+                .zip([faces[owners[0]].tolerance, faces[owners[1]].tolerance].iter())
+                .filter(|(gap, limit)| *gap > *limit)
+                .count()
+            {
+                0 => s_neither += 1,
+                1 => s_one += 1,
+                _ => s_both += 1,
+            }
             let floating = gaps.iter().filter(|g| **g > 1e-9).count();
+            // **片方だけ浮いている稜を、1 本ずつ出します**（4-351）。
+            // 4-345 は「`screw` の 5 本から」と言っていますが、**その 5 本が
+            // どんな形なのかは、まだ一度も見ていません**。
+            if floating == 1 && std::env::var_os("ZENITH_ONE_SIDED_WHY").is_some() {
+                let start = oriented.evaluate_normalized(0.0);
+                let end = oriented.evaluate_normalized(1.0);
+                println!(
+                    "  ONESIDED {name} 面 {} と面 {}: 浮き {:.9} / {:.9}、申告 {:.9} / {:.9}、長さ {:.6}、({:.4},{:.4},{:.4})→({:.4},{:.4},{:.4})",
+                    faces[owners[0]].id,
+                    faces[owners[1]].id,
+                    gaps[0],
+                    gaps[1],
+                    faces[owners[0]].tolerance,
+                    faces[owners[1]].tolerance,
+                    (end - start).norm(),
+                    start.x, start.y, start.z, end.x, end.y, end.z
+                );
+            }
             match floating {
                 0 => neither += 1,
                 1 => one += 1,
@@ -557,6 +633,18 @@ fn main() {
         println!(
             "{name}: 2 枚で共有する稜 {} 本——**どちらの面からも浮いていない {neither} 本**、**片方だけ浮いている {one} 本**、**両方浮いている {both} 本**（両方のときの小さいほうの最大 {worst_both:.9}）",
             shared.len()
+        );
+        // **物差しを 3 つ並べます**（4-351）。**1e-9 は、ファイルが約束していない
+        // 数**です。**4-266 の物差し（面が自分で申告する粗さ）が本命**で、
+        // **境界が曲面に乗っているかを見るときは p-curve の粗さも効きます**。
+        println!(
+            "{name}: **物差しを変えて数え直すと**——
+             {:>26} → どちらからも浮かない {} 本、片方だけ {} 本、**両方 {} 本**
+             {:>26} → どちらからも浮かない {} 本、片方だけ {} 本、**両方 {} 本**
+             {:>26} → どちらからも浮かない {d_neither} 本、片方だけ {d_one} 本、**両方 {d_both} 本**（小さいほうの最大 {d_worst_both:.9}）",
+            "1e-9（約束されていない数）", neither, one, both,
+            "面の粗さ", s_neither, s_one, s_both,
+            "面の粗さ ＋ p-curve の粗さ",
         );
     }
     println!();
