@@ -5496,6 +5496,52 @@ fn diagnose_selected_face_stitching(
                             other.end.z
                         );
                     }
+                    // **相手が「この稜の一部」ではないか**（4-353）。
+                    //
+                    // **中点で選んだ「いちばん近い相手」は、部分弧を見つけ
+                    // られません**——同じ弧の 0.54 ぶんを使っている相手の
+                    // 中点は、こちらの中点から離れたところにあります。
+                    //
+                    // **3 点を通る円**を引いて、**相手の 3 点がその上に
+                    // 乗っているか**を見ます。乗っていれば**同じ線を、
+                    // 違う長さで使っている**——**割る位置の食い違い**です。
+                    if std::env::var_os("ZENITH_SUBARC_WHY").is_some() {
+                        let on_carrier = |point: Point3| {
+                            distance_to_arc_carrier(use_.start, use_.middle, use_.end, point)
+                        };
+                        let mut riders = 0usize;
+                        let mut cross_side = 0usize;
+                        let mut shorter = 0usize;
+                        let mut worst_rider = f64::INFINITY;
+                        let own_length = (use_.end - use_.start).norm();
+                        for (j, other) in edge_uses.iter().enumerate() {
+                            if j == i {
+                                continue;
+                            }
+                            let worst = on_carrier(other.start)
+                                .max(on_carrier(other.middle))
+                                .max(on_carrier(other.end));
+                            if worst <= tol.linear.max(1e-4) {
+                                riders += 1;
+                                worst_rider = worst_rider.min(worst);
+                                // **相手側の立体から来ているか**——ここが
+                                // 本命です。**同じ線を、A と B が違う長さで
+                                // 使っている**なら、それは imprint の話です。
+                                if other.operand != use_.operand {
+                                    cross_side += 1;
+                                }
+                                if (other.end - other.start).norm() < own_length * 0.999 {
+                                    shorter += 1;
+                                }
+                            }
+                        }
+                        eprintln!(
+                            "SUBARC {:?} 面 {} 稜長 {own_length:.6}: 同じ線に乗る他の稜 {riders} 本（うち相手側 {cross_side} 本、短いもの {shorter} 本、いちばん近いもの {:.9}）",
+                            use_.operand,
+                            use_.face_id,
+                            if riders == 0 { -1.0 } else { worst_rider }
+                        );
+                    }
                     // **端点に何本つながっているか**（4-292）。
                     //
                     // 閉じた殻では、どの頂点にも少なくとも2本の稜が集まります。
@@ -6169,6 +6215,48 @@ fn reverse_wire(wire: &Wire) -> Wire {
             .map(|edge| OrientedEdge::new(edge.edge.clone(), edge.orientation.reversed()))
             .collect(),
     )
+}
+
+/// **3 点を通る円（または直線）**。**部分弧かどうかを見るために使います**
+/// （4-353）。`StitchEdgeUse` は曲線を持たず、始点・中点・終点の 3 点だけを
+/// 持ちます——**円弧なら、その 3 点で決まります。**
+///
+/// 3 点が一直線に並んでいたら `None`（＝直線として扱ってください）。
+fn circle_through_three_points(a: Point3, b: Point3, c: Point3) -> Option<(Point3, f64, Vec3)> {
+    let ab = b - a;
+    let ac = c - a;
+    let normal = ab.cross(&ac);
+    let n2 = normal.norm_squared();
+    if n2 <= 1e-24 {
+        return None;
+    }
+    let centre = a
+        + (ab.norm_squared() * ac.cross(&normal) + ac.norm_squared() * normal.cross(&ab))
+            / (2.0 * n2);
+    Some((centre, (a - centre).norm(), normal / normal.norm()))
+}
+
+/// 点が、その 3 点の作る円（または線分）からどれだけ離れているか。
+fn distance_to_arc_carrier(a: Point3, b: Point3, c: Point3, point: Point3) -> f64 {
+    match circle_through_three_points(a, b, c) {
+        Some((centre, radius, axis)) => {
+            let offset = point - centre;
+            let along = offset.dot(&axis);
+            let planar = (offset - axis * along).norm();
+            ((planar - radius).powi(2) + along * along).sqrt()
+        }
+        None => {
+            // **一直線なら、その直線までの距離**（線分ではなく直線です——
+            // 部分弧かどうかを見たいので、端の外側でも「線の上」は「上」）。
+            let direction = c - a;
+            let squared = direction.norm_squared();
+            if squared <= 0.0 {
+                return (point - a).norm();
+            }
+            let t = (point - a).dot(&direction) / squared;
+            (point - (a + direction * t)).norm()
+        }
+    }
 }
 
 fn same_undirected_stitch_edge(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -> bool {
