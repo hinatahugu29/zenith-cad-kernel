@@ -1368,7 +1368,7 @@ impl BrepIntersectionBuilder {
                         eprintln!(
                             "      輪 {} 本を閉じたワイヤにできない: {}",
                             edge_loop.edges.len(),
-                            reason.chars().take(150).collect::<String>()
+                            why_text(&reason)
                         );
                     }
                     failed_loop_count += 1
@@ -1787,7 +1787,7 @@ impl BrepIntersectionBuilder {
                         start.x, start.y, start.z, end.x, end.y, end.z
                     );
                     for reason in &reasons {
-                        eprintln!("  {}", reason.chars().take(140).collect::<String>());
+                        eprintln!("  {}", why_text(&reason));
                     }
                 }
             }
@@ -1991,7 +1991,7 @@ impl BrepIntersectionBuilder {
                         start.x, start.y, start.z, end.x, end.y, end.z
                     );
                     for reason in &reasons {
-                        eprintln!("  {}", reason.chars().take(160).collect::<String>());
+                        eprintln!("  {}", why_text(&reason));
                     }
                 }
                 leftover.push(split_edge.clone());
@@ -2050,7 +2050,7 @@ impl BrepIntersectionBuilder {
                         Err(reason) => eprintln!(
                             "LEFTOVERWHY   余り {} 本 → 片 {piece_index}: {}",
                             chain.len(),
-                            reason.chars().take(80).collect::<String>()
+                            why_text(&reason)
                         ),
                     }
                 }
@@ -2103,7 +2103,7 @@ impl BrepIntersectionBuilder {
                                 eprintln!(
                                     "SPLITWHY     鎖 {} 本を当てて断られた: {}",
                                     chain.len(),
-                                    reason.chars().take(160).collect::<String>()
+                                    why_text(&reason)
                                 );
                             }
                             next_faces.push(current_face)
@@ -2153,7 +2153,7 @@ impl BrepIntersectionBuilder {
                                         Err(reason) => eprintln!(
                                             "SPLITWHY     切り詰めた鎖 {} 本: {}",
                                             clipped.len(),
-                                            reason.chars().take(160).collect::<String>()
+                                            why_text(&reason)
                                         ),
                                     }
                                 }
@@ -2262,7 +2262,7 @@ impl BrepIntersectionBuilder {
                                         if why {
                                             eprintln!(
                                                 "CHAINWHY   内側の輪としても断られました: {}",
-                                                inner.chars().take(120).collect::<String>()
+                                                why_text(&inner)
                                             );
                                         }
                                         Err(reason)
@@ -2303,7 +2303,7 @@ impl BrepIntersectionBuilder {
                                     Err(reason) => eprintln!(
                                         "CHAINWHY   鎖 {} 本: {}",
                                         chain.len(),
-                                        reason.chars().take(160).collect::<String>()
+                                        why_text(&reason)
                                     ),
                                 }
                             }
@@ -2396,7 +2396,7 @@ impl BrepIntersectionBuilder {
                                         Err(reason) => eprintln!(
                                             "CHAINWHY   切り詰めた鎖 {} 本: {}",
                                             chain.len(),
-                                            reason.chars().take(160).collect::<String>()
+                                            why_text(&reason)
                                         ),
                                     }
                                 }
@@ -2504,7 +2504,7 @@ impl BrepIntersectionBuilder {
                                     Err(reason) => eprintln!(
                                         "LEFTWHY   鎖 {} 本: {}",
                                         chain.len(),
-                                        reason.chars().take(160).collect::<String>()
+                                        why_text(&reason)
                                     ),
                                 }
                             }
@@ -2558,7 +2558,7 @@ impl BrepIntersectionBuilder {
                                     Err(reason) => eprintln!(
                                         "LEFTWHY   切り詰めた鎖 {} 本: {}",
                                         clipped.len(),
-                                        reason.chars().take(160).collect::<String>()
+                                        why_text(&reason)
                                     ),
                                 }
                             }
@@ -2609,6 +2609,30 @@ struct StitchEdgeUse {
     operand: BooleanOperand,
 }
 
+/// **断り文を、途中で切らずに出す**（4-369）。
+///
+/// 診断は理由を **80〜160 文字で切って**印字していました。**NURBS の割る道は
+/// 4 段の受け皿**で、断り文は `horizontal; vertical; iso; general` と繋がって
+/// 出ます——**160 文字では 4 段目に届きません**。
+///
+/// **4 段目の言い分（`the splitting curve ends N away from the boundary`）は、
+/// 2026/09/07 まで一度も読まれていませんでした**（4-368）。**そこに、今日
+/// いちばん深い事実が書いてありました。**
+///
+/// **診断が、自分のいちばん大事な出力を隠していました。**
+///
+/// 既定は 700 文字。`ZENITH_WHY_CHARS` で変えられます（`0` なら全文）。
+fn why_text(reason: &str) -> String {
+    let limit = std::env::var("ZENITH_WHY_CHARS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(700);
+    if limit == 0 || reason.chars().count() <= limit {
+        return reason.to_string();
+    }
+    reason.chars().take(limit).collect()
+}
+
 fn collect_batch_splits_for_faces(
     faces: &[Face],
     edges_by_face: BTreeMap<usize, Vec<Edge>>,
@@ -2644,7 +2668,7 @@ fn collect_batch_splits_for_faces(
                     Err(reason) => eprintln!(
                         "BATCHWHY {side}面{face_index}: 交線 {} 本 → **断られた**: {}",
                         split_edges.len(),
-                        reason.chars().take(120).collect::<String>()
+                        why_text(&reason)
                     ),
                 }
             }
@@ -2986,12 +3010,12 @@ fn build_caps_from_nested_loops(wires: Vec<Wire>, tol: &Tolerance) -> (Vec<Face>
                                     report
                                         .errors
                                         .first()
-                                        .map(|e| e.chars().take(150).collect::<String>())
+                                        .map(|e| why_text(&e))
                                         .unwrap_or_default()
                                 ),
                                 Err(reason) => eprintln!(
                                     "      蓋の p-curve が取れない: {}",
-                                    reason.chars().take(150).collect::<String>()
+                                    why_text(&reason)
                                 ),
                             }
                         }
@@ -3000,10 +3024,7 @@ fn build_caps_from_nested_loops(wires: Vec<Wire>, tol: &Tolerance) -> (Vec<Face>
                 },
                 Err(reason) => {
                     if trace {
-                        eprintln!(
-                            "      蓋の面が作れない: {}",
-                            reason.chars().take(150).collect::<String>()
-                        );
+                        eprintln!("      蓋の面が作れない: {}", why_text(&reason));
                     }
                     failures += 1
                 }
