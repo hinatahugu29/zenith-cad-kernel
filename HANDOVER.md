@@ -123,6 +123,15 @@
 > **今日 4 回目**でした（4-354、4-356、4-359、4-369）。
 > **診断は呼ばれたときだけ出ます——切る必要がありません。**
 >
+> **33. 4-358 の順位は、切れた文字列で数えたものでした**（4-370）。
+> 数え直すと**筆頭が入れ替わり**——`does not lie on the outer boundary`
+> （117）ではなく **`Only recognized cylinder-side NURBS patches can be
+> split`（126）**。**そもそも「割れる形」だと認識されていません。**
+> そして**2 つの理由が新しく現れました**——**`the splitting curve ends N
+> away from the boundary`（63）**と**`splitting a face that has holes is
+> not implemented`（12）**。**どちらも 160 文字の向こう側**にいました。
+> **「境界に届いていない」を直しても、126 は残ります。**
+>
 > **26. 検体はビルダーではなく、`Face` を直に組めば作れました**（4-363）。
 > 4-362 の「**確かめられませんでした**」を閉じました。**立体を作る必要は
 > ありません**——`Face::new` は内側の輪をそのまま受け取るので、
@@ -26360,6 +26369,13 @@ IMPRINTWHY 稜 251 本のうち 1 本を刻み、2 本になりました
 
 ### 4-358. **残りの入口は、名前の付いた「まだ書いていない」の山でした**（2026年9月6日）
 
+> **⚠ この項の表は 4-370 で数え直しました。** ここの数字は
+> **160 文字で切れた文字列**で数えたもので、**順位が違います**
+> （筆頭は `does not lie on the outer boundary` ではなく
+> **`Only recognized cylinder-side NURBS patches can be split`**）。
+> **2 つの理由は、そもそも見えていませんでした。**
+> **数字は 4-370 を見てください。**
+
 4-357 で 132 本まで来て、**残りの出どころが分からない**と書きました。
 **`ZENITH_BATCH_WHY=1` と `ZENITH_SPLIT_WHY=1` を一緒に回したら、
 名前が付きました。**
@@ -26697,11 +26713,17 @@ cargo run --release -p zenith_algo --example contact_placement_probe
 
 | 断り文 | のべ | 中身 |
 | :--- | ---: | :--- |
-| **`does not lie on the outer boundary`** | **87** | **交線が面より長い**（届かない端の **68% が面の外**。4-361） |
-| `Only recognized cylinder-side NURBS patches` | 60 | **円柱の側面しか割れない**（未実装） |
-| `fewer than three boundary edges` | 42 | **輪が 2 辺以下**（4-293 の一族） |
-| `Split edge is degenerate` | 30 | |
-| `inner wires is not implemented yet` | 12 | **穴のある NURBS 面が割れない**（未実装） |
+| **`Only recognized cylinder-side NURBS patches can be split`** | **126** | **その曲面が「割れる形」だと認識されていません**（4-367） |
+| `Split edge start does not lie on the outer boundary` | 117 | **交線が面より長い**（届かない端の **68% が面の外**。4-361） |
+| **`the splitting curve ends N away from the boundary`** | **63** | **面の途中で終わる切り口**（4-368。中央 0.345、最大 3.318） |
+| `Cannot split a face with fewer than three boundary edges` | 63 | **輪が 2 辺以下**（4-293 の一族） |
+| `Only a three- or four-sided patch face can be split` | 60 | **四辺形しか割れない**（4-367） |
+| `NURBS face splitting with inner wires is not implemented yet` | 36 | **穴のある NURBS 面が割れない**（未実装） |
+| `Split edge is degenerate` | 36 | |
+| **`splitting a face that has holes is not implemented`** | **12** | **穴のある面が割れない**（未実装） |
+
+**数字は 4-370 の数え直しです**（4-358 の表は**160 文字で切れた文字列**で
+数えたもので、**順位が違いました**）。
 
 > **謎ではありません。書いていない機能の山です**（4-358）。
 
@@ -27337,6 +27359,62 @@ the boundary`。4-368）。
 
 **切るなら、切ったことが分かるようにしてください**（`…` を付けるなど）。
 **今日まで、切られていることが出力から分かりませんでした。**
+
+---
+
+### 4-370. **4-358 の順位は、切れた文字列で数えたものでした**（2026年9月7日）
+
+4-369 で断り文が最後まで出るようになったので、**4-358 の集計を
+数え直しました**。**順位が変わり、2 つの理由が新しく現れました。**
+
+| 断り文 | **数え直し** | 4-358（切れていた） |
+| :--- | ---: | ---: |
+| **`Only recognized cylinder-side NURBS patches can be split`** | **126** | 60 |
+| `Split edge start does not lie on the outer boundary` | 117 | 87 |
+| **`the splitting curve ends N away from the boundary`** | **63** | **見えていません** |
+| `Cannot split a face with fewer than three boundary edges` | 63 | 42 |
+| `Only a three- or four-sided patch face can be split` | 60 | （上に混ざっていました） |
+| `NURBS face splitting with inner wires is not implemented yet` | 36 | 12 |
+| `Split edge is degenerate` | 36 | 30 |
+| **`splitting a face that has holes is not implemented`** | **12** | **見えていません** |
+| `Split edge end does not lie on the outer boundary` | 6 | 6 |
+| `Section edge is not a circle about an axis` | 3 | （混ざっていました） |
+
+**3 演算ののべ**です（1 本の交線に対して面片ごとに断り文が出ます）。
+**割合として読んでください。**
+
+#### 一番の理由が入れ替わりました
+
+4-358 は **`does not lie on the outer boundary`（87）を筆頭**として、
+**「交線の端が境界に届いていない」を 1 番目の宿題**に置きました。
+
+**数え直すと、筆頭は
+`Only recognized cylinder-side NURBS patches can be split`（126）**です
+——**そもそも、その曲面が「割れる形」だと認識されていません。**
+
+#### 見えていなかった 2 つ
+
+| | |
+| :--- | :--- |
+| **`the splitting curve ends N away from the boundary`（63）** | 4-368 の中身。**面の途中で終わる切り口** |
+| **`splitting a face that has holes is not implemented`（12）** | **穴のある面は割れません**。名指しで未実装 |
+
+**どちらも 4 段目・5 段目**で、**160 文字の向こう側**にいました。
+
+#### 何を意味するか
+
+**「境界に届いていない」を直しても、126 は残ります。**
+
+**壁は 4-367 で書いたとおり**——**NURBS の面を割る道が、円柱の側面に
+限られている**ことです。**数え直して、それが数字でも 1 番になりました。**
+
+#### 次に触る人へ
+
+**4-358 の表を根拠に使わないでください。** **切れた文字列で数えたもの**です。
+**この項の表を使ってください。**
+
+**そして、集計を取る前に「その文字列は切れていないか」を見てください。**
+**今日は、切れていることが出力から分かりませんでした。**
 
 ---
 
