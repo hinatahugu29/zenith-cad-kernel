@@ -328,6 +328,80 @@ fn main() {
     }
 
     println!("{}", "-".repeat(112));
+
+    // ---- 連鎖（4-404）----
+    //
+    // **1 回通ることと、結果をもう 1 回切れることは、別**です。
+    // **フィーチャー履歴は連鎖**なので、そこが通らないと実務になりません。
+    //
+    // **恒等式を、2 段目でも見ます。**
+    println!();
+    println!("連鎖（結果をもう 1 度切る）");
+    println!();
+    let plane = WorkPlane::xy();
+    let mut chained = 0usize;
+    let mut chain_broken = 0usize;
+    let mut chain_refused = 0usize;
+    let mut chain_worst = 0.0f64;
+    let mut plate = rectangle(0.0, 0.0, 40.0, 30.0);
+    add_circle(&mut plate, 20.0, 15.0, 6.0);
+    if let Ok(first) = extrude_sketch(&plate, &plane, 10.0, &tol) {
+        let step1 = PrimitiveBuilder::make_box(12.0, 12.0, 40.0)
+            .map(|b| zenith_algo::BrepTransform::translate_solid(&b, Vec3::new(2.0, 2.0, -10.0)));
+        if let Ok(cutter) = step1 {
+            if let Ok(after) =
+                BooleanEngine::boolean_solids_exact(&first, &cutter, BooleanOpType::Difference, &tol)
+            {
+                // **2 段目**——結果を、別の相手で切ります。
+                let second = PrimitiveBuilder::make_cylinder(5.0, 40.0).map(|c| {
+                    zenith_algo::BrepTransform::translate_solid(&c, Vec3::new(33.0, 22.0, -10.0))
+                });
+                if let Ok(pin) = second {
+                    chained += 1;
+                    let va = volume_of(std::slice::from_ref(&after));
+                    let vb = volume_of(std::slice::from_ref(&pin));
+                    let mut got: [Option<f64>; 3] = [None, None, None];
+                    for (index, op) in [
+                        BooleanOpType::Union,
+                        BooleanOpType::Intersection,
+                        BooleanOpType::Difference,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        match BooleanEngine::boolean_solids_exact_result(&after, &pin, op, &tol) {
+                            Ok(result) => got[index] = Some(volume_of(&result.solids)),
+                            Err(reason) => {
+                                chain_refused += 1;
+                                notes.push(format!("  連鎖の2段目: {reason}"));
+                            }
+                        }
+                    }
+                    match (got[0], got[1], got[2]) {
+                        (Some(u), Some(i), Some(d)) => {
+                            let scale = (va + vb).abs().max(1.0);
+                            let worst = (((u + i) - (va + vb)).abs() / scale)
+                                .max(((d + i) - va).abs() / scale);
+                            chain_worst = chain_worst.max(worst);
+                            if worst > 1e-9 {
+                                chain_broken += 1;
+                            }
+                            println!(
+                                "  穴のある板 → 箱で差 → 円柱で 3 演算: 恒等式の残差 {worst:.3e}"
+                            );
+                        }
+                        _ => println!("  穴のある板 → 箱で差 → 円柱: **断られました**"),
+                    }
+                }
+            } else {
+                println!("  1 段目（穴のある板 − 箱）が断られました");
+            }
+        }
+    }
+    println!();
+    println!("連鎖 {chained} 本、破れ {chain_broken} 件、断り {chain_refused} 件（残差の最悪 {chain_worst:.3e}）");
+    broken += chain_broken;
+
     if !notes.is_empty() {
         println!();
         println!("断り文:");
