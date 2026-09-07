@@ -245,6 +245,60 @@ fn main() {
             if after > volume + 1e-6 {
                 return Ok(Some(format!("{after:.3} > {volume:.3}")));
             }
+
+            // **恒等式でも見ます**（4-408）。
+            //
+            // **「減った」だけでは弱すぎます**——**減りすぎていても通ります**。
+            // **閉じた式が無くても誤答を映すのは恒等式**です（4-142、4-191）。
+            //
+            // ```text
+            // |A＼B| + |A∩B| = |A|
+            // |A∪B| + |A∩B| = |A| + |B|
+            // ```
+            //
+            // **掃いた立体・ロフト・らせん・歯車には、これを 1 度も
+            // 当てていませんでした**——`closure_probe` は「減ったか」だけ、
+            // `contact_placement_probe` の検体はプリミティブだけです。
+            let sum_of = |solids: &[Solid]| -> f64 {
+                solids
+                    .iter()
+                    .map(|s| MassCalculator::compute_from_brep(s, &params()).volume)
+                    .sum()
+            };
+            let knife_volume =
+                MassCalculator::compute_from_brep(&knife, &params()).volume;
+            // **積と和が断られたら、恒等式は見ません。**
+            //
+            // **断りは欠陥ではありません**（この台本の下の注記どおり）。
+            // **切り手が当たっていない置き方**もあります——**回した輪の
+            // 穴を、切り手がそのまま通り抜けます**。**そこで「積が空」なのは
+            // 正しい**ので、**恒等式を当てる相手がいません。**
+            //
+            // **差だけは上で見てあります**（減ったか）。
+            let (Ok(intersection), Ok(union)) = (
+                BooleanEngine::boolean_solids_exact_result(
+                    &solid,
+                    &knife,
+                    BooleanOpType::Intersection,
+                    &tol,
+                ),
+                BooleanEngine::boolean_solids_exact_result(
+                    &solid,
+                    &knife,
+                    BooleanOpType::Union,
+                    &tol,
+                ),
+            ) else {
+                return Ok(None);
+            };
+            let (vi, vu): (f64, f64) = (sum_of(&intersection.solids), sum_of(&union.solids));
+            let scale = (volume + knife_volume).abs().max(1.0);
+            let first = ((after + vi) - volume).abs() / scale;
+            let second = ((vu + vi) - (volume + knife_volume)).abs() / scale;
+            let worst = first.max(second);
+            if worst > 1e-9 {
+                return Ok(Some(format!("恒等式の残差 {worst:.3e}")));
+            }
             Ok(None)
         }));
 
