@@ -57,6 +57,67 @@ fn edge_use_counts(
     counts
 }
 
+/// **スケッチから作った検体**（4-406）。
+///
+/// **穴つき**（内側の輪）、**円弧を含む輪郭**、**回して作った立体**の 3 つ。
+/// **どれもプリミティブには無い位相**です。
+fn sketch_solids(tol: &Tolerance) -> Vec<(&'static str, Solid)> {
+    use zenith_algo::{extrude_sketch, revolve_sketch, SketchSolver, WorkPlane};
+    use zenith_math::Point2;
+
+    let rectangle = |x0: f64, y0: f64, w: f64, h: f64| {
+        let mut solver = SketchSolver::new();
+        let a = solver.add_point(x0, y0);
+        let b = solver.add_point(x0 + w, y0);
+        let c = solver.add_point(x0 + w, y0 + h);
+        let d = solver.add_point(x0, y0 + h);
+        solver.add_line(a, b);
+        solver.add_line(b, c);
+        solver.add_line(c, d);
+        solver.add_line(d, a);
+        solver
+    };
+    let add_circle = |solver: &mut SketchSolver, cx: f64, cy: f64, r: f64| {
+        let centre = solver.add_point(cx, cy);
+        let east = solver.add_point(cx + r, cy);
+        let north = solver.add_point(cx, cy + r);
+        let west = solver.add_point(cx - r, cy);
+        let south = solver.add_point(cx, cy - r);
+        solver.add_arc(centre, east, north, true);
+        solver.add_arc(centre, north, west, true);
+        solver.add_arc(centre, west, south, true);
+        solver.add_arc(centre, south, east, true);
+    };
+
+    let plane = WorkPlane::xy();
+    let mut out = Vec::new();
+
+    let mut holed = rectangle(0.0, 0.0, 40.0, 30.0);
+    add_circle(&mut holed, 20.0, 15.0, 6.0);
+    if let Ok(solid) = extrude_sketch(&holed, &plane, 10.0, tol) {
+        out.push(("sketch: plate with a round hole", solid));
+    }
+
+    let mut two_holes = rectangle(0.0, 0.0, 60.0, 30.0);
+    add_circle(&mut two_holes, 15.0, 15.0, 4.0);
+    add_circle(&mut two_holes, 45.0, 15.0, 4.0);
+    if let Ok(solid) = extrude_sketch(&two_holes, &plane, 8.0, tol) {
+        out.push(("sketch: plate with two holes", solid));
+    }
+
+    if let Ok(solid) = revolve_sketch(
+        &rectangle(10.0, 0.0, 4.0, 6.0),
+        &plane,
+        Point2::new(0.0, 0.0),
+        Point2::new(0.0, 1.0),
+        tol,
+    ) {
+        out.push(("sketch: revolved ring", solid));
+    }
+
+    out
+}
+
 fn probe(name: &str, solid: &Solid, divisions: usize) -> bool {
     let params = TessellationParams {
         u_divisions: divisions,
@@ -160,6 +221,16 @@ fn main() {
                 .unwrap(),
             divisions,
         );
+        // **スケッチから作った立体**（4-406）。
+        //
+        // **位相がプリミティブと違います**——**穴が最初から内側の輪として
+        // 入り**、**円弧が輪の一部**として混ざります（4-392）。
+        // **その形をテッセレーションに掛けたことが、1 度もありません。**
+        //
+        // **画面と STL に出るのはここ**です。**開いていれば、切れません。**
+        for (name, solid) in sketch_solids(&tol) {
+            all_closed &= probe(name, &solid, divisions);
+        }
         println!();
     }
 
