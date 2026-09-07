@@ -32,8 +32,13 @@ import re
 import sys
 
 
-def tally(path):
-    """`split nothing` の直後にぶら下がる断り文を、段ごとにばらして数える。"""
+def tally(path, deciding_only=True):
+    """`split nothing` の直後にぶら下がる断り文を数える。
+
+    `deciding_only` なら**最後の段の理由だけ**を数えます。前の段の理由は
+    「次の段が引き取った」だけかもしれないので、割れなかった理由では
+    ありません（4-383）。
+    """
     lines = io.open(path, encoding="utf-8", errors="replace").read().splitlines()
     reasons = collections.Counter()
     counted = 0
@@ -47,7 +52,10 @@ def tally(path):
             if follow.lstrip().startswith(("SPLITWHY", "CHAINWHY", "CYLWHY")):
                 break
             counted += 1
-            for part in follow.strip().split("; "):
+            parts = follow.strip().split("; ")
+            if deciding_only:
+                parts = parts[-1:]
+            for part in parts:
                 # 数字は丸めて、同じ種類をまとめます。
                 part = re.sub(r"[0-9]+\.[0-9]+e?[+-]?[0-9]*", "N", part).strip()
                 if part:
@@ -56,14 +64,17 @@ def tally(path):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("使い方: py tools/tally_split_reasons.py <read_and_cut_probe の出力>")
+    argv = [a for a in sys.argv[1:] if a != "--all"]
+    deciding_only = "--all" not in sys.argv[1:]
+    if len(argv) != 1:
+        print("使い方: py tools/tally_split_reasons.py [--all] <read_and_cut_probe の出力>")
         return 1
-    counted, reasons = tally(sys.argv[1])
+    counted, reasons = tally(argv[0], deciding_only)
     if not reasons:
         print("断り文が見つかりません。ZENITH_SPLIT_WHY=1 を付けて回しましたか。")
         return 1
-    print(f"断り文の行 {counted} 本、種類 {len(reasons)}（3 演算ののべ）")
+    scope = "決め手だけ" if deciding_only else "**全部の段**（決め手ではありません）"
+    print(f"断り文の行 {counted} 本、種類 {len(reasons)}（3 演算ののべ。{scope}）")
     print()
     print(f"| {'断り文':<64} | のべ |")
     print(f"| {'-' * 64} | ---: |")
