@@ -456,6 +456,114 @@ fn main() {
         }
     }
 
+    // ---- 鏡像・配列を、ブーリアンの相手にする（4-403）----
+    //
+    // **体積が合うことと、ブーリアンの相手になれることは、別**です。
+    // **鏡像は、中で向きが裏返ります**——**そこは、このリポジトリが
+    // 何度も踏んできた所**です（4-134「裏返しの立体が打ち消し合って
+    // 検査を通る」、4-133「空洞シェルの向きが揃っていなかった」）。
+    //
+    // **恒等式で測ります。** **閉じた式が無くても誤答を映します。**
+    let identity_cases: Vec<(&str, Solid, Solid)> = {
+        let mut out = Vec::new();
+        let plate = PrimitiveBuilder::make_box(30.0, 20.0, 10.0).expect("box");
+        let pin = PrimitiveBuilder::make_cylinder(4.0, 30.0).expect("cylinder");
+        if let Ok(mirrored) = MirrorBuilder::mirror_solid(
+            &plate,
+            Point3::new(50.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            &tol,
+        ) {
+            out.push((
+                "鏡像の板 × 円柱",
+                mirrored,
+                zenith_algo::BrepTransform::translate_solid(
+                    &pin,
+                    Vec3::new(75.0, 10.0, -10.0),
+                ),
+            ));
+        }
+        // **鏡像どうし。** 両方の向きが裏返っています。
+        if let (Ok(a), Ok(b)) = (
+            MirrorBuilder::mirror_solid(
+                &plate,
+                Point3::new(50.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                &tol,
+            ),
+            MirrorBuilder::mirror_solid(
+                &PrimitiveBuilder::make_box(12.0, 12.0, 40.0).expect("box"),
+                Point3::new(50.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                &tol,
+            ),
+        ) {
+            out.push((
+                "鏡像の板 × 鏡像の箱",
+                a,
+                zenith_algo::BrepTransform::translate_solid(&b, Vec3::new(0.0, 4.0, -10.0)),
+            ));
+        }
+        // **配列複製の 1 つ**を相手にする。
+        if let Ok(copies) = PatternBuilder::linear_pattern(&pin, Vec3::new(1.0, 0.0, 0.0), 12.0, 3)
+        {
+            if let Some(second) = copies.get(1) {
+                out.push((
+                    "板 × 配列の 2 個目",
+                    plate.clone(),
+                    zenith_algo::BrepTransform::translate_solid(
+                        second,
+                        Vec3::new(2.0, 10.0, -10.0),
+                    ),
+                ));
+            }
+        }
+        out
+    };
+
+    for (name, a, b) in &identity_cases {
+        let va = volume(a);
+        let vb = volume(b);
+        let mut got: [Option<f64>; 3] = [None, None, None];
+        for (index, op) in [
+            zenith_algo::BooleanOpType::Union,
+            zenith_algo::BooleanOpType::Intersection,
+            zenith_algo::BooleanOpType::Difference,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if let Ok(result) = zenith_algo::BooleanEngine::boolean_solids_exact_result(a, b, op, &tol)
+            {
+                got[index] = Some(
+                    result
+                        .solids
+                        .iter()
+                        .map(volume)
+                        .sum::<f64>(),
+                );
+            }
+        }
+        let measured = match (got[0], got[1], got[2]) {
+            (Some(u), Some(i), Some(d)) => {
+                let scale = (va + vb).abs().max(1.0);
+                Ok((((u + i) - (va + vb)).abs() / scale)
+                    .max(((d + i) - va).abs() / scale))
+            }
+            _ => Err("3 演算のどれかが断られました".to_string()),
+        };
+        rows.push(Row {
+            name: match *name {
+                "鏡像の板 × 円柱" => "恒等式: 鏡像の板 × 円柱",
+                "鏡像の板 × 鏡像の箱" => "恒等式: 鏡像 × 鏡像",
+                _ => "恒等式: 板 × 配列の 2 個目",
+            },
+            // **恒等式の残差は 0 であるべき**です。
+            expected: 0.0,
+            measured,
+        });
+    }
+
     // ---- 出力 ----
     println!("呼び手が 1 人もいない公開関数を、閉じた式で測る（4-395）");
     println!();
