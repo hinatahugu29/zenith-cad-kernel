@@ -805,23 +805,62 @@ impl BrepIntersectionBuilder {
             // 化けさせません（4-214 の流儀）。
             point_inside_face_trim(face, middle, tol).unwrap_or(true)
         };
+        // **片側だけを切る口**（4-394。`ZENITH_SIDE_CLIP=1`。**既定では
+        // 走りません**）。
+        //
+        // **`ZENITH_NURBS_CLIP`（②）は、1 本の交線を切って、その 1 本を
+        // A と B の両方を割るのに使います。** ところが**はみ出しは A 側
+        // だけ**でした（4-380）。**片側のために切って、両側で使っている**
+        // ので、**A は良くならず、B だけが 8 枚壊れます**（4-387。
+        // 減った 8 枚は 8 枚とも B の面。A の面 16 枚は 1 枚も変わらず）。
+        //
+        // **ここでは、渡す先の面のトリムだけで切ります**——**A へ渡す分は
+        // A の面で、B へ渡す分は B の面で**。**同じ交線が、行き先ごとに
+        // 違う長さになります。**
+        let side_clip = std::env::var_os("ZENITH_SIDE_CLIP").is_some();
+        // **効いたかどうかを数えます。** **「入れたのに何も起きない」と
+        // 「入れたが効かない」を、出力で見分けられるようにします**
+        // （4-386 の教訓——揃った数だけを見ない）。
+        let mut clipped_count = 0usize;
+        let mut dropped_count = 0usize;
+        let mut clipped_for = |face: &Face, edge: &Edge| -> Vec<Edge> {
+            if !side_clip {
+                return vec![edge.clone()];
+            }
+            match clip_curve_to_planar_face_trim(edge, face, tol)
+                .or_else(|| clip_curve_to_nurbs_face_trim_inner(edge, face, tol))
+            {
+                Some(pieces) => {
+                    if pieces.is_empty() {
+                        dropped_count += 1;
+                    } else {
+                        clipped_count += 1;
+                    }
+                    pieces
+                }
+                None => vec![edge.clone()],
+            }
+        };
         for candidate in edge_candidates {
             if let Some(face) = faces_a.get(candidate.face_a_index) {
                 if keep_for(face, &candidate.edge) {
-                    edges_by_face_a
-                        .entry(candidate.face_a_index)
-                        .or_default()
-                        .push(candidate.edge.clone());
+                    let pieces = clipped_for(face, &candidate.edge);
+                    let entry = edges_by_face_a.entry(candidate.face_a_index).or_default();
+                    entry.extend(pieces);
                 }
             }
             if let Some(face) = faces_b.get(candidate.face_b_index) {
                 if keep_for(face, &candidate.edge) {
-                    edges_by_face_b
-                        .entry(candidate.face_b_index)
-                        .or_default()
-                        .push(candidate.edge);
+                    let pieces = clipped_for(face, &candidate.edge);
+                    let entry = edges_by_face_b.entry(candidate.face_b_index).or_default();
+                    entry.extend(pieces);
                 }
             }
+        }
+        if side_clip {
+            eprintln!(
+                "SIDECLIP 切り詰めた {clipped_count} 本、全部外で落とした {dropped_count} 本"
+            );
         }
 
         // **交線の端が、隣の面の境界に乗っていないか**（4-354。
@@ -8166,15 +8205,33 @@ fn clip_curve_to_both_planar_trims(
 /// 割り、境目は**二分で 40 段**詰めます。内外は `point_inside_face_trim`
 /// （4-342）で見ます。**中にある区間だけ**を返します。
 fn clip_curve_to_nurbs_face_trim(edge: &Edge, face: &Face, tol: &Tolerance) -> Option<Vec<Edge>> {
-    // **既定では走りません**（4-366）。 で入ります。
+    // **既定では走りません**（4-366）。`ZENITH_NURBS_CLIP=1` で入ります。
     //
     // `linkrods` は良くなります（132 → 126）が、**連鎖ブーリアンが 2 つ
     // 断られるようになります**（`rechained_boolean_probe`。
     // `(cylinder - cylinder) then cut by a box` が 3/3 → 0/3）。
     // **できていたことをできなくする取引**なので、既定にはしません。
+    //
+    // **そして 4-384・4-387 で、取引ですらないと分かりました**——
+    // **減る 8 枚は 8 枚とも切り手（B）の面**で、**読んだ立体（A）の面は
+    // 1 枚も変わりません**。**片側のために切って、両側で使っている**のが
+    // 効いていない理由です。**片側だけに効かせる口**は
+    // `clip_curve_to_face_trim`（4-394）にあります。
     if std::env::var_os("ZENITH_NURBS_CLIP").is_none() {
         return None;
     }
+    clip_curve_to_nurbs_face_trim_inner(edge, face, tol)
+}
+
+/// **面 1 枚のトリムで交線を切る**（環境変数の門を通りません）。
+///
+/// `clip_curve_to_nurbs_face_trim` の中身です。**呼ぶ側で入り切りを
+/// 決めたいとき**に使います（4-394 の片側クリップ）。
+fn clip_curve_to_nurbs_face_trim_inner(
+    edge: &Edge,
+    face: &Face,
+    tol: &Tolerance,
+) -> Option<Vec<Edge>> {
     if !matches!(face.geometry, FaceGeometry::Nurbs(_)) {
         return None;
     }
