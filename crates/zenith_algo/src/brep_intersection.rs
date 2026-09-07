@@ -372,6 +372,46 @@ impl BrepIntersectionBuilder {
         // **接する所の継ぎ目を、解析的な交線から作り直します**（4-182）。
         Self::rebuild_tangent_joints(faces_a, faces_b, &mut candidates, tol);
 
+        // **輪のあとに足された候補にも、トリムへの切り詰めを掛けます**
+        // （4-382。`ZENITH_LATE_CLIP=1`。**既定では走りません**）。
+        //
+        // **切り詰めは、組ごとの輪の中にしかありません**（4-381）。
+        // **上の 2 段は切り詰めを通さずに候補を足す**ので、
+        // **`ZENITH_NURBS_CLIP=1` を入れても、そこで足された分は
+        // はみ出したまま**です——実測で **3 組**（`A面13/17/31 x B面0`）、
+        // **②を入れても残る 3 個の端の持ち主**がこれでした。
+        //
+        // **ただし、この 2 段は「抜ける弧を拾う」ために足したもの**です
+        // （4-62、4-182）。**拾ったものを切り詰めると、拾った意味が
+        // 消えるかもしれません**——**だから既定にせず、口にしてあります。**
+        if std::env::var_os("ZENITH_LATE_CLIP").is_some() {
+            let before = candidates.len();
+            let mut dropped = 0usize;
+            candidates.retain_mut(|candidate| {
+                let (Some(face_a), Some(face_b)) = (
+                    faces_a.get(candidate.face_a_index),
+                    faces_b.get(candidate.face_b_index),
+                ) else {
+                    return true;
+                };
+                match clip_candidate_to_planar_trims(candidate.kind.clone(), face_a, face_b, tol) {
+                    Some(kind) => {
+                        candidate.kind = kind;
+                        true
+                    }
+                    None => {
+                        dropped += 1;
+                        false
+                    }
+                }
+            });
+            if std::env::var_os("ZENITH_PAIR_WHY").is_some() {
+                eprintln!(
+                    "LATECLIP 輪のあとの候補 {before} 本を切り詰め、{dropped} 本が消えました"
+                );
+            }
+        }
+
         candidates
     }
 
