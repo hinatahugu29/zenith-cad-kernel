@@ -157,6 +157,77 @@ fn conical_top_chamfer_volume(r_bottom: f64, r_top: f64, height: f64, distance: 
 fn build_subjects() -> Vec<Subject> {
     let mut subjects = Vec::new();
 
+    // **スケッチから作った立体**（4-407）。
+    //
+    // **位相がプリミティブと違います**——**穴が最初から内側の輪として
+    // 入り**、**円弧が輪の一部**として混ざります（4-392）。
+    // **その形を STEP に書いて、他人のカーネルに読ませたことがありません。**
+    //
+    // **体積は閉じた式で置けます**——`(W·H − πr²) × 高さ` と、
+    // パップスの `2π × 重心の半径 × 面積`。
+    {
+        use zenith_algo::{extrude_sketch, revolve_sketch, SketchSolver, WorkPlane};
+        use zenith_math::Point2;
+        let tol = Tolerance::default();
+        let plane = WorkPlane::xy();
+
+        let mut holed = SketchSolver::new();
+        {
+            let a = holed.add_point(0.0, 0.0);
+            let b = holed.add_point(40.0, 0.0);
+            let c = holed.add_point(40.0, 30.0);
+            let d = holed.add_point(0.0, 30.0);
+            holed.add_line(a, b);
+            holed.add_line(b, c);
+            holed.add_line(c, d);
+            holed.add_line(d, a);
+            let centre = holed.add_point(20.0, 15.0);
+            let east = holed.add_point(26.0, 15.0);
+            let north = holed.add_point(20.0, 21.0);
+            let west = holed.add_point(14.0, 15.0);
+            let south = holed.add_point(20.0, 9.0);
+            holed.add_arc(centre, east, north, true);
+            holed.add_arc(centre, north, west, true);
+            holed.add_arc(centre, west, south, true);
+            holed.add_arc(centre, south, east, true);
+        }
+        if let Ok(solid) = extrude_sketch(&holed, &plane, 10.0, &tol) {
+            subjects.push(Subject {
+                name: "sketch_plate_with_hole",
+                solid,
+                analytic_volume: Some((40.0 * 30.0 - std::f64::consts::PI * 36.0) * 10.0),
+                section: None,
+            });
+        }
+
+        let mut ring = SketchSolver::new();
+        {
+            let a = ring.add_point(10.0, 0.0);
+            let b = ring.add_point(14.0, 0.0);
+            let c = ring.add_point(14.0, 6.0);
+            let d = ring.add_point(10.0, 6.0);
+            ring.add_line(a, b);
+            ring.add_line(b, c);
+            ring.add_line(c, d);
+            ring.add_line(d, a);
+        }
+        if let Ok(solid) = revolve_sketch(
+            &ring,
+            &plane,
+            Point2::new(0.0, 0.0),
+            Point2::new(0.0, 1.0),
+            &tol,
+        ) {
+            subjects.push(Subject {
+                name: "sketch_revolved_ring",
+                // パップスの定理: 2π × 12 × (4 × 6)。
+                analytic_volume: Some(2.0 * std::f64::consts::PI * 12.0 * 24.0),
+                solid,
+                section: None,
+            });
+        }
+    }
+
     subjects.push(Subject {
         name: "box_20x30x40",
         solid: PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap(),

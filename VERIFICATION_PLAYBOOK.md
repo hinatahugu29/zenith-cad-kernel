@@ -322,7 +322,7 @@ cargo run --release -p zenith_algo --example export_validation_suite
 & "C:\Program Files\FreeCAD 1.1\bin\python.exe" tools/freecad_cross_validate.py
 ```
 
-**期待**: `27 of 27 subjects agree across both kernels`、**終了コード 0**。
+**期待**: `29 of 29 subjects agree across both kernels`、**終了コード 0**。**9/8 に、スケッチから作った 2 検体を足しました**（4-407。`sketch_plate_with_hole`・`sketch_revolved_ring`）——**穴が最初から内側の輪として入る位相を、STEP に書いて他人のカーネルに読ませたことがありませんでした**。実測: **どちらも Solid・妥当・閉じており、残差 9.427e-13 / 4.444e-13 と 1.088e-11 / 1.490e-11**。
 （2026/08/27 実測。23対象だった頃の記述を更新しました）
 
 不一致があれば非ゼロ終了します。CI に置けます。
