@@ -7327,6 +7327,23 @@ fn report_chain_gaps(
         (best, accept)
     };
 
+    // **候補の一覧に、どの組が居るか**（4-381）。
+    //
+    // **`PAIRWHY` は面の組を組む段の言い分**で、**そのあとに
+    // `trace_from_loose_ends_into`（4-62）と `rebuild_tangent_joints`
+    // （4-182）が候補を足します**。**だから「消えた」と出た組が、
+    // ここに居ることがあり得ます**——**`PAIRWHY` は最終の一覧では
+    // ありません**。**それを、推し量らずに突き合わせるための行です。**
+    eprintln!(
+        "CHAINGAPWHY 候補に居る組 {} 個: {}",
+        produced.len(),
+        produced
+            .iter()
+            .map(|(a, b)| format!("A面{a}xB面{b}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+
     let mut lone = 0usize;
     let mut on_existing = 0usize;
     let mut orphan = 0usize;
