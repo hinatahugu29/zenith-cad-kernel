@@ -177,10 +177,30 @@ fn subjects() -> Vec<(&'static str, Result<Solid, String>)> {
 }
 
 /// 後段の1つを走らせ、短い判定を返す。
+///
+/// # 断り文は、切ると読めなくなります
+///
+/// **表の行に収めるため、60 文字で切っています。** **`linkrods` の
+/// 断り文は 4 段の受け皿を繋いだもので、60 文字では 1 段目しか出ません**
+/// ——**4-369 で、まったく同じことをして 1 か月ぶん読み損ねました**
+/// （「診断が、自分のいちばん大事な出力を隠していました」）。
+///
+/// **`ZENITH_WHY_CHARS=0` で全文を出します**（`0` 以外なら、その文字数）。
+/// **表は崩れますが、読めます。**
 fn stage(label: &str, run: impl FnOnce() -> Result<Option<String>, String>) -> String {
+    let limit = std::env::var("ZENITH_WHY_CHARS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(60);
+    let shorten = |text: String| -> String {
+        if limit == 0 || text.chars().count() <= limit {
+            return text;
+        }
+        text.chars().take(limit).collect()
+    };
     match catch_unwind(AssertUnwindSafe(run)) {
         Err(_) => format!("{label}:PANIC"),
-        Ok(Err(err)) => format!("{label}:ERR({})", err.chars().take(60).collect::<String>()),
+        Ok(Err(err)) => format!("{label}:ERR({})", shorten(err)),
         Ok(Ok(None)) => format!("{label}:ok"),
         Ok(Ok(Some(note))) => format!("{label}:WRONG({note})"),
     }
