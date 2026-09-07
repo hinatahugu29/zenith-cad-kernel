@@ -90,7 +90,8 @@ Seamless CAD（`reference/CAD_8_1_5_1`）の主要プリミティブ・モディ
 | **CSG ブーリアン演算** | `BOOLEAN` | `make_boolean(mesh_a, mesh_b, op)` | ✅ 完全対応 |
 | **ミラー（鏡像反転）** | `MIRROR` | `make_mirror_box` / `make_mirror_compound_casing` | ✅ 完全対応 |
 | **貫通穴あけ** | `HOLE` | `make_drilled_box(dx, dy, dz, r, ...)` | ✅ 完全対応 |
-| **2D スケッチ幾何拘束** | `SKETCH` | `solve_2d_sketch(pts, lines, circles, constraints)` | ✅ 完全対応 |
+| **2D スケッチ幾何拘束** | `SKETCH` | `solve_2d_sketch(points_json, constraints_json)` | ✅ 対応。**⚠ 引数は 2 つ**です（**この表は長らく 4 引数と書いていました**）。**拘束は `horizontal` / `vertical` / `distance`**。**知らない種類・範囲外の点番号・`value` の欠落は断ります**（2026/09/08。4-401） |
+| **スケッチ → 立体** | `SKETCH_SOLID` | `Solid.from_sketch_extruded(sketch_json, height)` / `Solid.from_sketch_revolved(sketch_json, ax, ay, dx, dy)` | ✅ 対応（**2026/09/08 追加**。4-400）。**それまで Python から呼べるのは `solve_2d_sketch` だけ**で、**解けても形にできませんでした**。**穴・円弧・回転に対応** |
 | **断面解析・スライス** | `SECTION` | `slice_box_by_plane(dx, dy, dz, origin, normal)` | ✅ 完全対応 |
 | **干渉判定 (Clash Check)** | `INTERFERENCE` | `check_boxes_interference(box_a, box_b)` | ✅ 完全対応 |
 | **物性値計算 (Mass Props)** | `MASS` | `compute_box_mass_properties(dx, dy, dz)` | ✅ 完全対応 |
