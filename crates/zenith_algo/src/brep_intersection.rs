@@ -7356,8 +7356,24 @@ fn report_chain_gaps(
         // **a × 同じ点を載せている別の B 面**——が出すはずです。
         // **その組が交線を出したかどうか**を並べます。
         let (owner_a, owner_b) = owner_of.get(&key(*point)).copied().unwrap_or((usize::MAX, usize::MAX));
+        // **その面が、その点を載せているか。**
+        //
+        // **稜に乗っているかで見てはいけません**（4-378 で一度やりました）。
+        // **「離れている」を「どの稜からも遠い」で決めているので、同じ
+        // 物差しになり、13 個すべてが必ず「隣なし」になります**——
+        // **そう書いたからそう出るだけで、発見ではありません**。
+        //
+        // **続きを出すはずの面は、その点を内側に持っています。**
+        // 稜の上も内側に含めます（**続きの出どころは、境界を跨いだ隣**
+        // なので、境界の上に乗っている場合も数えます）。
+        //
+        // **読めなければ「載せていない」にします。** ここは数えるだけの
+        // 診断なので、**読めなかったものを「載せている」に化けさせない**
+        // ほうが安全です（4-214 の流儀とは逆向きですが、**振る舞いを
+        // 決めるのではなく数を出す**ためです）。
         let carries = |face: &Face, point: Point3| -> bool {
-            face.outer_wire
+            let on_wire = face
+                .outer_wire
                 .edges
                 .iter()
                 .chain(face.inner_wires.iter().flat_map(|wire| wire.edges.iter()))
@@ -7373,7 +7389,31 @@ fn report_chain_gaps(
                             <= tol.linear.max(face.tolerance + face.pcurve_tolerance)
                     })
                     .unwrap_or(false)
-                })
+                });
+            if on_wire {
+                return true;
+            }
+            // **`point_inside_face_trim` だけでは足りません**（4-379）。
+            // **あれは「射影した uv がトリムの中か」しか見ません**——
+            // **点がその曲面から遠く離れていても、射影はどこかに落ち、
+            // 「中」と答えます**。**面の内側に入っている**と言うには、
+            // **まずその曲面の上に乗っていること**が要ります。
+            let on_surface = match &face.geometry {
+                FaceGeometry::Plane(plane) => {
+                    (point - plane.origin).dot(&plane.normal).abs()
+                        <= tol.linear.max(face.tolerance)
+                }
+                FaceGeometry::Nurbs(surface) => {
+                    zenith_geom::ExtremumEngine::point_to_surface(point, surface, 64, 1e-13)
+                        .map(|projection| {
+                            (surface.evaluate(projection.u, projection.v) - point).norm()
+                                <= tol.linear.max(face.tolerance)
+                        })
+                        .unwrap_or(false)
+                }
+                _ => false,
+            };
+            on_surface && point_inside_face_trim(face, point, tol).unwrap_or(false)
         };
         let mut neighbours: Vec<String> = Vec::new();
         for (index, face) in faces_a.iter().enumerate() {
@@ -7394,6 +7434,28 @@ fn report_chain_gaps(
                 if produced.contains(&(owner_a, index)) { "=出した" } else { "=出していません" }
             ));
         }
+        // **その端は、自分を出した 2 枚の面のトリムの中か、外か**（4-379）。
+        //
+        // **隣が無い**と分かっただけでは、まだ 2 通りあります——
+        // **交線が面の途中で止まった**（中）のか、
+        // **交線が面より長くてはみ出した**（外）のか。**直す先が違います。**
+        let owner_side = |faces: &[Face], index: usize| -> &'static str {
+            match faces.get(index) {
+                None => "面が無い",
+                Some(face) => match point_inside_face_trim(face, *point, tol) {
+                    Some(true) => "中",
+                    Some(false) => "外",
+                    None => "読めない",
+                },
+            }
+        };
+        let inside_text = format!(
+            "自分の面: A面{}={}、B面{}={}",
+            owner_a,
+            owner_side(faces_a, owner_a),
+            owner_b,
+            owner_side(faces_b, owner_b)
+        );
         let neighbour_text = if neighbours.is_empty() {
             "**隣の組がありません**（この点を載せている他の面が無い）".to_string()
         } else {
@@ -7404,6 +7466,7 @@ fn report_chain_gaps(
             point.x, point.y, point.z, to_a, to_b, side, accept, verdict,
             owner_a, owner_b, neighbour_text
         );
+        eprintln!("CHAINGAPWHY   {}", inside_text);
     }
     eprintln!(
         "CHAINGAPWHY 交線 {} 本、端点 {} 個、1 本しか来ない端 {} 個 → **既存の稜の上 {} 個 / どの稜からも離れている {} 個**",
