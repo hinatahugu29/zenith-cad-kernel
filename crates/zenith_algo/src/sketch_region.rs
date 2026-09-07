@@ -452,11 +452,159 @@ fn arc_curve(arc: &LoopArc, from: Point2, to: Point2, plane: &WorkPlane) -> Opti
     .ok()
 }
 
-/// スケッチを押し出して立体にする。**外周1つだけの場合**です。
+/// 輪を、**外周と穴**に振り分ける（4-392）。
 ///
-/// 穴つきは [`crate::ExtrudeBuilder::extrude_face_with_holes`] が受け取る
-/// ので、輪が複数のときはそちらへ渡してください。ここではまだ**どの輪が
-/// 穴かを決めていません**（入れ子の判定は書いていません）。
+/// # 決め方
+///
+/// **いちばん広い輪を外周**とし、**残りが全部その中にあること**を確かめます。
+///
+/// # 断るもの
+///
+/// - **外周の外に出ている輪**——外形が 2 つあるということで、
+///   立体が 2 つに分かれます。**どちらを返すかを決められません**
+/// - **穴の中の輪**（入れ子が二段）——島を作る話で、
+///   `extrude_face_with_holes` は受け取れません
+///
+/// **推測しません。** どちらも名指しで断ります。
+///
+/// # 内外の見方
+///
+/// **輪を細かい多角形に開いてから見ます**（円弧は 16 分割）。
+/// **これは分類**であって、公差の勝負ではありません——**穴は外周から
+/// 十分に離れているか、離れていないなら図そのものが不正**です。
+/// **点が輪の上ちょうどに乗る置き方は、断ります**（下の `strictly_inside`）。
+fn classify_loops(
+    loops: Vec<SketchLoop>,
+    _tol: &Tolerance,
+) -> Result<(SketchLoop, Vec<SketchLoop>), String> {
+    if loops.is_empty() {
+        return Err("輪が 1 つもありません".to_string());
+    }
+    if loops.len() == 1 {
+        return Ok((loops.into_iter().next().expect("1本"), Vec::new()));
+    }
+
+    let polygons: Vec<Vec<Point2>> = loops.iter().map(densify_loop).collect();
+    let areas: Vec<f64> = loops.iter().map(|item| item.area()).collect();
+
+    let outer_index = areas
+        .iter()
+        .enumerate()
+        .max_by(|left, right| left.1.partial_cmp(right.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(index, _)| index)
+        .expect("空でない");
+
+    // 外周の中にあるか。
+    for (index, polygon) in polygons.iter().enumerate() {
+        if index == outer_index {
+            continue;
+        }
+        if !polygon
+            .iter()
+            .all(|point| strictly_inside(*point, &polygons[outer_index]))
+        {
+            return Err(format!(
+                "輪 {index} が外周（輪 {outer_index}）の外に出ています。                 外形が 2 つある図は、立体が 2 つに分かれるので受け取れません"
+            ));
+        }
+    }
+
+    // 穴の中の穴（入れ子が二段）。
+    for (index, polygon) in polygons.iter().enumerate() {
+        if index == outer_index {
+            continue;
+        }
+        for (other, other_polygon) in polygons.iter().enumerate() {
+            if other == index || other == outer_index {
+                continue;
+            }
+            if polygon
+                .iter()
+                .all(|point| strictly_inside(*point, other_polygon))
+            {
+                return Err(format!(
+                    "輪 {index} が輪 {other} の中にあります（入れ子が二段）。                     穴の中の島は、まだ受け取れません"
+                ));
+            }
+        }
+    }
+
+    let mut outer = None;
+    let mut holes = Vec::new();
+    for (index, item) in loops.into_iter().enumerate() {
+        if index == outer_index {
+            outer = Some(item);
+        } else {
+            holes.push(item);
+        }
+    }
+    Ok((outer.expect("外周"), holes))
+}
+
+/// 輪を多角形に開く。**円弧は 16 分割**します。
+///
+/// **端点だけでは足りません**——全円を 4 つの四半弧で持っていると、
+/// **端点は 4 つしかなく、内接する正方形**になります。**円の中にあって
+/// 正方形の外**にある点を、外だと答えてしまいます。
+fn densify_loop(sketch_loop: &SketchLoop) -> Vec<Point2> {
+    const PER_ARC: usize = 16;
+    let count = sketch_loop.points.len();
+    let mut out = Vec::with_capacity(count * PER_ARC);
+    for index in 0..count {
+        let (here, next, arc) = sketch_loop.span(index);
+        out.push(here);
+        let Some(arc) = arc else { continue };
+        let radius = (here - arc.center).norm();
+        if !(radius > 0.0) {
+            continue;
+        }
+        let sweep = signed_sweep(arc.center, here, next, arc.counterclockwise);
+        let start = (here.y - arc.center.y).atan2(here.x - arc.center.x);
+        for step in 1..PER_ARC {
+            let angle = start + sweep * (step as f64 / PER_ARC as f64);
+            out.push(Point2::new(
+                arc.center.x + radius * angle.cos(),
+                arc.center.y + radius * angle.sin(),
+            ));
+        }
+    }
+    out
+}
+
+/// 点が多角形の**内側**にあるか。**辺の上は「内側ではない」**とします。
+///
+/// **分類のための判定**です。境目に乗る置き方は、そもそも図が不正なので、
+/// **内側と答えないほうが安全**です（呼び手はそこで断ります）。
+fn strictly_inside(point: Point2, polygon: &[Point2]) -> bool {
+    let count = polygon.len();
+    if count < 3 {
+        return false;
+    }
+    let mut inside = false;
+    for index in 0..count {
+        let a = polygon[index];
+        let b = polygon[(index + 1) % count];
+        // 辺の上に乗っていたら「内側ではない」。
+        let cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
+        let along = (point.x - a.x) * (b.x - a.x) + (point.y - a.y) * (b.y - a.y);
+        let length = (b.x - a.x).powi(2) + (b.y - a.y).powi(2);
+        if cross.abs() <= 1e-12 && along >= -1e-12 && along <= length + 1e-12 {
+            return false;
+        }
+        if (a.y > point.y) != (b.y > point.y) {
+            let x = a.x + (point.y - a.y) / (b.y - a.y) * (b.x - a.x);
+            if point.x < x {
+                inside = !inside;
+            }
+        }
+    }
+    inside
+}
+
+/// スケッチを押し出して立体にする。**穴も受け取ります**（4-392）。
+///
+/// 輪が複数あるときは、[`classify_loops`] が**外周と穴**に振り分けます。
+/// **外形が 2 つある図と、入れ子が二段の図は、名指しで断ります。**
 pub fn extrude_sketch(
     solver: &SketchSolver,
     plane: &WorkPlane,
@@ -466,19 +614,26 @@ pub fn extrude_sketch(
     let loops = extract_loops(solver, tol).ok_or_else(|| {
         "スケッチから閉じた輪を取り出せません（分岐・行き止まり・開いた鎖）".to_string()
     })?;
-    if loops.len() != 1 {
-        return Err(format!(
-            "外周が1つの場合だけ扱えます（取り出した輪は {} 本）",
-            loops.len()
-        ));
-    }
     if !(height.abs() > tol.linear) {
         return Err("高さが 0 です".to_string());
     }
-    let outline = loops.into_iter().next().expect("1本").counterclockwise();
+    let (outer, holes) = classify_loops(loops, tol)?;
+    let outline = outer.counterclockwise();
     let wire =
         loop_to_wire(&outline, plane, tol).ok_or_else(|| "輪を 3D の輪にできません".to_string())?;
-    crate::ExtrudeBuilder::extrude_wire(&wire, plane.normal() * height, tol)
+    if holes.is_empty() {
+        return crate::ExtrudeBuilder::extrude_wire(&wire, plane.normal() * height, tol);
+    }
+    // **穴も外周と同じ向きで渡します**（`extrude_face_with_holes` が
+    // `is_hole` で内側へ向け直します。`builder_audit` の
+    // `hollow extrusion` が同じ渡し方です）。
+    let mut inner = Vec::with_capacity(holes.len());
+    for hole in holes {
+        let hole_wire = loop_to_wire(&hole.counterclockwise(), plane, tol)
+            .ok_or_else(|| "穴の輪を 3D の輪にできません".to_string())?;
+        inner.push(hole_wire);
+    }
+    crate::ExtrudeBuilder::extrude_face_with_holes(&wire, &inner, plane.normal() * height, tol)
 }
 
 /// スケッチの輪を、**作業平面の中の軸**まわりに 1 周させて立体にする。

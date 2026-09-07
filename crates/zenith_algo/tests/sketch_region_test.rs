@@ -481,3 +481,121 @@ fn revolving_does_not_depend_on_where_the_workplane_is() {
         "傾けて離すと体積が {there:.9} になりました（期待 {expected:.9}、相対 {residual:.3e}）"
     );
 }
+
+/// 中心 (cx, cy)、半径 r の円を、四半弧 4 本でスケッチに足す。
+fn add_circle(solver: &mut SketchSolver, cx: f64, cy: f64, r: f64) {
+    let centre = solver.add_point(cx, cy);
+    let east = solver.add_point(cx + r, cy);
+    let north = solver.add_point(cx, cy + r);
+    let west = solver.add_point(cx - r, cy);
+    let south = solver.add_point(cx, cy - r);
+    solver.add_arc(centre, east, north, true);
+    solver.add_arc(centre, north, west, true);
+    solver.add_arc(centre, west, south, true);
+    solver.add_arc(centre, south, east, true);
+}
+
+#[test]
+fn a_sketch_with_a_round_hole_extrudes_to_area_minus_hole_times_height() {
+    // **実務でいちばん多い形です**——外形の中に穴。
+    //
+    // ```text
+    // 体積 = (W·H − πr²) × 高さ
+    // ```
+    let tol = Tolerance::default();
+    let (w, h, r, height) = (40.0, 30.0, 5.0, 7.0);
+
+    let mut solver = SketchSolver::new();
+    let a = solver.add_point(0.0, 0.0);
+    let b = solver.add_point(w, 0.0);
+    let c = solver.add_point(w, h);
+    let d = solver.add_point(0.0, h);
+    solver.add_line(a, b);
+    solver.add_line(b, c);
+    solver.add_line(c, d);
+    solver.add_line(d, a);
+    add_circle(&mut solver, w / 2.0, h / 2.0, r);
+
+    let loops = extract_loops(&solver, &tol).expect("輪が取り出せません");
+    assert_eq!(loops.len(), 2, "輪が {} 本ありました", loops.len());
+
+    let solid = extrude_sketch(&solver, &WorkPlane::xy(), height, &tol).expect("押し出せません");
+    let expected = (w * h - PI * r * r) * height;
+    let measured = volume(&solid);
+    let residual = (measured - expected).abs() / expected;
+    assert!(
+        residual <= 1e-9,
+        "体積が {measured:.9} で、(W·H − πr²)·高さ = {expected:.9} と \
+         相対 {residual:.3e} 違います"
+    );
+}
+
+#[test]
+fn two_holes_are_both_subtracted() {
+    let tol = Tolerance::default();
+    let (w, h, r, height) = (60.0, 30.0, 4.0, 5.0);
+    let mut solver = SketchSolver::new();
+    let a = solver.add_point(0.0, 0.0);
+    let b = solver.add_point(w, 0.0);
+    let c = solver.add_point(w, h);
+    let d = solver.add_point(0.0, h);
+    solver.add_line(a, b);
+    solver.add_line(b, c);
+    solver.add_line(c, d);
+    solver.add_line(d, a);
+    add_circle(&mut solver, 15.0, 15.0, r);
+    add_circle(&mut solver, 45.0, 15.0, r);
+
+    let solid = extrude_sketch(&solver, &WorkPlane::xy(), height, &tol).expect("押し出せません");
+    let expected = (w * h - 2.0 * PI * r * r) * height;
+    let measured = volume(&solid);
+    let residual = (measured - expected).abs() / expected;
+    assert!(
+        residual <= 1e-9,
+        "体積が {measured:.9} で、期待の {expected:.9} と相対 {residual:.3e} 違います"
+    );
+}
+
+#[test]
+fn two_separate_outlines_are_refused_rather_than_guessed() {
+    // **外形が2つある図は、立体が2つに分かれます。** どちらを返すかを
+    // 決められないので、断ります。
+    let tol = Tolerance::default();
+    let mut solver = SketchSolver::new();
+    for offset in [0.0, 50.0] {
+        let a = solver.add_point(offset, 0.0);
+        let b = solver.add_point(offset + 20.0, 0.0);
+        let c = solver.add_point(offset + 20.0, 20.0);
+        let d = solver.add_point(offset, 20.0);
+        solver.add_line(a, b);
+        solver.add_line(b, c);
+        solver.add_line(c, d);
+        solver.add_line(d, a);
+    }
+    assert!(
+        extrude_sketch(&solver, &WorkPlane::xy(), 5.0, &tol).is_err(),
+        "外形が2つあるのに立体を返しました"
+    );
+}
+
+#[test]
+fn an_island_inside_a_hole_is_refused() {
+    // **入れ子が二段**（穴の中の島）は受け取れません。
+    let tol = Tolerance::default();
+    let mut solver = SketchSolver::new();
+    let a = solver.add_point(0.0, 0.0);
+    let b = solver.add_point(40.0, 0.0);
+    let c = solver.add_point(40.0, 40.0);
+    let d = solver.add_point(0.0, 40.0);
+    solver.add_line(a, b);
+    solver.add_line(b, c);
+    solver.add_line(c, d);
+    solver.add_line(d, a);
+    add_circle(&mut solver, 20.0, 20.0, 15.0);
+    add_circle(&mut solver, 20.0, 20.0, 5.0);
+
+    assert!(
+        extrude_sketch(&solver, &WorkPlane::xy(), 5.0, &tol).is_err(),
+        "穴の中の島があるのに立体を返しました"
+    );
+}
