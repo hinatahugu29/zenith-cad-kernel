@@ -1,6 +1,6 @@
 use crate::cap::CapBuilder;
 use crate::MassCalculator;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use zenith_geom::{
     ControlPoint3, ExtremumEngine, KnotVector, NurbsCurve3, NurbsSurface3, PlaneSurface3, Surface3,
 };
@@ -7249,8 +7249,10 @@ fn report_chain_gaps(
         )
     };
     // **中点で束ねます**（4-65。端点だけでは弧を見分けられません）。
-    let mut distinct: BTreeMap<((i64, i64, i64), (i64, i64, i64), (i64, i64, i64)), Edge> =
-        BTreeMap::new();
+    let mut distinct: BTreeMap<
+        ((i64, i64, i64), (i64, i64, i64), (i64, i64, i64)),
+        (Edge, usize, usize),
+    > = BTreeMap::new();
     for candidate in candidates {
         let edge = &candidate.edge;
         let (t0, t1) = edge.curve.param_range();
@@ -7260,15 +7262,33 @@ fn report_chain_gaps(
             key(edge.end_vertex.point),
         ];
         ends.sort();
-        distinct
-            .entry((ends[0], ends[1], key(middle)))
-            .or_insert_with(|| edge.clone());
+        distinct.entry((ends[0], ends[1], key(middle))).or_insert_with(|| {
+            (
+                edge.clone(),
+                candidate.face_a_index,
+                candidate.face_b_index,
+            )
+        });
     }
-    let edges: Vec<Edge> = distinct.into_values().collect();
+    let edges: Vec<(Edge, usize, usize)> = distinct.into_values().collect();
+
+    // **その端を出した面の組**（4-378）。
+    let owner_of: BTreeMap<(i64, i64, i64), (usize, usize)> = edges
+        .iter()
+        .flat_map(|(edge, a, b)| {
+            [edge.start_vertex.point, edge.end_vertex.point]
+                .into_iter()
+                .map(move |point| (key(point), (*a, *b)))
+        })
+        .collect();
+
+    // **どの面の組が、実際に交線を出したか**（4-378）。
+    let produced: BTreeSet<(usize, usize)> =
+        edges.iter().map(|(_, a, b)| (*a, *b)).collect();
 
     // **端点に、交線が何本集まるか**（4-375 の数え直し）。
     let mut incidence: BTreeMap<(i64, i64, i64), (usize, Point3)> = BTreeMap::new();
-    for edge in &edges {
+    for (edge, _, _) in &edges {
         for point in [edge.start_vertex.point, edge.end_vertex.point] {
             let slot = incidence.entry(key(point)).or_insert((0, point));
             slot.0 += 1;
@@ -7329,9 +7349,60 @@ fn report_chain_gaps(
             orphan += 1;
             "どの稜からも離れている（続きが作られていない）"
         };
+        // **続きは、どの面の組が出すはずだったか**（4-378）。
+        //
+        // その端を出したのが A面 a × B面 b なら、続きは**隣の組**
+        // ——**同じ点を載せている別の A 面 × b**、または
+        // **a × 同じ点を載せている別の B 面**——が出すはずです。
+        // **その組が交線を出したかどうか**を並べます。
+        let (owner_a, owner_b) = owner_of.get(&key(*point)).copied().unwrap_or((usize::MAX, usize::MAX));
+        let carries = |face: &Face, point: Point3| -> bool {
+            face.outer_wire
+                .edges
+                .iter()
+                .chain(face.inner_wires.iter().flat_map(|wire| wire.edges.iter()))
+                .any(|oriented| {
+                    zenith_geom::ExtremumEngine::point_to_curve(
+                        point,
+                        &oriented.edge.curve,
+                        64,
+                        1e-14,
+                    )
+                    .map(|result| {
+                        result.distance
+                            <= tol.linear.max(face.tolerance + face.pcurve_tolerance)
+                    })
+                    .unwrap_or(false)
+                })
+        };
+        let mut neighbours: Vec<String> = Vec::new();
+        for (index, face) in faces_a.iter().enumerate() {
+            if index == owner_a || !carries(face, *point) {
+                continue;
+            }
+            neighbours.push(format!(
+                "A面{index}xB面{owner_b}{}",
+                if produced.contains(&(index, owner_b)) { "=出した" } else { "=出していません" }
+            ));
+        }
+        for (index, face) in faces_b.iter().enumerate() {
+            if index == owner_b || !carries(face, *point) {
+                continue;
+            }
+            neighbours.push(format!(
+                "A面{owner_a}xB面{index}{}",
+                if produced.contains(&(owner_a, index)) { "=出した" } else { "=出していません" }
+            ));
+        }
+        let neighbour_text = if neighbours.is_empty() {
+            "**隣の組がありません**（この点を載せている他の面が無い）".to_string()
+        } else {
+            neighbours.join("、")
+        };
         eprintln!(
-            "CHAINGAPWHY 端 ({:.6} {:.6} {:.6}): A の稜まで {:.6e}、B の稜まで {:.6e} → いちばん近いのは {}（受け入れ {:.6e}）→ {}",
-            point.x, point.y, point.z, to_a, to_b, side, accept, verdict
+            "CHAINGAPWHY 端 ({:.6} {:.6} {:.6}): A の稜まで {:.6e}、B の稜まで {:.6e} → いちばん近いのは {}（受け入れ {:.6e}）→ {} ／ 出したのは A面{}xB面{}、隣: {}",
+            point.x, point.y, point.z, to_a, to_b, side, accept, verdict,
+            owner_a, owner_b, neighbour_text
         );
     }
     eprintln!(
