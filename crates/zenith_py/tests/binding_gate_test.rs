@@ -224,3 +224,96 @@ fn a_box_payload_carries_the_shape() {
         "ペイロードが空です: {json}"
     );
 }
+
+// ---- スケッチから立体へ、Python の口を通して（4-400）----
+//
+// **2026/09/08 まで、Python から呼べるのは `solve_2d_sketch` だけ**でした
+// ——**拘束を解いて点を返すところまで**で、**立体にする口がありません**。
+// **Blender 側は、スケッチを解けても形にできませんでした。**
+
+#[test]
+fn a_sketch_extrudes_through_the_binding() {
+    // **閉じた式**: `面積 × 高さ`。
+    let sketch = r#"{
+        "points": [[0.0, 0.0], [40.0, 0.0], [40.0, 30.0], [0.0, 30.0]],
+        "lines": [[0, 1], [1, 2], [2, 3], [3, 0]]
+    }"#;
+    let solid = PySolid::from_sketch_extruded(sketch, 7.0).expect("押し出せません");
+    let expected = 40.0 * 30.0 * 7.0;
+    let measured: f64 = solid.volume();
+    assert!(
+        close(measured, expected, 1e-9),
+        "体積が {measured:.9} で、面積 × 高さ の {expected:.9} と違います"
+    );
+}
+
+#[test]
+fn a_sketch_with_a_hole_extrudes_through_the_binding() {
+    // **閉じた式**: `(W·H − πr²) × 高さ`。**穴も Python から渡せます。**
+    //
+    // 点 0..3 が外形、点 4 が円の中心、点 5..8 が四半弧の継ぎ目。
+    let sketch = r#"{
+        "points": [[0.0, 0.0], [40.0, 0.0], [40.0, 30.0], [0.0, 30.0],
+                   [20.0, 15.0],
+                   [25.0, 15.0], [20.0, 20.0], [15.0, 15.0], [20.0, 10.0]],
+        "lines": [[0, 1], [1, 2], [2, 3], [3, 0]],
+        "arcs": [{"centre": 4, "start": 5, "end": 6},
+                 {"centre": 4, "start": 6, "end": 7},
+                 {"centre": 4, "start": 7, "end": 8},
+                 {"centre": 4, "start": 8, "end": 5}]
+    }"#;
+    let solid = PySolid::from_sketch_extruded(sketch, 7.0).expect("押し出せません");
+    let expected = (40.0 * 30.0 - PI * 25.0) * 7.0;
+    let measured: f64 = solid.volume();
+    assert!(
+        close(measured, expected, 1e-9),
+        "体積が {measured:.9} で、(W·H − πr²)·高さ の {expected:.9} と違います"
+    );
+}
+
+#[test]
+fn a_sketch_revolves_through_the_binding() {
+    // **閉じた式**: パップスの定理 `2π × 重心の半径 × 面積`。
+    let sketch = r#"{
+        "points": [[10.0, 0.0], [14.0, 0.0], [14.0, 6.0], [10.0, 6.0]],
+        "lines": [[0, 1], [1, 2], [2, 3], [3, 0]]
+    }"#;
+    let solid = PySolid::from_sketch_revolved(sketch, 0.0, 0.0, 0.0, 1.0).expect("回せません");
+    let expected = 2.0 * PI * 12.0 * (4.0 * 6.0);
+    let measured: f64 = solid.volume();
+    assert!(
+        close(measured, expected, 1e-9),
+        "体積が {measured:.9} で、パップスの {expected:.9} と違います"
+    );
+}
+
+#[test]
+fn a_bad_sketch_is_refused_by_name_through_the_binding() {
+    // **黙って 0 番に丸めてはいけません。** 間違った輪郭から、
+    // もっともらしい立体ができます。
+    let out_of_range = r#"{
+        "points": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]],
+        "lines": [[0, 1], [1, 9], [9, 0]]
+    }"#;
+    assert!(
+        PySolid::from_sketch_extruded(out_of_range, 5.0).is_err(),
+        "点の番号が範囲の外なのに立体が返りました"
+    );
+
+    // **線も弧も無い図は断ります。**
+    let no_segments = r#"{"points": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0]]}"#;
+    assert!(
+        PySolid::from_sketch_extruded(no_segments, 5.0).is_err(),
+        "線も弧も無いのに立体が返りました"
+    );
+
+    // **軸をまたぐ輪は、回せません。**
+    let crossing = r#"{
+        "points": [[-5.0, 0.0], [5.0, 0.0], [5.0, 6.0], [-5.0, 6.0]],
+        "lines": [[0, 1], [1, 2], [2, 3], [3, 0]]
+    }"#;
+    assert!(
+        PySolid::from_sketch_revolved(crossing, 0.0, 0.0, 0.0, 1.0).is_err(),
+        "軸をまたいでいるのに回りました"
+    );
+}

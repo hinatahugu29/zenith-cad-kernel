@@ -56,6 +56,64 @@ impl PySolid {
     }
 }
 
+/// JSON からスケッチを組む（4-400）。
+///
+/// **点の番号が範囲の外なら、名指しで断ります**——**黙って 0 番に
+/// 丸めてはいけません**。**間違った輪郭から、もっともらしい立体が
+/// できます。**
+fn sketch_from_json(sketch_json: &str) -> PyResult<zenith_algo::SketchSolver> {
+    #[derive(serde::Deserialize)]
+    struct Arc {
+        centre: usize,
+        start: usize,
+        end: usize,
+        #[serde(default = "yes")]
+        ccw: bool,
+    }
+    fn yes() -> bool {
+        true
+    }
+    #[derive(serde::Deserialize)]
+    struct Sketch {
+        points: Vec<[f64; 2]>,
+        #[serde(default)]
+        lines: Vec<[usize; 2]>,
+        #[serde(default)]
+        arcs: Vec<Arc>,
+    }
+
+    let sketch: Sketch = serde_json::from_str(sketch_json)
+        .map_err(|e| invalid(format!("スケッチの JSON が読めません: {e}")))?;
+    if sketch.points.len() < 3 {
+        return Err(invalid("点が 3 つ未満です".to_string()));
+    }
+
+    let mut solver = zenith_algo::SketchSolver::new();
+    let ids: Vec<_> = sketch
+        .points
+        .iter()
+        .map(|p| solver.add_point(p[0], p[1]))
+        .collect();
+    let at = |index: usize| -> PyResult<zenith_algo::PointId> {
+        ids.get(index).copied().ok_or_else(|| {
+            invalid(format!(
+                "点の番号 {index} が範囲の外です（点は {} 個）",
+                ids.len()
+            ))
+        })
+    };
+    for line in &sketch.lines {
+        solver.add_line(at(line[0])?, at(line[1])?);
+    }
+    for arc in &sketch.arcs {
+        solver.add_arc(at(arc.centre)?, at(arc.start)?, at(arc.end)?, arc.ccw);
+    }
+    if sketch.lines.is_empty() && sketch.arcs.is_empty() {
+        return Err(invalid("線も弧もありません".to_string()));
+    }
+    Ok(solver)
+}
+
 #[pymethods]
 impl PySolid {
     // ------------------------------------------------------------------
@@ -93,6 +151,73 @@ impl PySolid {
         PrimitiveBuilder::make_cone(r_bottom, r_top, height)
             .map(Self::wrap)
             .map_err(invalid)
+    }
+
+    /// **スケッチから押し出す**（4-400）。
+    ///
+    /// # なぜ要るのか
+    ///
+    /// 2026/08/30〜09/08 で、スケッチの幾何は閉じました——円弧、閉領域の
+    /// 抽出、作業平面の写像、押し出し、回転、穴（4-200、4-391、4-392）。
+    /// **ところが Python から呼べるのは `solve_2d_sketch` だけ**でした
+    /// ——**拘束を解いて点を返すところまで**で、**立体にする口がありません**。
+    ///
+    /// **Blender 側は、スケッチを解けても形にできませんでした。**
+    ///
+    /// # 受け取る形
+    ///
+    /// ```json
+    /// {"points": [[x, y], ...],
+    ///  "lines":  [[i, j], ...],
+    ///  "arcs":   [{"centre": k, "start": i, "end": j, "ccw": true}, ...]}
+    /// ```
+    ///
+    /// **`arcs` は省けます。** 直線だけの輪郭なら `lines` だけで足ります。
+    ///
+    /// **穴も渡せます**——**輪が 2 つ以上あれば、いちばん広いものを外周**
+    /// とし、残りを穴として扱います（4-392）。**外形が 2 つある図と、
+    /// 穴の中の島は、名指しで断ります。**
+    #[staticmethod]
+    pub fn from_sketch_extruded(sketch_json: &str, height: f64) -> PyResult<Self> {
+        let solver = sketch_from_json(sketch_json)?;
+        zenith_algo::extrude_sketch(
+            &solver,
+            &zenith_algo::WorkPlane::xy(),
+            height,
+            &Tolerance::default(),
+        )
+        .map(Self::wrap)
+        .map_err(invalid)
+    }
+
+    /// **スケッチを回して立体にする**（4-400）。
+    ///
+    /// 軸は**スケッチの座標**で渡します（`axis_x`, `axis_y` を通り、
+    /// `dir_x`, `dir_y` の向き）。**作業平面の中の軸だけ**です。
+    ///
+    /// **輪が軸に触れているか、またいでいたら断ります**——回した先が
+    /// 自分自身を突き抜けるからです（4-391）。
+    ///
+    /// **答えはパップスの定理と合います**（体積 = 2π × 重心の半径 × 面積。
+    /// 相対差 1e-13）。
+    #[staticmethod]
+    pub fn from_sketch_revolved(
+        sketch_json: &str,
+        axis_x: f64,
+        axis_y: f64,
+        dir_x: f64,
+        dir_y: f64,
+    ) -> PyResult<Self> {
+        let solver = sketch_from_json(sketch_json)?;
+        zenith_algo::revolve_sketch(
+            &solver,
+            &zenith_algo::WorkPlane::xy(),
+            zenith_math::Point2::new(axis_x, axis_y),
+            zenith_math::Point2::new(dir_x, dir_y),
+            &Tolerance::default(),
+        )
+        .map(Self::wrap)
+        .map_err(invalid)
     }
 
     /// トーラス
