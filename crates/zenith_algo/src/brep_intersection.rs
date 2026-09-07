@@ -7415,14 +7415,30 @@ fn report_chain_gaps(
             };
             on_surface && point_inside_face_trim(face, point, tol).unwrap_or(false)
         };
+        // **「載せている」と言うなら、何ぼで載せているかを出してください**
+        // （4-380）。**真偽だけを出すと、緩すぎる判定に気づけません。**
+        let surface_gap = |face: &Face, point: Point3| -> f64 {
+            match &face.geometry {
+                FaceGeometry::Plane(plane) => (point - plane.origin).dot(&plane.normal).abs(),
+                FaceGeometry::Nurbs(surface) => {
+                    zenith_geom::ExtremumEngine::point_to_surface(point, surface, 64, 1e-13)
+                        .map(|projection| {
+                            (surface.evaluate(projection.u, projection.v) - point).norm()
+                        })
+                        .unwrap_or(f64::INFINITY)
+                }
+                _ => f64::INFINITY,
+            }
+        };
         let mut neighbours: Vec<String> = Vec::new();
         for (index, face) in faces_a.iter().enumerate() {
             if index == owner_a || !carries(face, *point) {
                 continue;
             }
             neighbours.push(format!(
-                "A面{index}xB面{owner_b}{}",
-                if produced.contains(&(index, owner_b)) { "=出した" } else { "=出していません" }
+                "A面{index}xB面{owner_b}{}（面まで {:.3e}）",
+                if produced.contains(&(index, owner_b)) { "=出した" } else { "=出していません" },
+                surface_gap(face, *point)
             ));
         }
         for (index, face) in faces_b.iter().enumerate() {
@@ -7430,8 +7446,9 @@ fn report_chain_gaps(
                 continue;
             }
             neighbours.push(format!(
-                "A面{owner_a}xB面{index}{}",
-                if produced.contains(&(owner_a, index)) { "=出した" } else { "=出していません" }
+                "A面{owner_a}xB面{index}{}（面まで {:.3e}）",
+                if produced.contains(&(owner_a, index)) { "=出した" } else { "=出していません" },
+                surface_gap(face, *point)
             ));
         }
         // **その端は、自分を出した 2 枚の面のトリムの中か、外か**（4-379）。
