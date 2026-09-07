@@ -50,8 +50,27 @@
 //! **ずらして重ねる**と、**接する面が部分的にしか重ならない**ので、
 //! 割れた同一平面の面が残ります——**面 12 → 10 枚**。
 //!
-//! **`planarize_shell` と `sew_shell` は、まだ「壊さないこと」しか
-//! 測れていません。** **汚れた検体を用意するのが次の一手**です。
+//! **縫合は、汚れた検体で動かしました**（4-396）——**面を 1 枚ずつ独立に
+//! 組んだ箱**は、隣り合う面が同じ位置に別々の頂点と稜を持ちます。
+//! **稜 24 本 → 12 本**（立方体の稜の数。**閉じた式です**）、
+//! **縫い残し 0・非多様体 0**。
+//!
+//! **⚠ `planarize_shell` だけは、まだ 1 度も仕事をしていません。**
+//!
+//! | 検体 | 面 | 平面へ戻した数 |
+//! | :--- | ---: | ---: |
+//! | ビルダーの円柱 | 4 | **0** |
+//! | ビルダーの箱 | 6 | **0** |
+//! | `screw.step`（読んだもの） | 10 | **0** |
+//! | `linkrods.step`（読んだもの） | 37 | **0** |
+//!
+//! **STEP は平面も B-spline で書く**ので、そこに仕事があるはずでした。
+//! **ところが読み手が既に平面として持っています**（`screw` は 4 枚、
+//! `linkrods` は 6 枚が最初から `Plane`）。
+//!
+//! **「死んでいる」とは書きません**——**47 枚で 0 だった**という実測
+//! だけです。**ただし、`lib.rs` の唯一の呼び口が何かをした所を、
+//! まだ誰も見ていません。** **壊れても気づけません。**
 //!
 //! **誤答が 1 件でも出たら exit 1。**
 
@@ -71,6 +90,35 @@ fn solid_from(shell: zenith_topo::Shell) -> Result<Solid, String> {
         return Err("手入れの結果が閉じていません".to_string());
     }
     Ok(Solid::new(shell, Vec::new()))
+}
+
+/// 平面の四角形を、**その 4 点だけから**組む。
+///
+/// **隣の面と、頂点も稜も共有しません。** 縫合に仕事をさせるための
+/// 汚れた検体です（4-396）。
+fn quad_face(p0: Point3, p1: Point3, p2: Point3, p3: Point3) -> zenith_topo::Face {
+    use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Vertex, Wire};
+    let (v0, v1, v2, v3) = (
+        Vertex::from_point(p0),
+        Vertex::from_point(p1),
+        Vertex::from_point(p2),
+        Vertex::from_point(p3),
+    );
+    let wire = Wire::new(vec![
+        OrientedEdge::forward(Edge::line_between(v0.clone(), v1.clone()).unwrap()),
+        OrientedEdge::forward(Edge::line_between(v1.clone(), v2.clone()).unwrap()),
+        OrientedEdge::forward(Edge::line_between(v2.clone(), v3.clone()).unwrap()),
+        OrientedEdge::forward(Edge::line_between(v3.clone(), v0.clone()).unwrap()),
+    ]);
+    let plane =
+        zenith_geom::PlaneSurface3::new(p0, (p1 - p0).normalize(), (p3 - p0).normalize()).unwrap();
+    Face::new(
+        FaceGeometry::Plane(plane),
+        wire,
+        vec![],
+        Orientation::Forward,
+        1e-6,
+    )
 }
 
 fn volume(solid: &Solid) -> f64 {
@@ -310,6 +358,104 @@ fn main() {
         measured: welded_volume,
     });
 
+    // ---- 汚れた検体で、縫合の「直す力」を測る（4-396）----
+    //
+    // **面を 1 枚ずつ独立に組むと、隣り合う面は同じ位置に別々の頂点と稜を
+    // 持ちます**——**縫われていない箱**です。**縫合はここで初めて仕事を
+    // します。**
+    //
+    // ```text
+    // 縫う前  稜 24 本（6 面 × 4 本。共有されていない）
+    // 縫った後 稜 12 本（箱の稜）  ← 立方体の稜の数
+    // ```
+    //
+    // **これは閉じた式です。** 立方体の稜は 12 本と決まっています。
+    let unsewn = {
+        let side = 10.0;
+        let c = |x: f64, y: f64, z: f64| Point3::new(x * side, y * side, z * side);
+        // 6 面を、**それぞれ独立に**組みます（頂点も稜も共有しません）。
+        let faces = vec![
+            quad_face(c(0., 0., 0.), c(1., 0., 0.), c(1., 1., 0.), c(0., 1., 0.)),
+            quad_face(c(0., 0., 1.), c(0., 1., 1.), c(1., 1., 1.), c(1., 0., 1.)),
+            quad_face(c(0., 0., 0.), c(0., 1., 0.), c(0., 1., 1.), c(0., 0., 1.)),
+            quad_face(c(1., 0., 0.), c(1., 0., 1.), c(1., 1., 1.), c(1., 1., 0.)),
+            quad_face(c(0., 0., 0.), c(0., 0., 1.), c(1., 0., 1.), c(1., 0., 0.)),
+            quad_face(c(0., 1., 0.), c(1., 1., 0.), c(1., 1., 1.), c(0., 1., 1.)),
+        ];
+        zenith_topo::Shell::new(faces, true)
+    };
+    let (_, unsewn_report) = zenith_algo::Sewer::sew_shell(&unsewn, &tol);
+    rows.push(Row {
+        name: "縫合（縫われていない箱）: 稜は 12 本へ",
+        expected: 12.0,
+        measured: Ok(unsewn_report.edges_after as f64),
+    });
+    rows.push(Row {
+        name: "縫合（同上）: 縫う前は 24 本",
+        expected: 24.0,
+        measured: Ok(unsewn_report.edges_before as f64),
+    });
+    // **全部の稜がちょうど 2 面に共有されること。** 1 本でも余れば
+    // 「縫い残し」です。
+    rows.push(Row {
+        name: "縫合（同上）: 縫い残しは 0 本",
+        expected: 0.0,
+        measured: Ok(unsewn_report.boundary_edges as f64),
+    });
+    rows.push(Row {
+        name: "縫合（同上）: 非多様体は 0 本",
+        expected: 0.0,
+        measured: Ok(unsewn_report.non_manifold_edges as f64),
+    });
+
+    // ---- 汚れた検体で、平面化の「直す力」を測る（4-396）----
+    //
+    // **STEP は平面の面も B-spline で書きます。** 読んだ立体には
+    // **「中身は平面なのに NURBS として持っている面」**が混ざります
+    // ——`planarize_shell` は、まさにそれを平面へ戻す道具です。
+    //
+    // **閉じた式は「体積が変わらないこと」**です。**戻した面の枚数は
+    // ファイル次第**なので、そこは**数を出すだけ**にします（門にしません）。
+    let step = std::path::PathBuf::from(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../reference/OCCT/data/step"
+    ))
+    ;
+    let mut planarize_note = String::new();
+    for name in ["screw.step", "linkrods.step"] {
+        let path = step.join(name);
+        let Ok(solids) = zenith_io::StepImporter::import_solids_from_file(&path) else {
+            planarize_note.push_str(&format!("{name} が読めません
+"));
+            continue;
+        };
+        if let Some(subject) = solids.iter().max_by_key(|s| s.outer_shell.faces.len()) {
+            let before = volume(subject);
+            let (flattened, converted) =
+                zenith_algo::FaceMerger::planarize_shell(&subject.outer_shell, &tol);
+            let planes = flattened
+                .faces
+                .iter()
+                .filter(|face| matches!(face.geometry, zenith_topo::FaceGeometry::Plane(_)))
+                .count();
+            planarize_note.push_str(&format!(
+                "読んだ立体（{name}）: 面 {} 枚のうち **{converted} 枚を平面へ戻し**、平面の面は {planes} 枚
+",
+                flattened.faces.len()
+            ));
+            let measured = solid_from(flattened).map(|solid| volume(&solid));
+            rows.push(Row {
+                name: if name == "screw.step" {
+                    "平面化（screw）: 体積は変わらない"
+                } else {
+                    "平面化（linkrods）: 体積は変わらない"
+                },
+                expected: before,
+                measured,
+            });
+        }
+    }
+
     // ---- 出力 ----
     println!("呼び手が 1 人もいない公開関数を、閉じた式で測る（4-395）");
     println!();
@@ -348,6 +494,8 @@ fn main() {
         }
     }
     println!("{}", "-".repeat(104));
+    println!();
+    print!("{planarize_note}");
     println!();
     println!(
         "和の結果に併合を掛けると: 面 {welded_faces} → {merged_faces} 枚"
