@@ -1594,12 +1594,48 @@ impl BrepIntersectionBuilder {
     /// The split endpoints are located on the real boundary curves, and the
     /// boundary edges they land on are subdivided exactly, so a chord landing on
     /// a circular face keeps its arcs instead of degrading into a polyline.
+    ///
+    /// **一般の受け皿を平面にも付ける口**があります（4-385。
+    /// `ZENITH_PLANAR_GENERAL=1`。**既定では走りません**）。
+    ///
+    /// NURBS の面には受け皿が **4 段**あり、**一番奥は面の形を見ない
+    /// `FaceSplitter`**（外周を辿って面積で検算するだけ）です。**平面には
+    /// 1 段しかありません**——**曲面のほうが手厚い**という逆さまの形です。
+    /// 4-383 で**割れなかった交線 132 本のうち 57 本（43%）が平面**と
+    /// 分かったので、**同じ受け皿を付けて測りました。**
+    ///
+    /// **結果の数字は 1 つも動きません**（4-385）——相手のいない稜
+    /// 46/46/40、当たった割り 38/38/38、面片 46/29/20 が**素と同じ**です。
+    /// **だから既定にしていません**（効果が測れないものは入れません）。
+    ///
+    /// **消さずに残すのは、断り文が変わるから**です。**平面の 57 本は、
+    /// 曲面と同じ「境界まで届かない」に合流します**（63 → 117）。
+    /// **`Cannot split a face with fewer than three boundary edges` は、
+    /// 本当の理由ではありませんでした。**
+    ///
+    /// **面積で検算してから採ります。** 閉じたワイヤになっただけでは、
+    /// 領域の取り違えは分かりません（曲面の 4 段目と同じ流儀）。
     pub fn split_planar_face_by_edge(
         face: &Face,
         split_edge: &Edge,
         tol: &Tolerance,
     ) -> Result<Vec<Face>, String> {
-        Self::split_planar_face_by_edge_chain(face, std::slice::from_ref(split_edge), tol)
+        let chain_result =
+            Self::split_planar_face_by_edge_chain(face, std::slice::from_ref(split_edge), tol);
+        if std::env::var_os("ZENITH_PLANAR_GENERAL").is_none() {
+            return chain_result;
+        }
+        chain_result.or_else(|planar_error| {
+            let (pieces, report) = crate::FaceSplitter::split_by_curve(face, split_edge, tol)
+                .map_err(|general_error| format!("{planar_error}; {general_error}"))?;
+            if report.area_residual > 1e-6 {
+                return Err(format!(
+                    "{planar_error}; the general split lost {:.3e} of the face area",
+                    report.area_residual
+                ));
+            }
+            Ok(pieces)
+        })
     }
 
     /// Splits a planar face along a connected chain of intersection edges.

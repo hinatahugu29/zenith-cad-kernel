@@ -3,9 +3,12 @@
 なぜ要るのか
 ------------
 `linkrods.step` が断られる理由を追うとき、**断り文の内訳**が要ります。
-2026/09/07 の実測では、これで**筆頭が入れ替わりました**——
-`Only recognized cylinder-side NURBS patches can be split`（126）が
-`Split edge start does not lie on the outer boundary`（117）より多い、と。
+
+**⚠ 2026/09/07 に、数え方を変えました**（4-383）。**既定は「決め手だけ」**
+です。それまでは**全部の段を等しく数えて**おり、そこで出した筆頭
+`Only recognized cylinder-side NURBS patches can be split`（126）は、
+**決め手としては 0 件**でした。**その水増しされた筆頭を、3 つの節
+（4-370、4-371、4-372）が根拠にしていました。**
 
 **それまでは、その場限りのワンライナーで数えていました。** 数え方を
 残していないと、**次に数えた人と比べられません**（4-370 では、
@@ -15,12 +18,28 @@
 ------
     ZENITH_READ_CUT_ONLY=linkrods ZENITH_SPLIT_WHY=1 \
       cargo run --release -p zenith_algo --example read_and_cut_probe > out.txt 2>&1
-    py tools/tally_split_reasons.py out.txt
+    py tools/tally_split_reasons.py out.txt          # 決め手だけ（既定）
+    py tools/tally_split_reasons.py --all out.txt    # 段ごとの内訳
 
 読み方
 ------
-**3 演算ののべ**です。1 本の交線に対して**面片ごとに断り文が出る**ので、
-**そのまま「何本」とは読めません**。**割合として読んでください。**
+
+**断り文は、段ごとの理由を `; ` で繋いだもの**です。
+
+    Only recognized cylinder-side ...; Only recognized cylinder-side ...;
+    Only a three- or four-sided patch face can be split;
+    the splitting curve ends 3.450e-1 away from the boundary
+                           ^^^^^^^^^^^^ ここだけが決め手
+
+`split_face_by_edge` は **4 段の `or_else`** です。**前の段が断っても、
+次の段が割れば通ります。** だから**最後の 1 つ以外は、割れなかった理由では
+ありません**——**通り道の途中で、順番に断られた記録**です。
+
+**3 演算ののべ**です。**のべは `(交線, 面片)` の組**で、**1 本の交線は
+乗っていない面にも当てられます**——**そのほとんどは当たり前の
+「乗っていません」**です。**そのまま「何本」とは読めません**。
+**本数が要るなら、交線ごとにまとめ直してください**（4-383 はそうしました。
+**のべ 297 行 → 交線 132 本**）。
 
 **数字が桁で動いていたら、まず「断り文が切れていないか」を疑ってください**
 ——2026/09/07 まで、診断は理由を **160 文字で切って**いました（4-369）。
