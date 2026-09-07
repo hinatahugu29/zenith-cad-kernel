@@ -33,6 +33,17 @@ import json
 import os
 import sys
 
+# **コンソールが cp932 でも落ちないようにします。**
+#
+# FreeCAD 同梱の python は Windows の既定コードページで印字するので、
+# **全角ダッシュ（U+2014）で `UnicodeEncodeError` を出して止まります**。
+# **止まると、そこまでの検算結果ごと失われます**——実際に 1 度落ちました。
+# 表示が化けるのは構いませんが、**落ちてはいけません。**
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 EXPORTS = os.path.join(ROOT, "target", "mesh_exports")
@@ -102,6 +113,53 @@ def main():
 
         print("%-32s %8d %8d %10.3f %10.3f %9s %s" % (
             name, mine_tris, theirs, subject["brep_volume"], volume,
+            "OK" if box_ok else "**ちがう**",
+            "OK" if solid else "**閉じていない**"))
+
+    # ---- OBJ も同じ人に読ませる ----
+    #
+    # **同じ立体を 2 つの形式で書いています。** **両方を他人に読ませて、
+    # 互いに合うか**まで見ます——**片方だけ読ませると、書き手の思い違いが
+    # 両方に入っていても気づけません。**
+    #
+    # **OBJ は頂点を共有します**（STL は三角形ごとにばらばら）。
+    # **点の数は台帳の `vertices` と合うはず**です。
+    print()
+    print("書き出した OBJ を、FreeCAD に読ませる")
+    print()
+    print("%-32s %8s %8s %8s %8s %9s %s" % (
+        "検体", "枚数(台帳)", "枚数(OBJ)", "点(台帳)", "点(OBJ)", "境界箱", "水密"))
+    print("-" * 96)
+    for subject in subjects:
+        name = subject["name"]
+        obj = os.path.join(EXPORTS, name + ".obj")
+        if not os.path.exists(obj):
+            print("%-32s **OBJ がありません**" % name)
+            failures += 1
+            continue
+        try:
+            mesh = Mesh.Mesh(obj)
+        except Exception as exc:
+            print("%-32s **読めません**: %r" % (name, exc))
+            failures += 1
+            continue
+        low, high = subject["low"], subject["high"]
+        b = mesh.BoundBox
+        box_ok = (
+            abs(b.XMin - low[0]) <= 1e-6 and abs(b.YMin - low[1]) <= 1e-6
+            and abs(b.ZMin - low[2]) <= 1e-6 and abs(b.XMax - high[0]) <= 1e-6
+            and abs(b.YMax - high[1]) <= 1e-6 and abs(b.ZMax - high[2]) <= 1e-6
+        )
+        tris_ok = mesh.CountFacets == subject["triangles"]
+        pts_ok = mesh.CountPoints == subject["vertices"]
+        solid = mesh.isSolid()
+        if not (tris_ok and pts_ok and box_ok and solid):
+            failures += 1
+        print("%-32s %8d %8s %8d %8s %9s %s" % (
+            name, subject["triangles"],
+            str(mesh.CountFacets) if tris_ok else "**%d**" % mesh.CountFacets,
+            subject["vertices"],
+            str(mesh.CountPoints) if pts_ok else "**%d**" % mesh.CountPoints,
             "OK" if box_ok else "**ちがう**",
             "OK" if solid else "**閉じていない**"))
 
@@ -177,8 +235,11 @@ def main():
     if failures:
         print("**%d 件、他人の実装と食い違いました。**" % failures)
         return 1
-    print("**8 検体すべて、FreeCAD が STL を枚数・境界箱どおりに読んで水密と答え、**")
-    print("**DXF の断面も輪の数と面積が合いました。**")
+    print("**8 検体すべて、FreeCAD が STL と OBJ を枚数・点数・境界箱どおりに読んで**")
+    print("**水密と答え、DXF の断面も輪の数と面積が合いました。**")
+    print()
+    print("**glTF は、まだ他人に読ませていません**——FreeCAD の `Mesh` は")
+    print("`File extension not supported` で断ります。`gltf-validator` が要ります。")
     return 0
 
 
