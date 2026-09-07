@@ -72,37 +72,59 @@ pub fn solve_2d_sketch(points_json: &str, constraints_json: &str) -> PyResult<St
     let raw_constraints: Vec<serde_json::Value> = serde_json::from_str(constraints_json)
         .map_err(|e| PyValueError::new_err(format!("Invalid constraints JSON: {}", e)))?;
 
+    // **黙って落としません**（4-401）。
+    //
+    // ここは長らく、**知らない種類を `_ => {}` で無視**し、**番号が範囲の
+    // 外なら拘束ごと捨て**、**`value` が無ければ 10.0 を入れて**いました。
+    //
+    // **呼んだ側は「解けた」点を受け取ります**——**自分が掛けたつもりの
+    // 拘束が、1 本も入っていなくても**です。**綴りを 1 文字間違えるだけで、
+    // 何も掛かっていない図が「解けた」と返ります。**
+    //
+    // **このリポジトリの決まりどおり、名指しで断ります。**
+    let index_of = |value: Option<&serde_json::Value>, field: &str| -> PyResult<usize> {
+        let raw = value.and_then(|v| v.as_u64()).ok_or_else(|| {
+            PyValueError::new_err(format!("拘束に {field} がありません（整数で渡してください）"))
+        })? as usize;
+        if raw >= pt_ids.len() {
+            return Err(PyValueError::new_err(format!(
+                "{field} の点の番号 {raw} が範囲の外です（点は {} 個）",
+                pt_ids.len()
+            )));
+        }
+        Ok(raw)
+    };
+
     for c in raw_constraints {
         let c_type = c.get("type").and_then(|v| v.as_str()).unwrap_or("");
         match c_type {
             "horizontal" => {
-                let p1 = c.get("p1").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let p2 = c.get("p2").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-                if p1 < pt_ids.len() && p2 < pt_ids.len() {
-                    solver.add_constraint(zenith_algo::Constraint::Horizontal(
-                        pt_ids[p1], pt_ids[p2],
-                    ));
-                }
+                let (p1, p2) = (index_of(c.get("p1"), "p1")?, index_of(c.get("p2"), "p2")?);
+                solver.add_constraint(zenith_algo::Constraint::Horizontal(pt_ids[p1], pt_ids[p2]));
             }
             "vertical" => {
-                let p1 = c.get("p1").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let p2 = c.get("p2").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-                if p1 < pt_ids.len() && p2 < pt_ids.len() {
-                    solver
-                        .add_constraint(zenith_algo::Constraint::Vertical(pt_ids[p1], pt_ids[p2]));
-                }
+                let (p1, p2) = (index_of(c.get("p1"), "p1")?, index_of(c.get("p2"), "p2")?);
+                solver.add_constraint(zenith_algo::Constraint::Vertical(pt_ids[p1], pt_ids[p2]));
             }
             "distance" => {
-                let p1 = c.get("p1").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                let p2 = c.get("p2").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
-                let val = c.get("value").and_then(|v| v.as_f64()).unwrap_or(10.0);
-                if p1 < pt_ids.len() && p2 < pt_ids.len() {
-                    solver.add_constraint(zenith_algo::Constraint::Distance(
-                        pt_ids[p1], pt_ids[p2], val,
-                    ));
-                }
+                let (p1, p2) = (index_of(c.get("p1"), "p1")?, index_of(c.get("p2"), "p2")?);
+                // **`value` が無ければ断ります。** 既定の 10.0 を入れると、
+                // **頼んでいない寸法**が掛かります——**綴りを 1 文字
+                // 間違えただけで、10 mm の拘束が入っていました。**
+                let val = c.get("value").and_then(|v| v.as_f64()).ok_or_else(|| {
+                    PyValueError::new_err("distance に value がありません".to_string())
+                })?;
+                solver.add_constraint(zenith_algo::Constraint::Distance(
+                    pt_ids[p1], pt_ids[p2], val,
+                ));
             }
-            _ => {}
+            // **知らない種類は断ります。** 黙って無視すると、**掛けたつもりの
+            // 拘束が 1 本も入っていない図**が「解けた」と返ります。
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "知らない拘束の種類です: {other:?}（horizontal / vertical / distance）"
+                )))
+            }
         }
     }
 

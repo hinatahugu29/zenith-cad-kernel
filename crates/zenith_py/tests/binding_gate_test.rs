@@ -317,3 +317,44 @@ fn a_bad_sketch_is_refused_by_name_through_the_binding() {
         "軸をまたいでいるのに回りました"
     );
 }
+
+#[test]
+fn a_sketch_constraint_that_cannot_be_understood_is_refused_not_ignored() {
+    // **黙って落としません**（4-401）。
+    //
+    // ここは長らく、**知らない種類を無視**し、**番号が範囲の外なら拘束ごと
+    // 捨て**、**`value` が無ければ 10.0 を入れて**いました。
+    // **呼んだ側は「解けた」点を受け取ります**——**自分が掛けたつもりの
+    // 拘束が 1 本も入っていなくても**です。
+    let points = "[[0.0, 0.0], [3.0, 4.0], [9.0, 1.0]]";
+
+    // **綴り違い。** これが黙って通ると、何も掛かっていない図が
+    // 「解けた」と返ります。
+    let misspelled = r#"[{"type": "horizontol", "p1": 0, "p2": 1}]"#;
+    assert!(
+        zenith_cad::payload::solve_2d_sketch(points, misspelled).is_err(),
+        "知らない拘束の種類なのに解けたと返りました"
+    );
+
+    // **番号が範囲の外。**
+    let out_of_range = r#"[{"type": "distance", "p1": 0, "p2": 9, "value": 10.0}]"#;
+    assert!(
+        zenith_cad::payload::solve_2d_sketch(points, out_of_range).is_err(),
+        "点の番号が範囲の外なのに解けたと返りました"
+    );
+
+    // **`value` が無い。** 既定の 10.0 が入ると、**頼んでいない寸法**が
+    // 掛かります。
+    let no_value = r#"[{"type": "distance", "p1": 0, "p2": 1}]"#;
+    assert!(
+        zenith_cad::payload::solve_2d_sketch(points, no_value).is_err(),
+        "value が無いのに解けたと返りました"
+    );
+
+    // **正しく書いたものは、通ります。**
+    let good = r#"[{"type": "distance", "p1": 0, "p2": 1, "value": 10.0}]"#;
+    assert!(
+        zenith_cad::payload::solve_2d_sketch(points, good).is_ok(),
+        "正しい拘束が断られました"
+    );
+}
