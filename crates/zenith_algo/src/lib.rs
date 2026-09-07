@@ -116,7 +116,8 @@ pub use sketch_region::{
     extract_loops, extrude_sketch, loop_to_wire, revolve_sketch, LoopArc, SketchLoop, WorkPlane,
 };
 pub use sketch_solver::{
-    ArcId, CircleId, Constraint, LineId, PointId, SketchArc, SketchCircle, SketchConstraintStatus,
+    ArcId, CircleId, Constraint, LineId, OverConstraintKind, PointId, SketchArc, SketchCircle,
+    SketchConstraintStatus,
     SketchLine, SketchPoint, SketchSolver,
 };
 pub use slice::{SectionSliceResult, SectionSlicer};

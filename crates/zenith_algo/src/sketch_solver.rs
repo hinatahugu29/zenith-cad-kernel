@@ -562,6 +562,105 @@ impl SketchSolver {
             SketchConstraintStatus::UnderConstrained { remaining_dof }
         }
     }
+
+    /// **過剰拘束が「冗長」なのか「矛盾」なのか**を言う（4-393）。
+    ///
+    /// 過剰拘束でなければ `None`。
+    ///
+    /// # 自分で解いてから見ます
+    ///
+    /// **呼び手が解いていなくても正しく答えます**——**複製して解いてから**
+    /// 残差を測ります。**自分自身は動かしません。**
+    ///
+    /// **解く前の残差を見てはいけません。** 解いていないスケッチは、
+    /// **矛盾していなくても残差が大きい**ので、**全部「矛盾」と答えます**。
+    ///
+    /// # 見分け方
+    ///
+    /// **解いたあとの残差の最悪**が `tolerance` より大きければ**矛盾**、
+    /// そうでなければ**冗長**です。
+    pub fn diagnose_over_constraint(
+        &self,
+        max_iterations: usize,
+        tolerance: f64,
+    ) -> Option<OverConstraintKind> {
+        let SketchConstraintStatus::OverConstrained {
+            redundant_constraints,
+        } = self.constraint_status()
+        else {
+            return None;
+        };
+
+        // **複製して解きます。** 自分自身は動かしません。
+        let mut trial = self.clone();
+        // **解けなかった（特異など）ことは、それ自体では矛盾の証拠に
+        // なりません。** 残差のほうを見ます。
+        let _ = trial.solve(max_iterations, tolerance);
+
+        let mut x = DVector::zeros(trial.points.len() * 2);
+        for (index, point) in trial.points.iter().enumerate() {
+            x[2 * index] = point.x;
+            x[2 * index + 1] = point.y;
+        }
+        let (residuals, _) = trial.eval_residuals_and_jacobian(&x);
+
+        let mut worst_residual = 0.0f64;
+        let mut worst_equation = 0usize;
+        for (row, value) in residuals.iter().enumerate() {
+            if value.abs() > worst_residual {
+                worst_residual = value.abs();
+                worst_equation = row;
+            }
+        }
+
+        if worst_residual > tolerance {
+            Some(OverConstraintKind::Conflicting {
+                redundant_constraints,
+                worst_residual,
+                worst_equation,
+            })
+        } else {
+            Some(OverConstraintKind::Redundant {
+                redundant_constraints,
+                worst_residual,
+            })
+        }
+    }
+}
+
+/// **過剰拘束の中身**（4-393）。
+///
+/// `SketchConstraintStatus::OverConstrained` は「式が階数より多い」ことしか
+/// 言いません。**それは 2 つの、まるで違う状態を 1 つの名前で呼んで**います。
+///
+/// | | 何が起きているか | 使う人がすること |
+/// | :--- | :--- | :--- |
+/// | **冗長** | **同じことを 2 回言っている**。解はある | **消してよい**。形は変わらない |
+/// | **矛盾** | **両立しない**。解が無い | **どちらかを直す**。形が決まらない |
+///
+/// **見分け方は、解いたあとの残差**です。**冗長なら残差は 0 へ落ちます**
+/// ——余分な式も、他の式と同じことを言っているので同時に満たされます。
+/// **矛盾していると、どこまで回しても残差が残ります。**
+///
+/// **階数だけでは見分けられません**——**どちらも階数が式より小さい**からです。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum OverConstraintKind {
+    /// **冗長**。余分な式はあるが、全部同時に満たせる。
+    Redundant {
+        /// 式の本数 − 階数。
+        redundant_constraints: usize,
+        /// 解いたあとの残差の最悪。**関門より下**です。
+        worst_residual: f64,
+    },
+    /// **矛盾**。どこまで解いても残差が残る。
+    Conflicting {
+        redundant_constraints: usize,
+        /// 解いたあとの残差の最悪。
+        worst_residual: f64,
+        /// その残差を出している**式の番号**（拘束の番号ではありません
+        /// ——1 つの拘束が 2 本の式を出すことがあります）。
+        worst_equation: usize,
+    },
 }
 
 /// スケッチ拘束状態
