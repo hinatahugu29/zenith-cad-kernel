@@ -245,7 +245,14 @@ fn cases(tol: &Tolerance) -> Vec<Case> {
 
 fn main() {
     let tol = Tolerance::default();
-    let cases = cases(&tol);
+    // **1 つだけ回す口。** 診断を振るとき、8 置き方ぶんの出力に埋もれます。
+    //
+    //     ZENITH_SKETCH_BOOL_ONLY=接する ZENITH_STITCH_WHY=1 cargo run ...
+    let only = std::env::var("ZENITH_SKETCH_BOOL_ONLY").unwrap_or_default();
+    let cases: Vec<Case> = cases(&tol)
+        .into_iter()
+        .filter(|case| only.is_empty() || case.name.contains(only.as_str()))
+        .collect();
 
     println!("スケッチから作った立体を、ブーリアンの相手にする（4-398）");
     println!();
