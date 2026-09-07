@@ -536,7 +536,24 @@ impl FaceSplitter {
         let scale = boundary_extent(&face.outer_wire).max(1.0);
         // **天井を付けます**（4-215）。この `limit` は、下の `snapped_onto_boundary`
         // がどれだけ端を動かしてよいかでもあります。
-        let limit = (tol.linear * 10.0 * scale).min(SNAP_CEILING);
+        let limit = {
+            let fixed = (tol.linear * 10.0 * scale).min(SNAP_CEILING);
+            // **面が申告する粗さを使う口**（4-388。`ZENITH_FACE_SNAP=1`。
+            // **既定では走りません**）。
+            //
+            // 上の `fixed` は **1e-5×差し渡し、上限 4e-5** で、**ファイルが
+            // どこにも約束していない数**です。読んだ面は **4.1e-4 まで
+            // 申告します**（4-266、4-351。`ZENITH_CHAINGAP_WHY` は既に
+            // その流儀です）。
+            //
+            // **幅を緩める手は 6 戦 0 勝**（4-352）なので、**既定にはしません。**
+            // **測るための口**です。
+            if std::env::var_os("ZENITH_FACE_SNAP").is_some() {
+                fixed.max(face.tolerance + face.pcurve_tolerance)
+            } else {
+                fixed
+            }
+        };
 
         // 1. 切り込みが本当にこの面の上にあるか。構成に使っていない位置で測る。
         let mut curve_off_surface: f64 = 0.0;
