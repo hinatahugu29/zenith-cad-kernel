@@ -480,3 +480,83 @@ pub fn extrude_sketch(
         loop_to_wire(&outline, plane, tol).ok_or_else(|| "輪を 3D の輪にできません".to_string())?;
     crate::ExtrudeBuilder::extrude_wire(&wire, plane.normal() * height, tol)
 }
+
+/// スケッチの輪を、**作業平面の中の軸**まわりに 1 周させて立体にする。
+///
+/// # 軸はスケッチの座標で受け取ります
+///
+/// **軸は作業平面の中にあります。** `axis_point` と `axis_dir` は
+/// **スケッチの `(u, v)`** で、`plane` で 3D に写します。
+///
+/// **平面の外の軸は受け取れません**——受け取れる形にすると、輪が軸を
+/// またぐかどうかを別に判定することになり、**「もっともらしい立体」を
+/// 返す余地**ができます。
+///
+/// # 断るもの
+///
+/// **輪が軸に触れているか、またいでいたら断ります。** またぐと、
+/// 回した先が自分自身を突き抜けます。**推測しません**——**軸までの距離を
+/// 輪の点で測って、符号が揃っているか**を見ます。
+///
+/// # 測り方（パップスの定理）
+///
+/// ```text
+/// 体積 = 2π × (重心から軸までの距離) × 面積
+/// ```
+///
+/// **閉じた式です。** `sketch_region_test` がこれで測っています。
+pub fn revolve_sketch(
+    solver: &SketchSolver,
+    plane: &WorkPlane,
+    axis_point: Point2,
+    axis_dir: Point2,
+    tol: &Tolerance,
+) -> Result<zenith_topo::Solid, String> {
+    let loops = extract_loops(solver, tol).ok_or_else(|| {
+        "スケッチから閉じた輪を取り出せません（分岐・行き止まり・開いた鎖）".to_string()
+    })?;
+    if loops.len() != 1 {
+        return Err(format!(
+            "外周が1つの場合だけ扱えます（取り出した輪は {} 本）",
+            loops.len()
+        ));
+    }
+    let direction = {
+        let length = (axis_dir.x * axis_dir.x + axis_dir.y * axis_dir.y).sqrt();
+        if !(length > 1e-12) {
+            return Err("軸の向きが 0 です".to_string());
+        }
+        Point2::new(axis_dir.x / length, axis_dir.y / length)
+    };
+
+    let outline = loops.into_iter().next().expect("1本").counterclockwise();
+
+    // **軸のどちら側に居るか。** 符号つきの距離で見ます。
+    //
+    // **またいでいたら、回した先が自分を突き抜けます。** **触れている
+    // だけでも断ります**——回した先で厚みが 0 になり、そこは立体の
+    // 境界として読めません（3-1 と同じ筋です）。
+    let side = |point: Point2| -> f64 {
+        let dx = point.x - axis_point.x;
+        let dy = point.y - axis_point.y;
+        direction.x * dy - direction.y * dx
+    };
+    let mut lowest = f64::INFINITY;
+    let mut highest = f64::NEG_INFINITY;
+    for point in &outline.points {
+        let signed = side(*point);
+        lowest = lowest.min(signed);
+        highest = highest.max(signed);
+    }
+    if lowest <= tol.linear && highest >= -tol.linear {
+        return Err(format!(
+            "輪が軸に触れているか、またいでいます（軸までの符号つき距離が {lowest:.9} から {highest:.9}）"
+        ));
+    }
+
+    let wire =
+        loop_to_wire(&outline, plane, tol).ok_or_else(|| "輪を 3D の輪にできません".to_string())?;
+    let origin = plane.at(axis_point);
+    let along = plane.x_axis * direction.x + plane.y_axis * direction.y;
+    crate::RevolveBuilder::revolve_wire_solid(&wire, origin, along, tol)
+}

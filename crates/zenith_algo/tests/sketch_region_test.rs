@@ -364,3 +364,120 @@ fn a_workplane_normal_is_perpendicular_to_its_axes() {
     );
     let _ = PI;
 }
+
+#[test]
+fn revolving_a_sketch_obeys_pappus() {
+    // **パップスの定理で照らします。**
+    //
+    // ```text
+    // 体積 = 2π × (重心から軸までの距離) × 面積
+    // ```
+    //
+    // **閉じた式です。** 断面が長方形なら重心も面積も手で書けます。
+    // 軸から離した長方形を1周させると、**角のある輪（リング）**になります。
+    let tol = Tolerance::default();
+    let (width, height, offset) = (4.0, 6.0, 10.0);
+
+    // x ∈ [offset, offset + width]、y ∈ [0, height] の長方形。
+    let mut solver = SketchSolver::new();
+    let a = solver.add_point(offset, 0.0);
+    let b = solver.add_point(offset + width, 0.0);
+    let c = solver.add_point(offset + width, height);
+    let d = solver.add_point(offset, height);
+    solver.add_line(a, b);
+    solver.add_line(b, c);
+    solver.add_line(c, d);
+    solver.add_line(d, a);
+
+    // 軸は原点を通る y 方向（スケッチの座標）。
+    let solid = zenith_algo::revolve_sketch(
+        &solver,
+        &WorkPlane::xy(),
+        zenith_math::Point2::new(0.0, 0.0),
+        zenith_math::Point2::new(0.0, 1.0),
+        &tol,
+    )
+    .expect("回せません");
+
+    let area = width * height;
+    let centroid = offset + width / 2.0;
+    let expected = 2.0 * PI * centroid * area;
+    let measured = volume(&solid);
+    let residual = (measured - expected).abs() / expected;
+    // **実測は 1e-13 より良い**です（掃くのが有理2次の四半弧で厳密、
+    // 面積分も解析的なので、刻みに依りません）。**関門は 1e-12** に
+    // 置いて、少しだけ余裕を持たせています。
+    assert!(
+        residual <= 1e-12,
+        "体積が {measured:.9} で、パップスの 2π·{centroid}·{area} = {expected:.9} と \
+         相対 {residual:.3e} 違います"
+    );
+}
+
+#[test]
+fn a_loop_that_crosses_the_axis_is_refused() {
+    // **またぐ輪を回すと、自分を突き抜けます。** 推測せずに断ります。
+    let tol = Tolerance::default();
+    let mut solver = SketchSolver::new();
+    let a = solver.add_point(-5.0, 0.0);
+    let b = solver.add_point(5.0, 0.0);
+    let c = solver.add_point(5.0, 6.0);
+    let d = solver.add_point(-5.0, 6.0);
+    solver.add_line(a, b);
+    solver.add_line(b, c);
+    solver.add_line(c, d);
+    solver.add_line(d, a);
+
+    assert!(
+        zenith_algo::revolve_sketch(
+            &solver,
+            &WorkPlane::xy(),
+            zenith_math::Point2::new(0.0, 0.0),
+            zenith_math::Point2::new(0.0, 1.0),
+            &tol,
+        )
+        .is_err(),
+        "軸をまたいでいるのに回しました"
+    );
+}
+
+#[test]
+fn revolving_does_not_depend_on_where_the_workplane_is() {
+    // **作業平面を傾けて原点から離しても、体積は変わりません**（4-159）。
+    let tol = Tolerance::default();
+    let (width, height, offset) = (3.0, 5.0, 8.0);
+    let mut solver = SketchSolver::new();
+    let a = solver.add_point(offset, 0.0);
+    let b = solver.add_point(offset + width, 0.0);
+    let c = solver.add_point(offset + width, height);
+    let d = solver.add_point(offset, height);
+    solver.add_line(a, b);
+    solver.add_line(b, c);
+    solver.add_line(c, d);
+    solver.add_line(d, a);
+
+    let expected = 2.0 * PI * (offset + width / 2.0) * width * height;
+    let axis_point = zenith_math::Point2::new(0.0, 0.0);
+    let axis_dir = zenith_math::Point2::new(0.0, 1.0);
+
+    let here = volume(
+        &zenith_algo::revolve_sketch(&solver, &WorkPlane::xy(), axis_point, axis_dir, &tol)
+            .expect("回せません"),
+    );
+    assert!(
+        (here - expected).abs() / expected <= 1e-12,
+        "原点で {here:.9}、期待 {expected:.9}"
+    );
+
+    let tilted = WorkPlane::from_normal(Point3::new(137.0, -91.0, 53.0), Vec3::new(1.0, 2.0, 3.0))
+        .expect("作業平面が作れません");
+    let there = volume(
+        &zenith_algo::revolve_sketch(&solver, &tilted, axis_point, axis_dir, &tol)
+            .expect("回せません"),
+    );
+    let residual = (there - expected).abs() / expected;
+    assert!(
+        residual <= 1e-12,
+        "傾けて離すと体積が {there:.9} になりました（期待 {expected:.9}、相対 {residual:.3e}）"
+    );
+}

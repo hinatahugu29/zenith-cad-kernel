@@ -113,7 +113,7 @@ pub use sew::{SewReport, Sewer};
 pub use shell::ShellBuilder;
 pub use shelling::ShellingBuilder;
 pub use sketch_region::{
-    extract_loops, extrude_sketch, loop_to_wire, LoopArc, SketchLoop, WorkPlane,
+    extract_loops, extrude_sketch, loop_to_wire, revolve_sketch, LoopArc, SketchLoop, WorkPlane,
 };
 pub use sketch_solver::{
     ArcId, CircleId, Constraint, LineId, PointId, SketchArc, SketchCircle, SketchConstraintStatus,
