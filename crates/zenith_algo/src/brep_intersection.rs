@@ -732,6 +732,21 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // **交線の端は、そこで途切れているのか、既存の稜へ続くのか**
+        // （4-376。`ZENITH_CHAINGAP_WHY=1`）。
+        //
+        // 4-375 で、**交線の端点 68 個のうち 24 個には交線が 1 本しか
+        // 来ていない**と分かりました（**幅の問題ではありません**——1e-6 から
+        // 1e-3 まで 24 のまま）。読みは 2 つあり、**どちらかで、輪を組む段の
+        // 設計が変わります**——**続きの交線が作られていない**なら交線どうしを
+        // 繋げばよく、**続きが既存の稜**なら**交線と稜を混ぜて繋ぐ**ことに
+        // なります。
+        //
+        // **数えるだけです。** 振る舞いは変えていません。
+        if std::env::var_os("ZENITH_CHAINGAP_WHY").is_some() {
+            report_chain_gaps(faces_a, faces_b, &edge_candidates, tol);
+        }
+
         // **刻んだ小片は、その面のトリムの中にあるものだけ渡します**
         // （4-342。`ZENITH_SPLIT_AT_TRIM=1` のときだけ）。
         //
@@ -7209,6 +7224,124 @@ pub fn point_inside_face_trim_for_probe(
     tol: &Tolerance,
 ) -> Option<bool> {
     point_inside_face_trim(face, point, tol)
+}
+
+/// **交線の端が、そこで途切れているのか、既存の稜へ続くのか**を数える
+/// （4-376。`ZENITH_CHAINGAP_WHY=1`）。
+///
+/// **数えるだけです。** 4-375 の 24 個を 2 つの読みへ分けるためのものです。
+///
+/// **交線は重複して来ます**（同じ線が複数の面の組から出ます）。端点の
+/// 本数を数える前に、**中点で束ねて**別々のものにします——**端点だけでは、
+/// 同じ2点を結ぶ別々の弧を見分けられません**（4-65）。
+fn report_chain_gaps(
+    faces_a: &[Face],
+    faces_b: &[Face],
+    candidates: &[IntersectionEdgeCandidate],
+    tol: &Tolerance,
+) {
+    let key = |point: Point3| -> (i64, i64, i64) {
+        let scale = 1.0e6;
+        (
+            (point.x * scale).round() as i64,
+            (point.y * scale).round() as i64,
+            (point.z * scale).round() as i64,
+        )
+    };
+    // **中点で束ねます**（4-65。端点だけでは弧を見分けられません）。
+    let mut distinct: BTreeMap<((i64, i64, i64), (i64, i64, i64), (i64, i64, i64)), Edge> =
+        BTreeMap::new();
+    for candidate in candidates {
+        let edge = &candidate.edge;
+        let (t0, t1) = edge.curve.param_range();
+        let middle = edge.curve.evaluate((t0 + t1) * 0.5);
+        let mut ends = [
+            key(edge.start_vertex.point),
+            key(edge.end_vertex.point),
+        ];
+        ends.sort();
+        distinct
+            .entry((ends[0], ends[1], key(middle)))
+            .or_insert_with(|| edge.clone());
+    }
+    let edges: Vec<Edge> = distinct.into_values().collect();
+
+    // **端点に、交線が何本集まるか**（4-375 の数え直し）。
+    let mut incidence: BTreeMap<(i64, i64, i64), (usize, Point3)> = BTreeMap::new();
+    for edge in &edges {
+        for point in [edge.start_vertex.point, edge.end_vertex.point] {
+            let slot = incidence.entry(key(point)).or_insert((0, point));
+            slot.0 += 1;
+        }
+    }
+
+    // 既存の稜までの距離。**標本ではなく曲線そのものまで測ります**（4-354）。
+    //
+    // **受け入れ幅は、その稜を持つ面が申告する粗さ**で返します
+    // （4-266、4-351。**1e-9 のような、ファイルがどこにも約束していない数を
+    // 使ってはいけません**。**全部の面の最大**でもいけません——
+    // **遠くの粗い面の粗さで、近くの細かい面を測ることになります**）。
+    let nearest_edge = |faces: &[Face], point: Point3| -> (f64, f64) {
+        let mut best = f64::INFINITY;
+        let mut accept = tol.linear;
+        for face in faces {
+            for oriented in face
+                .outer_wire
+                .edges
+                .iter()
+                .chain(face.inner_wires.iter().flat_map(|wire| wire.edges.iter()))
+            {
+                if let Ok(result) = zenith_geom::ExtremumEngine::point_to_curve(
+                    point,
+                    &oriented.edge.curve,
+                    64,
+                    1e-14,
+                ) {
+                    if result.distance < best {
+                        best = result.distance;
+                        accept = tol.linear.max(face.tolerance + face.pcurve_tolerance);
+                    }
+                }
+            }
+        }
+        (best, accept)
+    };
+
+    let mut lone = 0usize;
+    let mut on_existing = 0usize;
+    let mut orphan = 0usize;
+    for (_, (count, point)) in incidence.iter() {
+        if *count != 1 {
+            continue;
+        }
+        lone += 1;
+        let (to_a, accept_a) = nearest_edge(faces_a, *point);
+        let (to_b, accept_b) = nearest_edge(faces_b, *point);
+        let (nearest, accept, side) = if to_a <= to_b {
+            (to_a, accept_a, "A")
+        } else {
+            (to_b, accept_b, "B")
+        };
+        let verdict = if nearest <= accept {
+            on_existing += 1;
+            "既存の稜の上（続きは稜）"
+        } else {
+            orphan += 1;
+            "どの稜からも離れている（続きが作られていない）"
+        };
+        eprintln!(
+            "CHAINGAPWHY 端 ({:.6} {:.6} {:.6}): A の稜まで {:.6e}、B の稜まで {:.6e} → いちばん近いのは {}（受け入れ {:.6e}）→ {}",
+            point.x, point.y, point.z, to_a, to_b, side, accept, verdict
+        );
+    }
+    eprintln!(
+        "CHAINGAPWHY 交線 {} 本、端点 {} 個、1 本しか来ない端 {} 個 → **既存の稜の上 {} 個 / どの稜からも離れている {} 個**",
+        edges.len(),
+        incidence.len(),
+        lone,
+        on_existing,
+        orphan
+    );
 }
 
 fn point_inside_face_trim(face: &Face, point: Point3, tol: &Tolerance) -> Option<bool> {
