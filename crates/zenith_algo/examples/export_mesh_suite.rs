@@ -34,6 +34,27 @@ use zenith_topo::Solid;
 
 const DIVISIONS: usize = 24;
 
+/// **立体の広がり**（4-269、4-389）。
+///
+/// `Solid::bounding_box()` はトリムされた NURBS で**曲面の制御点まで**
+/// 含みます。**面がどこにあるか**を知りたいときは、境界を見ます。
+fn boundary_bounding_box(solid: &Solid) -> Option<zenith_math::BoundingBox3> {
+    let mut bbox: Option<zenith_math::BoundingBox3> = None;
+    for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
+        for face in &shell.faces {
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for point in wire.sample_points(12) {
+                    match &mut bbox {
+                        Some(box3) => box3.extend_point(point),
+                        None => bbox = Some(zenith_math::BoundingBox3::from_point(point)),
+                    }
+                }
+            }
+        }
+    }
+    bbox
+}
+
 struct Subject {
     name: &'static str,
     solid: Solid,
@@ -174,7 +195,25 @@ fn run() -> Result<(), String> {
             .collect();
         DxfExporter::export_loops_to_file(&loops, &dxf)?;
 
-        let bbox = subject.solid.bounding_box();
+        // **`Solid::bounding_box()` は、立体の広がりではありません**（4-269、4-389）。
+        //
+        // トリムされた NURBS では、**曲面の制御点まで**入ります。台帳に
+        // その数を書くと、**外から読んだ人が「境界箱が違う」と言います**
+        // ——実測（`boolean_plate_minus_pin`）:
+        //
+        // | | z |
+        // | :--- | :--- |
+        // | `bounding_box()` | **[-10.000, 30.000]** |
+        // | 書き出したメッシュ（FreeCAD 読み） | **[0.000, 12.000]** |
+        //
+        // **差し渡しが 3.3 倍**違います。**引いた円柱の制御点**が入って
+        // いました。`read_and_cut_probe` が 4-269 で同じ穴を踏んで、
+        // **境界（ワイヤ）だけを見る**ようにしています。**ここも同じに
+        // します。**
+        //
+        // **見つけたのは、他人の実装に読ませたとき**でした（4-389）。
+        // **台帳のこの欄は、書いてあるだけで誰も検算していませんでした。**
+        let bbox = boundary_bounding_box(&subject.solid).unwrap_or_else(|| subject.solid.bounding_box());
         let outer_loops = section
             .signed_loop_areas
             .iter()
