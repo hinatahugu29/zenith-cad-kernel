@@ -697,16 +697,32 @@ fn seam_census() -> bool {
     *FLAG.get_or_init(|| std::env::var_os("ZENITH_SEAM_CENSUS").is_some())
 }
 
+/// **細分の段に受け入れ幅を掛け直す切替**（4-411。`ZENITH_SUBDIV_GUARD=1`）。
+///
+/// 立てると 4-410 の①の**前**の振る舞いに戻ります。
+fn subdiv_guard() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("ZENITH_SUBDIV_GUARD").is_some())
+}
+
 /// **細分の段で、外れた種を捨てるところを出す口**（4-411。`ZENITH_SUBDIV_WHY=1`）。
 fn subdiv_why() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FLAG.get_or_init(|| std::env::var_os("ZENITH_SUBDIV_WHY").is_some())
 }
 
-/// **`mixed` を外して測るための切替**（4-411。`ZENITH_SEAM_NO_MIXED=1`）。
-fn seam_no_mixed() -> bool {
+/// **`efa9c92` の `mixed` を戻すための切替**（4-411。`ZENITH_SEAM_MIXED=1`）。
+///
+/// **既定では使いません。** `mixed` は 4 つの門を赤にします（`foreign_slice`
+/// 24 中 17 誤答、`foreign_distance` 29/3、`foreign_inertia` 24/1、
+/// `grid_fallback` 15 中 9）。**円錐の底円まで「曖昧」と数えて潰す**ためです。
+///
+/// **無駄な行ではありません**——細分の段に受け入れ幅を掛ける（4-410 の①の
+/// 前）状態では、`linkrods` の表示メッシュの穴を **34 → 0** にします。
+/// **①のあとでは、どちらでも 480 本**で、何もしません（4-411 で実測）。
+fn seam_mixed() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| std::env::var_os("ZENITH_SEAM_NO_MIXED").is_some())
+    *FLAG.get_or_init(|| std::env::var_os("ZENITH_SEAM_MIXED").is_some())
 }
 
 fn settle_seam_segment_axis(
@@ -799,12 +815,12 @@ fn settle_seam_segment_axis(
                     inside.join(" "),
                 );
             }
-            // **`mixed` を外して測るための切替**（4-411。`ZENITH_SEAM_NO_MIXED=1`）。
+            // **`mixed` は既定では使いません**（4-411。`ZENITH_SEAM_MIXED=1` で戻る）。
             //
             // 4-410 の②は「戻すのは早すぎます」で止めました——**戻したら
-            // `linkrods` の穴が戻るはず**、と書いただけで、**測っていません**。
-            // ここで測れるようにします。**既定の答えは変えません。**
-            at(min) || at(max) || (mixed && !seam_no_mixed())
+            // `linkrods` の穴が戻るはず**、と書いただけで、**測っていません**
+            // でした。測った結果は 4-411 の表のとおりです。
+            at(min) || at(max) || (mixed && seam_mixed())
         })
         .collect();
     if ambiguous.iter().all(|flag| *flag) || ambiguous.iter().all(|flag| !*flag) {
@@ -1358,7 +1374,10 @@ fn project_edge_to_nurbs_pcurve(
                 continue;
             }
 
-            let uv = project(middle, Some(chord), false)?;
+            // **①の前に戻して測るための切替**（4-411。`ZENITH_SUBDIV_GUARD=1`）。
+            // ①は `linkrods` の表示メッシュを穴 0 → 480 本にしました。
+            // **どちらに倒すかを、組み合わせで測るために要ります。**
+            let uv = project(middle, Some(chord), subdiv_guard())?;
             // 継ぎ目をまたぐ区間は、割っても弦が縮まない。無限に割らないよう抜ける。
             // パラメータ空間で湾曲する曲線（有理パッチ上の直線など）の膨らみを
             // 誤認してスキップしないよう、区間長に応じたマージンを設ける。

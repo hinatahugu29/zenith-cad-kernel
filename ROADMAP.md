@@ -1,10 +1,16 @@
 # 🌐 Zenith CAD Kernel 機能要件マトリクス＆開発ロードマップ
 
-> ## ⚠ 2026/09/08 — 記録されている門のうち 4 つが赤のままです
+> ## ⚠ 2026/09/08 — 記録されている門のうち 1 つが赤のままです
 >
-> `foreign_slice_probe`・`foreign_distance_probe`・`foreign_inertia_probe`・
-> `grid_fallback_probe`。**`git bisect` で `efa9c92`（9/3）に落ちています**が、
-> **直していません**（HANDOVER 4-410、3-R）。
+> **`read_and_cut_probe` の `linkrods.step` で、表示メッシュに穴 480 本。**
+> **表示メッシュだけで、B-Rep は健全**です。**`446fa88`（HANDOVER 4-410 の①）
+> が持ち込みました**——`7c261ef` では 0 本でした。**直していません**
+> （HANDOVER 4-411、3-R）。
+>
+> **同じ日に赤だった 4 つ**（`foreign_slice_probe`・`foreign_distance_probe`・
+> `foreign_inertia_probe`・`grid_fallback_probe`）は、**4-411 で緑に戻りました**
+> ——24/0、36/0、32/0、15 件中 0 件。**`shape_variety_probe` も緑**です。
+>
 > **通しテストはずっと緑**でした——**門はテストではありません。**
 > **この文書の「完了」は、門が緑であることを前提にしています。**
 
