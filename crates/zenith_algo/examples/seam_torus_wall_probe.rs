@@ -149,4 +149,61 @@ fn main() {
     println!("  ZENITH_SPLIT_WHY=1 cargo run --release -p zenith_algo \\");
     println!("    --example seam_torus_wall_probe > out.txt 2>&1");
     println!("  py tools/tally_split_reasons.py out.txt");
+    println!();
+    check_loose_ends(&a, &b, &tol);
+}
+
+/// **浮いた端が、その組の両方のパッチに乗っているか**（4-412）。
+///
+/// 交線が 2 本足りないと数えたあと、**落ちた組を名指し**しました——
+/// `A面15 × B面10` と `A面15 × B面8`、どちらも**辿れた枝 0 本**。
+///
+/// **「その組に交線が通るはずだ」は、まだ推測です。** ここで確かめます
+/// ——**浮いた端を、両方のパッチへ射影**します。**両方に乗っていれば、
+/// 交線はそこを通っており、追跡器が取り落としています。**
+fn check_loose_ends(a: &Solid, b: &Solid, tol: &Tolerance) {
+    use zenith_geom::ExtremumEngine;
+    use zenith_math::Point3;
+    use zenith_topo::FaceGeometry;
+
+    let surface = |solid: &Solid, index: usize| match &solid.outer_shell.faces[index].geometry {
+        FaceGeometry::Nurbs(nurbs) => Some(nurbs.clone()),
+        _ => None,
+    };
+    let distance = |point: Point3, index: usize, solid: &Solid| -> String {
+        match surface(solid, index) {
+            Some(nurbs) => match ExtremumEngine::point_to_surface(point, &nurbs, 32, tol.parametric)
+            {
+                Ok(projection) => format!("{:.3e}", projection.distance),
+                Err(_) => "射影できず".to_string(),
+            },
+            None => "nurbs ではない".to_string(),
+        }
+    };
+
+    println!("**浮いた端は、その組の両方のパッチに乗っているか**（4-412）");
+    println!();
+    println!("{:<34}{:>14}{:>14}{:>14}", "浮いた端", "A面15 まで", "B面8 まで", "B面10 まで");
+    println!("{}", "-".repeat(78));
+    for (x, y, z) in [
+        (11.422866, -2.207950, -3.983248),
+        (11.632495, -2.947042, -4.000000),
+        (10.226803, -6.277938, -4.000000),
+        (7.773197, -6.542084, -3.551570),
+    ] {
+        let point = Point3::new(x, y, z);
+        println!(
+            "({:>9.4},{:>9.4},{:>9.4}){:>14}{:>14}{:>14}",
+            x,
+            y,
+            z,
+            distance(point, 15, a),
+            distance(point, 8, b),
+            distance(point, 10, b),
+        );
+    }
+    println!("{}", "-".repeat(78));
+    println!();
+    println!("**両方に乗っていれば、交線はそこを通っています**——");
+    println!("**取り落としているのは `fit_all_branches` のほう**です。");
 }
