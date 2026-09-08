@@ -2330,6 +2330,22 @@ union が通るのは、和では両側の面片をそのまま採るので重�
 **この節が、いちばん新しい要約**です。細かい経緯は 4 章（4-383 以降）に
 あります。
 
+> ### ⚠ **`reference/` の中身が消えています**（2026/09/08。**私の操作です**）
+>
+> 基準コミットの worktree に `reference` のジャンクションを張ったまま
+> `git worktree remove --force` を実行し、**リンクを辿って本体ごと
+> 削除**されました。**`.gitignore` 済みなので git からは戻せません。
+> ごみ箱にもありません。**
+>
+> **通しテストは 139 本 / 723 件通過・0 失敗のまま**です——読めない
+> ファイルは飛ばす作りでした。**赤にならないので気づきにくい**です。
+> **回せなくなるのは門**——`read_and_cut_probe`・`closure_probe`・
+> `step_face_gap_probe`・`step_surface_shape_probe`・
+> `unused_builder_probe`・`seam_census_probe`。
+>
+> **下の 4-411 の実測値は、すべて消える前に取ったもの**です。
+> 詳しくは 5 章の落とし穴に。
+
 > ### ⚠ 門は、テストではありません（**4-410、4-411**）
 >
 > **記録されている門のうち 5 つが、`origin/main` の時点で赤**でした。
@@ -31696,6 +31712,40 @@ diff <(grep -v 秒 clip.txt) <(grep -v 秒 clip_trim.txt)   # 出力なし
 
 ## 5. 踏んだ落とし穴（繰り返さないために）
 
+### ⚠ **worktree の中にジャンクションを張ったら、`worktree remove` で本体が消えます**（2026/09/08）
+
+**`reference/`（約 420MB。`.gitignore` 済み）を消しました。**
+
+基準コミットで測り直すために worktree を出し、そこに `reference` が
+無かったので、**`mklink /J` で本体へのジャンクションを張りました**。
+測り終えたあと、**`git worktree remove --force` が、ジャンクションを
+辿って本体の中身ごと削除**しました。
+
+| | |
+| :--- | :--- |
+| git から復元 | **できません**（`/reference/` は `.gitignore`） |
+| ごみ箱 | **ありません**（git の削除はごみ箱を経由しません） |
+| 中身 | `OCCT`、`CAD_8_1_5_1`（移植元）、`external-analysis/` |
+
+**通しテストは 139 本 / 723 件通過・0 失敗のままです**——読めない
+ファイルは飛ばす作りでした。**赤にならないので、気づきにくい**です。
+**読めなくなるのは門のほう**——`read_and_cut_probe`・`closure_probe`・
+`step_face_gap_probe`・`step_surface_shape_probe`・`unused_builder_probe`・
+`seam_census_probe`。
+
+#### 次に同じことをしないために
+
+- **worktree に外部資料が要るときは、ジャンクションではなく `cp` で
+  写してください。** 消えて困らない複製にします。
+- **どうしてもリンクを張ったなら、`worktree remove` の前に外す**
+  （`rmdir <link>`。中身は消えません）。
+- **`--force` は、リンクの先まで力を及ぼします。**
+
+**この文書の「基準コミットで測り直す」手順は、正しいままです**
+（4-411 で①の回帰に気づけたのは、それをやったから）。
+**危ないのは、資料の繋ぎ方のほうでした。**
+
+
 ### まとめの数が気持ちよく揃ったら、生の行を 3 本読んでください（2026/09/07）
 
 **診断を 1 行足して、`自分の面の稜 11 個 / 別の面の稜 0 個` と出ました。**
@@ -33335,7 +33385,7 @@ cargo run --release -p zenith_algo --example export_mesh_suite        # target/m
 追跡していないもの:
 
 - リポジトリ直下の生成物 `*.step`、`target*/` — `.gitignore` 済み
-- `reference/`（移植元の Seamless CAD と OCCT、合計 420MB）— `.gitignore` 済み
+- `reference/`（移植元の Seamless CAD と OCCT、合計 420MB）— `.gitignore` 済み。**⚠ 2026/09/08 に、私の操作で中身を消しました**（worktree に張ったジャンクションごと `worktree remove --force`。5 章の落とし穴）。**復元されるまで、`reference/OCCT/data/step/` を読む門は回せません**
 - `agent-work-log.json` — `.gitignore` 済み
 
 **`.gitignore` の落とし穴**: `/tools/test_*.py` が無視されます。ここに置いた
