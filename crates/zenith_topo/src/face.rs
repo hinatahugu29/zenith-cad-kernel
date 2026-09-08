@@ -688,6 +688,15 @@ fn settle_seam_segments(
     settle_seam_segment_axis(segments, v_min, v_max, surface, tol, false);
 }
 
+/// **継ぎ目の判定を数えるための口**（4-411。`ZENITH_SEAM_CENSUS=1`）。
+///
+/// **既定の答えは変えません。** 1 度だけ読みます——この判定は面ごとに
+/// 呼ばれるので、毎回読むと切り分けのために測定そのものを重くします。
+fn seam_census() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("ZENITH_SEAM_CENSUS").is_some())
+}
+
 fn settle_seam_segment_axis(
     segments: &mut [FacePcurveSegment],
     min: f64,
@@ -745,6 +754,39 @@ fn settle_seam_segment_axis(
                 let value = coordinate(&control.point);
                 (value - min).abs() <= edge_of_domain || (value - max).abs() <= edge_of_domain
             });
+            // **数えるための口**（4-411。`ZENITH_SEAM_CENSUS=1`）。**既定の
+            // 答えは変えません。** 4-410 の②は「制御点の位置だけでは、継ぎ目に
+            // 張り付いた区間と、端から端へ素直に横断する区間を見分けられない」
+            // で止まっています。**見分けられるかどうかは途中を見れば分かる
+            // はず**ですが、**まだ数えていませんでした**。次数・制御点・
+            // **途中の標本**を並べて出します。
+            if seam_census() {
+                let (t_min, t_max) = segment.curve.param_range();
+                let inside: Vec<String> = [0.25f64, 0.5, 0.75]
+                    .iter()
+                    .map(|f| {
+                        let t = t_min + (t_max - t_min) * f;
+                        format!("{:.6}", coordinate(&segment.curve.evaluate(t)))
+                    })
+                    .collect();
+                let controls: Vec<String> = segment
+                    .curve
+                    .control_points
+                    .iter()
+                    .map(|c| format!("{:.6}", coordinate(&c.point)))
+                    .collect();
+                println!(
+                    "  [seam] {} 次数{} 制御点{} at_min={} at_max={} mixed={} 制御=[{}] 途中=[{}]",
+                    if along_u { "u" } else { "v" },
+                    segment.curve.degree,
+                    segment.curve.control_points.len(),
+                    at(min),
+                    at(max),
+                    mixed,
+                    controls.join(" "),
+                    inside.join(" "),
+                );
+            }
             at(min) || at(max) || mixed
         })
         .collect();
