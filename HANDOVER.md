@@ -28549,6 +28549,57 @@ linkrods （16,114 件中 15,673 件）
 **glTF だけは、まだ他人に読ませていません**——FreeCAD の `Mesh` は
 `File extension not supported` で断ります。**`gltf-validator` が要ります。**
 
+#### **なぜ 10 日も気づかなかったのか——CI は回っていませんでした**
+
+`.github/workflows/gates.yml` は、**赤だった 5 つを含めて門を回します**。
+**門は自分で非ゼロを返します**（実測: `foreign_slice` は 17 miss で
+exit 1、`grid_fallback` は 9 over で exit 1）。**CI が走れば、落ちて
+いたはず**です。
+
+**走っていませんでした。**
+
+```yaml
+on:
+  # push:
+  #   branches: ["main"]
+  pull_request:
+    paths-ignore: ["**.md"]
+  workflow_dispatch:
+```
+
+**`push` は 2026/08/30 に外されています**（md だけの push でも毎回
+フルビルドになり、Private のリポジトリでは Actions に枠があるため。
+理由はそのファイルに書いてあります）。**そして、このリポジトリは
+PR を使わない運用**です。**残るのは手で回す `workflow_dispatch` だけ**。
+
+**枠の話は正しいままです**——だから**戻していません**。**課金に触る
+判断は、こちらでするものではありません。**
+
+> **もし戻すなら**、`push:` に `paths-ignore: ["**.md"]` を付ければ、
+> 2026/08/30 に挙がっていた「20 回のうち 9 回は md だけ」は消えます。
+> **ただし枠を使うことに変わりはありません。**
+
+#### **手で回すほうを、1 コマンドにしました**
+
+**回すのを飛ばしやすいのは、手間だからです。**
+
+```bash
+bash tools/run_gates.sh          # 全部（約 30 分）
+bash tools/run_gates.sh --quick  # 4 分かかる contact_placement を外す
+```
+
+**要る外部ファイルを最初に見て**（`external_data_probe`）、通しテストを
+回し、**42 の門**を順に回します。見るのは 3 つ——**終了コードが 0 でない**、
+**`WRONG n` / `PANIC n`**、**`n miss(es)` / `n over the allowance`**。
+
+**3 つ目は CI が見ていません。** 門が自分で非ゼロを返すので CI でも
+落ちますが、**書いてある数を読むほうが、何が起きたかまで分かります。**
+
+実測（2026/09/08、`--quick`）: **42 門すべて緑**。重い順に
+`foreign_cross_pair` 370s、`foreign_boolean` 266s、`countersink_range` 115s、
+`helix_volume` 110s、`closure` 105s、`curved_placement` 104s、
+`slice_robustness` 103s、`sketch_boolean` 86s。**残り 34 本は合計 4 分**です。
+
 #### **`cargo test` で捕まえられるようにしました**
 
 **この節でいちばん大事なのは、「門はテストではない」**でした。

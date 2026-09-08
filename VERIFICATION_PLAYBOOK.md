@@ -123,6 +123,35 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 
 以下を上から順に実行してください。所要時間はビルド込みで 5〜10 分程度です。
 
+> ### **門を 1 コマンドで回す**（2026/09/08 追加。4-411）
+>
+> ```bash
+> bash tools/run_gates.sh          # 全部（約 30 分）
+> bash tools/run_gates.sh --quick  # 4 分かかる contact_placement を外す
+> ```
+>
+> **要る外部ファイルを最初に見て**、通しテストを回し、**42 の門**を
+> 順に回します。**終了コードが 0 でなければ、`main` に持っていくもの
+> ではありません。**
+>
+> 見るのは 3 つです——**終了コードが 0 でない**、**`WRONG n` / `PANIC n`**、
+> **`n miss(es)` / `n over the allowance`**（いずれも n≠0）。
+>
+> **なぜ要ったか**: 2026/09/08 に、**記録されている門のうち 5 つが
+> `origin/main` の時点で赤**だと分かりました（4-410）。**そのあいだ
+> 通しテストはずっと緑**です。`.github/workflows/gates.yml` はこれらを
+> 回しますが、**`push` では走りません**（2026/08/30 に、md だけの
+> push でも毎回フルビルドになるのを避けて外してあります）。
+> **このリポジトリは PR を使わない運用**なので、**実質ずっと
+> 回っていませんでした。**
+>
+> **回すのを飛ばしやすいのは、手間だからです。**
+>
+> 実測（2026/09/08、`--quick`）: **42 門すべて緑**。重い順に
+> `foreign_cross_pair` 370s、`foreign_boolean` 266s、`countersink_range` 115s、
+> `helix_volume` 110s、`closure` 105s、`curved_placement` 104s、
+> `slice_robustness` 103s、`sketch_boolean` 86s。**残り 34 本は合計 4 分**。
+
 ### 2-1. テスト
 
 ```bash
