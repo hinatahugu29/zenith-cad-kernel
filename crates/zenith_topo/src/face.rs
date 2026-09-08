@@ -571,10 +571,11 @@ impl Face {
         seed: Option<Point2>,
         limit: f64,
     ) -> (f64, Option<Point2>) {
+        let seeding_off = boundary_seeding_off();
         match &self.geometry {
             FaceGeometry::Plane(plane) => ((point - plane.origin).dot(&plane.normal).abs(), None),
             FaceGeometry::Nurbs(surface) => {
-                if let Some(uv) = seed {
+                if let Some(uv) = seed.filter(|_| !seeding_off) {
                     zenith_geom::work_counter::count_boundary_check_projection();
                     if let Ok(projection) = ExtremumEngine::point_to_surface_seeded(
                         point, surface, uv.x, uv.y, 24, 1e-9,
@@ -1127,9 +1128,10 @@ fn project_edge_to_nurbs_pcurve(
     // 辺は面の上にあるはずなので、`on_surface_limit` を超えた答えは
     // 採りません。超えたら全域を見直します——**そこは元の値段に戻るだけ**
     // で、悪くはなりません。
+    let seeding_off = pcurve_seeding_off();
     let project = |t: f64, seed: Option<Point2>| -> Result<Point2, String> {
         let point = edge.evaluate_normalized(t);
-        if let Some(uv) = seed {
+        if let Some(uv) = seed.filter(|_| !seeding_off) {
             zenith_geom::work_counter::count_pcurve_projection();
             if let Ok(projection) = ExtremumEngine::point_to_surface_seeded(
                 point,
@@ -1170,6 +1172,26 @@ fn project_edge_to_nurbs_pcurve(
         uv_points.push(uv);
     }
     settle_seam_parameters(&mut uv_points, surface, tol);
+    if std::env::var_os("ZENITH_PCURVE_TRAVEL").is_some() {
+        let mut du = 0.0f64;
+        let mut dv = 0.0f64;
+        for pair in uv_points.windows(2) {
+            du += (pair[1].x - pair[0].x).abs();
+            dv += (pair[1].y - pair[0].y).abs();
+        }
+        let ((a, b), (c, d)) = surface.param_range();
+        eprintln!(
+            "PCURVETRAVEL 点 {} u 移動 {du:.6}（域 {:.6}） v 移動 {dv:.6}（域 {:.6}） 始 ({:.6},{:.6}) 終 ({:.6},{:.6}) 射影の最悪 {:.3e}",
+            uv_points.len(),
+            b - a,
+            d - c,
+            uv_points[0].x,
+            uv_points[0].y,
+            uv_points[uv_points.len() - 1].x,
+            uv_points[uv_points.len() - 1].y,
+            max_distance.get()
+        );
+    }
 
     // 弦の中点が辺から離れている区間を割る。継ぎ目をまたぐ区間はここでは
     // 詰められないので、割らずに残す。
@@ -1631,4 +1653,24 @@ fn same_edge_geometry(a: &OrientedEdge, b: &OrientedEdge, tol: f64) -> bool {
     let (b_start, b_end) = (b.start_vertex().point, b.end_vertex().point);
     let close = |left: Point3, right: Point3| (left - right).norm() <= tol;
     close(a_start, b_start) && close(a_end, b_end) || close(a_start, b_end) && close(a_end, b_start)
+}
+
+/// **種渡しを切る口**（`ZENITH_NO_PCURVE_SEED` / `ZENITH_NO_BOUNDARY_SEED`）。
+///
+/// 4-410 で、`shape_variety_probe` の `pipe_bend` が **1579.136704 →
+/// 335.103216** に落ちていたのを追ったとき、**種渡しがそれを起こして
+/// いるのか**を切り分けるのに要りました。**射影の口は 1 点ごとに呼ばれる**
+/// ので、**環境変数はここで 1 度だけ読みます**（毎回読むと、切り分けの
+/// ために測定そのものを重くします）。
+///
+/// **既定は「種を渡す」です。** この口は診断用で、答えを変える口では
+/// ありません——**切っても答えが変わらないなら、原因は種ではありません**。
+fn pcurve_seeding_off() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("ZENITH_NO_PCURVE_SEED").is_some())
+}
+
+fn boundary_seeding_off() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var_os("ZENITH_NO_BOUNDARY_SEED").is_some())
 }
