@@ -1129,7 +1129,24 @@ fn project_edge_to_nurbs_pcurve(
     // 採りません。超えたら全域を見直します——**そこは元の値段に戻るだけ**
     // で、悪くはなりません。
     let seeding_off = pcurve_seeding_off();
-    let project = |t: f64, seed: Option<Point2>| -> Result<Point2, String> {
+    // **`guarded` は「種の答えを、面に乗っていたときだけ採る」**という意味です
+    // （4-410）。
+    //
+    // **細分の段では、これを掛けてはいけません。** 4-164 が種渡しを入れた
+    // とき、**細分の段は前から種を無条件に使っていました**——そこへ受け入れ
+    // 幅を掛けたことで、**外れた点だけが全域の射影へ落ちる**ようになり、
+    // **同じ 1 本の p-curve の中で 2 つの経路が混ざり**ました。
+    //
+    // 実測（`pipe_bend`。曲がった管の壁 1 枚）:
+    //
+    // | | 面0 の符号つき体積 | `compute_from_brep` |
+    // | :--- | ---: | ---: |
+    // | 種を一切使わない | 1241.863822 | **335.103216** |
+    // | 細分だけ無条件（親と同じ） | 1241.863822 | **1579.136704** |
+    //
+    // **正しい答えを出すのは、種を使ったほう**です。全域の射影は、継ぎ目の
+    // ある管では別の枝を選びます。
+    let project = |t: f64, seed: Option<Point2>, guarded: bool| -> Result<Point2, String> {
         let point = edge.evaluate_normalized(t);
         if let Some(uv) = seed.filter(|_| !seeding_off) {
             zenith_geom::work_counter::count_pcurve_projection();
@@ -1141,7 +1158,7 @@ fn project_edge_to_nurbs_pcurve(
                 32,
                 tol.parametric,
             ) {
-                if projection.distance <= on_surface_limit {
+                if !guarded || projection.distance <= on_surface_limit {
                     max_distance.set(max_distance.get().max(projection.distance));
                     return Ok(Point2::new(projection.u, projection.v));
                 }
@@ -1167,7 +1184,7 @@ fn project_edge_to_nurbs_pcurve(
     // 解く段の曲面評価の 2割にあたります。
     let mut previous: Option<Point2> = None;
     for t in &parameters {
-        let uv = project(*t, previous)?;
+        let uv = project(*t, previous, true)?;
         previous = Some(uv);
         uv_points.push(uv);
     }
@@ -1260,7 +1277,7 @@ fn project_edge_to_nurbs_pcurve(
                 continue;
             }
 
-            let uv = project(middle, Some(chord))?;
+            let uv = project(middle, Some(chord), false)?;
             // 継ぎ目をまたぐ区間は、割っても弦が縮まない。無限に割らないよう抜ける。
             // パラメータ空間で湾曲する曲線（有理パッチ上の直線など）の膨らみを
             // 誤認してスキップしないよう、区間長に応じたマージンを設ける。
