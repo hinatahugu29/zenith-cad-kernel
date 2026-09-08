@@ -1663,6 +1663,10 @@ impl IntersectionMarcher {
                     continue;
                 };
                 if deviation <= deviation_limit {
+                    // **「辿ったあとで、同じ曲線かどうかを見る」も試しました**
+                    // （4-412）。**ほとんど効きません**——種 40 個で交線
+                    // 48 → 47 本。**重複は、同じ組の中ではなく、別の組を
+                    // またいで出ている**からです。**口は残していません。**
                     found.push((curve, marched, deviation));
                     break;
                 }
