@@ -8,7 +8,7 @@
 > （HANDOVER 4-411、3-R）。
 >
 > **同じ日に赤だった 4 つ**（`foreign_slice_probe`・`foreign_distance_probe`・
-> `foreign_inertia_probe`・`grid_fallback_probe`）は、**4-411 で緑に戻りました**
+> `foreign_inertia_probe`・`grid_fallback_probe`）は、**4-411 で緑に戻りました**（`mixed` が、**稜の 3D の中点を射影して**円錐の底円と継ぎ目に沿う稜を見分けるようになりました）
 > ——24/0、36/0、32/0、15 件中 0 件。**`shape_variety_probe` も緑**です。
 >
 > **通しテストはずっと緑**でした——**門はテストではありません。**

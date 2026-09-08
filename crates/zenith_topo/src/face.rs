@@ -655,7 +655,7 @@ fn derive_wire_nurbs_boundary_pcurves(
         });
     }
 
-    settle_seam_segments(&mut segments, surface, tol);
+    settle_seam_segments(&mut segments, wire, surface, tol);
 
     Ok(FacePcurveLoop { segments })
 }
@@ -677,6 +677,7 @@ fn derive_wire_nurbs_boundary_pcurves(
 /// 一致していなければなりません。
 fn settle_seam_segments(
     segments: &mut [FacePcurveSegment],
+    wire: &Wire,
     surface: &NurbsSurface3,
     tol: &Tolerance,
 ) {
@@ -684,8 +685,8 @@ fn settle_seam_segments(
         return;
     }
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
-    settle_seam_segment_axis(segments, u_min, u_max, surface, tol, true);
-    settle_seam_segment_axis(segments, v_min, v_max, surface, tol, false);
+    settle_seam_segment_axis(segments, wire, u_min, u_max, surface, tol, true);
+    settle_seam_segment_axis(segments, wire, v_min, v_max, surface, tol, false);
 }
 
 /// **継ぎ目の判定を数えるための口**（4-411。`ZENITH_SEAM_CENSUS=1`）。
@@ -727,6 +728,7 @@ fn seam_mixed() -> bool {
 
 fn settle_seam_segment_axis(
     segments: &mut [FacePcurveSegment],
+    wire: &Wire,
     min: f64,
     max: f64,
     surface: &NurbsSurface3,
@@ -759,9 +761,42 @@ fn settle_seam_segment_axis(
     // 「各制御点が min か max のどちらかにある」では足りません。円錐の底円の
     // p-curve は u が 1 から 0 へ動く1次の直線で、制御点は 2 点ともちょうど
     // 端にあります。それを曖昧と見ると、寄せ先を決める基準が無くなります。
+    // **稜そのものを見て、継ぎ目に沿って走っているかを決めます**（4-411）。
+    //
+    // `mixed`（どの制御点も min か max）だけでは足りませんでした——
+    // **円錐の底円と、継ぎ目に沿う稜は、p-curve では見分けがつきません。**
+    // どちらも「次数1・制御点2・制御=[1.0 0.0]」になります（実測で 12 本、
+    // **1 本の例外もなく同じ形**でした）。
+    //
+    // **見分けられるのは、3D の中点を射影したとき**です。
+    //
+    // | | 中点を射影した軸の値 |
+    // | :--- | :--- |
+    // | 円錐の底円（本当に横断する） | **真ん中**（弦の中点 0.5 と一致） |
+    // | 継ぎ目に沿う稜 | **端**（0 か 1。弦の中点 0.5 とは無関係） |
+    //
+    // `ZENITH_SUBDIV_WHY` の実測がそれです——`linkrods` は種 u=0.5 に対して
+    // 真の射影が u=0.0 でした（4-411）。**u の周期は 1.0 なので 1.0 も同じ
+    // 点ですが、0.0 も 1.0 も 0.5 の近くではありません。**
+    //
+    // **射影は、`mixed` が立った区間についてだけ払います**（実測で 12 本）。
+    let rides_seam = |index: usize| -> bool {
+        let Some(oriented) = wire.edges.get(index) else {
+            return false;
+        };
+        let middle = oriented.evaluate_normalized(0.5);
+        let Ok(projection) = ExtremumEngine::point_to_surface(middle, surface, 32, tol.parametric)
+        else {
+            return false;
+        };
+        let value = if along_u { projection.u } else { projection.v };
+        (value - min).abs() <= edge_of_domain || (value - max).abs() <= edge_of_domain
+    };
+
     let ambiguous: Vec<bool> = segments
         .iter()
-        .map(|segment| {
+        .enumerate()
+        .map(|(index, segment)| {
             let at =
                 |target: f64| {
                     segment.curve.control_points.iter().all(|control| {
@@ -820,7 +855,7 @@ fn settle_seam_segment_axis(
             // 4-410 の②は「戻すのは早すぎます」で止めました——**戻したら
             // `linkrods` の穴が戻るはず**、と書いただけで、**測っていません**
             // でした。測った結果は 4-411 の表のとおりです。
-            at(min) || at(max) || (mixed && seam_mixed())
+            at(min) || at(max) || (mixed && (seam_mixed() || rides_seam(index)))
         })
         .collect();
     if ambiguous.iter().all(|flag| *flag) || ambiguous.iter().all(|flag| !*flag) {
