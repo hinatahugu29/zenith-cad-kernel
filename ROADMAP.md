@@ -1,17 +1,16 @@
 # 🌐 Zenith CAD Kernel 機能要件マトリクス＆開発ロードマップ
 
-> ## ⚠ 2026/09/08 — 記録されている門のうち 1 つが赤のままです
+> ## ✅ 2026/09/08 — 記録されている門は、**すべて緑**です
 >
-> **`read_and_cut_probe` の `linkrods.step` で、表示メッシュに穴 480 本。**
-> **表示メッシュだけで、B-Rep は健全**です。**`446fa88`（HANDOVER 4-410 の①）
-> が持ち込みました**——`7c261ef` では 0 本でした。**直していません**
-> （HANDOVER 4-411、3-R）。
+> **この日、`origin/main` の時点で 5 つが赤でした**（`shape_variety_probe`・
+> `foreign_slice_probe`・`foreign_distance_probe`・`foreign_inertia_probe`・
+> `grid_fallback_probe`）。**通しテストはずっと緑**でした——
+> **門はテストではありません**（`cargo test` では 1 本も走りません）。
 >
-> **同じ日に赤だった 4 つ**（`foreign_slice_probe`・`foreign_distance_probe`・
-> `foreign_inertia_probe`・`grid_fallback_probe`）は、**4-411 で緑に戻りました**（`mixed` が、**稜の 3D の中点を射影して**円錐の底円と継ぎ目に沿う稜を見分けるようになりました）
-> ——24/0、36/0、32/0、15 件中 0 件。**`shape_variety_probe` も緑**です。
+> **6 つとも緑に戻しました**（HANDOVER 4-410、4-411、3-R）。原因は
+> **1 つの形**でした——**`u=0` と `u=1` は同じ点なのに、1 本の p-curve の
+> 中でどちらを持つかが揃っていない。** 直したのは 2 か所です。
 >
-> **通しテストはずっと緑**でした——**門はテストではありません。**
 > **この文書の「完了」は、門が緑であることを前提にしています。**
 
 Zenith CAD Kernel は、Rust でフルスクラッチ開発された **次世代型 3次元 B-Rep / 自由曲面 NURBS CAD カーネル** です。

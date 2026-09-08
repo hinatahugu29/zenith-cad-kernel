@@ -698,6 +698,15 @@ fn seam_census() -> bool {
     *FLAG.get_or_init(|| std::env::var_os("ZENITH_SEAM_CENSUS").is_some())
 }
 
+/// **周期の端を、隣に近いほうへ寄せるのをやめる切替**（4-411。`ZENITH_NO_SEAM_ENDPICK=1`）。
+///
+/// **既定では寄せます。** 立てると 4-411 の前に戻り、`linkrods.step` の
+/// 表示メッシュに穴が 480 本開きます。
+fn seam_endpick() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("ZENITH_NO_SEAM_ENDPICK").is_none())
+}
+
 /// **細分の段に受け入れ幅を掛け直す切替**（4-411。`ZENITH_SUBDIV_GUARD=1`）。
 ///
 /// 立てると 4-410 の①の**前**の振る舞いに戻ります。
@@ -1256,6 +1265,49 @@ fn project_edge_to_nurbs_pcurve(
     //
     // **正しい答えを出すのは、種を使ったほう**です。全域の射影は、継ぎ目の
     // ある管では別の枝を選びます。
+    // **周期の端は、隣に近いほうを選びます**（4-411。`ZENITH_SEAM_ENDPICK=1`）。
+    //
+    // **`u = 0` と `u = 1` は同じ点**なので、射影はどちらを返しても
+    // 「面の上」です。**どちらを返すかは、射影の都合で決まります。**
+    // **1 本の p-curve の中でそれが混ざると、曲線が飛びます。**
+    //
+    // 実測（`pipe_bend`）: 隣の点が v=0.125、真の中点が v=0.0625 なのに、
+    // 端の点は **v=1.0**（＝0.0）で持たれていました。**0.125 から 1.0 へ
+    // 動く曲線**として持つと、中点の弦は 0.5625 になり、**曲線の上の
+    // どこでもありません**。
+    let ((u_lo, u_hi), (v_lo, v_hi)) = surface.param_range();
+    let periodic = |along_u: bool| -> bool {
+        let (lo, hi) = if along_u { (u_lo, u_hi) } else { (v_lo, v_hi) };
+        if hi - lo <= 0.0 {
+            return false;
+        }
+        let middle = if along_u {
+            (v_lo + v_hi) * 0.5
+        } else {
+            (u_lo + u_hi) * 0.5
+        };
+        let (low, high) = if along_u {
+            (surface.evaluate(lo, middle), surface.evaluate(hi, middle))
+        } else {
+            (surface.evaluate(middle, lo), surface.evaluate(middle, hi))
+        };
+        (high - low).norm() <= tol.linear.max(1e-9)
+    };
+    let periodic_u = seam_endpick() && periodic(true);
+    let periodic_v = seam_endpick() && periodic(false);
+    let nearer_end = |value: f64, reference: f64, lo: f64, hi: f64| -> f64 {
+        let span = hi - lo;
+        let edge_of_domain = span * 1e-6;
+        if (value - lo).abs() > edge_of_domain && (value - hi).abs() > edge_of_domain {
+            return value;
+        }
+        if (reference - lo).abs() <= (reference - hi).abs() {
+            lo
+        } else {
+            hi
+        }
+    };
+
     let project = |t: f64, seed: Option<Point2>, guarded: bool| -> Result<Point2, String> {
         let point = edge.evaluate_normalized(t);
         if let Some(uv) = seed.filter(|_| !seeding_off) {
@@ -1292,14 +1344,30 @@ fn project_edge_to_nurbs_pcurve(
                 }
                 if !guarded || on_surface {
                     max_distance.set(max_distance.get().max(projection.distance));
-                    return Ok(Point2::new(projection.u, projection.v));
+                    let mut answer = Point2::new(projection.u, projection.v);
+                    if periodic_u {
+                        answer.x = nearer_end(answer.x, uv.x, u_lo, u_hi);
+                    }
+                    if periodic_v {
+                        answer.y = nearer_end(answer.y, uv.y, v_lo, v_hi);
+                    }
+                    return Ok(answer);
                 }
             }
         }
         zenith_geom::work_counter::count_pcurve_projection();
         let projection = ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)?;
         max_distance.set(max_distance.get().max(projection.distance));
-        Ok(Point2::new(projection.u, projection.v))
+        let mut answer = Point2::new(projection.u, projection.v);
+        if let Some(uv) = seed {
+            if periodic_u {
+                answer.x = nearer_end(answer.x, uv.x, u_lo, u_hi);
+            }
+            if periodic_v {
+                answer.y = nearer_end(answer.y, uv.y, v_lo, v_hi);
+            }
+        }
+        Ok(answer)
     };
 
     let start = samples_per_edge.max(4);
