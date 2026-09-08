@@ -2330,8 +2330,21 @@ impl BrepIntersectionBuilder {
             let chains = group_edges_into_chains(&deduplicate_split_edges(split_edges, tol), tol);
             let why = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
             if why {
+                // **どの面の鎖かを名乗ります**（4-412）。**番号は演算ごとに
+                // 変わる**ので、**幾何で照合します**（4-247 と同じ立て方）
+                // ——外側の輪の最初の稜の中点です。**`CANDWHY` の座標と
+                // 突き合わせられます。**
+                let where_at = face
+                    .outer_wire
+                    .edges
+                    .first()
+                    .map(|edge| {
+                        let point = edge.evaluate_normalized(0.5);
+                        format!("({:.6},{:.6},{:.6})", point.x, point.y, point.z)
+                    })
+                    .unwrap_or_else(|| "(輪が空)".to_string());
                 eprintln!(
-                    "CHAINWHY 汎用の鎖分割へ: 交線 {} 本 → 鎖 {} 本",
+                    "CHAINWHY 面 {where_at} 汎用の鎖分割へ: 交線 {} 本 → 鎖 {} 本",
                     split_edges.len(),
                     chains.len()
                 );
@@ -9070,8 +9083,19 @@ fn intersect_nurbs_patches(
         // 「何本辿れたか」だけでは、公差をいじっても数字が動かない理由が
         // 分かりません。`deviation_limit` は絶対値なので、模型が小さいと
         // 相対では緩くなります。
+        // **どのパッチどうしかを名乗ります**（4-412）。**番号は演算ごとに
+        // 変わる**ので、**幾何で照合します**（4-247）——それぞれの中央の点
+        // です。**`CANDWHY` の座標と突き合わせれば、「枝が 0 本だった組」の
+        // うち、どれが交線を出すはずだったかが分かります。**
+        let centre = |surface: &zenith_geom::NurbsSurface3| {
+            let ((u_lo, u_hi), (v_lo, v_hi)) = surface.param_range();
+            let point = surface.evaluate((u_lo + u_hi) * 0.5, (v_lo + v_hi) * 0.5);
+            format!("({:.4},{:.4},{:.4})", point.x, point.y, point.z)
+        };
         eprintln!(
-            "SSIWHY {} branch(es) marched  パッチの大きさ {extent:.6e}、             当てはめの許容 {deviation_limit:.3e}（相対 {:.3e}）、最初の歩幅 {first_step:.3e}",
+            "SSIWHY A中央 {} B中央 {} : {} branch(es) marched  パッチの大きさ {extent:.6e}、             当てはめの許容 {deviation_limit:.3e}（相対 {:.3e}）、最初の歩幅 {first_step:.3e}",
+            centre(surface_a),
+            centre(surface_b),
             branches.len(),
             deviation_limit / extent.max(f64::MIN_POSITIVE)
         );
