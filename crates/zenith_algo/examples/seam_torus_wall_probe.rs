@@ -183,8 +183,8 @@ fn check_loose_ends(a: &Solid, b: &Solid, tol: &Tolerance) {
 
     println!("**浮いた端は、その組の両方のパッチに乗っているか**（4-412）");
     println!();
-    println!("{:<34}{:>14}{:>14}{:>14}", "浮いた端", "A面15 まで", "B面8 まで", "B面10 まで");
-    println!("{}", "-".repeat(78));
+    println!("{:<34}{:>13}{:>13}{:>13}{:>13}{:>13}", "浮いた端", "A面14 まで", "A面15 まで", "B面8 まで", "B面9 まで", "B面10 まで");
+    println!("{}", "-".repeat(99));
     for (x, y, z) in [
         (11.422866, -2.207950, -3.983248),
         (11.632495, -2.947042, -4.000000),
@@ -193,16 +193,18 @@ fn check_loose_ends(a: &Solid, b: &Solid, tol: &Tolerance) {
     ] {
         let point = Point3::new(x, y, z);
         println!(
-            "({:>9.4},{:>9.4},{:>9.4}){:>14}{:>14}{:>14}",
+            "({:>9.4},{:>9.4},{:>9.4}){:>13}{:>13}{:>13}{:>13}{:>13}",
             x,
             y,
             z,
+            distance(point, 14, a),
             distance(point, 15, a),
             distance(point, 8, b),
+            distance(point, 9, b),
             distance(point, 10, b),
         );
     }
-    println!("{}", "-".repeat(78));
+    println!("{}", "-".repeat(99));
     println!();
     println!("**両方に乗っていれば、交線はそこを通っています**——");
     println!("**取り落としているのは `fit_all_branches` のほう**です。");

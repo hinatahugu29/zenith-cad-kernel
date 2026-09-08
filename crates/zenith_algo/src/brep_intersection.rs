@@ -9090,7 +9090,17 @@ fn intersect_nurbs_patches(
         surface_b,
         first_step,
         deviation_limit,
-        2,
+        // **上限を測るための口**（4-412。`ZENITH_SSI_BRANCHES=<n>`）。
+        //
+        // **すぐ上のコメントは「3 本以上で交わる配置は今の検体には無い」と
+        // 書いていました。出ました**——どちらも回したトーラス 2 つで、
+        // **`A面14 × B面9` が 3 本ぶんの交線を担います**（4-412）。
+        // **既定は 2 のまま**です。上げると走査が重くなるので、
+        // **測ってから決めます。**
+        std::env::var("ZENITH_SSI_BRANCHES")
+            .ok()
+            .and_then(|text| text.parse::<usize>().ok())
+            .unwrap_or(2),
         tol,
     );
 
