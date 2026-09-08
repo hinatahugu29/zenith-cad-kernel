@@ -697,6 +697,18 @@ fn seam_census() -> bool {
     *FLAG.get_or_init(|| std::env::var_os("ZENITH_SEAM_CENSUS").is_some())
 }
 
+/// **細分の段で、外れた種を捨てるところを出す口**（4-411。`ZENITH_SUBDIV_WHY=1`）。
+fn subdiv_why() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("ZENITH_SUBDIV_WHY").is_some())
+}
+
+/// **`mixed` を外して測るための切替**（4-411。`ZENITH_SEAM_NO_MIXED=1`）。
+fn seam_no_mixed() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("ZENITH_SEAM_NO_MIXED").is_some())
+}
+
 fn settle_seam_segment_axis(
     segments: &mut [FacePcurveSegment],
     min: f64,
@@ -787,7 +799,12 @@ fn settle_seam_segment_axis(
                     inside.join(" "),
                 );
             }
-            at(min) || at(max) || mixed
+            // **`mixed` を外して測るための切替**（4-411。`ZENITH_SEAM_NO_MIXED=1`）。
+            //
+            // 4-410 の②は「戻すのは早すぎます」で止めました——**戻したら
+            // `linkrods` の穴が戻るはず**、と書いただけで、**測っていません**。
+            // ここで測れるようにします。**既定の答えは変えません。**
+            at(min) || at(max) || (mixed && !seam_no_mixed())
         })
         .collect();
     if ambiguous.iter().all(|flag| *flag) || ambiguous.iter().all(|flag| !*flag) {
@@ -1200,7 +1217,29 @@ fn project_edge_to_nurbs_pcurve(
                 32,
                 tol.parametric,
             ) {
-                if !guarded || projection.distance <= on_surface_limit {
+                let on_surface = projection.distance <= on_surface_limit;
+                // **外れた種を捨てるとき、何を捨てて何を採るのかを出します**
+                // （4-411。`ZENITH_SUBDIV_WHY=1`）。**既定の答えは変えません。**
+                //
+                // ①（4-410）は「細分では種を無条件に採る」に倒しました。
+                // それで `pipe_bend` は直りましたが、**`linkrods` の表示メッシュ
+                // が穴 0 → 480 本になりました**。どちらに倒しても片方が赤に
+                // なるので、**捨てる／採るの中身を見ないと決められません。**
+                if subdiv_why() && !on_surface {
+                    zenith_geom::work_counter::count_pcurve_projection();
+                    if let Ok(global) =
+                        ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric)
+                    {
+                        println!(
+                            "  [subdiv] 種=({:.6},{:.6}) 種の答=({:.6},{:.6}) d={:.3e} / 全域=({:.6},{:.6}) d={:.3e} 幅={:.3e}",
+                            uv.x, uv.y,
+                            projection.u, projection.v, projection.distance,
+                            global.u, global.v, global.distance,
+                            on_surface_limit,
+                        );
+                    }
+                }
+                if !guarded || on_surface {
                     max_distance.set(max_distance.get().max(projection.distance));
                     return Ok(Point2::new(projection.u, projection.v));
                 }
