@@ -18,6 +18,11 @@ use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Vertex, Wire};
 
 fn cylinder_quarter(r: f64, h: f64) -> Face {
+    cylinder_quarter_trimmed(r, h, h)
+}
+
+/// 同じ四半パッチに、`top` までで止めた輪を張る。`top == h` なら素のパッチ。
+fn cylinder_quarter_trimmed(r: f64, h: f64, top: f64) -> Face {
     let w = FRAC_1_SQRT_2;
     let grid: Vec<Vec<ControlPoint3>> = [(r, 0.0, 1.0), (r, r, w), (0.0, r, 1.0)]
         .iter()
@@ -50,8 +55,8 @@ fn cylinder_quarter(r: f64, h: f64) -> Face {
     };
     let bottom_start = Vertex::from_point(Point3::new(r, 0.0, 0.0));
     let bottom_end = Vertex::from_point(Point3::new(0.0, r, 0.0));
-    let top_start = Vertex::from_point(Point3::new(r, 0.0, h));
-    let top_end = Vertex::from_point(Point3::new(0.0, r, h));
+    let top_start = Vertex::from_point(Point3::new(r, 0.0, top));
+    let top_end = Vertex::from_point(Point3::new(0.0, r, top));
     Face::new(
         FaceGeometry::Nurbs(surface),
         Wire::new(vec![
@@ -62,7 +67,7 @@ fn cylinder_quarter(r: f64, h: f64) -> Face {
                 1e-6,
             )),
             OrientedEdge::forward(Edge::line_between(bottom_end.clone(), top_end.clone()).unwrap()),
-            OrientedEdge::reversed(Edge::new(arc(h), top_start.clone(), top_end.clone(), 1e-6)),
+            OrientedEdge::reversed(Edge::new(arc(top), top_start.clone(), top_end.clone(), 1e-6)),
             OrientedEdge::reversed(
                 Edge::line_between(bottom_start.clone(), top_start.clone()).unwrap(),
             ),
@@ -188,5 +193,28 @@ fn refining_the_offset_sampling_converges_on_the_closed_form() {
     assert!(
         (6.0..40.0).contains(&ratio),
         "doubling the samples should divide the error by about 16, got {ratio:.1}"
+    );
+}
+
+/// **トリムした曲面のシートは、名指しで断ります。**
+///
+/// 4-409 まで、`thicken_nurbs_face` は面の輪を一度も読まず、曲面の
+/// パラメータ域を端から端まで厚くしていました。輪を半分で止めた面でも
+/// **素のパッチぶんの立体**（閉じた式の 2.000 倍）が返ります。閉じた
+/// 多様体で、形も円柱の一部なので、形の検査では捕まりません。
+#[test]
+fn a_trimmed_curved_sheet_is_refused_by_name() {
+    let tol = Tolerance::default();
+    let (r, h) = (10.0, 20.0);
+
+    // 素のパッチは、これまでどおり通ります。
+    ThickenBuilder::thicken_face(&cylinder_quarter_trimmed(r, h, h), 1.0, &tol)
+        .expect("an untrimmed patch should still thicken");
+
+    let err = ThickenBuilder::thicken_face(&cylinder_quarter_trimmed(r, h, h * 0.5), 1.0, &tol)
+        .expect_err("a trimmed curved sheet must be refused, not silently thickened whole");
+    assert!(
+        err.contains("trimmed"),
+        "断り文が、何を扱えないのか名乗っていません: {err}"
     );
 }

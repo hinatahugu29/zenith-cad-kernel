@@ -1,5 +1,5 @@
 use zenith_geom::{CoonsPatch3, NurbsCurve3, NurbsSurface3, PlaneSurface3};
-use zenith_math::{Point3, Tolerance};
+use zenith_math::{Point3, Tolerance, Vec3, Vec3Ext};
 use zenith_topo::{
     Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Vertex, Wire,
 };
@@ -227,90 +227,70 @@ impl ThickenBuilder {
         crate::validated_solid(shell)
     }
 
+    /// 平らなシートに厚みを付ける。
+    ///
+    /// # 以前どうしていたか
+    ///
+    /// **外周の稜の始点だけを拾って、直線で結び直して**いました。
+    /// 側面も、その頂点どうしを結ぶ平面です。**内側の輪（穴）は
+    /// 一度も読んでいませんでした。**
+    ///
+    /// どちらも**閉じた多様体で返ります**——角柱としては正しく閉じて
+    /// いて、非多様体でもなく、内外判定も通ります。**大きさだけが
+    /// 違う**ので、形の検査では捕まりません（4-409）。
+    ///
+    /// | 置き方 | 閉じた式 | 返っていた値 |
+    /// | :--- | ---: | ---: |
+    /// | 丸板（半径10・厚み3） | 942.477796 | **600.000000**（＝ 2r²t の内接正方形） |
+    /// | 40×30 に φ10 の穴（厚み3） | 3364.380551 | **3600.000000**（＝ 穴なし） |
+    ///
+    /// # いまどうするか
+    ///
+    /// **平らな面を法線方向へ厚くすることは、その面を押し出すことと
+    /// 同じ**です。押し出しの口（[`crate::ExtrudeBuilder::extrude_face_with_holes`]）は
+    /// **稜の曲線をそのまま平行移動し**、**内側の輪には内向きの側面を
+    /// 立てます**。作り直さずに、そちらへ渡します。
+    ///
+    /// 向きだけ揃えます。押し出しの口は**外周が押し出す向きから見て
+    /// 反時計回り**であることを前提にしているので、面の輪の回り方を
+    /// Newell の法線で見て、逆なら輪を反転してから渡します。
+    /// **厚みが負のときも同じ道を通ります**——向きが逆になるだけです。
     fn thicken_planar_face(
         face: &Face,
         plane: &PlaneSurface3,
         thickness: f64,
     ) -> Result<Solid, String> {
-        let n = plane.normal.normalize();
-        let offset_vec = n * thickness;
+        let tol = Tolerance::default();
+        let normal = plane
+            .normal
+            .try_normalize_safe(1e-12)
+            .ok_or("the sheet's plane has no normal to offset along")?;
+        let direction = normal * thickness;
 
-        // 1. 底面ワイヤ（元のワイヤ）の頂点列を取得
-        let mut orig_points = Vec::new();
-        for oe in &face.outer_wire.edges {
-            orig_points.push(oe.edge.start_vertex.point);
-        }
-        let num_pts = orig_points.len();
-        if num_pts < 3 {
+        if face.outer_wire.edges.len() < 3 {
             return Err("Planar face requires at least 3 vertices".to_string());
         }
 
-        // 2. オフセット天面の頂点列
-        let mut top_points = Vec::with_capacity(num_pts);
-        for p in &orig_points {
-            top_points.push(*p + offset_vec);
-        }
+        // **押し出す向きから見て反時計回りに揃えます。**
+        //
+        // 揃えないと、押し出しの口が内向きの立体を組み、シェル検証で
+        // 落ちます。**黙って裏返った立体を返すよりは良い**のですが、
+        // 呼び手から見れば「厚みの符号で断られる」ことになります。
+        let flip = wire_turns_against(&face.outer_wire, direction).unwrap_or(false);
+        let outer = rebuild_wire_forward(&face.outer_wire, flip);
+        // **穴も外周と同じ向きで渡します**——`extrude_face_with_holes`
+        // が `is_hole` で内側へ向け直します（`extrude_sketch` と同じ
+        // 渡し方です）。
+        let inner: Vec<Wire> = face
+            .inner_wires
+            .iter()
+            .map(|wire| {
+                let against = wire_turns_against(wire, direction).unwrap_or(false);
+                rebuild_wire_forward(wire, against != flip)
+            })
+            .collect();
 
-        let vb: Vec<Vertex> = orig_points.iter().map(|p| Vertex::from_point(*p)).collect();
-        let vt: Vec<Vertex> = top_points.iter().map(|p| Vertex::from_point(*p)).collect();
-
-        // 3. 底面エッジ・天面エッジ・垂直エッジの構築
-        let mut eb = Vec::with_capacity(num_pts);
-        let mut et = Vec::with_capacity(num_pts);
-        let mut ev = Vec::with_capacity(num_pts);
-
-        for i in 0..num_pts {
-            let next = (i + 1) % num_pts;
-            eb.push(Edge::line_between(vb[i].clone(), vb[next].clone())?);
-            et.push(Edge::line_between(vt[i].clone(), vt[next].clone())?);
-            ev.push(Edge::line_between(vb[i].clone(), vt[i].clone())?);
-        }
-
-        let mut faces = Vec::with_capacity(num_pts + 2);
-
-        // 4. 側面Faces
-        for i in 0..num_pts {
-            let next = (i + 1) % num_pts;
-            let p_orig = vb[i].point;
-            let u = vb[next].point - vb[i].point;
-            let v = offset_vec;
-            let side_plane =
-                PlaneSurface3::new(p_orig, u, v).ok_or("Side plane creation failed")?;
-            let side_wire = Wire::new(vec![
-                OrientedEdge::forward(eb[i].clone()),
-                OrientedEdge::forward(ev[next].clone()),
-                OrientedEdge::reversed(et[i].clone()),
-                OrientedEdge::reversed(ev[i].clone()),
-            ]);
-            faces.push(Face::simple(FaceGeometry::Plane(side_plane), side_wire));
-        }
-
-        // 5. 底面 (反時計回り反転)
-        let bot_plane =
-            PlaneSurface3::new(plane.origin, plane.v_axis, plane.u_axis).ok_or("Bot plane fail")?;
-        let mut bot_edges = Vec::with_capacity(num_pts);
-        for i in (0..num_pts).rev() {
-            bot_edges.push(OrientedEdge::reversed(eb[i].clone()));
-        }
-        faces.push(Face::simple(
-            FaceGeometry::Plane(bot_plane),
-            Wire::new(bot_edges),
-        ));
-
-        // 6. 天面
-        let top_plane = PlaneSurface3::new(plane.origin + offset_vec, plane.u_axis, plane.v_axis)
-            .ok_or("Top plane fail")?;
-        let mut top_edges = Vec::with_capacity(num_pts);
-        for edge in et.iter().take(num_pts) {
-            top_edges.push(OrientedEdge::forward(edge.clone()));
-        }
-        faces.push(Face::simple(
-            FaceGeometry::Plane(top_plane),
-            Wire::new(top_edges),
-        ));
-
-        let shell = Shell::closed(faces);
-        crate::validated_solid(shell)
+        crate::ExtrudeBuilder::extrude_face_with_holes(&outer, &inner, direction, &tol)
     }
 
     /// 曲面シートに厚みを与える。
@@ -338,12 +318,37 @@ impl ThickenBuilder {
     /// 通し直したものなので、**標本の細かさぶんの近似**です。曲率半径より
     /// 厚みが大きいと面が自分と交わりますが、それは見ていません。
     fn thicken_nurbs_face(
-        _face: &Face,
+        face: &Face,
         nurbs: &NurbsSurface3,
         thickness: f64,
         samples: usize,
         tol: &Tolerance,
     ) -> Result<Solid, String> {
+        // **面のトリムを読んでいないので、素のパッチだけを受け取ります**
+        // （4-409）。
+        //
+        // ここから下は、曲面のパラメータ域を**端から端まで**厚くします。
+        // 面の輪がその端と違う所を走っていても、以前は**黙って素のパッチを
+        // 厚くした立体**を返していました。輪を半分で止めた四半円柱で、
+        // **閉じた式の 2.000 倍**が返ります（`thicken_trim_probe`）。
+        // **閉じた多様体で、形も円柱の一部**なので、形の検査では
+        // 捕まりません。
+        //
+        // **トリムを読んで厚くするのは、まだ実装していません**——
+        // オフセットした面を同じ輪で切り直し、側面をトリム曲線に沿って
+        // 立てる段が要ります。**半分書いたものを返すより、断ります。**
+        if !face.inner_wires.is_empty() {
+            return Err(format!(
+                "the sheet has {} inner loop(s); thicken only handles an untrimmed NURBS patch (a trimmed curved sheet is not implemented)",
+                face.inner_wires.len()
+            ));
+        }
+        if let Some(off) = wire_leaves_patch_boundary(&face.outer_wire, nurbs, tol) {
+            return Err(format!(
+                "the sheet's boundary runs {off:.3e} inside the patch, so this is a trimmed curved sheet; thicken only handles an untrimmed NURBS patch"
+            ));
+        }
+
         let sample_count = samples;
 
         let ((u_min, u_max), (v_min, v_max)) = nurbs.param_range();
@@ -507,4 +512,160 @@ impl ThickenBuilder {
         let shell = Shell::closed(faces);
         crate::validated_solid(shell)
     }
+}
+
+/// 輪が、与えた向きから見て**時計回り**か。
+///
+/// 稜の始点だけでなく**曲線の途中も標本します**——弧だけでできた輪は
+/// 始点が 4 点しかなく、そこだけを見ると内接多角形の回り方になります。
+/// 回り方そのものは同じなので符号は変わりませんが、**弧が半周を超える
+/// 輪では始点が一直線に並ぶことがあり**、そのとき Newell の法線が
+/// 立ちません。
+///
+/// 判じられないときは `None` を返します。**推測はしません。**
+fn wire_turns_against(wire: &Wire, direction: Vec3) -> Option<bool> {
+    let mut points: Vec<Point3> = Vec::new();
+    for oriented in &wire.edges {
+        // 終点は次の稜の始点なので入れません（`include_start` のみ）。
+        points.extend(oriented.sample_points(8, true));
+    }
+    let normal = newell_normal_of(&points)?;
+    let dot = normal.dot(&direction);
+    if dot.abs() <= 1e-12 {
+        return None;
+    }
+    Some(dot < 0.0)
+}
+
+/// 平面多角形の法線（Newell の方法）。
+///
+/// 3 点だけを見る外積と違って、どの 3 点が一直線に並んでいても落ちません。
+fn newell_normal_of(points: &[Point3]) -> Option<Vec3> {
+    if points.len() < 3 {
+        return None;
+    }
+    let mut normal = Vec3::zeros();
+    for index in 0..points.len() {
+        let current = points[index];
+        let next = points[(index + 1) % points.len()];
+        normal.x += (current.y - next.y) * (current.z + next.z);
+        normal.y += (current.z - next.z) * (current.x + next.x);
+        normal.z += (current.x - next.x) * (current.y + next.y);
+    }
+    if normal.norm() <= 1e-12 {
+        return None;
+    }
+    Some(normal)
+}
+
+/// 輪を、**曲線そのものが頭から尾へ繋がる**形に組み直す。
+///
+/// **向きの札を裏返すだけでは足りません。** 押し出しの口
+/// （`extrude_loop`）は、稜の**曲線を札を見ずに**取り出して側面を立てる
+/// ので、輪の稜は**物理的に**前向きに繋がっていなければなりません。
+/// 立体から取り出した面の輪は、`Reversed` の稜を普通に含みます——札の
+/// ままで渡すと「外周の輪が開いている」「同じ向きの稜が 2 度使われて
+/// いる」と断られます（**実際に 2 本の試験がそれで落ちました**）。
+///
+/// `reverse` が真なら、同じ組み直しをしたうえで逆回りにします。
+fn rebuild_wire_forward(wire: &Wire, reverse: bool) -> Wire {
+    let mut edges: Vec<OrientedEdge> = wire
+        .edges
+        .iter()
+        .map(|oriented| {
+            // その稜を「実際に走る向き」の曲線に直します。
+            let curve = if oriented.orientation.is_forward() {
+                oriented.edge.curve.clone()
+            } else {
+                oriented.edge.curve.reversed()
+            };
+            let start = oriented.start_vertex().clone();
+            let end = oriented.end_vertex().clone();
+            OrientedEdge::forward(Edge::new(curve, start, end, 1e-6))
+        })
+        .collect();
+
+    if reverse {
+        edges.reverse();
+        edges = edges
+            .into_iter()
+            .map(|oriented| {
+                let curve = oriented.edge.curve.reversed();
+                let start = oriented.edge.end_vertex.clone();
+                let end = oriented.edge.start_vertex.clone();
+                OrientedEdge::forward(Edge::new(curve, start, end, 1e-6))
+            })
+            .collect();
+    }
+
+    Wire::new(edges)
+}
+
+/// 輪が、素のパッチの**外周からどれだけ内側へ入っているか**。
+///
+/// 素のパッチちょうどの面なら `None`。どこかが内側を走っていれば、
+/// **いちばん深く入っている距離**を返します。
+///
+/// 外周は 4 本の等パラメータ曲線です。輪の標本点から、その 4 本を折れ線で
+/// 近似したものへの距離を測ります。**標本そのものへの距離ではなく折れ線へ
+/// 測ります**——標本への距離は刻みの半分ぶん大きく出るので、長い辺の上に
+/// ちょうど乗っている点が「内側にいる」ように見えます。
+fn wire_leaves_patch_boundary(
+    wire: &Wire,
+    nurbs: &NurbsSurface3,
+    tol: &Tolerance,
+) -> Option<f64> {
+    const BOUNDARY_SAMPLES: usize = 96;
+    const WIRE_SAMPLES: usize = 12;
+
+    let ((u_min, u_max), (v_min, v_max)) = nurbs.param_range();
+    let mut boundary: Vec<Vec<Point3>> = Vec::with_capacity(4);
+    for (fixed_u, value) in [(true, u_min), (true, u_max), (false, v_min), (false, v_max)] {
+        let mut polyline = Vec::with_capacity(BOUNDARY_SAMPLES + 1);
+        for index in 0..=BOUNDARY_SAMPLES {
+            let t = index as f64 / BOUNDARY_SAMPLES as f64;
+            let (u, v) = if fixed_u {
+                (value, v_min + (v_max - v_min) * t)
+            } else {
+                (u_min + (u_max - u_min) * t, value)
+            };
+            polyline.push(nurbs.evaluate(u, v));
+        }
+        boundary.push(polyline);
+    }
+
+    let distance_to_boundary = |point: Point3| -> f64 {
+        let mut best = f64::INFINITY;
+        for polyline in &boundary {
+            for pair in polyline.windows(2) {
+                let segment = pair[1] - pair[0];
+                let length_squared = segment.norm_squared();
+                let distance = if length_squared <= f64::EPSILON {
+                    (point - pair[0]).norm()
+                } else {
+                    let s = ((point - pair[0]).dot(&segment) / length_squared).clamp(0.0, 1.0);
+                    (point - (pair[0] + segment * s)).norm()
+                };
+                best = best.min(distance);
+            }
+        }
+        best
+    };
+
+    // **許しは、面の大きさに合わせます。** 等パラメータ曲線を折れ線で
+    // 近似しているぶん、弧の上の点はわずかに外れます。素のパッチを
+    // 断ってしまうほうが困るので、そこは通します。
+    let diagonal = (nurbs.evaluate(u_max, v_max) - nurbs.evaluate(u_min, v_min)).norm();
+    let allowance = (diagonal * 1e-3).max(tol.linear * 10.0);
+
+    let mut worst: Option<f64> = None;
+    for oriented in &wire.edges {
+        for point in oriented.sample_points(WIRE_SAMPLES, true) {
+            let distance = distance_to_boundary(point);
+            if distance > allowance {
+                worst = Some(worst.map_or(distance, |best: f64| best.max(distance)));
+            }
+        }
+    }
+    worst
 }

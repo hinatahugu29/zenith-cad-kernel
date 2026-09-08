@@ -81,6 +81,9 @@ struct Case {
     /// **もし縁を端点だけで結んだら**こうなる、という値。**予想であって
     /// 要求ではありません**——一致したら、そう作られていると分かります。
     polygonized: Option<f64>,
+    /// 立体が乗っているべき z の範囲。**体積では表裏を見分けられません**
+    /// ——反対側に同じだけ厚くなっても、体積は同じです。
+    z_range: (f64, f64),
     note: &'static str,
 }
 
@@ -104,6 +107,21 @@ fn cases() -> Vec<Case> {
     )
     .expect("hole wire");
 
+    let hole_a = ProfileBuilder::make_circle(
+        4.0,
+        Point3::new(12.0, 15.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .expect("hole a");
+    let hole_b = ProfileBuilder::make_circle(
+        3.0,
+        Point3::new(28.0, 15.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    )
+    .expect("hole b");
+
     vec![
         Case {
             name: "長方形の板（既知の緑）",
@@ -111,6 +129,7 @@ fn cases() -> Vec<Case> {
             thickness: t,
             expected: 40.0 * 30.0 * t,
             polygonized: None,
+            z_range: (0.0, 3.0),
             note: "4-390 で測ってある形。ここが赤なら、測り方のほうが壊れています",
         },
         Case {
@@ -121,7 +140,42 @@ fn cases() -> Vec<Case> {
             // 弧の端点は (±r,0)・(0,±r) の 4 点。直線で結ぶと、対角 2r の
             // 正方形（面積 2r²）になります。
             polygonized: Some(2.0 * r * r * t),
+            z_range: (0.0, 3.0),
             note: "縁を端点だけで結ぶと、円が内接正方形になります",
+        },
+        Case {
+            name: "丸板（厚みが負）",
+            face: planar_face(circle, vec![]),
+            thickness: -t,
+            // **符号は向きだけを決めます。** 反対側へ同じだけ厚く
+            // なるので、体積は同じです。**押し出しの口は「押し出す
+            // 向きから見て反時計回り」を前提にする**ので、負の厚みでは
+            // 輪を反転してから渡さなければなりません。
+            expected: PI * r * r * t,
+            polygonized: None,
+            z_range: (-3.0, 0.0),
+            note: "負の厚みでも、輪の向きを揃え直しているか。**体積は表裏で同じ**なので、z も見ます",
+        },
+        Case {
+            name: "角丸の板（弧と直線）",
+            face: planar_face(
+                ProfileBuilder::make_rounded_rectangle(
+                    40.0,
+                    30.0,
+                    6.0,
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    Vec3::new(1.0, 0.0, 0.0),
+                )
+                .expect("rounded rectangle"),
+                vec![],
+            ),
+            thickness: t,
+            // 角丸は、4 隅から (4 − π) r² ぶんを削った形です。
+            expected: (40.0 * 30.0 - (4.0 - PI) * 36.0) * t,
+            polygonized: None,
+            z_range: (0.0, 3.0),
+            note: "弧と直線が混じる輪",
         },
         Case {
             name: "穴のある板",
@@ -130,7 +184,17 @@ fn cases() -> Vec<Case> {
             expected: (40.0 * 30.0 - PI * 25.0) * t,
             // 内側の輪を読まなければ、穴の無い板がそのまま返ります。
             polygonized: Some(40.0 * 30.0 * t),
+            z_range: (0.0, 3.0),
             note: "内側の輪（穴）を読んでいるか",
+        },
+        Case {
+            name: "穴が2つある板",
+            face: planar_face(rect_wire(0.0, 0.0, 40.0, 30.0), vec![hole_a, hole_b]),
+            thickness: t,
+            expected: (40.0 * 30.0 - PI * 16.0 - PI * 9.0) * t,
+            polygonized: Some(40.0 * 30.0 * t),
+            z_range: (0.0, 3.0),
+            note: "内側の輪が 2 本あっても、両方読んでいるか",
         },
     ]
 }
@@ -156,9 +220,22 @@ fn main() {
             Ok(solid) => {
                 let volume = MassCalculator::compute_from_brep(&solid, &params).volume;
                 let residual = (volume - case.expected).abs() / case.expected.abs().max(1.0);
-                let ok = residual <= 1e-6;
+                let bbox = solid.bounding_box();
+                // **x と y は見ません**——有理2次の弧は制御点が弧の外へ
+                // 出るので、`bounding_box()` は制御点ぶん広く出ます
+                // （4-269 と同じ穴）。**z は制御点も面の上に乗る**ので、
+                // ここだけは正しく読めます。
+                let z_ok = (bbox.min.z - case.z_range.0).abs() <= 1e-9
+                    && (bbox.max.z - case.z_range.1).abs() <= 1e-9;
+                let ok = residual <= 1e-6 && z_ok;
                 if !ok {
                     wrong += 1;
+                }
+                if !z_ok {
+                    notes.push(format!(
+                        "  {}: **z の範囲が違います**——[{:.6}, {:.6}]、あるべきは [{:.6}, {:.6}]",
+                        case.name, bbox.min.z, bbox.max.z, case.z_range.0, case.z_range.1
+                    ));
                 }
                 println!(
                     "{:<26}{:>16.6}{:>16.6}{:>12.3e}  {}",
