@@ -2335,16 +2335,24 @@ union が通るのは、和では両側の面片をそのまま採るので重�
 > 基準コミットの worktree に `reference` のジャンクションを張ったまま
 > `git worktree remove --force` を実行し、**リンクを辿って本体ごと
 > 削除**されました。**`.gitignore` 済みなので git からは戻せません。
-> ごみ箱にもありません。**
+> ごみ箱にもありません。** 詳しくは 5 章の落とし穴に。
+>
+> **ただし、コードが読んでいたのは 2 ファイルだけ**でした。
+>
+> | | |
+> | :--- | :--- |
+> | **コードが要るもの** | **`reference/OCCT/data/step/linkrods.step` と `screw.step` の 2 つだけ**（OCCT が公開しているサンプルデータ） |
+> | 他カーネルの検体 29 個 | **`crates/zenith_algo/tests/fixtures/` にあり、git で追跡済み**——無事です |
+> | 文書だけが挙げるもの | `reference/CAD_8_1_5_1/core_bridge.py`（移植元）、`reference/external-analysis/*.md`（第三者のレポート） |
 >
 > **通しテストは 139 本 / 723 件通過・0 失敗のまま**です——読めない
 > ファイルは飛ばす作りでした。**赤にならないので気づきにくい**です。
 > **回せなくなるのは門**——`read_and_cut_probe`・`closure_probe`・
 > `step_face_gap_probe`・`step_surface_shape_probe`・
-> `unused_builder_probe`・`seam_census_probe`。
+> `unused_builder_probe`・`seam_census_probe`。**その 2 ファイルを
+> 戻せば、全部回せます。**
 >
 > **下の 4-411 の実測値は、すべて消える前に取ったもの**です。
-> 詳しくは 5 章の落とし穴に。
 
 > ### ⚠ 門は、テストではありません（**4-410、4-411**）
 >
@@ -31726,6 +31734,12 @@ diff <(grep -v 秒 clip.txt) <(grep -v 秒 clip_trim.txt)   # 出力なし
 | git から復元 | **できません**（`/reference/` は `.gitignore`） |
 | ごみ箱 | **ありません**（git の削除はごみ箱を経由しません） |
 | 中身 | `OCCT`、`CAD_8_1_5_1`（移植元）、`external-analysis/` |
+
+**コードが読んでいたのは 2 ファイルだけ**でした——
+`reference/OCCT/data/step/linkrods.step` と `screw.step`。**OCCT が
+公開しているサンプルデータ**です。**他カーネルの検体 29 個は
+`crates/zenith_algo/tests/fixtures/` にあり、git で追跡済み**——無事です。
+**その 2 つを戻せば、門は全部回せます。**
 
 **通しテストは 139 本 / 723 件通過・0 失敗のままです**——読めない
 ファイルは飛ばす作りでした。**赤にならないので、気づきにくい**です。
