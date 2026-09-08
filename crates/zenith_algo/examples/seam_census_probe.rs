@@ -107,6 +107,29 @@ fn main() {
     println!("**途中=[...] が端に張り付いていなければ、途中を見て見分けられます。**");
     println!();
 
-    census("円錐（OCC が書いたもの）", fixture("occ_reference_cone_full.step"), &tol);
-    census("linkrods.step", occt_sample("linkrods.step"), &tol);
+    // **追跡済みの検体を先に置きます**（4-411）。`reference/` は
+    // `.gitignore` 済みで、**2026/09/08 に消えました**——**無くても
+    // この口が回るように**、周期的な曲面を持つ検体を並べてあります。
+    for (label, name) in [
+        ("円錐（OCC が書いたもの）", "occ_reference_cone_full.step"),
+        ("球", "occ_reference_sphere.step"),
+        ("円柱", "occ_reference_cylinder.step"),
+        ("トーラス", "occ_reference_torus.step"),
+        ("曲がり管", "occ_reference_pipe_bend.step"),
+    ] {
+        census(label, fixture(name), &tol);
+    }
+
+    // **`linkrods.step` は `reference/` にあります。** 無ければ、
+    // **無いと言って飛ばします**——**黙って通さない**ために
+    // `external_data_probe` が別に赤にします。
+    let linkrods = occt_sample("linkrods.step");
+    if linkrods.exists() {
+        census("linkrods.step", linkrods, &tol);
+    } else {
+        println!("== linkrods.step ==");
+        println!("  **ありません**（`reference/OCCT/data/step/`）。");
+        println!("  **飛ばしました**——`external_data_probe` を回してください。");
+        println!();
+    }
 }
