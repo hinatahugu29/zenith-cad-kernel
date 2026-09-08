@@ -2357,6 +2357,12 @@ union が通るのは、和では両側の面片をそのまま採るので重�
 > `unused_builder_probe`・`seam_census_probe`。**その 2 ファイルを
 > 戻せば、全部回せます。**
 >
+> **`external_data_probe` を置きました**（`cargo run --release -p zenith_algo
+> --example external_data_probe`）。**要る外部ファイルが 1 つでも無ければ、
+> 非ゼロで終わります。** **「無い」を「緑」と読み違えないため**です
+> ——通しテストは無くても 139 本 / 723 件通過のままだからです。
+> **門を回す前に、まずこれを回してください。**
+>
 > **下の 4-411 の実測値は、すべて消える前に取ったもの**です。
 
 > ### ⚠ 門は、テストではありません（**4-410、4-411**）
@@ -31770,6 +31776,20 @@ diff <(grep -v 秒 clip.txt) <(grep -v 秒 clip_trim.txt)   # 出力なし
 **読めなくなるのは門のほう**——`read_and_cut_probe`・`closure_probe`・
 `step_face_gap_probe`・`step_surface_shape_probe`・`unused_builder_probe`・
 `seam_census_probe`。
+
+#### **黙って通らないようにしました**
+
+**`external_data_probe`**（`cargo run --release -p zenith_algo --example
+external_data_probe`）。**コードが実際に読んでいる外部ファイルを並べ、
+1 つでも無ければ非ゼロで終わります。**
+
+**この事故のいちばん危ないところは、赤にならないこと**でした
+——**「出力が無い」を「緑」と読み違えられます。** 4-410 の
+「門はテストではありません」と、同じ形です。
+
+**「読めないファイルは赤にしない」（4-266）とは別の話**です。
+あちらは**読めたが中身が粗い**とき。ここは**そもそも無い**ときで、
+**門が回っていない**ことを意味します。
 
 #### 次に同じことをしないために
 
