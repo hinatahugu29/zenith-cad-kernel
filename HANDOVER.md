@@ -28512,6 +28512,20 @@ linkrods （16,114 件中 15,673 件）
 `foreign_cross_pair_probe`。
 **通しテスト 139 本 / 723 件通過 / 0 件失敗 / 無視 0。**
 
+#### **別のカーネルにも確かめさせました**
+
+**自分で自分に確かめさせても、証拠にはなりません。** 直したあとの
+カーネルで書き出して、**FreeCAD 1.1（OpenCASCADE）に読み直させました。**
+
+| | |
+| :--- | :--- |
+| `freecad_cross_validate.py` | **29 対象すべて一致**（`Solid`・valid・closed。体積と面積の相対差は、`spur_gear_m2_z18` の 7.182e-05 を除いて **1e-7 以下**——その 1 件は OCC 側の `shape.Volume` の癖で、面積は 8.182e-08 で合います。4-40） |
+| `foreign_read_mesh_exports.py` | **8 検体すべて**、STL と OBJ を枚数・点数・境界箱どおりに読んで**水密**と答え、DXF の断面も輪の数と面積が合いました |
+| `check_python_surface.py`（本物の Python 3.11） | **誤答 0 件、断りそこね 0 件** |
+
+**glTF だけは、まだ他人に読ませていません**——FreeCAD の `Mesh` は
+`File extension not supported` で断ります。**`gltf-validator` が要ります。**
+
 #### 次に触る人へ
 
 **4-410 で見つけた赤は、6 つとも緑になりました。** ここは閉じています。
