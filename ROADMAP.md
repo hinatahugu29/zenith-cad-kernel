@@ -1,5 +1,13 @@
 # 🌐 Zenith CAD Kernel 機能要件マトリクス＆開発ロードマップ
 
+> ## ⚠ 2026/09/08 — 記録されている門のうち 4 つが赤のままです
+>
+> `foreign_slice_probe`・`foreign_distance_probe`・`foreign_inertia_probe`・
+> `grid_fallback_probe`。**`git bisect` で `efa9c92`（9/3）に落ちています**が、
+> **直していません**（HANDOVER 4-410、3-R）。
+> **通しテストはずっと緑**でした——**門はテストではありません。**
+> **この文書の「完了」は、門が緑であることを前提にしています。**
+
 Zenith CAD Kernel は、Rust でフルスクラッチ開発された **次世代型 3次元 B-Rep / 自由曲面 NURBS CAD カーネル** です。
 Parasolid, ACIS, OpenCASCADE, そして Plasticity のようなモダン CAD の強みを融合し、**「高精度な幾何数学」「堅牢な B-Rep トポロジー」「直感的なダイレクトモデリング」** を実現します。
 
