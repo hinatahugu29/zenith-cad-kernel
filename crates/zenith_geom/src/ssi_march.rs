@@ -1598,11 +1598,34 @@ impl IntersectionMarcher {
             }
             let seed_point = s1.evaluate(seed_u, seed_v);
             // 既に辿った枝の上に来た種は飛ばす。同じ曲線を何度も辿らない。
+            // **同じ曲線を何度も辿らないための判定**ですが、**その半径は
+            // `first_step`（パッチの大きさの 1 割）**です。**枝そのものが
+            // それより短いと、種が丸ごと飛ばされます**——実測（4-412）:
+            // どちらも回したトーラス 2 つで、`A面14 × B面9` は **3 本ぶん**の
+            // 交線を担うのに、**弦 0.77 の 1 本が見つかりません**。
+            // そこの `first_step` は **2.263** で、**枝より大きい**のです。
+            //
+            // **`ZENITH_SSI_DEDUP=<倍率>` で測れます**（既定 1.0＝変更なし）。
+            // **小さくすると、同じ枝を二度辿る危険**があります。
+            let dedup = std::env::var("ZENITH_SSI_DEDUP")
+                .ok()
+                .and_then(|text| text.parse::<f64>().ok())
+                .filter(|factor| *factor > 0.0)
+                .unwrap_or(1.0);
+            //
+            // **半径を縮めるだけでは駄目でした**（4-412 で実測）——0.3 倍で
+            // 交線 15 → 41 本、0.1 倍で 63 本、0.03 倍で 64 本。**同じ枝を
+            // 何度も辿ります。**
+            //
+            // **「標本が飛び飛びだから半径が要る」も外れ**でした。線分までの
+            // 距離に変えて測ったら、**1 桁も動きません**（15/41/63）。
+            // **標本は十分に密**です。**増える分は、同じ曲線の別の部分**
+            // ——**march が途中で止まっている**ほうを見てください。
             let already = found.iter().any(|(_, marched, _)| {
                 marched
                     .points
                     .iter()
-                    .any(|sample| (sample.point - seed_point).norm() <= first_step)
+                    .any(|sample| (sample.point - seed_point).norm() <= first_step * dedup)
             });
             if already {
                 continue;
