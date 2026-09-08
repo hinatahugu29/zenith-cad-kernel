@@ -762,6 +762,7 @@ p-curve は8等分で作られ、検査も8等分でした。構成上そこを�
 | `mass_convergence` | 質量積分が細分に対して収束するか |
 | `slice_probe` | 断面積・周長と解析解の差 |
 | `step_import_audit` | STEP の往復と、他カーネルのファイルを読めるか |
+| `ZENITH_CONTACT_SEAMS=1`（環境変数） | **追加の置き方**（9/9 追加。4-412）。`contact_placement_probe` に**継ぎ目どうしを当てる置き方**を 1 つ足します——**どちらも回したトーラス 2 つ**。**必ず赤になります**（3 演算とも「未実装」で断られ、この門の規約では赤）。**外部ファイル無しで H8 の壁が出る検体**で、断り文は `12 unmatched edge uses, 3 non-manifold edge uses`——**`linkrods.step` で見ていたのと同じ形**です。**H8 に手を付ける人は、まずこれを回してください**（`linkrods` の 132 本より 12 本のほうが追えます） |
 | `pcurve_fidelity_probe` | p-curve が本当に辺の上にあるか |
 | `foreign_reexport` | 他カーネルのファイルを読んで書き戻す一周 |
 | `regularize_probe` | 全周を刻んでも体積・面積が動かないか。**組み直した立体をブーリアンが受け取れるか**も見る（`usable` の列。閉じているだけでは足りません） |

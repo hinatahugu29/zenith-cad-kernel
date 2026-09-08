@@ -918,6 +918,110 @@ fn cases() -> Vec<Case> {
     });
     let _ = &torus_upright_b;
 
+    // ---- **継ぎ目どうしを当てる**（4-411）。
+    //
+    // 2026/09/08 に、**継ぎ目のそばで等価な 2 つの値のどちらを持つかが
+    // 揃っていない**という欠陥を 2 つ直しました。**そこを踏む置き方が、
+    // この表に 1 つもありません**——回転面は軸を揃えて置いてあるので、
+    // **継ぎ目はいつも同じ向き**です。
+    //
+    // 3-N-2 が「**同じ形を置き方だけ変えて測る**、が今のところいちばん
+    // 当たる手」と書いています。**継ぎ目を互いに違う向きへ回します。**
+    let spin = |degrees: f64| Transform3::from_axis_angle(&Vec3::new(0.0, 0.0, 1.0), degrees.to_radians());
+    let tip = |degrees: f64| Transform3::from_axis_angle(&Vec3::new(1.0, 0.0, 0.0), degrees.to_radians());
+
+    out.push(Case {
+        name: "sphere x sphere (seams turned apart)",
+        why: "同じ球を 2 つ、**継ぎ目だけ違う向き**（0 度と 71 度）に回して食い込ませる。交線は継ぎ目を 2 本とも横切る",
+        a: PrimitiveBuilder::make_sphere(10.0).expect("sphere"),
+        b: shifted(
+            &BrepTransform::transform_solid(
+                &PrimitiveBuilder::make_sphere(10.0).expect("sphere"),
+                &spin(71.0),
+            )
+            .expect("turn"),
+            12.0,
+            0.0,
+            0.0,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+
+    out.push(Case {
+        name: "cylinder x cylinder (seams turned apart)",
+        why: "軸を揃えたまま**継ぎ目だけ 47 度ずらした**円柱どうしを、横にずらして食い込ませる。継ぎ目が 2 本とも交線の内側に来る",
+        a: PrimitiveBuilder::make_cylinder(10.0, 30.0).expect("cylinder"),
+        b: shifted(
+            &BrepTransform::transform_solid(
+                &PrimitiveBuilder::make_cylinder(10.0, 30.0).expect("cylinder"),
+                &spin(47.0),
+            )
+            .expect("turn"),
+            11.0,
+            0.0,
+            5.0,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+
+    // **これは、外部ファイルを 1 つも使わずに H8 の壁を再現する検体です**
+    // （4-411）。**既定では走らせません**——`ZENITH_CONTACT_SEAMS=1` で
+    // 足します。`ZENITH_TILTED` と同じ立て方です。
+    //
+    // **なぜ外してあるか**: **3 演算とも「未実装」で断られ**、この門の
+    // 規約ではそれは赤だからです。**断り文は H8 の壁そのもの**でした——
+    //
+    // ```text
+    // 33 selected face pieces,
+    // 12 unmatched edge uses, 3 non-manifold edge uses
+    // ```
+    //
+    // **`linkrods.step` で見ていたのと同じ形**です。**そちらは
+    // `reference/`（`.gitignore` 済み）にあり、2026/09/08 に消えました。**
+    // **こちらは 2 つの基本形から作れます**——**再現に外部ファイルが
+    // 要りません。**
+    //
+    // **隠すために外したのではありません。** **回せば必ず赤になる**ので、
+    // 「門が緑」と「この置き方が通る」を混ぜないためです。
+    // **H8 に手を付ける人は、まずこれを回してください**——`linkrods` の
+    // 132 本より、**12 本のほうが追えます**。
+    if std::env::var_os("ZENITH_CONTACT_SEAMS").is_some() {
+        out.push(Case {
+            name: "torus x torus (both turned, tubes overlapping)",
+            why: "**どちらも回した**トーラス 2 つ（一方は継ぎ目を 29 度、他方は 61 度傾ける）。管どうしが交わり、**両方の継ぎ目が交線にかかります**",
+            a: BrepTransform::transform_solid(&torus, &spin(29.0)).expect("turn"),
+            b: shifted(
+                &BrepTransform::transform_solid(&torus, &tip(61.0)).expect("tip"),
+                18.0,
+                0.0,
+                0.0,
+            ),
+            note: [
+                "実測: **3 演算とも「未実装」で断られます**（4-411）。縫合で相手のいない稜 12、非多様体の稜 3、面片 33。**外部ファイル無しで H8 の壁が出る検体**",
+                "同上",
+                "同上",
+            ],
+        });
+    }
+
+    out.push(Case {
+        name: "cone x cylinder (both seams off axis)",
+        why: "円錐と円柱を、**どちらも継ぎ目が座標面に乗らない向き**（37 度と 53 度）へ回して当てる。3-N-2 が挙げた「2つの曲面立体を、どちらも回して当てる」",
+        a: BrepTransform::transform_solid(&cone, &spin(37.0)).expect("turn"),
+        b: shifted(
+            &BrepTransform::transform_solid(
+                &PrimitiveBuilder::make_cylinder(6.0, 40.0).expect("cylinder"),
+                &tip(53.0),
+            )
+            .expect("tip"),
+            0.0,
+            -12.0,
+            10.0,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+
+
     out
 }
 
