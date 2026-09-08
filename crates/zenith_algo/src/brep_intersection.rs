@@ -751,7 +751,28 @@ impl BrepIntersectionBuilder {
         // 中点も出します。**端点だけでは、同じ2点を結ぶ別々の弧を見分けられ
         // ません**（4-65。4-320 でまた踏みました）。
         if std::env::var_os("ZENITH_CAND_WHY").is_some() {
+            // **パッチの中央も出します**（4-412）。**`SSIWHY` は面番号を
+            // 持たず、こちらは座標を持たない**ので、そのままでは
+            // 「交線を出すはずだったのに枝が 0 本だった組」を突き合わせ
+            // られませんでした。**同じ式（パラメータの真ん中）で出します。**
+            let centre = |faces: &[Face], index: usize| -> String {
+                match faces.get(index).map(|face| &face.geometry) {
+                    Some(FaceGeometry::Nurbs(surface)) => {
+                        let ((u_lo, u_hi), (v_lo, v_hi)) = surface.param_range();
+                        let point = surface.evaluate((u_lo + u_hi) * 0.5, (v_lo + v_hi) * 0.5);
+                        format!("({:.4},{:.4},{:.4})", point.x, point.y, point.z)
+                    }
+                    _ => "(nurbs ではない)".to_string(),
+                }
+            };
             for candidate in edge_candidates.iter() {
+                eprintln!(
+                    "CANDCENTRE A面{} 中央 {} x B面{} 中央 {}",
+                    candidate.face_a_index,
+                    centre(faces_a, candidate.face_a_index),
+                    candidate.face_b_index,
+                    centre(faces_b, candidate.face_b_index),
+                );
                 let start = candidate.edge.start_vertex.point;
                 let end = candidate.edge.end_vertex.point;
                 let middle = candidate.edge.curve.evaluate(
