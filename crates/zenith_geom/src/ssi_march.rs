@@ -1592,7 +1592,23 @@ impl IntersectionMarcher {
         // 費用はここで決まる。ブーリアンは面の組ごとにこれを呼ぶので、格子を
         // 大きくすると効いてくる。20 x 20 にしたときはテスト一式が10分を
         // 超えた。12 x 12（片側169点）で、既知の配置はすべて拾える。
-        for (seed_u, seed_v) in Self::find_seeds(s1, s2, 12, max_branches * 2) {
+        //
+        // **種の数は、枝の上限から切り離してあります**（4-413。
+        // `ZENITH_SSI_SEEDS=<n>`。**既定は `max_branches * 2` のまま**）。
+        //
+        // **4-412 で「見つからない理由は種の数だった」と測りました**——
+        // どちらも回したトーラス 2 つで、`A面14 x B面9` は **3 本ぶん**の
+        // 交線を担うのに、**種 4 個では 1 本しか出ません**。**種を増やすと
+        // 順に見つかります。** **ただし 4-412 が測ったのは
+        // `ZENITH_SSI_BRANCHES` だけ**で、**種と上限が同じつまみに
+        // 縛られていた**ため、**どちらが効いているのかを分けられません**
+        // でした。**ここで分けます。**
+        let seeds = std::env::var("ZENITH_SSI_SEEDS")
+            .ok()
+            .and_then(|text| text.parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(max_branches * 2);
+        for (seed_u, seed_v) in Self::find_seeds(s1, s2, 12, seeds) {
             if found.len() >= max_branches {
                 break;
             }
