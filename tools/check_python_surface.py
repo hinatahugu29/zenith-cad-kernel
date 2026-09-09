@@ -89,6 +89,25 @@ rows.append(("スケッチを回す（パップス）",
 
 rows.append(("箱の体積", value_of(S.box(10.0, 20.0, 30.0), "volume")[0], 6000.0))
 
+# **密度は、慣性にだけ効きます**（4-414）。
+#
+# **2026/09/09 まで、この引数は受け取って捨てられていました**——
+# 引数名が `_density` で、本体からは読まれていません。**鋼の 7850 を
+# 渡しても密度 1 の慣性が返り、7850 倍ずれた値がもっともらしい数字
+# として返っていました。** **Rust の試験では見えません**——
+# **この口は Python にしかありません。**
+#
+# 原点を隅に置いた直方体の、原点まわり: Ixx = ρ V (dy² + dz²) / 3
+DX, DY, DZ = 40.0, 20.0, 10.0
+BOX_V = DX * DY * DZ
+for rho in (1.0, 7850.0):
+    vol, _surf, _centre, inertia = z.compute_box_mass_properties(DX, DY, DZ, rho)
+    rows.append(("箱の体積（密度 %g）" % rho, vol, BOX_V))
+    rows.append(("箱の Ixx（密度 %g）" % rho,
+                 inertia[0], rho * BOX_V * (DY * DY + DZ * DZ) / 3.0))
+    rows.append(("箱の Izz（密度 %g）" % rho,
+                 inertia[2], rho * BOX_V * (DX * DX + DY * DY) / 3.0))
+
 print("本物の Python から拡張モジュールを触る（4-402）")
 print()
 print("Python %s" % sys.version.split()[0])
@@ -126,6 +145,11 @@ refusals = [
     ("distance に value が無い",
      lambda: z.solve_2d_sketch("[[0,0],[3,4],[9,1]]",
                                '[{"type": "distance", "p1": 0, "p2": 1}]')),
+    # **負の密度は、慣性の符号を静かに反転させます**（4-414）。
+    ("密度が負",
+     lambda: z.compute_box_mass_properties(10.0, 10.0, 10.0, -1.0)),
+    ("密度が 0",
+     lambda: z.compute_box_mass_properties(10.0, 10.0, 10.0, 0.0)),
 ]
 missed = 0
 for name, call in refusals:

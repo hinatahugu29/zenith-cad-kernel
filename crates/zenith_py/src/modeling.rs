@@ -1081,14 +1081,35 @@ pub fn slice_box_by_plane(
 }
 
 /// 直方体の高精度物理特性・重心・慣性モーメントを計算
+///
+/// 返すのは `(体積, 表面積, 重心, 原点まわりの慣性モーメント対角成分)`。
+///
+/// **`density` は慣性にだけ効きます。** 体積・表面積・重心は密度に
+/// よりません。慣性は密度 1 の値に `density` を掛けたものです
+/// （`MassProperties` は密度 1 で積みます）。
+///
+/// > **⚠ 2026/09/09 まで、`density` は受け取って捨てられていました**
+/// > （4-414。引数名が `_density` で、本体からは読まれていません）。
+/// > **鋼の 7850 を渡しても、密度 1 の慣性が返っていました**——
+/// > **7850 倍ずれた値が、もっともらしい数字として返ります。**
+/// > **4-409 の `_face` と同じ型**です。**既定 (1.0) の答えは
+/// > 変わりません。**
 #[pyfunction]
-#[pyo3(signature = (dx, dy, dz, _density = 1.0))]
+#[pyo3(signature = (dx, dy, dz, density = 1.0))]
 pub fn compute_box_mass_properties(
     dx: f64,
     dy: f64,
     dz: f64,
-    _density: f64,
+    density: f64,
 ) -> PyResult<(f64, f64, [f64; 3], [f64; 3])> {
+    // **名指しで断ります。** 負の密度や NaN を通すと、慣性の符号が
+    // 静かに反転します（4-401 と同じ規約——**読めない値に既定を
+    // 詰めない**）。
+    if !(density.is_finite() && density > 0.0) {
+        return Err(PyValueError::new_err(format!(
+            "density must be a finite positive number, got {density}"
+        )));
+    }
     let solid = zenith_algo::PrimitiveBuilder::make_box(dx, dy, dz)
         .map_err(|e| PyValueError::new_err(format!("Box creation failed: {}", e)))?;
 
@@ -1103,10 +1124,12 @@ pub fn compute_box_mass_properties(
         props.center_of_mass.y,
         props.center_of_mass.z,
     ];
+    // **慣性は密度に比例します**（`MassProperties` は密度 1 で積む）。
+    // 体積・表面積・重心は密度によりません。
     let inertia = [
-        props.inertia_diagonal.x,
-        props.inertia_diagonal.y,
-        props.inertia_diagonal.z,
+        props.inertia_diagonal.x * density,
+        props.inertia_diagonal.y * density,
+        props.inertia_diagonal.z * density,
     ];
 
     Ok((props.volume, props.surface_area, center, inertia))
