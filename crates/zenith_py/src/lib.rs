@@ -76,6 +76,7 @@ fn zenith_cad(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(modeling::make_exact_drill_boolean, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::thicken_surface_patch, m)?)?;
     m.add_function(wrap_pyfunction!(modeling::make_spur_gear, m)?)?;
+    m.add_function(wrap_pyfunction!(modeling::make_drilled_spur_gear, m)?)?;
 
     // Direct Modeling
     m.add_function(wrap_pyfunction!(direct_edit::fillet_box_single_edge, m)?)?;

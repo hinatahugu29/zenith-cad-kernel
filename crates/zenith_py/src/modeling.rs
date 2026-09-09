@@ -1218,6 +1218,53 @@ pub fn make_spur_gear(
     Ok(PyMesh { mesh })
 }
 
+/// 軸穴（貫通穴）の開いたインボリュート平歯車 B-Rep Solid 生成（STEP出力対応）
+///
+/// `make_spur_gear` は **穴を開けません**（`bore_radius` は歯底半径の
+/// 下限に効くだけ）。**穴が要るならこちら**です——歯車と円柱の厳密
+/// ブーリアン差で開けます。`bore_radius <= 0` なら穴なしの歯車を返します。
+///
+/// > **⚠ 2026/09/09 まで、この口は Python から呼べませんでした**
+/// > （4-415）。**カーネルには 8/20 からあり、試験も付いていました**
+/// > （`test_drilled_spur_gear_actually_has_a_bore`。体積が
+/// > `歯車 - π r² t` と相対差 1e-4 以内）。**Python からは、軸穴の
+/// > ある歯車が 1 つも作れませんでした。** **4-400 と同じ型**です
+/// > ——**カーネルにあると Python から呼べるは、別**。
+#[pyfunction]
+#[pyo3(signature = (module = 2.0, teeth = 18, pressure_angle = 20.0, thickness = 10.0, bore_radius = 5.0, u_divisions = 8, v_divisions = 8, step_path = None))]
+#[allow(clippy::too_many_arguments)]
+pub fn make_drilled_spur_gear(
+    module: f64,
+    teeth: usize,
+    pressure_angle: f64,
+    thickness: f64,
+    bore_radius: f64,
+    u_divisions: usize,
+    v_divisions: usize,
+    step_path: Option<&str>,
+) -> PyResult<PyMesh> {
+    let solid = zenith_algo::gear::GearBuilder::make_drilled_spur_gear(
+        module,
+        teeth,
+        pressure_angle,
+        thickness,
+        bore_radius,
+    )
+    .map_err(|e| PyValueError::new_err(format!("Drilled spur gear creation failed: {}", e)))?;
+
+    if let Some(path) = step_path {
+        StepExporter::export_solid_to_file(&solid, path, "ZENITH_DRILLED_SPUR_GEAR")
+            .map_err(|e| PyValueError::new_err(format!("STEP export failed: {}", e)))?;
+    }
+
+    let params = TessellationParams {
+        u_divisions,
+        v_divisions,
+    };
+    let mesh = tessellate_solid(&solid, &params);
+    Ok(PyMesh { mesh })
+}
+
 /// 直交直方体同士の厳密 B-Rep ブーリアン演算（Union/Difference/Intersection・STEP出力対応）
 #[pyfunction]
 #[pyo3(signature = (dx1, dy1, dz1, offset1, dx2, dy2, dz2, offset2, op_type = 1, u_divisions = 8, v_divisions = 8, step_path = None))]

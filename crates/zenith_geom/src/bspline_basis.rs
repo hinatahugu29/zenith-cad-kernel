@@ -27,7 +27,23 @@ impl KnotVector {
     pub fn clamped_uniform(num_ctrl_pts: usize, degree: usize) -> Self {
         let mut knots = vec![0.0; degree + 1];
 
-        let num_inner = num_ctrl_pts - degree - 1;
+        // **引き算を飽和させます**（4-415）。
+        //
+        // **`num_ctrl_pts <= degree` だと、ここが桁溢れします**——
+        // **debug では panic、release では黙って 1.8e19 に化けます。**
+        // **そのまま `for i in 1..=num_inner` へ入るので、128 GiB を
+        // 確保しようとしてプロセスごと落ちます。**
+        //
+        // **Python から届きます**——`thicken_surface_patch` は
+        // 渡された点をそのまま次数 3 の B-spline にするので、
+        // **点を 2 個渡すだけで Blender が落ちます**（実測。
+        // `memory allocation of 137438953472 bytes failed`）。
+        //
+        // **飽和させると、ノットの本数が `2 * (degree + 1)` になり、
+        // `NurbsCurve3::new` の「制御点が次数 + 1 個より少ない」で
+        // きちんと断られます**——**断りは、もともとありました。
+        // そこへ届いていなかっただけ**です。
+        let num_inner = num_ctrl_pts.saturating_sub(degree + 1);
         for i in 1..=num_inner {
             knots.push(i as f64 / (num_inner + 1) as f64);
         }
