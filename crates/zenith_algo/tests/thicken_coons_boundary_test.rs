@@ -18,8 +18,21 @@
 //! 等間隔でないと 8.203e-2 外れていると報告されます**（本当は 6.7e-14）。
 //!
 //! **検査を本物の距離に直し**、**この作りが 4 隅の箱しか組めないことを
-//! 名指しで断る**ようにしました。**両方要ります**——**片方だけだと、
-//! 断りが誤答に変わります。**
+//! 名指しで断る**ようにしました（4-416）。**両方要ります**——
+//! **片方だけだと、断りが誤答に変わります。**
+//!
+//! # そのあと、作りのほうを直しました（4-417）
+//!
+//! **輪を境界曲線そのものから組み、側面をその曲線とオフセット曲線の
+//! あいだの線織面**にしました。**曲がった縁の板が、閉じた式と合います**
+//! ——`(100 + 5b) * 2` に対して、刻み 8 → 256 で相対差
+//! **1.019e-3 → 9.951e-7**（**2 次で 0 へ**）。
+//!
+//! **受けるのは、平らなシートだけ**です。**縁の形は問いません。**
+//! **曲がったシートは名指しで断ります**——天面は**制御点を法線方向へ
+//! ずらして**作るので、**平らなら厳密な平行移動**ですが、
+//! **曲がっていると本当のオフセットではありません**（実測: 円弧に近い
+//! 四半パッチで **1.1% ずれ、刻みでは縮まない**）。
 
 use zenith_algo::{CurvePatchBuilder, MassCalculator, ThickenBuilder};
 use zenith_geom::NurbsCurve3;
@@ -66,14 +79,17 @@ fn a_flat_sheet_thickens_however_its_edges_are_parameterised() {
     }
 }
 
-/// **曲がった縁は、名指しで断ること。**
+/// **曲がった縁の板は、閉じた式と合うこと**（4-417）。
 ///
-/// **黙って角柱を返すほうが、ずっと困ります**——**大きさだけが違う
-/// 立体**は、形の検査では捕まりません。
+/// **2026/09/09 の朝まで、ここは名指しで断っていました**（4-416）
+/// ——**4 隅から角柱を組むだけ**で、**黙って中身の違う立体**を返して
+/// いたからです。**輪を境界曲線から組むようにして、通しました。**
 #[test]
-fn a_bowed_boundary_is_refused_by_name() {
+fn a_bowed_boundary_thickens_to_the_closed_form() {
     let tol = Tolerance::default();
-    for bow in [1e-3, 1.0, 6.0] {
+    // 片側の縁を、制御点 y = 0, -b, -b, 0 の 3 次で膨らませる。
+    // 増える面積は ∫ y dx = 5b（x は制御点が等間隔なので x(t) = 10t）。
+    for bow in [1.0, 3.0, 6.0] {
         let face = CurvePatchBuilder::build_from_4_curves(
             curve(vec![
                 Point3::new(0.0, 0.0, 0.0),
@@ -103,12 +119,62 @@ fn a_bowed_boundary_is_refused_by_name() {
         )
         .expect("patch");
 
-        let message = ThickenBuilder::thicken_face(&face, 2.0, &tol)
-            .err()
-            .unwrap_or_else(|| panic!("a bowed boundary (bow {bow}) must be refused, not thickened"));
+        let solid = ThickenBuilder::thicken_face(&face, 2.0, &tol)
+            .unwrap_or_else(|error| panic!("a bowed boundary (bow {bow}) should thicken, got {error}"));
+        let params = TessellationParams {
+            u_divisions: 64,
+            v_divisions: 64,
+        };
+        let volume = MassCalculator::compute_from_brep(&solid, &params).volume;
+        let expected = (100.0 + 5.0 * bow) * 2.0;
+        let residual = (volume - expected).abs() / expected;
         assert!(
-            message.contains("bows") && message.contains("not implemented"),
-            "the refusal should name the bow and say it is not implemented, got {message}"
+            residual <= 1e-4,
+            "bow {bow}: expected {expected}, got {volume} (relative {residual:.3e})"
         );
     }
+}
+
+/// **曲がったシートは、名指しで断ること**（4-417）。
+///
+/// **天面は制御点を法線方向へずらして作ります。** **平らなら厳密な
+/// 平行移動**ですが、**曲がっていると本当のオフセット曲線ではありません**
+/// ——実測: 円弧に近い四半パッチで **1.1% ずれ、刻みでは縮みません。**
+/// **1% 黙ってずれるより、断ります。**
+#[test]
+fn a_curved_sheet_is_refused_by_name() {
+    let tol = Tolerance::default();
+    let radius = 10.0;
+    let length = 20.0;
+    let count = 7;
+    let arc: Vec<Point3> = (0..count)
+        .map(|i| {
+            let angle = std::f64::consts::FRAC_PI_2 * i as f64 / (count - 1) as f64;
+            Point3::new(radius * angle.cos(), radius * angle.sin(), 0.0)
+        })
+        .collect();
+    let face = CurvePatchBuilder::build_from_4_curves(
+        curve(arc.clone()),
+        curve(arc.iter().map(|p| Point3::new(p.x, p.y, length)).collect()),
+        curve(
+            (0..count)
+                .map(|i| Point3::new(radius, 0.0, length * i as f64 / (count - 1) as f64))
+                .collect(),
+        ),
+        curve(
+            (0..count)
+                .map(|i| Point3::new(0.0, radius, length * i as f64 / (count - 1) as f64))
+                .collect(),
+        ),
+        &tol,
+    )
+    .expect("patch");
+
+    let message = ThickenBuilder::thicken_face(&face, 1.0, &tol)
+        .err()
+        .expect("a curved sheet must be refused, not thickened by 1% too little");
+    assert!(
+        message.contains("bulges") && message.contains("not implemented"),
+        "the refusal should name the bulge and say it is not implemented, got {message}"
+    );
 }

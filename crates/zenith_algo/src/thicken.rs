@@ -97,54 +97,84 @@ impl ThickenBuilder {
         let n11 = coons.normal(1.0, 1.0).ok_or("normal 11 fail")?;
         let n01 = coons.normal(0.0, 1.0).ok_or("normal 01 fail")?;
 
-        // **この作りは、4 隅から角柱を組むだけ**です——**底も天も、
-        // 隅どうしを結んだ直線**で輪を作り、**側面は平面**です
-        // （下の `Edge::line_between` と `PlaneSurface3::new`）。
-        // **境界曲線そのものは、一度も読んでいません。**
+        // **輪は、境界曲線そのものから組みます**（4-417）。
         //
-        // **縁がまっすぐなら、それが正しい答え**です。**曲がっていたら、
-        // 返るのは中身の違う立体**です——実測（4-416）: 10x10 の平らな
-        // シートの片側の縁を膨らませると、**閉じた式 210 / 230 / 260 に
-        // 対して 203.3 / 210.0 / 219.9** が返ります。**閉じた多様体で、
-        // 形も板**なので、**形の検査では捕まりません**（4-409 と同じ型）。
+        // **2026/09/09 まで、ここは 4 隅から角柱を組むだけ**でした——
+        // 底も天も**隅どうしを結んだ直線**で輪を作り、側面は平面。
+        // **境界曲線を一度も読んでいません**でした。**縁がまっすぐなら
+        // それが正しい答え**ですが、**曲がっていたら中身の違う立体**が
+        // 返ります（4-416。閉じた式 210 に対して 203.3）。
         //
-        // **2026/09/09 まで、ここは「たまたま」断られていました**——
-        // 面の境界検査が **16x16 の標本の中でいちばん近い点**までの距離を
-        // 「曲面までの距離」と呼んでおり、その粗さで落ちていたのです。
-        // **その検査を本物の距離に直したら**（4-416。8.203e-2 → 6.7e-14）、
-        // **正しい平らな板が通るようになった代わりに、この誤答も
-        // 通るようになりました。** **検査が壊したのではなく、前から
-        // 壊れていた所が見えた**だけです（4-366 と同じ形）。
+        // **側面は、その境界曲線と、そのオフセット曲線のあいだの線織面**
+        // です。**オフセットは制御点の数も次数もノットも変えない**ので、
+        // **線織面はぴったり組めます**——`v` 方向は次数 1、制御点 2 個。
+        // **`v=0` の等パラメータ曲線が下の縁、`v=1` が上の縁**に、
+        // 構成上そのまま一致します。
+        // **平らなシートだけを受けます**（4-417）。
         //
-        // **名指しで断ります。** **曲がった縁を厚くするには、輪を境界曲線
-        // から組み、側面をその曲線に沿って立てる段が要ります**——
-        // **半分書いたものは、書かないより悪い**（4-409）。
-        for (name, curve, from, to) in [
-            ("c0", &coons.c0, p00_b, p10_b),
-            ("c1", &coons.c1, p01_b, p11_b),
-            ("d0", &coons.d0, p00_b, p01_b),
-            ("d1", &coons.d1, p10_b, p11_b),
-        ] {
-            let (t0, t1) = curve.param_range();
-            let span = to - from;
-            let length = span.norm();
+        // **縁の形は問いません**——**曲がった縁も通ります**（それが
+        // この節で足したところです）。**問うのは、面そのものが平らか**
+        // どうかです。
+        //
+        // **なぜか**: 天面は**境界曲線の制御点を法線方向へずらして**
+        // 作ります。**平らなら法線はどこでも同じ**なので、これは
+        // **ぴったりの平行移動**です。**曲がっていると、ずらした制御点の
+        // 曲線は本当のオフセット曲線ではありません**——実測（4-417）:
+        // 円弧に近い四半パッチ（長さ 15.527、回転角 1.309 rad）を 1 だけ
+        // 厚くすると、**独立に積んだ値 323.633 に対して 320.007**。
+        // **1.1% ずれ、しかも刻みを 16 → 128 と上げても縮みません**
+        // （3.067e-2 → 2.989e-2）。**幾何のずれで、刻みのずれでは
+        // ありません。**
+        //
+        // **1% 黙ってずれるより、断ります**（4-409 と同じ判断）。
+        // **曲がったシートを厚くするには、`thicken_nurbs_face` が
+        // やっているように曲面を標本してずらし、通し直す段が要ります。**
+        {
+            let mut points: Vec<Point3> = Vec::new();
+            for curve in [&coons.c0, &coons.c1, &coons.d0, &coons.d1] {
+                let (t0, t1) = curve.param_range();
+                for step in 0..=16 {
+                    points.push(curve.evaluate(t0 + (t1 - t0) * step as f64 / 16.0));
+                }
+            }
+            for i in 0..=8 {
+                for j in 0..=8 {
+                    points.push(coons.evaluate(i as f64 / 8.0, j as f64 / 8.0));
+                }
+            }
+            let origin = points[0];
+            let normal = n00;
             let mut worst: f64 = 0.0;
-            for step in 0..=32 {
-                let t = t0 + (t1 - t0) * step as f64 / 32.0;
-                let point = curve.evaluate(t);
-                let along = if length > 0.0 {
-                    ((point - from).dot(&span) / (length * length)).clamp(0.0, 1.0)
-                } else {
-                    0.0
-                };
-                worst = worst.max((point - (from + span * along)).norm());
+            for point in &points {
+                worst = worst.max((*point - origin).dot(&normal).abs());
             }
             if worst > tol.linear {
                 return Err(format!(
-                    "the sheet's {name} boundary bows {worst:.3e} away from the straight line between its corners; thicken only handles a Coons patch whose four boundaries are straight (a curved-boundary sheet is not implemented)"
+                    "the sheet bulges {worst:.3e} out of the plane at its first corner; thicken only handles a flat Coons sheet (offsetting a curved Coons sheet is not implemented, and would be about 1% out)"
                 ));
             }
         }
+
+        let ruled = |bottom: &zenith_geom::NurbsCurve3,
+                     top: &zenith_geom::NurbsCurve3|
+         -> Result<NurbsSurface3, String> {
+            if bottom.control_points.len() != top.control_points.len() {
+                return Err("the offset boundary changed its control point count".to_string());
+            }
+            let grid: Vec<Vec<zenith_geom::ControlPoint3>> = bottom
+                .control_points
+                .iter()
+                .zip(top.control_points.iter())
+                .map(|(low, high)| vec![*low, *high])
+                .collect();
+            NurbsSurface3::new(
+                bottom.degree,
+                1,
+                grid,
+                bottom.knots.clone(),
+                zenith_geom::KnotVector::clamped_uniform(2, 1),
+            )
+        };
 
         let p00_t = p00_b + n00 * thickness;
         let p10_t = p10_b + n10 * thickness;
@@ -173,7 +203,7 @@ impl ThickenBuilder {
         let d0_t = offset_boundary(&coons.d0, false, 0.0)?;
         let d1_t = offset_boundary(&coons.d1, false, 1.0)?;
 
-        let top_coons = CoonsPatch3::new(c0_t, c1_t, d0_t, d1_t, &tol)?;
+        let top_coons = CoonsPatch3::new(c0_t.clone(), c1_t.clone(), d0_t.clone(), d1_t.clone(), &tol)?;
 
         let v00_b = Vertex::from_point(p00_b);
         let v10_b = Vertex::from_point(p10_b);
@@ -185,16 +215,17 @@ impl ThickenBuilder {
         let v11_t = Vertex::from_point(p11_t);
         let v01_t = Vertex::from_point(p01_t);
 
-        // 底面・天面・垂直エッジ
-        let e_b0 = Edge::line_between(v00_b.clone(), v10_b.clone())?;
-        let e_b1 = Edge::line_between(v10_b.clone(), v11_b.clone())?;
-        let e_b2 = Edge::line_between(v11_b.clone(), v01_b.clone())?;
-        let e_b3 = Edge::line_between(v01_b.clone(), v00_b.clone())?;
+        // **縁の稜は、境界曲線そのもの**です。
+        // `c0`: p00 -> p10、`c1`: p01 -> p11、`d0`: p00 -> p01、`d1`: p10 -> p11。
+        let e_c0: Edge = Edge::new(coons.c0.clone(), v00_b.clone(), v10_b.clone(), tol.linear);
+        let e_d1: Edge = Edge::new(coons.d1.clone(), v10_b.clone(), v11_b.clone(), tol.linear);
+        let e_c1: Edge = Edge::new(coons.c1.clone(), v01_b.clone(), v11_b.clone(), tol.linear);
+        let e_d0: Edge = Edge::new(coons.d0.clone(), v00_b.clone(), v01_b.clone(), tol.linear);
 
-        let e_t0 = Edge::line_between(v00_t.clone(), v10_t.clone())?;
-        let e_t1 = Edge::line_between(v10_t.clone(), v11_t.clone())?;
-        let e_t2 = Edge::line_between(v11_t.clone(), v01_t.clone())?;
-        let e_t3 = Edge::line_between(v01_t.clone(), v00_t.clone())?;
+        let e_c0_t: Edge = Edge::new(c0_t.clone(), v00_t.clone(), v10_t.clone(), tol.linear);
+        let e_d1_t: Edge = Edge::new(d1_t.clone(), v10_t.clone(), v11_t.clone(), tol.linear);
+        let e_c1_t: Edge = Edge::new(c1_t.clone(), v01_t.clone(), v11_t.clone(), tol.linear);
+        let e_d0_t: Edge = Edge::new(d0_t.clone(), v00_t.clone(), v01_t.clone(), tol.linear);
 
         let e_v0 = Edge::line_between(v00_b.clone(), v00_t.clone())?;
         let e_v1 = Edge::line_between(v10_b.clone(), v10_t.clone())?;
@@ -203,72 +234,85 @@ impl ThickenBuilder {
 
         let mut faces = Vec::with_capacity(6);
 
-        let p_side0 = PlaneSurface3::new(p00_b, p10_b - p00_b, n00 * thickness).ok_or("side 0")?;
+        // 側面 0（`c0` に沿う。p00 -> p10）
         faces.push(Face::simple(
-            FaceGeometry::Plane(p_side0),
+            FaceGeometry::Nurbs(ruled(&coons.c0, &c0_t)?),
             Wire::new(vec![
-                OrientedEdge::forward(e_b0.clone()),
+                OrientedEdge::forward(e_c0.clone()),
                 OrientedEdge::forward(e_v1.clone()),
-                OrientedEdge::reversed(e_t0.clone()),
+                OrientedEdge::reversed(e_c0_t.clone()),
                 OrientedEdge::reversed(e_v0.clone()),
             ]),
         ));
 
-        let p_side1 = PlaneSurface3::new(p10_b, p11_b - p10_b, n10 * thickness).ok_or("side 1")?;
+        // 側面 1（`d1` に沿う。p10 -> p11）
         faces.push(Face::simple(
-            FaceGeometry::Plane(p_side1),
+            FaceGeometry::Nurbs(ruled(&coons.d1, &d1_t)?),
             Wire::new(vec![
-                OrientedEdge::forward(e_b1.clone()),
+                OrientedEdge::forward(e_d1.clone()),
                 OrientedEdge::forward(e_v2.clone()),
-                OrientedEdge::reversed(e_t1.clone()),
+                OrientedEdge::reversed(e_d1_t.clone()),
                 OrientedEdge::reversed(e_v1.clone()),
             ]),
         ));
 
-        let p_side2 = PlaneSurface3::new(p11_b, p01_b - p11_b, n11 * thickness).ok_or("side 2")?;
-        faces.push(Face::simple(
-            FaceGeometry::Plane(p_side2),
-            Wire::new(vec![
-                OrientedEdge::forward(e_b2.clone()),
-                OrientedEdge::forward(e_v3.clone()),
-                OrientedEdge::reversed(e_t2.clone()),
-                OrientedEdge::reversed(e_v2.clone()),
-            ]),
-        ));
-
-        let p_side3 = PlaneSurface3::new(p01_b, p00_b - p01_b, n01 * thickness).ok_or("side 3")?;
-        faces.push(Face::simple(
-            FaceGeometry::Plane(p_side3),
-            Wire::new(vec![
-                OrientedEdge::forward(e_b3.clone()),
-                OrientedEdge::forward(e_v0.clone()),
-                OrientedEdge::reversed(e_t3.clone()),
-                OrientedEdge::reversed(e_v3.clone()),
-            ]),
-        ));
-
-        // 底面（元シート・法線反転）
+        // 側面 2（`c1` を逆に辿る。p11 -> p01）
+        //
+        // **ここだけ、向きの札を裏返します。** `c1` は `c0` と同じ向き
+        // （u が増える向き）に走るので、**線織面の法線は 2 枚とも同じ側**
+        // を向きます。**外へ向くのは片方だけ**です——実測（4-417）:
+        // 裏返さないと `planar p-curve loop is inconsistent with face
+        // orientation; oriented area -2.000000e1` で断られます。
         faces.push(Face::new(
-            FaceGeometry::Coons(coons.clone()),
+            FaceGeometry::Nurbs(ruled(&coons.c1, &c1_t)?),
             Wire::new(vec![
-                OrientedEdge::reversed(e_b3),
-                OrientedEdge::reversed(e_b2),
-                OrientedEdge::reversed(e_b1),
-                OrientedEdge::reversed(e_b0),
+                OrientedEdge::reversed(e_c1.clone()),
+                OrientedEdge::forward(e_v3.clone()),
+                OrientedEdge::forward(e_c1_t.clone()),
+                OrientedEdge::reversed(e_v2.clone()),
             ]),
             vec![],
             Orientation::Reversed,
             1e-6,
         ));
 
-        // 天面（オフセットシート）
+        // 側面 3（`d0` を逆に辿る。p01 -> p00）。**側面 2 と同じ理由で
+        // 裏返します。**
+        faces.push(Face::new(
+            FaceGeometry::Nurbs(ruled(&coons.d0, &d0_t)?),
+            Wire::new(vec![
+                OrientedEdge::reversed(e_d0.clone()),
+                OrientedEdge::forward(e_v0.clone()),
+                OrientedEdge::forward(e_d0_t.clone()),
+                OrientedEdge::reversed(e_v3.clone()),
+            ]),
+            vec![],
+            Orientation::Reversed,
+            1e-6,
+        ));
+
+        // 底面（元シート・法線反転）。p00 -> p01 -> p11 -> p10 -> p00
+        faces.push(Face::new(
+            FaceGeometry::Coons(coons.clone()),
+            Wire::new(vec![
+                OrientedEdge::forward(e_d0),
+                OrientedEdge::forward(e_c1),
+                OrientedEdge::reversed(e_d1),
+                OrientedEdge::reversed(e_c0),
+            ]),
+            vec![],
+            Orientation::Reversed,
+            1e-6,
+        ));
+
+        // 天面（オフセットシート）。p00 -> p10 -> p11 -> p01 -> p00
         faces.push(Face::simple(
             FaceGeometry::Coons(top_coons),
             Wire::new(vec![
-                OrientedEdge::forward(e_t0),
-                OrientedEdge::forward(e_t1),
-                OrientedEdge::forward(e_t2),
-                OrientedEdge::forward(e_t3),
+                OrientedEdge::forward(e_c0_t),
+                OrientedEdge::forward(e_d1_t),
+                OrientedEdge::reversed(e_c1_t),
+                OrientedEdge::reversed(e_d0_t),
             ]),
         ));
 
