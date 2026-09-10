@@ -310,6 +310,82 @@ SHAPES.append((
                                      GEAR_DIVISIONS, GEAR_DIVISIONS),
     _gear_solid - math.pi * GEAR[4] ** 2 * GEAR[3], 1e-4, None))
 
+# **掃く形**（4-422）。**らせんに沿って掃いた立体は、断面積 ×
+# らせんの長さ**です——**断面の重心が、らせんの上に乗っているとき**。
+#
+# **`make_helix_solid` は、断面の原点をらせんに乗せます。**
+# **断面を原点中心にしないと、重心がずれた半径を回ります**
+# ——実測（4-422）: 一辺 3 の正方形を `0..3` に置くと **1.58% ずれ**、
+# **`±1.5` に置くと 2.5e-5**。**大きさを 1/2/3/4 と変えても、
+# 比は 0.999975 で動きません。** **ずれていたのは私の式**でした。
+def centred_square(side, height):
+    half = side / 2.0
+    return [[-half, -half, height], [half, -half, height],
+            [half, half, height], [-half, half, height]]
+
+
+SPRING = (10.0, 8.0, 3.0, 1.5)          # 半径・ピッチ・巻数・線径
+HELIX = (15.0, 10.0, 2.0, 3.0)          # 半径・ピッチ・巻数・断面の一辺
+spring_length = SPRING[2] * math.sqrt((2.0 * math.pi * SPRING[0]) ** 2 + SPRING[1] ** 2)
+helix_length = HELIX[2] * math.sqrt((2.0 * math.pi * HELIX[0]) ** 2 + HELIX[1] ** 2)
+ARC = [[20.0 * math.cos(step * math.pi / 2.0 / 32.0),
+        20.0 * math.sin(step * math.pi / 2.0 / 32.0), 0.0] for step in range(33)]
+
+SHAPES.extend([
+    ("ばね（π rw² × らせん長）",
+     lambda: z.make_round_wire_spring(SPRING[0], SPRING[1], SPRING[2], SPRING[3],
+                                      DIVISIONS, DIVISIONS),
+     math.pi * SPRING[3] ** 2 * spring_length, 1e-3, None),
+    ("らせんに掃いた角材（A × らせん長）",
+     lambda: z.make_helix_solid(centred_square(HELIX[3], 0.0), HELIX[0], HELIX[1],
+                                HELIX[2], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 128,
+                                DIVISIONS, DIVISIONS),
+     HELIX[3] ** 2 * helix_length, 1e-3, None),
+    ("円弧に掃いた管（パップス）",
+     lambda: z.make_sweep_pipe(ARC, 2.0, 64, DIVISIONS, DIVISIONS),
+     math.pi * 4.0 * (20.0 * math.pi / 2.0), 1e-3, None),
+    ("折れ線に掃いた角材 直線 L20",
+     lambda: z.make_polyline_sweep(centred_square(3.0, 0.0),
+                                   [[0.0, 0.0, 0.0], [0.0, 0.0, 20.0]], 0.0,
+                                   DIVISIONS, DIVISIONS),
+     9.0 * 20.0, 1e-12, None),
+    ("掃いた角材 直線 L20",
+     lambda: z.make_sweep_wire(centred_square(3.0, 0.0),
+                               [[0.0, 0.0, 0.0], [0.0, 0.0, 20.0]], 16,
+                               DIVISIONS, DIVISIONS),
+     9.0 * 20.0, 1e-12, None),
+    # **案内が直線なら、ふつうのロフトと同じ**はずです。
+    ("案内付きロフト 正方形10→8 h12",
+     lambda: z.make_guided_loft_solid(
+         [centred_square(10.0, 0.0), centred_square(8.0, 12.0)],
+         [[[0.0, 0.0, 0.0], [0.0, 0.0, 12.0]]], 2, DIVISIONS, DIVISIONS),
+     12.0 / 6.0 * (100.0 + 4.0 * 81.0 + 64.0), 1e-12, None),
+    # **面取りするのは 1 稜だけ**です（4-422 で 1 度、4 稜と読んで
+    # 外しました）。**それが 2 つぶん。**
+    ("鏡像の複合ケーシング（面取り 1 稜 × 2）",
+     lambda: z.make_mirror_compound_casing(30.0, 50.0, 20.0, 10.0, 6.0,
+                                           [0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                                           DIVISIONS, DIVISIONS),
+     2.0 * (30.0 * 50.0 * 20.0 - 0.5 * 6.0 * 6.0 * 20.0), 1e-12, None),
+])
+
+# **面だけを返す口**（4-422）。**体積はありません**ので、面積で見ます。
+AREAS = [
+    ("平らなキャップ 10x10",
+     lambda: z.cap_planar_wire([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0],
+                                [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]],
+                               DIVISIONS, DIVISIONS),
+     100.0, 1e-12),
+    ("4 境界の平らなパッチ 10x10",
+     lambda: z.make_curve_patch(
+         [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [7.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
+         [[0.0, 10.0, 0.0], [3.0, 10.0, 0.0], [7.0, 10.0, 0.0], [10.0, 10.0, 0.0]],
+         [[0.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 7.0, 0.0], [0.0, 10.0, 0.0]],
+         [[10.0, 0.0, 0.0], [10.0, 3.0, 0.0], [10.0, 7.0, 0.0], [10.0, 10.0, 0.0]],
+         DIVISIONS, DIVISIONS),
+     100.0, 1e-12),
+]
+
 print("本物の Python から拡張モジュールを触る（4-402）")
 print()
 print("Python %s" % sys.version.split()[0])
@@ -351,6 +427,26 @@ for name, build, expected, allowance, box in SHAPES:
         wrong += 1
     print("%-34s%18.6f%18.6f%12.3e  %s"
           % (name, expected, volume, residual, "ok" if ok else "**ちがう**"))
+print("-" * 100)
+print()
+
+# **面だけを返す口**は、面積で見ます（4-422）。
+print("%-34s%18s%18s%12s  %s" % ("作る面", "閉じた式", "測った値", "相対差", "結果"))
+print("-" * 100)
+for name, build, expected, allowance in AREAS:
+    try:
+        area, _ = value_of(build(), "surface_area")
+    except Exception as error:
+        wrong += 1
+        print("%-34s%18.6f%18s%12s  **断られました**: %s"
+              % (name, expected, "-", "-", str(error)[:28]))
+        continue
+    residual = abs(area - expected) / max(abs(expected), 1.0)
+    ok = residual <= allowance
+    if not ok:
+        wrong += 1
+    print("%-34s%18.6f%18.6f%12.3e  %s"
+          % (name, expected, area, residual, "ok" if ok else "**ちがう**"))
 print("-" * 100)
 print()
 
