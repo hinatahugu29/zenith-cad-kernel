@@ -97,6 +97,55 @@ impl ThickenBuilder {
         let n11 = coons.normal(1.0, 1.0).ok_or("normal 11 fail")?;
         let n01 = coons.normal(0.0, 1.0).ok_or("normal 01 fail")?;
 
+        // **この作りは、4 隅から角柱を組むだけ**です——**底も天も、
+        // 隅どうしを結んだ直線**で輪を作り、**側面は平面**です
+        // （下の `Edge::line_between` と `PlaneSurface3::new`）。
+        // **境界曲線そのものは、一度も読んでいません。**
+        //
+        // **縁がまっすぐなら、それが正しい答え**です。**曲がっていたら、
+        // 返るのは中身の違う立体**です——実測（4-416）: 10x10 の平らな
+        // シートの片側の縁を膨らませると、**閉じた式 210 / 230 / 260 に
+        // 対して 203.3 / 210.0 / 219.9** が返ります。**閉じた多様体で、
+        // 形も板**なので、**形の検査では捕まりません**（4-409 と同じ型）。
+        //
+        // **2026/09/09 まで、ここは「たまたま」断られていました**——
+        // 面の境界検査が **16x16 の標本の中でいちばん近い点**までの距離を
+        // 「曲面までの距離」と呼んでおり、その粗さで落ちていたのです。
+        // **その検査を本物の距離に直したら**（4-416。8.203e-2 → 6.7e-14）、
+        // **正しい平らな板が通るようになった代わりに、この誤答も
+        // 通るようになりました。** **検査が壊したのではなく、前から
+        // 壊れていた所が見えた**だけです（4-366 と同じ形）。
+        //
+        // **名指しで断ります。** **曲がった縁を厚くするには、輪を境界曲線
+        // から組み、側面をその曲線に沿って立てる段が要ります**——
+        // **半分書いたものは、書かないより悪い**（4-409）。
+        for (name, curve, from, to) in [
+            ("c0", &coons.c0, p00_b, p10_b),
+            ("c1", &coons.c1, p01_b, p11_b),
+            ("d0", &coons.d0, p00_b, p01_b),
+            ("d1", &coons.d1, p10_b, p11_b),
+        ] {
+            let (t0, t1) = curve.param_range();
+            let span = to - from;
+            let length = span.norm();
+            let mut worst: f64 = 0.0;
+            for step in 0..=32 {
+                let t = t0 + (t1 - t0) * step as f64 / 32.0;
+                let point = curve.evaluate(t);
+                let along = if length > 0.0 {
+                    ((point - from).dot(&span) / (length * length)).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                worst = worst.max((point - (from + span * along)).norm());
+            }
+            if worst > tol.linear {
+                return Err(format!(
+                    "the sheet's {name} boundary bows {worst:.3e} away from the straight line between its corners; thicken only handles a Coons patch whose four boundaries are straight (a curved-boundary sheet is not implemented)"
+                ));
+            }
+        }
+
         let p00_t = p00_b + n00 * thickness;
         let p10_t = p10_b + n10 * thickness;
         let p11_t = p11_b + n11 * thickness;

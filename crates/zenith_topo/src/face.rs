@@ -1830,15 +1830,70 @@ fn validate_face_pcurve_loop(
 
 fn sampled_surface_distance<S: Surface3>(point: Point3, surface: &S, samples: usize) -> f64 {
     let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
-    let mut min_distance = f64::INFINITY;
     let steps = samples.max(2);
 
+    // **粗い格子で、いちばん近い升を選ぶ。**
+    let mut min_distance = f64::INFINITY;
+    let mut best = (u_min, v_min);
     for i in 0..=steps {
         let u = u_min + (i as f64 / steps as f64) * (u_max - u_min);
         for j in 0..=steps {
             let v = v_min + (j as f64 / steps as f64) * (v_max - v_min);
             let distance = (surface.evaluate(u, v) - point).norm();
-            min_distance = min_distance.min(distance);
+            if distance < min_distance {
+                min_distance = distance;
+                best = (u, v);
+            }
+        }
+    }
+
+    // **そのまわりを、刻みながら見直す**（4-416）。
+    //
+    // **ここは「面の上にあるか」を判定する段**です。**格子だけで
+    // 止めると、測っているのは曲面までの距離ではなく、
+    // 「256 個の標本のうちいちばん近いものまでの距離」**になります。
+    //
+    // **正しい立体が、格子の粗さだけで断られていました**——実測（4-416）:
+    // **10x10 の平らな Coons パッチ**を厚くすると、**縁の直線は
+    // 曲面の上にちょうど乗っている**（密に標本して確かめました。
+    // 曲面の z は全域で 0）のに、**8.203e-2 外れている**と報告され、
+    // 48 件の検査落ちで断られます。**制御点が等間隔のときだけ通る**
+    // のは、**そのときだけ標本が縁の点と同じ所に落ちる**からでした。
+    //
+    // **NURBS の面は、ここを通りません**——そちらは
+    // `ExtremumEngine::point_to_surface` で本物の射影をします。
+    // **粗いままだったのは Coons / Gordon / Triangular** です。
+    //
+    // **升の幅を半分にして、その中を 3x3 で見る**、を繰り返します。
+    // **微分は要りません**ので、どの曲面にも同じように効きます。
+    //
+    // **段数は 30 です。** **8 段では足りませんでした**（4-416 で
+    // 実測）——**同じ平らなパッチで、8 段だと 3.1e-4、40 段だと
+    // 6.7e-14**。**縁は本当に曲面の上に乗っています。**
+    // **8 段のままだと、1e-6 の受け入れ幅には 2 桁届かず、
+    // 「正しい立体を断る」ほうは直りません。**
+    //
+    // 30 段は幅を 2^-30（≈ 9.3e-10）倍にします。**費用は 1 点あたり
+    // 240 回の評価**で、**格子の 289 回とほぼ同じ**です。
+    let mut half_u = (u_max - u_min) / steps as f64;
+    let mut half_v = (v_max - v_min) / steps as f64;
+    for _ in 0..30 {
+        half_u *= 0.5;
+        half_v *= 0.5;
+        let (centre_u, centre_v) = best;
+        for i in -1i32..=1 {
+            for j in -1i32..=1 {
+                if i == 0 && j == 0 {
+                    continue;
+                }
+                let u = (centre_u + half_u * i as f64).clamp(u_min, u_max);
+                let v = (centre_v + half_v * j as f64).clamp(v_min, v_max);
+                let distance = (surface.evaluate(u, v) - point).norm();
+                if distance < min_distance {
+                    min_distance = distance;
+                    best = (u, v);
+                }
+            }
         }
     }
 
