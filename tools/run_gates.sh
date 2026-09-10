@@ -136,6 +136,55 @@ for probe in $GATES; do
   fi
 done
 
+# **Python の口も回します**（4-419）。
+#
+# **`cargo test` は、Python から使えることの証明になりません**（4-402）
+# ——`volume` は Python では getter でした。**そして 2 つの道具は、
+# 置いてあるだけで門に入っていませんでした**——**4-410 の「回って
+# いない門」と同じ形**です。
+#
+# **Python か拡張モジュールが無ければ、赤にはせず、名前を出して飛ばします**
+# ——**「無い」を「緑」と読み違えないため**に、行は必ず出します。
+echo
+echo "== Python の口 =="
+PYTHON="${ZENITH_PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+  for candidate in py python3 python; do
+    if command -v "$candidate" > /dev/null 2>&1; then
+      PYTHON="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "$PYTHON" ]; then
+  echo "  **Python がありません。** 下の 2 つは回していません（緑ではありません）。"
+  echo "    tools/check_python_surface.py / tools/check_python_arguments.py"
+elif ! cargo build --release -p zenith_py > "$OUT/pybuild.txt" 2>&1; then
+  echo "  **拡張モジュールが建ちません。** $OUT/pybuild.txt"
+  fail=1
+  red="$red zenith_py"
+else
+  # **読ませる STEP は、追跡下の検体から選びます**（`reference/` は
+  # 2026/09/08 に消えました）。
+  export ZENITH_ARGS_STEP="${ZENITH_ARGS_STEP:-crates/zenith_algo/tests/fixtures/occ_reference_cylinder.step}"
+  for script in check_python_surface check_python_arguments; do
+    started=$(date +%s)
+    "$PYTHON" "tools/$script.py" > "$OUT/$script.txt" 2>&1
+    code=$?
+    elapsed=$(( $(date +%s) - started ))
+    if [ "$code" != "0" ]; then
+      fail=1
+      red="$red $script"
+      printf "  %-30s **赤**  exit=%s  (%ss)
+" "$script" "$code" "$elapsed"
+    else
+      printf "  %-30s 緑    (%ss)
+" "$script" "$elapsed"
+    fi
+  done
+fi
+
 echo
 if [ "$fail" = "0" ]; then
   echo "**門は全部緑です。**"

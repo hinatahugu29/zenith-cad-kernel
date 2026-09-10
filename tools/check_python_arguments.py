@@ -72,6 +72,15 @@ SMALL_SQUARE = [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0], [3.0, 3.0, 0.0], [0.0, 3.0, 0.
 PATH = [[0.0, 0.0, 0.0], [0.0, 0.0, 20.0], [15.0, 0.0, 30.0]]
 REVOLVE_PROFILE = [[10.0, 0.0, 0.0], [14.0, 0.0, 0.0],
                    [14.0, 0.0, 6.0], [10.0, 0.0, 6.0]]
+UPPER_SQUARE = [[1.0, 1.0, 12.0], [9.0, 1.0, 12.0],
+                [9.0, 9.0, 12.0], [1.0, 9.0, 12.0]]
+# **4 本の境界曲線**（`make_curve_patch` と `thicken_surface_patch`）。
+# **点は 4 個以上**要ります——**2 個だと、次数 3 の B-spline が組めず、
+# 2026/09/09 まではそこでプロセスごと落ちていました**（4-415）。
+BOWED_U0 = [[0.0, 0.0, 0.0], [3.0, 0.0, 1.0], [7.0, 0.0, 1.0], [10.0, 0.0, 0.0]]
+BOWED_U1 = [[0.0, 10.0, 0.0], [3.0, 10.0, 1.0], [7.0, 10.0, 1.0], [10.0, 10.0, 0.0]]
+SIDE_V0 = [[0.0, 0.0, 0.0], [0.0, 3.0, 0.0], [0.0, 7.0, 0.0], [0.0, 10.0, 0.0]]
+SIDE_V1 = [[10.0, 0.0, 0.0], [10.0, 3.0, 0.0], [10.0, 7.0, 0.0], [10.0, 10.0, 0.0]]
 
 BASELINE = {
     "make_box": dict(dx=10.0, dy=20.0, dz=30.0),
@@ -173,6 +182,27 @@ BASELINE = {
     "make_exact_drill_boolean":
         dict(dx=30.0, dy=30.0, dz=20.0, box_offset=[0.0, 0.0, 0.0],
              radius=4.0, height=40.0, drill_offset=[15.0, 15.0, -10.0]),
+
+    # **残り 8 個**（4-419）。**「回せなかった」は「緑」ではありません**
+    # ——4-415 で 9 個、名前だけ挙げて置いていました。
+    "get_primitive_shader_payload": dict(prim_type="box"),
+    "make_curve_patch": dict(c0=BOWED_U0, c1=BOWED_U1, d0=SIDE_V0, d1=SIDE_V1),
+    "thicken_surface_patch":
+        dict(c_u0=BOWED_U0, c_u1=BOWED_U1, c_0v=SIDE_V0, c_1v=SIDE_V1),
+    "make_loft_solid": dict(sections=[SQUARE, UPPER_SQUARE]),
+    "make_guided_loft_solid":
+        dict(sections=[SQUARE, UPPER_SQUARE],
+             guide_curves=[[[0.0, 0.0, 0.0], [0.0, 0.0, 12.0]]]),
+    "make_mirror_compound_casing":
+        dict(dx=30.0, dy=50.0, dz=20.0, offset_x=10.0, chamfer_dist=6.0,
+             plane_origin=[0.0, 0.0, 0.0], plane_normal=[1.0, 0.0, 0.0]),
+
+    # **中身は下で組みます**（生きた `Mesh`、書き先のファイル、読む
+    # ファイル）。**ここに名前を置くのは、上の「既定値だけでは呼べません」
+    # で降りないため**です。
+    "make_boolean": {},
+    "export_box_section_dxf": {},
+    "import_step_file": {},
 }
 
 # **触らない引数**——ファイルを書く / 形の種類そのものを変える。
@@ -228,6 +258,46 @@ def fingerprint(value):
             parts.extend(round(float(x), 9) for x in attribute)
     if not parts:
         parts.append(repr(type(value)))
+    return tuple(parts)
+
+
+def call_and_fingerprint(function, arguments):
+    """**呼んで、返り値と、書いたファイルの両方を指紋にする。**
+
+    **返り値だけでは足りません**（4-419）——`export_box_section_dxf` は
+    **いつも `1` を返し、本当の出力は DXF ファイルのほう**です。
+    **返り値だけ見て「4 引数が効かない」と名指ししました。**
+    **DXF はどの引数でも変わっています。** **道具のほうが見ていません**
+    でした。
+
+    **書き先の引数が来ていたら、毎回ちがう名前へ書かせ、中身を数えます。**
+    """
+    import hashlib
+    import os
+    import tempfile
+
+    written = [key for key in arguments if key.endswith("_path")]
+    arguments = dict(arguments)
+    targets = []
+    for key in written:
+        if not isinstance(arguments[key], str):
+            continue
+        # **読む口（`file_path`）は、そのまま**です。**書く口だけ**
+        # 名前を替えます。
+        if os.path.exists(arguments[key]):
+            continue
+        target = os.path.join(tempfile.mkdtemp(prefix="zenith-args-out-"),
+                              os.path.basename(arguments[key]))
+        arguments[key] = target
+        targets.append(target)
+
+    parts = list(fingerprint(function(**arguments)))
+    for target in targets:
+        if os.path.exists(target):
+            with open(target, "rb") as handle:
+                parts.append(hashlib.md5(handle.read()).hexdigest())
+        else:
+            parts.append("書かれませんでした")
     return tuple(parts)
 
 
@@ -320,10 +390,30 @@ for name in sorted(n for n in dir(z) if not n.startswith("_")):
             merged.update(one)
             cases.append(merged)
 
+    # **生きた物を渡す口**は、ここで組みます（表には書けません）。
+    if name == "make_boolean":
+        cases = [dict(mesh_a=z.make_box(10.0, 10.0, 10.0),
+                      mesh_b=z.make_box(6.0, 6.0, 20.0))]
+    elif name == "export_box_section_dxf":
+        import os, tempfile
+        cases = [dict(box_w=20.0, box_d=20.0, box_h=20.0,
+                      plane_origin=[0.0, 0.0, 10.0], plane_normal=[0.0, 0.0, 1.0],
+                      dxf_path=os.path.join(tempfile.mkdtemp(prefix="zenith-args-dxf-"),
+                                            "section.dxf"))]
+    elif name == "import_step_file":
+        # **追跡済みの検体だけを読みます**（`reference/` は 2026/09/08 に
+        # 消えました。5 章の落とし穴）。
+        import os
+        fixture = os.environ.get("ZENITH_ARGS_STEP")
+        if not fixture or not os.path.exists(fixture):
+            skipped.append((name, "読ませる STEP がありません（ZENITH_ARGS_STEP）"))
+            continue
+        cases = [dict(file_path=fixture)]
+
     usable = []
     for case in cases:
         try:
-            usable.append((case, fingerprint(function(**case))))
+            usable.append((case, call_and_fingerprint(function, case)))
         except Exception as error:
             skipped.append((name, "検体が断られました: %s" % str(error)[:40]))
     if not usable:
@@ -342,7 +432,7 @@ for name in sorted(n for n in dir(z) if not n.startswith("_")):
                 trial = dict(case)
                 trial[key] = moved
                 try:
-                    after = fingerprint(function(**trial))
+                    after = call_and_fingerprint(function, trial)
                 except Exception:
                     # **断られたなら、読まれています。**
                     moved_answer = True
