@@ -369,6 +369,57 @@ SHAPES.extend([
      2.0 * (30.0 * 50.0 * 20.0 - 0.5 * 6.0 * 6.0 * 20.0), 1e-12, None),
 ])
 
+# **置き方を変えても、大きさは変わりません**（4-423）。
+#
+# **4-421 のメッシュのブーリアンは、高さ 10 のときだけ合っていました**
+# ——**面がちょうど三角形の境目に乗るから**です。**「合っている例が
+# ある」は、正しいことの証明になりません。**
+#
+# **上の 42 形は、どれも軸に沿った素直な置き方**です。**ここでは
+# 軸・平面・経路を傾けます**——**体積は剛体運動で変わらない**ので、
+# **閉じた式はそのまま**使えます（3-N-2 の「同じ形を置き方だけ
+# 変えて測る」）。
+DIAGONAL = 1.0 / math.sqrt(3.0)
+SHAPES.extend([
+    ("箱に丸穴：軸 x（貫通 30）",
+     lambda: z.make_exact_drill_boolean(30.0, 30.0, 20.0, [0.0, 0.0, 0.0],
+                                        4.0, 60.0, [-20.0, 15.0, 10.0],
+                                        [1.0, 0.0, 0.0], 1, DIVISIONS, DIVISIONS),
+     30.0 * 30.0 * 20.0 - math.pi * 16.0 * 30.0, 1e-3, None),
+    ("箱に丸穴：軸 y（貫通 30）",
+     lambda: z.make_exact_drill_boolean(30.0, 30.0, 20.0, [0.0, 0.0, 0.0],
+                                        4.0, 60.0, [15.0, -20.0, 10.0],
+                                        [0.0, 1.0, 0.0], 1, DIVISIONS, DIVISIONS),
+     30.0 * 30.0 * 20.0 - math.pi * 16.0 * 30.0, 1e-3, None),
+    ("回した環：軸 x（パップスは軸によらない）",
+     lambda: z.make_revolve_solid([[0.0, 10.0, 0.0], [0.0, 14.0, 0.0],
+                                   [6.0, 14.0, 0.0], [6.0, 10.0, 0.0]],
+                                  [0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                                  DIVISIONS, DIVISIONS),
+     2.0 * math.pi * 12.0 * 24.0, 1e-3, None),
+    ("直線に掃いた管：斜め (1,1,1)",
+     lambda: z.make_sweep_pipe([[0.0, 0.0, 0.0],
+                                [20.0 * DIAGONAL, 20.0 * DIAGONAL, 20.0 * DIAGONAL]],
+                               3.0, 32, DIVISIONS, DIVISIONS),
+     math.pi * 9.0 * 20.0, 1e-3, None),
+    ("らせんに掃いた角材：軸 (1,1,1)",
+     lambda: z.make_helix_solid(centred_square(HELIX[3], 0.0), HELIX[0], HELIX[1],
+                                HELIX[2], [0.0, 0.0, 0.0],
+                                [DIAGONAL, DIAGONAL, DIAGONAL], 128,
+                                DIVISIONS, DIVISIONS),
+     HELIX[3] ** 2 * helix_length, 1e-3, None),
+    ("鏡像の箱：平面 (1,1,1)",
+     lambda: z.make_mirror_box(10.0, 20.0, 30.0, [0.0, 0.0, 0.0],
+                               [DIAGONAL, DIAGONAL, DIAGONAL],
+                               DIVISIONS, DIVISIONS),
+     6000.0, 1e-12, None),
+    ("箱の差：ずらし (-3, 7, -5)",
+     lambda: z.make_exact_box_boolean(20.0, 20.0, 20.0, [0.0, 0.0, 0.0],
+                                      10.0, 10.0, 30.0, [-3.0, 7.0, -5.0],
+                                      1, DIVISIONS, DIVISIONS),
+     8000.0 - 7.0 * 10.0 * 20.0, 1e-12, None),
+])
+
 # **面だけを返す口**（4-422）。**体積はありません**ので、面積で見ます。
 AREAS = [
     ("平らなキャップ 10x10",
