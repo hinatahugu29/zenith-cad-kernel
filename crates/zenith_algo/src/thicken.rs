@@ -68,7 +68,9 @@ impl ThickenBuilder {
             FaceGeometry::Nurbs(nurbs) => {
                 Self::thicken_nurbs_face(face, nurbs, thickness, samples.max(4), tol)
             }
-            FaceGeometry::Coons(coons) => Self::thicken_coons_face(face, coons, thickness),
+            FaceGeometry::Coons(coons) => {
+                Self::thicken_coons_face(face, coons, thickness, samples.max(4))
+            }
             _ => Err("Unsupported surface geometry for thicken".to_string()),
         }
     }
@@ -83,6 +85,7 @@ impl ThickenBuilder {
         _face: &Face,
         coons: &CoonsPatch3,
         thickness: f64,
+        samples: usize,
     ) -> Result<Solid, String> {
         let tol = Tolerance::default();
 
@@ -110,51 +113,6 @@ impl ThickenBuilder {
         // **線織面はぴったり組めます**——`v` 方向は次数 1、制御点 2 個。
         // **`v=0` の等パラメータ曲線が下の縁、`v=1` が上の縁**に、
         // 構成上そのまま一致します。
-        // **平らなシートだけを受けます**（4-417）。
-        //
-        // **縁の形は問いません**——**曲がった縁も通ります**（それが
-        // この節で足したところです）。**問うのは、面そのものが平らか**
-        // どうかです。
-        //
-        // **なぜか**: 天面は**境界曲線の制御点を法線方向へずらして**
-        // 作ります。**平らなら法線はどこでも同じ**なので、これは
-        // **ぴったりの平行移動**です。**曲がっていると、ずらした制御点の
-        // 曲線は本当のオフセット曲線ではありません**——実測（4-417）:
-        // 円弧に近い四半パッチ（長さ 15.527、回転角 1.309 rad）を 1 だけ
-        // 厚くすると、**独立に積んだ値 323.633 に対して 320.007**。
-        // **1.1% ずれ、しかも刻みを 16 → 128 と上げても縮みません**
-        // （3.067e-2 → 2.989e-2）。**幾何のずれで、刻みのずれでは
-        // ありません。**
-        //
-        // **1% 黙ってずれるより、断ります**（4-409 と同じ判断）。
-        // **曲がったシートを厚くするには、`thicken_nurbs_face` が
-        // やっているように曲面を標本してずらし、通し直す段が要ります。**
-        {
-            let mut points: Vec<Point3> = Vec::new();
-            for curve in [&coons.c0, &coons.c1, &coons.d0, &coons.d1] {
-                let (t0, t1) = curve.param_range();
-                for step in 0..=16 {
-                    points.push(curve.evaluate(t0 + (t1 - t0) * step as f64 / 16.0));
-                }
-            }
-            for i in 0..=8 {
-                for j in 0..=8 {
-                    points.push(coons.evaluate(i as f64 / 8.0, j as f64 / 8.0));
-                }
-            }
-            let origin = points[0];
-            let normal = n00;
-            let mut worst: f64 = 0.0;
-            for point in &points {
-                worst = worst.max((*point - origin).dot(&normal).abs());
-            }
-            if worst > tol.linear {
-                return Err(format!(
-                    "the sheet bulges {worst:.3e} out of the plane at its first corner; thicken only handles a flat Coons sheet (offsetting a curved Coons sheet is not implemented, and would be about 1% out)"
-                ));
-            }
-        }
-
         let ruled = |bottom: &zenith_geom::NurbsCurve3,
                      top: &zenith_geom::NurbsCurve3|
          -> Result<NurbsSurface3, String> {
@@ -181,15 +139,83 @@ impl ThickenBuilder {
         let p11_t = p11_b + n11 * thickness;
         let p01_t = p01_b + n01 * thickness;
 
+        // **境界曲線を、形を変えずに細かくします**（4-418）。
+        //
+        // **ノット挿入は曲線を 1 ミリも動かしません**——**制御点が
+        // 増えるだけ**です。**制御多角形は、挿入するほど曲線に寄ります。**
+        //
+        // **なぜ要るのか**: 天面は**制御点を法線方向へずらして**作ります。
+        // **平らなら法線はどこでも同じ**なので、これは**ぴったりの
+        // 平行移動**です。**曲がっていると、ずらした制御点の曲線は
+        // 本当のオフセット曲線ではありません**——実測（4-417）:
+        // 円弧に近い四半パッチで **1.1% ずれ、刻みでは縮みません。**
+        //
+        // **制御多角形が曲線に寄れば、そのずれは縮みます。**
+        // **底面と底の輪は 1 ミリも動きません**——**細かくしたのは
+        // 同じ曲線**だからです。
+        let refine = |curve: &zenith_geom::NurbsCurve3| -> zenith_geom::NurbsCurve3 {
+            let mut refined = curve.clone();
+            // **分けて測るための口**（4-418。`ZENITH_THICKEN_NO_REFINE=1`
+            // で細分を止めます）。**既定は細分あり**です。
+            let rounds = if std::env::var_os("ZENITH_THICKEN_NO_REFINE").is_some() {
+                0
+            } else {
+                samples.max(1).min(64)
+            };
+            for _ in 0..rounds {
+                let knots = refined.knots.knots.clone();
+                let mut inserted = refined.clone();
+                let mut changed = false;
+                for window in knots.windows(2) {
+                    if window[1] - window[0] > 1e-12 {
+                        let middle = 0.5 * (window[0] + window[1]);
+                        if let Some(next) = inserted.insert_knot(middle, 1) {
+                            inserted = next;
+                            changed = true;
+                        }
+                    }
+                }
+                if !changed || inserted.control_points.len() > 512 {
+                    break;
+                }
+                refined = inserted;
+            }
+            refined
+        };
+
+        // **制御点に当てる媒介変数は、Greville の横座標**です（4-418）。
+        //
+        // **`i / (n - 1)` は、ノットが等間隔のときしか合いません。**
+        // **細かくすると等間隔ではなくなる**ので、そこを直さないと
+        // 細分が効きません。
+        let greville = |curve: &zenith_geom::NurbsCurve3, index: usize| -> f64 {
+            let p = curve.degree;
+            let knots = &curve.knots.knots;
+            if p == 0 {
+                return knots[index];
+            }
+            let sum: f64 = (1..=p).map(|j| knots[index + j]).sum();
+            sum / p as f64
+        };
+
         // 境界曲線を法線方向へオフセット（`along_u` = u方向に走る境界か）
         let offset_boundary = |curve: &zenith_geom::NurbsCurve3, along_u: bool, fixed: f64| {
-            let n = curve.control_points.len();
+            let (t_min, t_max) = curve.param_range();
+            let span = (t_max - t_min).max(f64::MIN_POSITIVE);
             let mut cps = curve.control_points.clone();
+            let cps_len = cps.len();
             for (i, cp) in cps.iter_mut().enumerate() {
-                let t = if n <= 1 {
-                    0.0
+                // **同じく、分けて測るための口**（`ZENITH_THICKEN_NO_GREVILLE=1`
+                // で `i / (n - 1)` に戻します）。
+                let t = if std::env::var_os("ZENITH_THICKEN_NO_GREVILLE").is_some() {
+                    let n = cps_len;
+                    if n <= 1 {
+                        0.0
+                    } else {
+                        i as f64 / (n - 1) as f64
+                    }
                 } else {
-                    i as f64 / (n - 1) as f64
+                    ((greville(curve, i) - t_min) / span).clamp(0.0, 1.0)
                 };
                 let (u, v) = if along_u { (t, fixed) } else { (fixed, t) };
                 let nrm = coons.normal(u, v).unwrap_or(n00);
@@ -198,10 +224,15 @@ impl ThickenBuilder {
             zenith_geom::NurbsCurve3::new(curve.degree, cps, curve.knots.clone())
         };
 
-        let c0_t = offset_boundary(&coons.c0, true, 0.0)?;
-        let c1_t = offset_boundary(&coons.c1, true, 1.0)?;
-        let d0_t = offset_boundary(&coons.d0, false, 0.0)?;
-        let d1_t = offset_boundary(&coons.d1, false, 1.0)?;
+        let c0_r = refine(&coons.c0);
+        let c1_r = refine(&coons.c1);
+        let d0_r = refine(&coons.d0);
+        let d1_r = refine(&coons.d1);
+
+        let c0_t = offset_boundary(&c0_r, true, 0.0)?;
+        let c1_t = offset_boundary(&c1_r, true, 1.0)?;
+        let d0_t = offset_boundary(&d0_r, false, 0.0)?;
+        let d1_t = offset_boundary(&d1_r, false, 1.0)?;
 
         let top_coons = CoonsPatch3::new(c0_t.clone(), c1_t.clone(), d0_t.clone(), d1_t.clone(), &tol)?;
 
@@ -217,10 +248,10 @@ impl ThickenBuilder {
 
         // **縁の稜は、境界曲線そのもの**です。
         // `c0`: p00 -> p10、`c1`: p01 -> p11、`d0`: p00 -> p01、`d1`: p10 -> p11。
-        let e_c0: Edge = Edge::new(coons.c0.clone(), v00_b.clone(), v10_b.clone(), tol.linear);
-        let e_d1: Edge = Edge::new(coons.d1.clone(), v10_b.clone(), v11_b.clone(), tol.linear);
-        let e_c1: Edge = Edge::new(coons.c1.clone(), v01_b.clone(), v11_b.clone(), tol.linear);
-        let e_d0: Edge = Edge::new(coons.d0.clone(), v00_b.clone(), v01_b.clone(), tol.linear);
+        let e_c0: Edge = Edge::new(c0_r.clone(), v00_b.clone(), v10_b.clone(), tol.linear);
+        let e_d1: Edge = Edge::new(d1_r.clone(), v10_b.clone(), v11_b.clone(), tol.linear);
+        let e_c1: Edge = Edge::new(c1_r.clone(), v01_b.clone(), v11_b.clone(), tol.linear);
+        let e_d0: Edge = Edge::new(d0_r.clone(), v00_b.clone(), v01_b.clone(), tol.linear);
 
         let e_c0_t: Edge = Edge::new(c0_t.clone(), v00_t.clone(), v10_t.clone(), tol.linear);
         let e_d1_t: Edge = Edge::new(d1_t.clone(), v10_t.clone(), v11_t.clone(), tol.linear);
@@ -236,7 +267,7 @@ impl ThickenBuilder {
 
         // 側面 0（`c0` に沿う。p00 -> p10）
         faces.push(Face::simple(
-            FaceGeometry::Nurbs(ruled(&coons.c0, &c0_t)?),
+            FaceGeometry::Nurbs(ruled(&c0_r, &c0_t)?),
             Wire::new(vec![
                 OrientedEdge::forward(e_c0.clone()),
                 OrientedEdge::forward(e_v1.clone()),
@@ -247,7 +278,7 @@ impl ThickenBuilder {
 
         // 側面 1（`d1` に沿う。p10 -> p11）
         faces.push(Face::simple(
-            FaceGeometry::Nurbs(ruled(&coons.d1, &d1_t)?),
+            FaceGeometry::Nurbs(ruled(&d1_r, &d1_t)?),
             Wire::new(vec![
                 OrientedEdge::forward(e_d1.clone()),
                 OrientedEdge::forward(e_v2.clone()),
@@ -264,7 +295,7 @@ impl ThickenBuilder {
         // 裏返さないと `planar p-curve loop is inconsistent with face
         // orientation; oriented area -2.000000e1` で断られます。
         faces.push(Face::new(
-            FaceGeometry::Nurbs(ruled(&coons.c1, &c1_t)?),
+            FaceGeometry::Nurbs(ruled(&c1_r, &c1_t)?),
             Wire::new(vec![
                 OrientedEdge::reversed(e_c1.clone()),
                 OrientedEdge::forward(e_v3.clone()),
@@ -279,7 +310,7 @@ impl ThickenBuilder {
         // 側面 3（`d0` を逆に辿る。p01 -> p00）。**側面 2 と同じ理由で
         // 裏返します。**
         faces.push(Face::new(
-            FaceGeometry::Nurbs(ruled(&coons.d0, &d0_t)?),
+            FaceGeometry::Nurbs(ruled(&d0_r, &d0_t)?),
             Wire::new(vec![
                 OrientedEdge::reversed(e_d0.clone()),
                 OrientedEdge::forward(e_v0.clone()),
