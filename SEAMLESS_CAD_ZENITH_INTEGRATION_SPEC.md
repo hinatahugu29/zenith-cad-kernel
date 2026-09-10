@@ -70,7 +70,7 @@ Seamless CAD（`reference/CAD_8_1_5_1`）の主要プリミティブ・モディ
 | Seamless CAD プリミティブ / 操作 | 内部種別名 (`type`) | Zenith CAD ネイティブ API (`zenith_cad`) | 実装ステータス |
 | :--- | :--- | :--- | :---: |
 | **直方体 (Box)** | `BOX` | `make_box(dx, dy, dz)` | ✅ 完全対応 |
-| **インボリュート平歯車**（歯元はトロコイドではなく直線。`bore_radius` は穴を開けない） | `GEAR` | `make_spur_gear(module, teeth, angle, ...)` | ✅ 歯形は基礎円のインボリュート（閉じた式と 1.99e-9） |
+| **インボリュート平歯車**（歯元はトロコイドではなく直線。`make_spur_gear` の `bore_radius` は**穴を開けません**——歯底半径の下限に効くだけ） | `GEAR` | `make_spur_gear(module, teeth, angle, ...)`。**軸穴が要るなら `make_drilled_spur_gear`** | ✅ 歯形は基礎円のインボリュート（閉じた式と 1.99e-9）。**軸穴の口は 2026/09/09 に Python へ出しました**（HANDOVER 4-415。**カーネルには 8/20 からあり、Python からは 1 つも作れませんでした**）——穴は `π r² t` と **刻み 128 で 2.178e-6** |
 | **円柱 (Cylinder)** | `CYLINDER` | `make_cylinder(radius, height, ...)` | ✅ 完全対応 |
 
 | **円錐 / 円錐台 (Cone)** | `CONE` | `make_cone(r1, r2, h)` | ✅ 完全対応 |
@@ -87,14 +87,14 @@ Seamless CAD（`reference/CAD_8_1_5_1`）の主要プリミティブ・モディ
 | **薄肉中空化 (Shelling)** | `SHELL` | `make_open_box` / `make_hollow_box` | ✅ 完全対応 |
 | **面 Push-Pull (Offset)** | `FACE_OFFSET` | `push_pull_box(dx, dy, dz, face_idx, dist)` | ✅ 完全対応 |
 | **面 Taper (抜き勾配)** | `DRAFT` | `taper_box(dx, dy, dz, face_idx, angle)` | ✅ 完全対応 |
-| **CSG ブーリアン演算** | `BOOLEAN` | `make_boolean(mesh_a, mesh_b, op)` | ✅ 完全対応 |
+| **CSG ブーリアン演算** | `BOOLEAN` | **厳密**: `make_exact_box_boolean` / `make_exact_drill_boolean`。**表示用**: `make_boolean(mesh_a, mesh_b, op)` | ⚠ **`make_boolean` は表示用です**（2026/09/11。HANDOVER 4-421）。**三角形を割らず**、重心の内外で三角形を丸ごと採るので、**閉じた立体は返るが大きさが違います**（実測: `20x20x20` と `10x10x20` の積は、閉じた式 2000 に対して **1333.333**）。**`volume` を読まないでください。** **厳密な口は閉じた式と 1e-12 で一致**します。**`op` は 0=和 / 1=差 / 2=積で、既定は 1（差）** |
 | **ミラー（鏡像反転）** | `MIRROR` | `make_mirror_box` / `make_mirror_compound_casing` | ✅ 完全対応 |
 | **貫通穴あけ** | `HOLE` | `make_drilled_box(dx, dy, dz, r, ...)` | ✅ 完全対応 |
 | **2D スケッチ幾何拘束** | `SKETCH` | `solve_2d_sketch(points_json, constraints_json)` | ✅ 対応。**⚠ 引数は 2 つ**です（**この表は長らく 4 引数と書いていました**）。**拘束は `horizontal` / `vertical` / `distance`**。**知らない種類・範囲外の点番号・`value` の欠落は断ります**（2026/09/08。4-401） |
 | **スケッチ → 立体** | `SKETCH_SOLID` | `Solid.from_sketch_extruded(sketch_json, height)` / `Solid.from_sketch_revolved(sketch_json, ax, ay, dx, dy)` | ✅ 対応（**2026/09/08 追加**。4-400）。**それまで Python から呼べるのは `solve_2d_sketch` だけ**で、**解けても形にできませんでした**。**穴・円弧・回転に対応** |
 | **断面解析・スライス** | `SECTION` | `slice_box_by_plane(dx, dy, dz, origin, normal)` | ✅ 完全対応 |
 | **干渉判定 (Clash Check)** | `INTERFERENCE` | `check_boxes_interference(box_a, box_b)` | ✅ 完全対応 |
-| **物性値計算 (Mass Props)** | `MASS` | `compute_box_mass_properties(dx, dy, dz)` | ✅ 完全対応 |
+| **物性値計算 (Mass Props)** | `MASS` | `compute_box_mass_properties(dx, dy, dz, density=1.0)` | ✅ 対応。**⚠ 2026/09/09 まで `density` は受け取って捨てられていました**（HANDOVER 4-414）——**鋼の 7850 を渡しても密度 1 の慣性が返り、7850 倍ずれた値がもっともらしい数字として返っていました。** **いまは慣性に掛かります**（体積・表面積・重心は密度によりません）。**負の密度と 0 は名指しで断ります** |
 | **STEP 入出力** | `STEP_IO` | `import_step_file` / STEP AP214 Exporter | ✅ 完全対応 (FreeCAD合格) |
 
 ---

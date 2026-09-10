@@ -146,7 +146,7 @@ CAD の主要モデリング機能群。
 - **`shell.rs` (`ShellBuilder`)**:
   - `make_hollow_box`: 直方体を指定面（天面/底面）開口し、肉厚 $t$ で中空容器化（外側5面＋内側5面＋リム4面＝全14面）。
   - **`make_through_hollow_box`**: 直方体の両端面（底面 $Z=0$ および 天面 $Z=dz$）を開口した角パイプ中空ソリッドの生成（外壁4面＋内壁4面＋上下リム8面＝全16面完全閉ソリッド）。
-- **`thicken.rs` (`ThickenBuilder::thicken_face`)**: 単一の Plane / Nurbs / Coons シートに厚み $t$ を与え、側面パッチを自動生成して閉ソリッド化。
+- **`thicken.rs` (`ThickenBuilder::thicken_face`)**: 単一の Plane / Nurbs / Coons シートに厚み $t$ を与え、側面パッチを自動生成して閉ソリッド化。**Coons の経路は 2026/09/10〜11 に作り直しました**（HANDOVER 4-417、4-418）——**輪は境界曲線そのもの、側面はその曲線とオフセット曲線のあいだの線織面**。**曲がった縁は閉じた式へ 2 次収束**、**曲がったシートはノット挿入で 1.1% → 8.2e-6**。
 
 #### 3. ダイレクトモデリング (`direct_edit.rs`)
 - **`inspect_face`**: 面積（$\text{mm}^2$）、重心座標、法線ベクトル、各座標平面との角度を解析。
@@ -213,8 +213,8 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 | | `make_loft` | 複数プロファイル曲線のロフト曲面 |
 | | `make_loft_solid` | 複数閉断面ポリライン群からの完全閉ロフトソリッド生成 ＆ STEP出力 |
 | | `make_guided_loft_solid` | 1本以上の3Dガイドレール曲線に沿ったロフト完全閉ソリッド生成 ＆ STEP出力 |
-| | `make_boolean` | メッシュCSGブーリアン（Union, Difference, Intersection） |
-| | `thicken_surface_patch` | パッチ曲面に厚み付けしてソリッド化 |
+| | `make_boolean` | メッシュCSGブーリアン（Union, Difference, Intersection）。**⚠ 表示用です**——**三角形を割らない**ので大きさが違います（4-421）。厳密な口は `make_exact_box_boolean` / `make_exact_drill_boolean` |
+| | `thicken_surface_patch` | パッチ曲面に厚み付けしてソリッド化。**曲がった縁・曲がったシートとも通ります**（4-417、4-418）。**⚠ 境界は 4 点以上**——**2 点だと 2026/09/09 までプロセスごと落ちました**（4-415） |
 | **Direct Edit** | `fillet_box_single_edge` | `(dx, dy, dz, edge_index, radius)` $\to$ 単一エッジフィレット |
 | | `chamfer_box_single_edge` | `(dx, dy, dz, edge_index, distance, ...)` $\to$ 単一エッジ面取り ＆ STEP出力 |
 | | `push_pull_box` | `(dx, dy, dz, face_index, distance)` $\to$ 面の法線方向移動 |
