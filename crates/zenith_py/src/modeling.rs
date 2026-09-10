@@ -871,6 +871,18 @@ pub fn make_hollow_box(
 }
 
 /// 2つのメッシュ間のブーリアン演算 (0: Union, 1: Difference, 2: Intersection)
+///
+/// > **⚠ これは表示用です。`volume` を読まないでください**（4-421）。
+/// > **三角形を割りません**——**重心が相手の内側かどうかで、三角形を
+/// > 丸ごと採るか捨てるか**を決めます。**閉じた立体は返りますが、
+/// > 大きさが違います**（実測: `20x20x20` と `10x10x20` の積は、
+/// > 閉じた式 2000 に対して **1333.333**）。
+/// >
+/// > **正しい答えが要るなら `make_exact_box_boolean` /
+/// > `make_exact_drill_boolean`** を使ってください——**そちらは
+/// > 閉じた式とぴったり合います。**
+/// >
+/// > **既定の `op_type` は 1、つまり差**です（**和ではありません**）。
 #[pyfunction]
 #[pyo3(signature = (mesh_a, mesh_b, op_type = 1))]
 pub fn make_boolean(mesh_a: &PyMesh, mesh_b: &PyMesh, op_type: u8) -> PyResult<PyMesh> {
