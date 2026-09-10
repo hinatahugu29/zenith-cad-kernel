@@ -108,6 +108,112 @@ for rho in (1.0, 7850.0):
     rows.append(("箱の Izz（密度 %g）" % rho,
                  inertia[2], rho * BOX_V * (DX * DX + DY * DY) / 3.0))
 
+# **形を作る口を、閉じた式と突き合わせます**（4-420）。
+#
+# **なぜ要るのか**: 4-415 の `check_python_arguments.py` は
+# **「その引数が読まれているか」しか見ません**。**読んだうえで
+# 渡し先を取り違えていれば、答えは動くので通ります**——
+# **`dy` と `dz` を入れ替えても、両方「効く」**のです。
+# **閉じた式と、囲み箱**が、そこを押さえます。
+#
+# **刻みは 64**。**曲がった形は、その刻みのぶんだけずれます**ので、
+# **許容はそれぞれに書いてあります**（**一律にすると、緩い所と
+# 厳しすぎる所ができます**）。
+DIVISIONS = 64
+
+
+def volume_and_box(mesh):
+    """体積と、囲み箱。
+
+    **`measured` という名前にして、1 度つまずきました**（4-420）——
+    **上の表のループが `for name, measured, expected in rows` で
+    同じ名前を潰します。** **`'float' object is not callable`** に
+    なりました。**同じ名前は、離れていても当たります。**
+    """
+    volume, _ = value_of(mesh, "volume")
+    points = getattr(mesh, "vertices")
+    if callable(points):
+        points = points()
+    box = [
+        (min(point[axis] for point in points), max(point[axis] for point in points))
+        for axis in range(3)
+    ]
+    return volume, box
+
+
+HEX = lambda across: 0.5 * math.sqrt(3.0) * across * across
+
+# (名前, 作る式, 閉じた式, 許容, 囲み箱〈None なら見ない〉)
+SHAPES = [
+    ("箱 10x20x30", lambda: z.make_box(10.0, 20.0, 30.0, DIVISIONS, DIVISIONS),
+     6000.0, 1e-12, [(0.0, 10.0), (0.0, 20.0), (0.0, 30.0)]),
+    ("円柱 r5 h12", lambda: z.make_cylinder(5.0, 12.0, DIVISIONS, DIVISIONS),
+     math.pi * 25.0 * 12.0, 1e-3, [(-5.0, 5.0), (-5.0, 5.0), (0.0, 12.0)]),
+    ("円錐台 r6->r2 h10", lambda: z.make_cone(6.0, 2.0, 10.0, DIVISIONS, DIVISIONS),
+     math.pi * 10.0 / 3.0 * (36.0 + 12.0 + 4.0), 1e-3,
+     [(-6.0, 6.0), (-6.0, 6.0), (0.0, 10.0)]),
+    ("球 r7", lambda: z.make_sphere(7.0, DIVISIONS, DIVISIONS),
+     4.0 / 3.0 * math.pi * 343.0, 1e-3, [(-7.0, 7.0), (-7.0, 7.0), (-7.0, 7.0)]),
+    ("トーラス R12 r4", lambda: z.make_torus(12.0, 4.0, DIVISIONS, DIVISIONS),
+     2.0 * math.pi ** 2 * 12.0 * 16.0, 1e-3,
+     [(-16.0, 16.0), (-16.0, 16.0), (-4.0, 4.0)]),
+    ("正六角柱 r8 h10", lambda: z.make_regular_prism(6, 8.0, 10.0, DIVISIONS, DIVISIONS),
+     0.5 * 6.0 * 64.0 * math.sin(2.0 * math.pi / 6.0) * 10.0, 1e-12, None),
+    ("穴あき箱 30x30x10 r4",
+     lambda: z.make_drilled_box(30.0, 30.0, 10.0, 4.0, DIVISIONS, DIVISIONS),
+     30.0 * 30.0 * 10.0 - math.pi * 16.0 * 10.0, 1e-3, None),
+    ("六角ナット S16 穴4.25 t8",
+     lambda: z.make_hex_nut(16.0, 4.25, 8.0, DIVISIONS, DIVISIONS),
+     HEX(16.0) * 8.0 - math.pi * 4.25 ** 2 * 8.0, 1e-3, None),
+    ("六角ボルト S16 頭6.4 r5 L30",
+     lambda: z.make_hex_bolt(16.0, 6.4, 5.0, 30.0, DIVISIONS, DIVISIONS),
+     HEX(16.0) * 6.4 + math.pi * 25.0 * 30.0, 1e-3, None),
+    # **`open_face_index` を渡しても、開くのは 1 面**です
+    # （4-420 で 1 度、2 面ぶん引く式を書いて外しました）。
+    ("片面のない箱 30x30x20 t2",
+     lambda: z.make_hollow_box(30.0, 30.0, 20.0, 2.0, 1, DIVISIONS, DIVISIONS),
+     30.0 * 30.0 * 20.0 - 26.0 * 26.0 * 18.0, 1e-12, None),
+    ("両面のない箱 30x30x20 t2",
+     lambda: z.make_through_hollow_box(30.0, 30.0, 20.0, 2.0, DIVISIONS, DIVISIONS),
+     30.0 * 30.0 * 20.0 - 26.0 * 26.0 * 20.0, 1e-12, None),
+    ("上のない箱 30x30x20 t2",
+     lambda: z.make_open_box(30.0, 30.0, 20.0, 2.0, DIVISIONS, DIVISIONS),
+     30.0 * 30.0 * 20.0 - 26.0 * 26.0 * 18.0, 1e-12, None),
+    ("直線に掃いた管 L20 r3",
+     lambda: z.make_sweep_pipe([[0.0, 0.0, 0.0], [0.0, 0.0, 20.0]], 3.0, 32,
+                               DIVISIONS, DIVISIONS),
+     math.pi * 9.0 * 20.0, 1e-3, None),
+    ("回した環（パップス）",
+     lambda: z.make_revolve_solid([[10.0, 0.0, 0.0], [14.0, 0.0, 0.0],
+                                   [14.0, 0.0, 6.0], [10.0, 0.0, 6.0]],
+                                  [0.0, 0.0, 0.0], [0.0, 0.0, 1.0],
+                                  DIVISIONS, DIVISIONS),
+     2.0 * math.pi * 12.0 * 24.0, 1e-3, None),
+    ("段付き軸 3段",
+     lambda: z.make_stepped_shaft([(10.0, 20.0), (6.0, 15.0), (8.0, 10.0)],
+                                  DIVISIONS, DIVISIONS),
+     math.pi * (100.0 * 20.0 + 36.0 * 15.0 + 64.0 * 10.0), 1e-3, None),
+    ("フランジ",
+     lambda: z.make_circular_flange(40.0, 10.0, 15.0, 28.0, 4, 3.5,
+                                    DIVISIONS, DIVISIONS),
+     math.pi * 10.0 * (1600.0 - 225.0 - 4.0 * 3.5 ** 2), 1e-3, None),
+    ("ざぐり穴の箱",
+     lambda: z.make_counterbore_hole_box(50.0, 50.0, 25.0, 4.0, 8.0, 5.0,
+                                         DIVISIONS, DIVISIONS),
+     50.0 * 50.0 * 25.0 - math.pi * 16.0 * 25.0 - math.pi * (64.0 - 16.0) * 5.0,
+     1e-3, None),
+    ("面取りした箱 30x20x10 c2",
+     lambda: z.make_chamfered_box(30.0, 20.0, 10.0, 2.0, DIVISIONS, DIVISIONS),
+     30.0 * 20.0 * 10.0 - 4.0 * (0.5 * 2.0 * 2.0 * 10.0), 1e-12, None),
+    ("角丸めした箱 30x20x10 r3",
+     lambda: z.make_filleted_box(30.0, 20.0, 10.0, 3.0, DIVISIONS, DIVISIONS),
+     30.0 * 20.0 * 10.0 - 4.0 * (9.0 - math.pi * 9.0 / 4.0) * 10.0, 1e-3, None),
+    ("鏡像の箱 10x20x30",
+     lambda: z.make_mirror_box(10.0, 20.0, 30.0, [0.0, 0.0, 0.0], [1.0, 0.0, 0.0],
+                               DIVISIONS, DIVISIONS),
+     6000.0, 1e-12, None),
+]
+
 print("本物の Python から拡張モジュールを触る（4-402）")
 print()
 print("Python %s" % sys.version.split()[0])
@@ -124,6 +230,31 @@ for name, measured, expected in rows:
         wrong += 1
     print("%-34s%18.9f%18.9f%12.3e  %s" % (name, expected, measured, residual, "ok" if ok else "**ちがう**"))
 
+print("-" * 100)
+print()
+
+# **形を作る口を、閉じた式と囲み箱で**（4-420）。
+print("%-34s%18s%18s%12s  %s" % ("作る形", "閉じた式", "測った値", "相対差", "結果"))
+print("-" * 100)
+for name, build, expected, allowance, box in SHAPES:
+    try:
+        volume, measured_box = volume_and_box(build())
+    except Exception as error:
+        wrong += 1
+        print("%-34s%18s%18s%12s  **断られました**: %s"
+              % (name, "%.6f" % expected, "-", "-", str(error)[:28]))
+        continue
+    residual = abs(volume - expected) / max(abs(expected), 1.0)
+    ok = residual <= allowance
+    if box is not None:
+        for axis, (low, high) in enumerate(box):
+            if (abs(measured_box[axis][0] - low) > 1e-6
+                    or abs(measured_box[axis][1] - high) > 1e-6):
+                ok = False
+    if not ok:
+        wrong += 1
+    print("%-34s%18.6f%18.6f%12.3e  %s"
+          % (name, expected, volume, residual, "ok" if ok else "**ちがう**"))
 print("-" * 100)
 print()
 
