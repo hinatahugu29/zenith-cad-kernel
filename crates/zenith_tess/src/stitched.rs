@@ -489,8 +489,27 @@ fn tessellate_face_stitched(
     }
 
     let mesh = match &face.geometry {
-        FaceGeometry::Plane(_) => patch_mesh(&rings, None, face.orientation, params),
-        FaceGeometry::Nurbs(surface) => patch_mesh(&rings, Some(surface), face.orientation, params),
+        // **平面の法線を渡します**（4-425）。
+        //
+        // **2026/09/11 まで `Plane(_)` で捨てていました**——**面を
+        // 受け取りながら読んでいない**、4-409 の `_face`・4-414 の
+        // `_density` と同じ形です。**下の `patch_mesh` は、
+        // `surface` が `None` のとき法線を `(0, 0, 1)` に決め打ち**して
+        // いました。
+        //
+        // **実測（4-425）**: **箱の 8 頂点すべてが `(0, 0, 1)`**——
+        // **6 面ある箱で、法線が 1 種類**でした。**正六角柱も同じ。**
+        // **面の法線と比べた最大差は 2.000**（＝**真逆**）。
+        FaceGeometry::Plane(plane) => patch_mesh(
+            &rings,
+            None,
+            Some(plane.normal),
+            face.orientation,
+            params,
+        ),
+        FaceGeometry::Nurbs(surface) => {
+            patch_mesh(&rings, Some(surface), None, face.orientation, params)
+        }
         _ => crate::surface_tess::tessellate_face(face, params),
     };
 
@@ -680,6 +699,7 @@ fn boundary_rings(face: &Face, plan: &SamplePlan) -> Option<Vec<BoundaryRing>> {
 fn patch_mesh(
     rings: &[BoundaryRing],
     surface: Option<&zenith_geom::NurbsSurface3>,
+    plane_normal: Option<Vec3>,
     orientation: Orientation,
     params: &TessellationParams,
 ) -> TriangleMesh {
@@ -1385,7 +1405,20 @@ fn patch_mesh(
         mesh.positions.push(position);
         mesh.normals.push(match surface {
             Some(surface) => oriented_normal(surface, *uv, orientation),
-            None => Vec3::new(0.0, 0.0, 1.0),
+            // **平面は、その平面の法線**です（4-425）。**面の向きが
+            // 裏なら、裏返します**——曲面のほうと同じ扱いです。
+            // **渡ってこなければ、これまでどおり `(0, 0, 1)`**
+            // （**そこはもう通りません**が、既定は残します）。
+            None => match plane_normal {
+                Some(normal) => {
+                    if orientation.is_forward() {
+                        normal
+                    } else {
+                        -normal
+                    }
+                }
+                None => Vec3::new(0.0, 0.0, 1.0),
+            },
         });
         mesh.uvs.push(uv.coords);
     }
@@ -1499,8 +1532,34 @@ fn oriented_normal(
     uv: Point2,
     orientation: Orientation,
 ) -> Vec3 {
+    // **極では法線が決まりません**（4-425）。
+    //
+    // `∂S/∂u × ∂S/∂v` が 0 になるので `normal` は `None` を返し、
+    // **2026/09/11 まで、そこを `(0, 0, 1)` で埋めて**いました。
+    // **球の南極では、それがちょうど真逆**です——実測: `p = (0, 0, -7)`
+    // に `n = (0, 0, 1)`。**極の頂点は数十枚の三角形に使われる**ので、
+    // **1 点の取り違えが 32 枚（刻み 32 なら 128 枚）に効きます。**
+    //
+    // **定義域の内側へ少し寄って測り直します。** **極そのものでは
+    // 決まらなくても、そのすぐ隣では決まります**——**極へ近づける
+    // 極限が、そこの法線**です。**寄り方は 3 段**（1e-6 / 1e-4 / 1e-2）
+    // で、**近いほうから採ります。**
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let inside = |value: f64, low: f64, high: f64, step: f64| -> f64 {
+        let span = (high - low).abs().max(f64::MIN_POSITIVE);
+        (value + step * span * if value <= (low + high) * 0.5 { 1.0 } else { -1.0 })
+            .clamp(low, high)
+    };
     let normal = surface
         .normal(uv.x, uv.y)
+        .or_else(|| {
+            [1e-6, 1e-4, 1e-2].iter().find_map(|step| {
+                surface.normal(
+                    inside(uv.x, u_min, u_max, *step),
+                    inside(uv.y, v_min, v_max, *step),
+                )
+            })
+        })
         .unwrap_or_else(|| Vec3::new(0.0, 0.0, 1.0));
     if orientation.is_forward() {
         normal
@@ -1557,7 +1616,26 @@ fn weld(
         }
 
         match matched {
-            Some(existing) => remap[index] = existing,
+            Some(existing) => {
+                remap[index] = existing;
+                // **溶接した頂点の法線は、足し合わせます**（4-425）。
+                //
+                // **1 つの頂点は 1 つの法線しか持てません。** 位置で
+                // 潰すと、**箱の隅のように 3 面が集まる頂点**では、
+                // **どれか 1 面ぶんしか残りません**——**2026/09/11 まで
+                // 「最初に来たもの」を残していました**。**残りの 2 面から
+                // 見ると、その法線は横向き、ときに真逆**です。
+                //
+                // **実測（4-425）**: 円柱の 12 頂点、円錐台の 90 頂点、
+                // 球の 32 頂点で、**面の法線との内積が負**でした。
+                //
+                // **足して最後に正規化します**——**滑らかな陰影の普通の
+                // 決め方**で、**どの面から見ても内積は正**になります。
+                // **位相は 1 つも変わりません**（潰し方はそのまま）。
+                if let Some(normal) = mesh.normals.get(index) {
+                    normals[existing as usize] += *normal;
+                }
+            }
             None => {
                 let slot = positions.len() as u32;
                 grid.entry((cx, cy, cz)).or_default().push(slot);
@@ -1571,6 +1649,17 @@ fn weld(
                 uvs.push(mesh.uvs.get(index).copied().unwrap_or_default());
                 remap[index] = slot;
             }
+        }
+    }
+
+    // **足し合わせた法線を、ここで正規化します**（4-425）。
+    // **長さが 0 になったもの**（真逆どうしが打ち消し合った頂点）は、
+    // **元の 1 本目をそのまま**使います——**0 の法線を配るより、
+    // 片面ぶんでも向きがあるほうがまし**です。
+    for normal in normals.iter_mut() {
+        let length = normal.norm();
+        if length > 1e-12 {
+            *normal /= length;
         }
     }
 

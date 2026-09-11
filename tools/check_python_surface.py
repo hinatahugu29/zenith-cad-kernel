@@ -582,6 +582,53 @@ def _step_round_trip():
     return z.Solid.from_step(path).volume
 
 
+# **表示メッシュの法線**（4-425）。
+#
+# **2026/09/11 まで、1 度も測っていませんでした。** 測ったら:
+#
+# * **箱の 8 頂点すべてが `(0, 0, 1)`**——**6 面ある箱で法線が 1 種類**
+#   （`FaceGeometry::Plane(_)` で平面を受け取りながら捨て、`(0, 0, 1)` を
+#   決め打ちしていた）
+# * **溶接した頂点は「最初の 1 面ぶん」だけ**を残していた
+# * **球の南極は `(0, 0, 1)`**——**ちょうど真逆**（極では法線が決まらず、
+#   既定で埋めていた）
+#
+# **ここが見るのは 1 つだけ**です——**頂点の法線が、それを使う三角形の
+# 面法線と、同じ側を向いているか。** **内積が負のものが 1 つでもあれば
+# 赤**です。**これは陰影の質の話ではなく、向きの話**です
+# （**真逆の法線は、Blender で裏返って見えます**）。
+def inward_normals(mesh):
+    """**頂点の法線が、使う三角形の面法線と逆を向いている数。**"""
+    points = mesh.vertices
+    normals = mesh.normals
+    wrong = 0
+    for triangle in mesh.faces:
+        a, b, c = (points[i] for i in triangle)
+        first = [b[k] - a[k] for k in range(3)]
+        second = [c[k] - a[k] for k in range(3)]
+        cross = [first[1] * second[2] - first[2] * second[1],
+                 first[2] * second[0] - first[0] * second[2],
+                 first[0] * second[1] - first[1] * second[0]]
+        length = math.sqrt(sum(x * x for x in cross))
+        if length <= 1e-12:
+            continue
+        for corner in triangle:
+            if sum(cross[k] * normals[corner][k] for k in range(3)) / length < 0.0:
+                wrong += 1
+    return float(wrong)
+
+
+NORMAL_CHECKS = [
+    ("法線が裏返っている 箱", lambda: z.Solid.box(30.0, 20.0, 10.0)),
+    ("法線が裏返っている 円柱", lambda: z.Solid.cylinder(5.0, 12.0)),
+    ("法線が裏返っている 球", lambda: z.Solid.sphere(7.0)),
+    ("法線が裏返っている 円錐台", lambda: z.Solid.cone(6.0, 2.0, 10.0)),
+    ("法線が裏返っている トーラス", lambda: z.Solid.torus(12.0, 4.0)),
+    ("法線が裏返っている 正六角柱",
+     lambda: z.Solid.regular_prism(6, 8.0, 10.0)),
+]
+
+
 # **面だけを返す口**（4-422）。**体積はありません**ので、面積で見ます。
 AREAS = [
     ("平らなキャップ 10x10",
@@ -660,6 +707,30 @@ for name, call, expected, allowance in SOLID_CHECKS:
         wrong += 1
     print("%-40s%18.6f%18.6f%12.3e  %s"
           % (name, expected, got, residual, "ok" if ok else "**ちがう**"))
+print("-" * 100)
+print()
+
+# **表示メッシュの法線**（4-425）。**刻みを 2 つとも見ます。**
+#
+# **外側の `wrong`（誤答の数）と同じ名前を使わないこと**——
+# **ここで 1 度、取り違えました**（4-420 の `measured` と同じ形。
+# **同じ名前は、離れていても当たります**）。
+print("%-40s%18s%18s%12s  %s" % ("法線", "あるべき", "測った値", "", "結果"))
+print("-" * 100)
+for name, build in NORMAL_CHECKS:
+    for divisions in (8, 32):
+        label = "%s（刻み %d）" % (name, divisions)
+        try:
+            inward = inward_normals(build().tessellate(divisions, divisions))
+        except Exception as error:
+            wrong += 1
+            print("%-40s%18s%18s%12s  **断られました**: %s"
+                  % (label, "0", "-", "", str(error)[:24]))
+            continue
+        if inward != 0.0:
+            wrong += 1
+        print("%-40s%18d%18d%12s  %s"
+              % (label, 0, int(inward), "", "ok" if inward == 0.0 else "**ちがう**"))
 print("-" * 100)
 print()
 
