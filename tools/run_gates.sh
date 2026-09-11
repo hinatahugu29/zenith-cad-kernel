@@ -165,6 +165,36 @@ elif ! cargo build --release -p zenith_py > "$OUT/pybuild.txt" 2>&1; then
   fail=1
   red="$red zenith_py"
 else
+  # **配る包みが、いま建てたものと同じか**（4-426）。
+  #
+  # **2026/09/08 に「18 日古いまま」と分かりました**（4-405）。
+  # **記録しただけで、門を置きませんでした**——**2026/09/12 に見たら、
+  # また 4 日古く**、**4-409 から 4-425 までが 1 つも入っていません**
+  # でした（**プロセスごと落ちる欠陥の直しも、法線の直しも**）。
+  #
+  # **包みは `.gitignore` の外**なので `git status` に出ず、
+  # **どの門も `target/release` のほうを見ています**。**ここだけが、
+  # 配る形を見ます。**
+  PACKAGE="blender_addon/H-CAD_V_1_0_0/zenith_cad.pyd"
+  BUILT="target/release/zenith_cad.dll"
+  if [ ! -f "$BUILT" ]; then
+    BUILT="target/release/libzenith_cad.so"
+  fi
+  if [ ! -f "$PACKAGE" ]; then
+    printf "  %-30s **赤**  配る包みがありません（py tools/build_pyd.py）
+" "配る包み"
+    fail=1
+    red="$red addon_package"
+  elif ! cmp -s "$PACKAGE" "$BUILT"; then
+    printf "  %-30s **赤**  いま建てたものと中身が違います（py tools/build_pyd.py）
+" "配る包み"
+    fail=1
+    red="$red addon_package"
+  else
+    printf "  %-30s 緑    (同じ中身)
+" "配る包み"
+  fi
+
   # **読ませる STEP は、追跡下の検体から選びます**（`reference/` は
   # 2026/09/08 に消えました）。
   export ZENITH_ARGS_STEP="${ZENITH_ARGS_STEP:-crates/zenith_algo/tests/fixtures/occ_reference_cylinder.step}"
