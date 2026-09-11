@@ -618,6 +618,33 @@ def inward_normals(mesh):
     return float(wrong)
 
 
+# **uv は、面の媒介変数そのもの**です（4-425）。**正規化していません。**
+#
+# **ここで留めるのは「約束が 1 つであること」**です——**球が [0, 1] に
+# 見えるのは、その曲面の範囲がそれだから**であって、**正規化している
+# からではありません。** **「形によって違う」と 1 度書きかけました。**
+#
+# **テクスチャ座標として使うなら、面ごとに割り直す**——**それを
+# 知らずに使うと、箱だけ模型の寸法で流れます。**
+def uv_span(mesh):
+    values = mesh.uvs
+    return (min(t[0] for t in values), max(t[0] for t in values),
+            min(t[1] for t in values), max(t[1] for t in values))
+
+
+UV_CHECKS = [
+    # **平面は、平面へ落とした座標**（模型の寸法）。
+    ("uv 箱 30x20x10 の u の最大", lambda: uv_span(
+        z.Solid.box(30.0, 20.0, 10.0).tessellate(16, 16))[1], 30.0, 1e-12),
+    ("uv 箱 3x2x1 の u の最大", lambda: uv_span(
+        z.Solid.box(3.0, 2.0, 1.0).tessellate(16, 16))[1], 3.0, 1e-12),
+    # **こちらの作りの曲面は、媒介変数が [0, 1]。**
+    ("uv 球 r7 の u の最大", lambda: uv_span(
+        z.Solid.sphere(7.0).tessellate(16, 16))[1], 1.0, 1e-9),
+    ("uv トーラス の v の最大", lambda: uv_span(
+        z.Solid.torus(12.0, 4.0).tessellate(16, 16))[3], 1.0, 1e-9),
+]
+
 NORMAL_CHECKS = [
     ("法線が裏返っている 箱", lambda: z.Solid.box(30.0, 20.0, 10.0)),
     ("法線が裏返っている 円柱", lambda: z.Solid.cylinder(5.0, 12.0)),
@@ -707,6 +734,25 @@ for name, call, expected, allowance in SOLID_CHECKS:
         wrong += 1
     print("%-40s%18.6f%18.6f%12.3e  %s"
           % (name, expected, got, residual, "ok" if ok else "**ちがう**"))
+print("-" * 100)
+print()
+
+# **uv の約束**（4-425）。**正規化していないことを、ここで留めます。**
+print("%-40s%18s%18s%12s  %s" % ("uv", "約束", "測った値", "相対差", "結果"))
+print("-" * 100)
+for name, call, expected, allowance in UV_CHECKS:
+    try:
+        got = call()
+    except Exception as error:
+        wrong += 1
+        print("%-40s%18.6f%18s%12s  **断られました**: %s"
+              % (name, expected, "-", "-", str(error)[:24]))
+        continue
+    residual = abs(got - expected) / max(abs(expected), 1.0)
+    if residual > allowance:
+        wrong += 1
+    print("%-40s%18.6f%18.6f%12.3e  %s"
+          % (name, expected, got, residual, "ok" if residual <= allowance else "**ちがう**"))
 print("-" * 100)
 print()
 
