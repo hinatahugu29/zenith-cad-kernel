@@ -618,6 +618,50 @@ def inward_normals(mesh):
     return float(wrong)
 
 
+# **空洞のある立体**（4-427）。
+#
+# **`face_count` と `faces()` は外側シェルだけ**、**`volume` と
+# `tessellate` と `validate` は空洞も数えます**——**そこだけ食い違います。**
+# **面積を `faces()` で積むと、空洞のぶんが落ちます。**
+#
+# **空洞があるかを知る手段がありませんでした**ので、
+# **`inner_shell_count` と `total_face_count` を出しました。**
+def hollow_box():
+    return (z.Solid.box(30.0, 30.0, 20.0)
+            .difference(z.Solid.box(26.0, 26.0, 16.0).translated(2.0, 2.0, 2.0)))
+
+
+SHELL_CHECKS = [
+    ("中空の箱 volume（空洞あり）", lambda: hollow_box().volume,
+     30.0 * 30.0 * 20.0 - 26.0 * 26.0 * 16.0, 1e-12),
+    ("中空の箱 face_count（外側だけ）",
+     lambda: float(hollow_box().face_count), 6.0, 1e-12),
+    ("中空の箱 total_face_count（外 6 + 内 6）",
+     lambda: float(hollow_box().total_face_count), 12.0, 1e-12),
+    ("中空の箱 inner_shell_count",
+     lambda: float(hollow_box().inner_shell_count), 1.0, 1e-12),
+    ("中空の箱 faces() の面積の和（外側だけ）",
+     lambda: sum(face["area"] for face in hollow_box().faces()),
+     2.0 * 30.0 * 30.0 + 4.0 * 30.0 * 20.0, 1e-12),
+    ("中空の箱 メッシュの表面積（空洞あり）",
+     lambda: hollow_box().tessellate(8, 8).surface_area,
+     2.0 * 30.0 * 30.0 + 4.0 * 30.0 * 20.0
+     + 2.0 * 26.0 * 26.0 + 4.0 * 26.0 * 16.0, 1e-12),
+    ("中空の箱 STEP 往復で空洞が残る",
+     lambda: _hollow_round_trip(), 30.0 * 30.0 * 20.0 - 26.0 * 26.0 * 16.0, 1e-12),
+    ("ふつうの箱 inner_shell_count",
+     lambda: float(z.Solid.box(30.0, 30.0, 20.0).inner_shell_count), 0.0, 1e-12),
+]
+
+
+def _hollow_round_trip():
+    import os
+    import tempfile
+    path = os.path.join(tempfile.mkdtemp(prefix="zenith-hollow-step-"), "hollow.step")
+    hollow_box().to_step(path, "zenith_hollow_check")
+    return z.Solid.from_step(path).volume
+
+
 # **uv は、面の媒介変数そのもの**です（4-425）。**正規化していません。**
 #
 # **ここで留めるのは「約束が 1 つであること」**です——**球が [0, 1] に
@@ -734,6 +778,25 @@ for name, call, expected, allowance in SOLID_CHECKS:
         wrong += 1
     print("%-40s%18.6f%18.6f%12.3e  %s"
           % (name, expected, got, residual, "ok" if ok else "**ちがう**"))
+print("-" * 100)
+print()
+
+# **空洞のある立体**（4-427）。**外側だけを数える所と、空洞も数える所**。
+print("%-40s%18s%18s%12s  %s" % ("空洞", "あるべき", "測った値", "相対差", "結果"))
+print("-" * 100)
+for name, call, expected, allowance in SHELL_CHECKS:
+    try:
+        got = call()
+    except Exception as error:
+        wrong += 1
+        print("%-40s%18.6f%18s%12s  **断られました**: %s"
+              % (name, expected, "-", "-", str(error)[:24]))
+        continue
+    residual = abs(got - expected) / max(abs(expected), 1.0)
+    if residual > allowance:
+        wrong += 1
+    print("%-40s%18.6f%18.6f%12.3e  %s"
+          % (name, expected, got, residual, "ok" if residual <= allowance else "**ちがう**"))
 print("-" * 100)
 print()
 

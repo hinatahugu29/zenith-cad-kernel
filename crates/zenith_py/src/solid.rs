@@ -445,6 +445,12 @@ impl PySolid {
     // ------------------------------------------------------------------
 
     /// 面の一覧（`face_index` は下の操作でそのまま使える）
+    /// 面の一覧（**外側シェルだけ**）
+    ///
+    /// > **⚠ 空洞の面は入りません**（4-427）。**面積を積むなら、
+    /// > ここではなくメッシュ**を使ってください——実測（中空の箱）:
+    /// > **ここの和は 4200.000、メッシュの表面積は 7216.000**。
+    /// > **空洞があるかは `inner_shell_count`** で分かります。
     pub fn faces<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let rows = PyList::empty(py);
         for (index, face) in self.solid.outer_shell.faces.iter().enumerate() {
@@ -700,10 +706,49 @@ impl PySolid {
         StepInterop::export_solid_to_string(&self.solid, product_name, &Tolerance::default()).0
     }
 
-    /// 面の枚数
+    /// 面の枚数（**外側シェルだけ**）
+    ///
+    /// > **⚠ 空洞の面は数えません**（4-427）。**`faces()` も同じ**です。
+    /// > **`volume` と `tessellate` と `validate` は空洞を数えます**
+    /// > ——**そこだけ食い違います。**
+    /// >
+    /// > 実測（30x30x20 から 26x26x16 を中に引いた中空の箱）:
+    /// >
+    /// > | | |
+    /// > | :--- | ---: |
+    /// > | `volume` | **7184.000**（＝ 18000 − 10816。**空洞あり**） |
+    /// > | `face_count` / `len(faces())` | **6**（**外側だけ**。本当は外 6 + 内 6） |
+    /// > | `faces()` の面積の和 | **4200.000**（＝ 外側だけ） |
+    /// > | `tessellate(8, 8).surface_area` | **7216.000**（＝ 4200 + 内側 3016） |
+    /// >
+    /// > **面積を積むなら `faces()` ではなくメッシュ**を使ってください。
+    /// > **`face_index` は外側シェルの添字**で、`push_pull_face` /
+    /// > `taper_face` もその番号を取ります——**空洞の面は、そもそも
+    /// > 指せません。**
     #[getter]
     pub fn face_count(&self) -> usize {
         self.solid.outer_shell.faces.len()
+    }
+
+    /// 空洞（内側シェル）の枚数（4-427）
+    ///
+    /// **`face_count` が外側だけを数える**ので、**空洞があるかどうかを
+    /// 知る手段がありませんでした。** ここがそれです。
+    #[getter]
+    pub fn inner_shell_count(&self) -> usize {
+        self.solid.inner_shells.len()
+    }
+
+    /// 空洞も含めた面の枚数（4-427）
+    #[getter]
+    pub fn total_face_count(&self) -> usize {
+        self.solid.outer_shell.faces.len()
+            + self
+                .solid
+                .inner_shells
+                .iter()
+                .map(|shell| shell.faces.len())
+                .sum::<usize>()
     }
 
     /// 体積（既定の分割での測定値）
