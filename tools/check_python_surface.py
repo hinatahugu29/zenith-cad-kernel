@@ -618,6 +618,71 @@ def inward_normals(mesh):
     return float(wrong)
 
 
+# **稜の長さ**（4-428）。
+#
+# **2026/09/12 まで、どの門も見ていませんでした。** **だから 10% ずれた
+# まま通っていました**——`inspect_edge` が**両端だけ**から長さ・中点・
+# 接線を作り、**曲線を一度も見ていなかった**からです。
+#
+# **見るのは 2 つ**です——**長さが弧長か**（弦ではないか）、
+# **中点が立体の上に乗っているか**（線分の中点ではないか）。
+def edge_lengths(solid):
+    return sorted(round(edge["length"], 9) for edge in solid.edges())
+
+
+def quarter_arc(solid, radius):
+    """**半径 `radius` の四半弧**の長さ（1 本）。"""
+    target = math.pi * radius / 2.0
+    for edge in solid.edges():
+        if abs(edge["length"] - target) <= target * 1e-6:
+            return edge["length"]
+    # **見つからなければ、いちばん近いものを返します**——
+    # **「無い」ではなく「違う」と出したい**からです。
+    return min((edge["length"] for edge in solid.edges()),
+               key=lambda value: abs(value - target))
+
+
+def quarter_arc_midpoint_radius(solid, radius):
+    """**四半弧の中点**が、軸からどれだけ離れているか。
+
+    **弧の上なら `radius`**、**線分の中点なら `radius / √2`**。
+    """
+    target = math.pi * radius / 2.0
+    best = min(solid.edges(), key=lambda edge: abs(edge["length"] - target))
+    point = best["midpoint"]
+    return math.hypot(point[0], point[1])
+
+
+EDGE_CHECKS = [
+    # **箱は 1 ビットも変わらないこと**（直線の稜）。
+    ("稜 箱 30x20x10 の長さの和",
+     lambda: sum(z.Solid.box(30.0, 20.0, 10.0).edges()[i]["length"]
+                 for i in range(len(z.Solid.box(30.0, 20.0, 10.0).edges()))),
+     4.0 * (30.0 + 20.0 + 10.0), 1e-12),
+    ("稜 箱 の本数", lambda: float(len(z.Solid.box(30.0, 20.0, 10.0).edges())),
+     12.0, 1e-12),
+    # **曲がった稜は、弧長**（弦なら 10% 短い）。
+    ("稜 円柱 r5 の四半弧",
+     lambda: quarter_arc(z.Solid.cylinder(5.0, 12.0), 5.0),
+     math.pi * 5.0 / 2.0, 1e-9),
+    ("稜 円柱 r10 の四半弧",
+     lambda: quarter_arc(z.Solid.cylinder(10.0, 5.0), 10.0),
+     math.pi * 10.0 / 2.0, 1e-9),
+    ("稜 球 r7 の四半弧",
+     lambda: quarter_arc(z.Solid.sphere(7.0), 7.0),
+     math.pi * 7.0 / 2.0, 1e-9),
+    # **中点は、弧の上**（線分の中点なら r/√2 = 3.5355）。
+    ("稜 円柱 r5 の四半弧の中点の半径",
+     lambda: quarter_arc_midpoint_radius(z.Solid.cylinder(5.0, 12.0), 5.0),
+     5.0, 1e-9),
+    # **`blendable_edges` は円 1 周**（`edges()` はそれを 4 本に割る）。
+    ("稜 円柱 r5 の blendable は円 1 周",
+     lambda: max(edge["length"]
+                 for edge in z.Solid.cylinder(5.0, 12.0).blendable_edges()),
+     2.0 * math.pi * 5.0, 1e-9),
+]
+
+
 # **空洞のある立体**（4-427）。
 #
 # **`face_count` と `faces()` は外側シェルだけ**、**`volume` と
@@ -778,6 +843,25 @@ for name, call, expected, allowance in SOLID_CHECKS:
         wrong += 1
     print("%-40s%18.6f%18.6f%12.3e  %s"
           % (name, expected, got, residual, "ok" if ok else "**ちがう**"))
+print("-" * 100)
+print()
+
+# **稜の長さ**（4-428）。**弧長か、弦か。**
+print("%-40s%18s%18s%12s  %s" % ("稜", "閉じた式", "測った値", "相対差", "結果"))
+print("-" * 100)
+for name, call, expected, allowance in EDGE_CHECKS:
+    try:
+        got = call()
+    except Exception as error:
+        wrong += 1
+        print("%-40s%18.6f%18s%12s  **断られました**: %s"
+              % (name, expected, "-", "-", str(error)[:24]))
+        continue
+    residual = abs(got - expected) / max(abs(expected), 1.0)
+    if residual > allowance:
+        wrong += 1
+    print("%-40s%18.6f%18.6f%12.3e  %s"
+          % (name, expected, got, residual, "ok" if residual <= allowance else "**ちがう**"))
 print("-" * 100)
 print()
 

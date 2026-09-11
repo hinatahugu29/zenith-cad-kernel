@@ -144,6 +144,23 @@ PYO3_PYTHON="C:/Users/<user>/AppData/Local/Programs/Python/Python311/python.exe"
 > **Python か拡張モジュールが無ければ、赤にはせず、名前を出して
 > 飛ばします**——**「無い」を「緑」と読み違えないため**に、
 > **行は必ず出ます**。**拡張モジュールが建たなければ赤**です。
+>
+> **「配る包み」の行もここに出ます**（2026/09/12 追加。4-426）——
+> **`blender_addon/.../zenith_cad.pyd` が、いま建てたものと同じ中身か。**
+> **違えば赤**です。
+>
+> **⚠ 順序があります**（4-429）。**`cargo test --workspace --release` は
+> 拡張を建て直します**ので、**その前に作った包みは古くなります。**
+>
+> ```bash
+> cargo test --workspace --release   # 先に回す
+> py tools/build_pyd.py              # そのあとで包む
+> bash tools/run_gates.sh            # 最後に門
+> ```
+>
+> **`run_gates.sh` は自分で通しテストも回します**ので、**門だけを回す
+> なら、その前に包み直してください。** **1 度、この順序を踏み外して
+> 赤を出しました**——**門は正しく働いています。**
 > **`cargo test` は `--exclude zenith_py` で回るので、Python の口は
 > 通しテストには 1 度も出てきません**（4-402）。
 >

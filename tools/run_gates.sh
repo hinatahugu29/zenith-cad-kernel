@@ -186,7 +186,11 @@ else
     fail=1
     red="$red addon_package"
   elif ! cmp -s "$PACKAGE" "$BUILT"; then
-    printf "  %-30s **赤**  いま建てたものと中身が違います（py tools/build_pyd.py）
+    # **通しテストのあとは、ここが赤になります**（4-429）——
+    # `cargo test --workspace --release` が拡張を建て直すので、
+    # **その前に作った包みは古くなります**。**包みは最後に作る**のが
+    # 順序です（テスト → `py tools/build_pyd.py` → 門）。
+    printf "  %-30s **赤**  いま建てたものと中身が違います（py tools/build_pyd.py を、通しテストのあとに）
 " "配る包み"
     fail=1
     red="$red addon_package"
