@@ -58,6 +58,15 @@ EXPECTED_INERT = {
     # **穴が要るなら `make_drilled_spur_gear`**（4-415 で口を足しました）。
     ("make_spur_gear", "bore_radius"):
         "軸穴は開かない。歯底半径の下限に効くだけで、既定では当たらない",
+    # **軸は直線**です（4-424）。**原点を軸の上で動かしても、同じ直線**
+    # ——実測: `axis_y` を 0 / 5 / -3 と変えても体積 1809.557368468。
+    ("Solid.from_sketch_revolved", "axis_y"):
+        "原点を軸の向きに動かしても、同じ直線になる（向きは (0, 1)）",
+    # **向きは正規化されます**——**定数倍しても同じ軸**です。
+    # 実測: `dir_y` を 1 / 2.5 / 0.61 と変えても同じ体積。
+    # **`dir_x` は効きます**（0 / 0.3 / 1.0 で 1809.557 / 1603.248 / 959.663）。
+    ("Solid.from_sketch_revolved", "dir_y"):
+        "向きの定数倍は同じ軸。dir_x のほうは効く（1809.557 → 959.663）",
 }
 
 # **既定値だけでは呼べない口に、こちらから渡す引数。**
@@ -226,6 +235,26 @@ def fingerprint(value):
         return tuple(parts)
     if isinstance(value, str):
         return (value,)
+    # **辞書も見ます**（4-424）。**`mass_properties()` も `validate()` も
+    # `distance_to()` も辞書**で、**見ていないと「刻みが効かない」に
+    # 見えます。**
+    if hasattr(value, "keys"):
+        for key in sorted(value.keys()):
+            parts.append(str(key))
+            parts.extend(fingerprint(value[key]))
+        return tuple(parts)
+    # **`Solid` には `vertices` がありません**（4-424）。**位置を見る
+    # には、面の重心**を使います——**それが無いと、`translated` の
+    # `dx` すら「効かない」に見えます。**
+    corners = getattr(value, "faces", None)
+    if callable(corners):
+        try:
+            for face in corners():
+                if hasattr(face, "keys") and "centroid" in face:
+                    parts.extend(round(float(x), 9) for x in face["centroid"])
+                    parts.append(round(float(face["area"]), 9))
+        except Exception:
+            pass
     # **大きさだけでは足りません**（4-415）——**30x20x10 の箱は、
     # どの縦稜を面取りしても体積も表面積も同じ**です。**位置も見ます。**
     corner = getattr(value, "vertices", None)
@@ -261,7 +290,7 @@ def fingerprint(value):
     return tuple(parts)
 
 
-def call_and_fingerprint(function, arguments):
+def call_and_fingerprint(function, arguments, make_self=None):
     """**呼んで、返り値と、書いたファイルの両方を指紋にする。**
 
     **返り値だけでは足りません**（4-419）——`export_box_section_dxf` は
@@ -291,7 +320,13 @@ def call_and_fingerprint(function, arguments):
         arguments[key] = target
         targets.append(target)
 
-    parts = list(fingerprint(function(**arguments)))
+    # **`self` は毎回作り直します**（4-424）——**稜の番号はその立体の
+    # もの**なので、使い回すと `Edge N is not in this solid` で断られます。
+    if make_self is None:
+        answer = function(**arguments)
+    else:
+        answer = function(make_self(), **arguments)
+    parts = list(fingerprint(answer))
     for target in targets:
         if os.path.exists(target):
             with open(target, "rb") as handle:
@@ -339,11 +374,120 @@ rows = []
 inert = []
 skipped = []
 
-for name in sorted(n for n in dir(z) if not n.startswith("_")):
-    function = getattr(z, name)
-    if not callable(function) or inspect.isclass(function):
-        continue
-    signature = getattr(function, "__text_signature__", None)
+# **クラスの口も測ります**（4-424）。
+#
+# **2026/09/11 まで、`inspect.isclass` で飛ばしていました**——
+# **`Solid` に 38 個、`Mesh` に 14 個**あるのに、**1 つも測って
+# いません**でした。**module の関数 59 個だけを数えて「全部」と
+# 書いていた**のです。
+#
+# **`self` を取る口は、その場で 1 つ作って渡します**（下の `RECEIVER`）。
+# **静的メソッド（`Solid.box` など）は、module の関数と同じ**扱いです。
+RECEIVER = {
+    "Solid": lambda: z.Solid.box(30.0, 20.0, 10.0),
+    "Mesh": lambda: z.Solid.box(30.0, 20.0, 10.0).tessellate(8, 8),
+}
+
+# **刻みは、曲がった形にしか効きません**（4-424）。
+#
+# **箱は平面だけ**なので、**`tessellate(8)` と `tessellate(64)` の
+# 体積が 1 ビットも違いません**——**それは正しい**のですが、
+# **「刻みが効かない」に見えます。** **曲がった形を渡します。**
+CURVED_RECEIVER = {"Solid.tessellate", "Solid.mass_properties"}
+
+# **相手が要る口**——`self` だけでは呼べません。
+PARTNER = {
+    ("Solid", "union"): lambda: dict(other=z.Solid.box(10.0, 10.0, 30.0)),
+    ("Solid", "difference"): lambda: dict(other=z.Solid.box(10.0, 10.0, 30.0)),
+    ("Solid", "intersection"): lambda: dict(other=z.Solid.box(10.0, 10.0, 30.0)),
+    ("Solid", "difference_all"): lambda: dict(tools=[z.Solid.box(6.0, 6.0, 30.0)]),
+    ("Solid", "distance_to"):
+        lambda: dict(other=z.Solid.box(10.0, 10.0, 10.0).translated(50.0, 0.0, 0.0)),
+    ("Solid", "clash_status"):
+        lambda: dict(other=z.Solid.box(10.0, 10.0, 10.0).translated(50.0, 0.0, 0.0)),
+}
+
+
+# **クラスの口で、既定値だけでは呼べないもの**（4-424）。
+#
+# **稜や面の番号は、その立体のもの**です——**別の立体から取った番号を
+# 渡すと断られます**（**それが正しい振る舞い**。黙って別の稜を丸める
+# より、ずっといい）。**ここでは番号を使う口を外し**、
+# **`check_python_surface.py` の閉じた式のほうで見ます。**
+CLASS_BASELINE = {
+    "Solid.translated": lambda: dict(dx=3.0, dy=-7.0, dz=11.0),
+    "Solid.rotated": lambda: dict(axis_origin=[0.0, 0.0, 0.0],
+                                  axis_dir=[0.0, 0.0, 1.0], angle_deg=37.0),
+    "Solid.mirrored": lambda: dict(plane_origin=[0.0, 0.0, 0.0],
+                                   plane_normal=[1.0, 0.0, 0.0]),
+    "Solid.push_pull_face": lambda: dict(face_index=0, distance=5.0),
+    # **面 0 と 1 は、どの角でも断られます**（4-424。
+    # `Taper left an adjacent face non-planar`——**z 軸まわりに
+    # 傾けると、上下の面が平面でなくなる**）。**面 2 を使います。**
+    "Solid.taper_face": lambda: dict(face_index=2, axis_origin=[0.0, 0.0, 0.0],
+                                     axis_dir=[0.0, 0.0, 1.0], angle_deg=5.0),
+    # **`base_rgb` は組**です（**並びだと `'list' object cannot be
+    # converted to 'PyTuple'`**。4-424）。
+    "Mesh.shaded_colors": lambda: dict(base_rgb=(0.8, 0.2, 0.2), selected=False),
+    "Solid.box": lambda: dict(dx=10.0, dy=20.0, dz=30.0),
+    "Solid.cylinder": lambda: dict(radius=5.0, height=12.0),
+    "Solid.sphere": lambda: dict(radius=7.0),
+    "Solid.cone": lambda: dict(r_bottom=6.0, r_top=2.0, height=10.0),
+    "Solid.torus": lambda: dict(major_radius=12.0, minor_radius=4.0),
+    "Solid.regular_prism": lambda: dict(sides=6, radius=8.0, height=10.0),
+    "Solid.from_sketch_extruded": lambda: dict(
+        sketch_json='{"points": [[0,0],[40,0],[40,30],[0,30]],'
+                    ' "lines": [[0,1],[1,2],[2,3],[3,0]]}', height=7.0),
+    "Solid.from_sketch_revolved": lambda: dict(
+        sketch_json='{"points": [[10,0],[14,0],[14,6],[10,6]],'
+                    ' "lines": [[0,1],[1,2],[2,3],[3,0]]}',
+        axis_x=0.0, axis_y=0.0, dir_x=0.0, dir_y=1.0),
+}
+
+# **番号を使う口**は、ここでは測りません（上の理由）。
+CLASS_SKIP = {"Solid.fillet_edge", "Solid.fillet_edges",
+              "Solid.chamfer_edge", "Solid.chamfer_edges",
+              "Solid.from_step", "Solid.all_from_step",
+              "Solid.to_step", "Mesh.export_obj", "Mesh.export_stl"}
+
+
+def class_entries():
+    """`(見せる名前, 呼べるもの, 署名, 余分な引数)` を返す。"""
+    found = []
+    for class_name, make in RECEIVER.items():
+        holder = getattr(z, class_name, None)
+        if holder is None:
+            continue
+        for member in sorted(n for n in dir(holder) if not n.startswith("_")):
+            attribute = getattr(holder, member)
+            signature = getattr(attribute, "__text_signature__", None)
+            if signature is None or not callable(attribute):
+                continue  # getter は引数を取りません
+            label = "%s.%s" % (class_name, member)
+            if label in CLASS_SKIP:
+                continue
+            if signature.startswith("($self"):
+                # **`self` は毎回作り直します**——**稜の番号は
+                # その立体のもの**なので、使い回すと断られます（4-424）。
+                extra = PARTNER.get((class_name, member))
+                receiver = (lambda: z.Solid.cylinder(5.0, 12.0))                     if label in CURVED_RECEIVER else make
+                found.append((label, attribute, signature[len("($self"):].lstrip(", ").rstrip(")"),
+                              receiver, extra))
+            else:
+                found.append((label, attribute, signature.strip("()"), None, None))
+    return found
+
+
+ENTRIES = [(n, getattr(z, n), None, None, None)
+           for n in sorted(x for x in dir(z) if not x.startswith("_"))
+           if callable(getattr(z, n)) and not inspect.isclass(getattr(z, n))]
+ENTRIES += class_entries()
+
+for name, function, piece_text, make_self, extra in ENTRIES:
+    if piece_text is None:
+        signature = getattr(function, "__text_signature__", None)
+    else:
+        signature = "(" + piece_text + ")"
     if not signature:
         skipped.append((name, "署名がありません"))
         continue
@@ -370,6 +514,14 @@ for name in sorted(n for n in dir(z) if not n.startswith("_")):
     if not ready:
         defaults = {}
     supplied = BASELINE.get(name)
+    if supplied is None and name in CLASS_BASELINE:
+        supplied = CLASS_BASELINE[name]()
+    if supplied is None and extra is not None:
+        supplied = extra()
+    if supplied is None and make_self is not None and (ready and not defaults):
+        # **引数を取らない口**（`Solid.edges` など）。**呼べます**——
+        # **動かす引数が無いだけ**です。
+        supplied = {}
     if supplied is None and (not ready or not defaults):
         skipped.append((name, "既定値だけでは呼べません"))
         continue
@@ -413,7 +565,7 @@ for name in sorted(n for n in dir(z) if not n.startswith("_")):
     usable = []
     for case in cases:
         try:
-            usable.append((case, call_and_fingerprint(function, case)))
+            usable.append((case, call_and_fingerprint(function, case, make_self)))
         except Exception as error:
             skipped.append((name, "検体が断られました: %s" % str(error)[:40]))
     if not usable:
@@ -432,7 +584,7 @@ for name in sorted(n for n in dir(z) if not n.startswith("_")):
                 trial = dict(case)
                 trial[key] = moved
                 try:
-                    after = call_and_fingerprint(function, trial)
+                    after = call_and_fingerprint(function, trial, make_self)
                 except Exception:
                     # **断られたなら、読まれています。**
                     moved_answer = True

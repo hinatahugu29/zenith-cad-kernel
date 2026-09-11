@@ -420,6 +420,168 @@ SHAPES.extend([
      8000.0 - 7.0 * 10.0 * 20.0, 1e-12, None),
 ])
 
+# **`Solid` クラスの口**（4-424）。
+#
+# **2026/09/11 まで、1 つも測っていませんでした。** `check_python_arguments.py`
+# は **`inspect.isclass` で飛ばし**、`check_python_surface.py` は
+# **`volume` と `from_sketch_*` しか触っていません**でした。
+# **`Solid` には 38 個、`Mesh` には 14 個**あります。
+#
+# **ここの `volume` は B-Rep の厳密値**です——**刻みに依りません**
+# （`tessellate(8)` と `tessellate(64)` で 6000.000000 が両方）。
+# **上の `make_*` はメッシュを返す**ので、そちらは刻みのぶんずれます。
+#
+# **`translated` / `rotated` / `mirrored` は出ています**——
+# **4-423 で「`BrepTransform` は Python に出ていない」と書いたのは
+# 外れ**でした。**`Solid` のメソッドとして、ずっとありました。**
+BOX = (30.0, 20.0, 10.0)
+
+
+def solid_box():
+    return z.Solid.box(*BOX)
+
+
+def vertical_edges(solid):
+    """**長さ 10 の縦稜**（4 本）の番号。
+
+    **番号は決め打ちしません**——**長さで拾います**（番号は作りが
+    変われば変わります）。
+
+    **⚠ 番号は、その立体のものです**（4-424）。**同じ寸法の箱でも、
+    作り直すたびに別の番号**が振られます——**別の箱から取った番号を
+    渡すと `Edge N is not in this solid` で断られます**。
+    **それが正しい振る舞い**です（**黙って別の稜を丸めるより、
+    ずっといい**）。**ここで 1 度、それをやりました。**
+    """
+    return [edge["edge_id"] for edge in solid.blendable_edges()
+            if abs(edge["length"] - BOX[2]) <= 1e-9]
+
+
+def rounded(radius, count):
+    """縦稜を `count` 本だけ半径 `radius` で丸めた体積。"""
+    solid = solid_box()
+    ids = vertical_edges(solid)[:count]
+    return (solid.fillet_edge(ids[0], radius) if count == 1
+            else solid.fillet_edges(ids, radius)).volume
+
+
+def cut(distance, count):
+    """縦稜を `count` 本だけ `distance` で面取りした体積。"""
+    solid = solid_box()
+    ids = vertical_edges(solid)[:count]
+    return (solid.chamfer_edge(ids[0], distance) if count == 1
+            else solid.chamfer_edges(ids, distance)).volume
+
+
+AXIS = [1.0 / math.sqrt(3.0)] * 3
+ROUND = 3.0
+CHAMFER = 2.0
+CORNER = ROUND * ROUND - math.pi * ROUND * ROUND / 4.0
+
+SOLID_CHECKS = [
+    # **閉じた式**（刻みに依らない）
+    ("Solid 箱 30x20x10", lambda: solid_box().volume, 6000.0, 1e-12),
+    ("Solid 円柱 r5 h12", lambda: z.Solid.cylinder(5.0, 12.0).volume,
+     math.pi * 25.0 * 12.0, 1e-12),
+    ("Solid 球 r7", lambda: z.Solid.sphere(7.0).volume,
+     4.0 / 3.0 * math.pi * 343.0, 1e-12),
+    ("Solid 円錐台 r6->r2 h10", lambda: z.Solid.cone(6.0, 2.0, 10.0).volume,
+     math.pi * 10.0 / 3.0 * (36.0 + 12.0 + 4.0), 1e-12),
+    ("Solid トーラス R12 r4", lambda: z.Solid.torus(12.0, 4.0).volume,
+     2.0 * math.pi ** 2 * 12.0 * 16.0, 1e-12),
+    ("Solid 正六角柱 r8 h10",
+     lambda: z.Solid.regular_prism(6, 8.0, 10.0).volume,
+     0.5 * 6.0 * 64.0 * math.sin(2.0 * math.pi / 6.0) * 10.0, 1e-12),
+
+    # **置き方**——**体積は剛体運動で変わりません。**
+    ("Solid 移す (3,-7,11)",
+     lambda: solid_box().translated(3.0, -7.0, 11.0).volume, 6000.0, 1e-12),
+    ("Solid 回す 軸(1,1,1) 137度",
+     lambda: solid_box().rotated([0.0, 0.0, 0.0], AXIS, 137.0).volume,
+     6000.0, 1e-12),
+    ("Solid 鏡像 平面(1,1,1)",
+     lambda: solid_box().mirrored([0.0, 0.0, 0.0], AXIS).volume, 6000.0, 1e-12),
+    ("Solid 回して移して鏡像",
+     lambda: solid_box().rotated([1.0, 2.0, 3.0], AXIS, 37.0)
+     .translated(5.0, -4.0, 2.0).mirrored([0.0, 0.0, 0.0], [0.0, 1.0, 0.0]).volume,
+     6000.0, 1e-12),
+
+    # **厳密ブーリアン**——**回してからでも同じ。**
+    ("Solid 和", lambda: z.Solid.box(20.0, 20.0, 20.0)
+     .union(z.Solid.box(10.0, 10.0, 30.0).translated(5.0, 5.0, -5.0)).volume,
+     8000.0 + 3000.0 - 2000.0, 1e-12),
+    ("Solid 差", lambda: z.Solid.box(20.0, 20.0, 20.0)
+     .difference(z.Solid.box(10.0, 10.0, 30.0).translated(5.0, 5.0, -5.0)).volume,
+     8000.0 - 2000.0, 1e-12),
+    ("Solid 積", lambda: z.Solid.box(20.0, 20.0, 20.0)
+     .intersection(z.Solid.box(10.0, 10.0, 30.0).translated(5.0, 5.0, -5.0)).volume,
+     2000.0, 1e-12),
+    ("Solid 回してから差",
+     lambda: z.Solid.box(20.0, 20.0, 20.0).rotated([0.0, 0.0, 0.0], AXIS, 31.0)
+     .difference(z.Solid.box(10.0, 10.0, 30.0).translated(5.0, 5.0, -5.0)
+                 .rotated([0.0, 0.0, 0.0], AXIS, 31.0)).volume,
+     6000.0, 1e-12),
+
+    # **稜の丸め・面取り**
+    ("Solid 縦稜 1 本を r3 で丸める",
+     lambda: rounded(ROUND, 1),
+     6000.0 - CORNER * BOX[2], 1e-9),
+    ("Solid 縦稜 4 本を r3 で丸める",
+     lambda: rounded(ROUND, 4),
+     6000.0 - 4.0 * CORNER * BOX[2], 1e-9),
+    ("Solid 縦稜 1 本を c2 で面取り",
+     lambda: cut(CHAMFER, 1),
+     6000.0 - 0.5 * CHAMFER * CHAMFER * BOX[2], 1e-12),
+    ("Solid 縦稜 4 本を c2 で面取り",
+     lambda: cut(CHAMFER, 4),
+     6000.0 - 4.0 * 0.5 * CHAMFER * CHAMFER * BOX[2], 1e-12),
+
+    # **面**——**面積の和は表面積**。
+    ("Solid faces の面積の和",
+     lambda: sum(face["area"] for face in solid_box().faces()),
+     2.0 * (30.0 * 20.0 + 30.0 * 10.0 + 20.0 * 10.0), 1e-12),
+    # **押した増分は、その面の面積 × 距離**ちょうどです。
+    ("Solid 面 0 を 5 押す", lambda: solid_box().push_pull_face(0, 5.0).volume,
+     6000.0 + 600.0 * 5.0, 1e-12),
+    ("Solid 面 4 を 5 押す", lambda: solid_box().push_pull_face(4, 5.0).volume,
+     6000.0 + 200.0 * 5.0, 1e-12),
+
+    # **物性**——**回しても主慣性モーメントは変わりません。**
+    ("Solid 主慣性 0（回す前後）",
+     lambda: solid_box().rotated([0.0, 0.0, 0.0], AXIS, 37.0)
+     .mass_properties(64, 64)["principal_moments"][0],
+     solid_box().mass_properties(64, 64)["principal_moments"][0], 1e-9),
+    ("Solid 主慣性 2（回す前後）",
+     lambda: solid_box().rotated([0.0, 0.0, 0.0], AXIS, 37.0)
+     .mass_properties(64, 64)["principal_moments"][2],
+     solid_box().mass_properties(64, 64)["principal_moments"][2], 1e-9),
+
+    # **距離**——**50 離した 10 の箱との隙間は 20。**
+    ("Solid distance_to（隙間 20）",
+     lambda: solid_box().distance_to(
+         z.Solid.box(10.0, 10.0, 10.0).translated(50.0, 0.0, 0.0))["distance"],
+     20.0, 1e-9),
+
+    # **縫い直し・簡約・STEP 往復**——**どれも大きさを変えません。**
+    ("Solid sewn", lambda: solid_box().sewn().volume, 6000.0, 1e-12),
+    ("Solid simplified", lambda: solid_box().simplified().volume, 6000.0, 1e-12),
+    ("Solid STEP 往復", lambda: _step_round_trip(), 6000.0, 1e-12),
+    # **箱は平面だけなので、刻みを変えても体積は動きません。**
+    ("Solid tessellate(8) の体積",
+     lambda: solid_box().tessellate(8, 8).volume, 6000.0, 1e-12),
+    ("Solid tessellate(64) の体積",
+     lambda: solid_box().tessellate(64, 64).volume, 6000.0, 1e-12),
+]
+
+
+def _step_round_trip():
+    import os
+    import tempfile
+    path = os.path.join(tempfile.mkdtemp(prefix="zenith-surface-step-"), "solid.step")
+    solid_box().to_step(path, "zenith_surface_check")
+    return z.Solid.from_step(path).volume
+
+
 # **面だけを返す口**（4-422）。**体積はありません**ので、面積で見ます。
 AREAS = [
     ("平らなキャップ 10x10",
@@ -478,6 +640,26 @@ for name, build, expected, allowance, box in SHAPES:
         wrong += 1
     print("%-34s%18.6f%18.6f%12.3e  %s"
           % (name, expected, volume, residual, "ok" if ok else "**ちがう**"))
+print("-" * 100)
+print()
+
+# **`Solid` クラスの口**（4-424）。**ここの体積は B-Rep の厳密値**です。
+print("%-40s%18s%18s%12s  %s" % ("Solid の口", "閉じた式", "測った値", "相対差", "結果"))
+print("-" * 100)
+for name, call, expected, allowance in SOLID_CHECKS:
+    try:
+        got = call()
+    except Exception as error:
+        wrong += 1
+        print("%-40s%18.6f%18s%12s  **断られました**: %s"
+              % (name, expected, "-", "-", str(error)[:24]))
+        continue
+    residual = abs(got - expected) / max(abs(expected), 1.0)
+    ok = residual <= allowance
+    if not ok:
+        wrong += 1
+    print("%-40s%18.6f%18.6f%12.3e  %s"
+          % (name, expected, got, residual, "ok" if ok else "**ちがう**"))
 print("-" * 100)
 print()
 
