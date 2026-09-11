@@ -156,13 +156,67 @@ impl DirectModeling {
     pub fn inspect_edge(edge: &Edge) -> EdgeInspection {
         let p_s = edge.start_vertex.point;
         let p_e = edge.end_vertex.point;
-        let len = (p_e - p_s).norm();
-        let mid = Point3::from((p_s.coords + p_e.coords) * 0.5);
-        let tangent = if len > 1e-9 {
-            (p_e - p_s).normalize()
-        } else {
-            Vec3::new(1.0, 0.0, 0.0)
+
+        // **稜は、曲線で測ります**（4-428）。
+        //
+        // **2026/09/12 まで、両端だけ**で長さ・中点・接線を作って
+        // いました——**曲線を一度も見ていません**でした
+        // （**4-409 の `_face`、4-414 の `_density` と同じ形**）。
+        //
+        // **実測**: 円柱 r5 の四半弧が **7.071068**（＝ 弦 `5√2`）と
+        // 出ます。**弧長は 7.853982** で、**10% 短い**。
+        // **中点は `(2.5, 2.5, 0)`**——**半径 3.5355 の所**で、
+        // **立体の上ですらありません。**
+        //
+        // **直線の稜では、どちらも同じ**です（degree 1、制御点 2 個）。
+        // **そこは 1 分割で打ち切り**、**曲がっている稜だけ積みます。**
+        let (u_min, u_max) = edge.curve.param_range();
+        let span = u_max - u_min;
+        let at = |t: f64| edge.evaluate(u_min + t.clamp(0.0, 1.0) * span);
+        let straight = edge.curve.degree == 1 && edge.curve.control_points.len() == 2;
+
+        // **折れ線で積むと、刻みの 2 乗で足りません**——**リチャードソン
+        // 補外**で 4 乗にします（`(4 L₂ₙ − Lₙ) / 3`）。**四半円で、
+        // 128 分割でも 1e-12 に入ります。**
+        let polyline = |segments: usize| -> f64 {
+            let mut total = 0.0;
+            let mut previous = at(0.0);
+            for step in 1..=segments {
+                let point = at(step as f64 / segments as f64);
+                total += (point - previous).norm();
+                previous = point;
+            }
+            total
         };
+        let len = if straight {
+            (p_e - p_s).norm()
+        } else {
+            let coarse = polyline(128);
+            let fine = polyline(256);
+            (4.0 * fine - coarse) / 3.0
+        };
+
+        let mid = if straight {
+            Point3::from((p_s.coords + p_e.coords) * 0.5)
+        } else {
+            at(0.5)
+        };
+
+        // **接線も、曲線の真ん中で測ります。** **弦の向きは、曲がって
+        // いる稜では真ん中の向きと違います**——**二面角はこの接線から
+        // 作る**ので、そこも揃えます。**取れなければ弦に落とします。**
+        let chord = (p_e - p_s).norm();
+        let tangent = edge
+            .curve
+            .tangent(u_min + 0.5 * span)
+            .filter(|_| !straight)
+            .unwrap_or_else(|| {
+                if chord > 1e-9 {
+                    (p_e - p_s).normalize()
+                } else {
+                    Vec3::new(1.0, 0.0, 0.0)
+                }
+            });
 
         EdgeInspection {
             length: len,
