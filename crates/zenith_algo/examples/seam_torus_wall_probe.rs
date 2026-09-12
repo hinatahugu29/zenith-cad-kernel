@@ -117,6 +117,17 @@ fn main() {
     println!("A: 面 {} 枚、B: 面 {} 枚", a.outer_shell.faces.len(), b.outer_shell.faces.len());
     println!();
 
+    // **恒等式で確かめます**（4-441）。**返るだけでは足りません**——
+    // **もっともらしい立体を返すのが、このリポジトリがいちばん避けてきた
+    // 失敗**です。
+    //
+    //     V(A ∪ B) + V(A ∩ B) = V(A) + V(B)
+    //     V(A − B) = V(A) − V(A ∩ B)
+    //
+    // **トーラス R=12 r=4 の体積は 2π²Rr²**（回しても動きません）。
+    let mut measured: std::collections::BTreeMap<&str, f64> =
+        std::collections::BTreeMap::new();
+
     for (label, op) in [
         ("union", BooleanOpType::Union),
         ("difference", BooleanOpType::Difference),
@@ -127,7 +138,21 @@ fn main() {
                 let solids = &result.solids;
                 let bad: usize = solids.iter().map(non_manifold_edges).sum();
                 let faces: usize = solids.iter().map(|s| s.outer_shell.faces.len()).sum();
-                println!("{label:<14} 返りました: 立体 {} 個、面 {faces} 枚、非多様体の稜 {bad} 本", solids.len());
+                let volume: f64 = solids
+                    .iter()
+                    .map(|solid| {
+                        zenith_algo::MassCalculator::compute_from_brep(
+                            solid,
+                            &zenith_tess::TessellationParams { u_divisions: 64, v_divisions: 64 },
+                        )
+                        .volume
+                    })
+                    .sum();
+                measured.insert(label, volume);
+                println!(
+                    "{label:<14} 返りました: 立体 {} 個、面 {faces} 枚、非多様体の稜 {bad} 本、体積 {volume:.6}",
+                    solids.len()
+                );
             }
             Err(reason) => {
                 println!("{label:<14} **断られました**");
@@ -140,6 +165,26 @@ fn main() {
         }
         println!();
     }
+
+    // ---- 恒等式 ----
+    let one = 2.0 * std::f64::consts::PI * std::f64::consts::PI * 12.0 * 16.0;
+    println!("**恒等式で確かめる**（トーラス 1 つぶん {one:.6}）");
+    println!();
+    if let (Some(u), Some(i), Some(d)) = (
+        measured.get("union"),
+        measured.get("intersection"),
+        measured.get("difference"),
+    ) {
+        let sum = u + i;
+        println!("  V(和) + V(積) = {:.6}   A と B の和 = {:.6}   相対差 {:.3e}",
+                 sum, 2.0 * one, (sum - 2.0 * one).abs() / (2.0 * one));
+        let expect_diff = one - i;
+        println!("  V(差)         = {:.6}   V(A) - V(積) = {:.6}   相対差 {:.3e}",
+                 d, expect_diff, (d - expect_diff).abs() / expect_diff.abs().max(1.0));
+    } else {
+        println!("  **3 演算がそろっていないので、恒等式は測れません。**");
+    }
+    println!();
 
     println!("**これは診断です。赤にはしません**——いま断られるのが分かっている");
     println!("検体だからです。**赤にするのは `contact_placement_probe` の側**で、");

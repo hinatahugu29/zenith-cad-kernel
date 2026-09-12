@@ -1340,6 +1340,9 @@ impl BrepIntersectionBuilder {
                     edge: candidate.edge,
                 }),
         );
+        // **閉じた輪という不変量で、足りない交線を拾い直します**（4-441）。
+        let repaired = repair_open_intersection_loops(&faces_a, &faces_b, &mut edge_candidates, tol);
+        let _ = repaired;
         let selection = Self::selected_face_pieces_from_candidates(
             solid_a,
             solid_b,
@@ -4085,6 +4088,187 @@ fn clip_chain_to_face_trim(face: &Face, chain: &[Edge], tol: &Tolerance) -> Opti
     } else {
         None
     }
+}
+
+/// **閉じた輪という不変量で、足りない交線を拾い直す**（4-441）。
+///
+/// # なぜ要るのか
+///
+/// **閉じた立体どうしの交線は、閉じた輪になります**——**どの端点も
+/// ちょうど 2 回**使われるはずです。**1 回しか使われない端点**が
+/// 残っていたら、**そこで輪が切れています。**
+///
+/// **4-436 までに、交線を出す側は 5 つとも潰れました**——上限・種・
+/// 重複判定・`march`・濾過。**どれを動かしても閉じません。**
+///
+/// **4-441 で、浮いた端から歩かせてみたら、歩けました。**
+/// **交線はそこにあり、種が置かれていないだけ**でした。実測（回した
+/// トーラス 2 つ）——**足りない 2 本は長さ 2.5882 と 0.7691**で、
+/// **後者は最初の歩幅 2.263 より短い**ので、**種が乗りません。**
+///
+/// # どうやるか
+///
+/// **種を増やすのではありません**（4-436 で尽きました）。
+/// **不変量が破れている所だけ**——**浮いた端から、その端が乗っている
+/// 組の上を歩きます。**
+///
+/// **費用は、破れているときだけ**かかります。**閉じていれば、
+/// 端を数えて終わり**です。
+///
+/// `ZENITH_NO_LOOP_REPAIR=1` で止められます（**測るための口**）。
+fn repair_open_intersection_loops(
+    faces_a: &[Face],
+    faces_b: &[Face],
+    candidates: &mut Vec<IntersectionEdgeCandidate>,
+    tol: &Tolerance,
+) -> usize {
+    if std::env::var_os("ZENITH_NO_LOOP_REPAIR").is_some() {
+        return 0;
+    }
+    let explain = std::env::var_os("ZENITH_REPAIR_WHY").is_some();
+
+    // **端点は丸めて数えます**——**同じ点が別の曲線から来ると、
+    // 最後の桁が違います**（4-412 の註と同じ）。
+    let key = |point: Point3| {
+        (
+            (point.x * 1e7).round() as i64,
+            (point.y * 1e7).round() as i64,
+            (point.z * 1e7).round() as i64,
+        )
+    };
+
+    let mut added = 0usize;
+    // **4 巡まで**。**1 本足すと隣が閉じることがある**ので繰り返しますが、
+    // **増えなくなったら止めます。**
+    for _round in 0..4 {
+        let mut uses: std::collections::BTreeMap<(i64, i64, i64), (usize, Point3)> =
+            std::collections::BTreeMap::new();
+        for candidate in candidates.iter() {
+            for point in [
+                candidate.edge.start_vertex.point,
+                candidate.edge.end_vertex.point,
+            ] {
+                let entry = uses.entry(key(point)).or_insert((0, point));
+                entry.0 += 1;
+            }
+        }
+        let loose: Vec<Point3> = uses
+            .values()
+            .filter(|(count, _)| *count != 2)
+            .map(|(_, point)| *point)
+            .collect();
+        if loose.is_empty() {
+            break;
+        }
+        if explain {
+            eprintln!("REPAIRWHY 浮いた端 {} 個", loose.len());
+        }
+
+        let mut gained = 0usize;
+        for point in &loose {
+            for (ai, face_a) in faces_a.iter().enumerate() {
+                let FaceGeometry::Nurbs(surface_a) = &face_a.geometry else {
+                    continue;
+                };
+                let Ok(projection) =
+                    ExtremumEngine::point_to_surface(*point, surface_a, 32, tol.parametric)
+                else {
+                    continue;
+                };
+                if projection.distance > 1e-6 {
+                    continue;
+                }
+                for (bi, face_b) in faces_b.iter().enumerate() {
+                    let FaceGeometry::Nurbs(surface_b) = &face_b.geometry else {
+                        continue;
+                    };
+                    match ExtremumEngine::point_to_surface(*point, surface_b, 32, tol.parametric) {
+                        Ok(other) if other.distance <= 1e-6 => {}
+                        _ => continue,
+                    }
+
+                    let extent = surface_patch_extent(surface_a).max(surface_patch_extent(surface_b));
+                    // **歩幅は、ふつうの 5 分の 1**にします——**足りない枝は
+                    // ふつうの歩幅より短い**ことがあるからです（実測 0.7691 対 2.263）。
+                    // **歩幅は刻みながら試します**——**1 回で決め打ちすると、
+                    // 当てはめのずれが許容を超えたところで諦めます。**
+                    // **実際に 1 度そうなりました**（4-441。歩いてはいるのに
+                    // 1 本も足せない）。`fit_all_branches` と同じ作りです。
+                    let mut step = (extent * 0.02).max(tol.linear * 100.0);
+                    let mut fitted = None;
+                    for _ in 0..8 {
+                        if let Some(marched) = zenith_geom::IntersectionMarcher::march(
+                            surface_a,
+                            surface_b,
+                            projection.u,
+                            projection.v,
+                            step,
+                            2048,
+                            tol,
+                        ) {
+                            if marched.points.len() >= 4 {
+                                if let Some((curve, deviation)) =
+                                    zenith_geom::IntersectionMarcher::fit_curve(
+                                        surface_a, surface_b, &marched, 3,
+                                    )
+                                {
+                                    // **近いところを通るもっともらしい曲線は
+                                    // 渡しません**（`intersect_nurbs_patches` と
+                                    // 同じ規約）。
+                                    if deviation <= tol.linear {
+                                        fitted = Some(curve);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        step *= 0.5;
+                    }
+                    let Some(curve) = fitted else {
+                        continue;
+                    };
+                    let (t0, t1) = curve.param_range();
+                    let start = curve.evaluate(t0);
+                    let end = curve.evaluate(t1);
+                    if (end - start).norm() <= tol.linear {
+                        continue;
+                    }
+                    // **もう持っているか**——端の組で見ます（向きは問いません）。
+                    let same = |x: Point3, y: Point3| (x - y).norm() <= 1e-5;
+                    if candidates.iter().any(|existing| {
+                        let s = existing.edge.start_vertex.point;
+                        let e = existing.edge.end_vertex.point;
+                        (same(s, start) && same(e, end)) || (same(s, end) && same(e, start))
+                    }) {
+                        continue;
+                    }
+                    let edge = Edge::new(
+                        curve,
+                        Vertex::new(start, tol.linear),
+                        Vertex::new(end, tol.linear),
+                        tol.linear,
+                    );
+                    if explain {
+                        eprintln!(
+                            "REPAIRWHY   足した A面{ai} x B面{bi}: ({:.3},{:.3},{:.3}) -> ({:.3},{:.3},{:.3})",
+                            start.x, start.y, start.z, end.x, end.y, end.z
+                        );
+                    }
+                    candidates.push(IntersectionEdgeCandidate {
+                        face_a_index: ai,
+                        face_b_index: bi,
+                        edge,
+                    });
+                    gained += 1;
+                }
+            }
+        }
+        added += gained;
+        if gained == 0 {
+            break;
+        }
+    }
+    added
 }
 
 fn group_edges_into_chains(edges: &[Edge], tol: &Tolerance) -> Vec<Vec<Edge>> {
