@@ -1,4 +1,4 @@
-"""**書き出した glTF を、Blender に読ませる**（4-432）。
+"""**書き出した glTF / STL / OBJ を、Blender に読ませる**（4-432、4-434）。
 
 なぜ要るのか
 ------------
@@ -85,6 +85,50 @@ def read_one(path):
     return triangles, len(positions), low, high
 
 
+def read_stl_or_obj(path, kind):
+    """**STL と OBJ も、同じ人に読ませます**（4-434）。
+
+    **FreeCAD には読ませてあります**（4-389）。**二人目です**——
+    **glTF は、自前のパーサでは気づけない誤りを持っていました**ので、
+    **他の形式も、もう一人に見てもらいます。**
+
+    **⚠ OBJ は、軸を明示して読みます。**
+    **OBJ の仕様には、上がどちらかの定めがありません。**
+    **Blender の取り込みは既定で「Y が上」と見なす**ので、
+    **z-up の CAD ファイルは横倒しに読まれます**——**書き出しの
+    誤りではありません**（実測: 既定だと `[0,-40,0]..[20,0,30]`、
+    `forward='Y', up='Z'` なら `[0,0,0]..[20,30,40]` で台帳どおり）。
+    **glTF は違います**——**あちらは仕様が「+Y が上」と定めている**
+    ので、**z-up のまま書いていたのは、こちらの誤りでした**（4-432）。
+    """
+    clear_scene()
+    if kind == "stl":
+        try:
+            bpy.ops.wm.stl_import(filepath=path)
+        except AttributeError:
+            bpy.ops.import_mesh.stl(filepath=path)
+    else:
+        bpy.ops.wm.obj_import(filepath=path, forward_axis="Y", up_axis="Z")
+
+    triangles = 0
+    positions = set()
+    low = [float("inf")] * 3
+    high = [float("-inf")] * 3
+    for obj in bpy.data.objects:
+        if obj.type != "MESH":
+            continue
+        mesh = obj.data
+        mesh.calc_loop_triangles()
+        triangles += len(mesh.loop_triangles)
+        for vertex in mesh.vertices:
+            world = obj.matrix_world @ vertex.co
+            positions.add((round(world.x, 5), round(world.y, 5), round(world.z, 5)))
+            for axis in range(3):
+                low[axis] = min(low[axis], world[axis])
+                high[axis] = max(high[axis], world[axis])
+    return triangles, len(positions), low, high
+
+
 def main():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     subjects = load_manifest(root)
@@ -139,11 +183,52 @@ def main():
                 [round(x, 4) for x in low], [round(x, 4) for x in high])))
 
     print("-" * 96)
+
+    # ---- STL と OBJ も、同じ人に読ませます（4-434）----
+    for kind in ("stl", "obj"):
+        print()
+        print("書き出した %s を、Blender に読ませる（4-434）%s"
+              % (kind.upper(),
+                 "  ※ 軸を明示（forward=Y, up=Z）" if kind == "obj" else ""))
+        print()
+        print("%-32s %9s %9s %8s %8s %s" % (
+            "検体", "枚数(台帳)", "枚数(Blender)", "点(台帳)", "点(位置)", "境界箱"))
+        print("-" * 96)
+        for subject in subjects:
+            name = subject["name"]
+            path = os.path.join(exports, name + "." + kind)
+            if not os.path.exists(path):
+                print("%-32s **%s がありません**" % (name, kind.upper()))
+                failures += 1
+                continue
+            try:
+                triangles, points, low, high = read_stl_or_obj(path, kind)
+            except Exception as exc:
+                print("%-32s **読めません**: %r" % (name, exc))
+                failures += 1
+                continue
+            box_ok = all(
+                abs(low[axis] - subject["low"][axis]) <= 1e-4
+                and abs(high[axis] - subject["high"][axis]) <= 1e-4
+                for axis in range(3))
+            tris_ok = triangles == subject["triangles"]
+            points_ok = points == subject["vertices"]
+            if not tris_ok or not box_ok or not points_ok:
+                failures += 1
+            print("%-32s %9d %9s %8d %8s %s" % (
+                name, subject["triangles"],
+                ("%d" % triangles) if tris_ok else ("**%d**" % triangles),
+                subject["vertices"],
+                ("%d" % points) if points_ok else ("**%d**" % points),
+                "OK" if box_ok else "**ちがう** %s %s" % (
+                    [round(x, 4) for x in low], [round(x, 4) for x in high])))
+        print("-" * 96)
+
     print()
     if failures:
         print("**食い違い %d 件。**" % failures)
     else:
-        print("**8 検体とも、枚数・点の数・境界箱が一致しました。**")
+        print("**glTF / STL / OBJ とも、8 検体すべてで枚数・点の数・境界箱が一致しました。**")
     return 1 if failures else 0
 
 
