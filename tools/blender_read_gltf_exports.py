@@ -43,6 +43,7 @@ import json
 import os
 import sys
 
+import bmesh
 import bpy
 
 
@@ -127,6 +128,38 @@ def read_stl_or_obj(path, kind):
                 low[axis] = min(low[axis], world[axis])
                 high[axis] = max(high[axis], world[axis])
     return triangles, len(positions), low, high
+
+
+def watertight_report(path):
+    """**水密かどうかを、Blender に数えてもらう**（4-435）。
+
+    **「表示メッシュは水密」は、この文書の芯にある主張**です
+    （`mesh_watertight_probe`）。**ですが、数えているのは自前の
+    コードだけ**でした。**ここが二人目**です。
+
+    **STL は三角形ごとに点がばらばら**なので、**まず溶接**します
+    （`remove_doubles`）。**溶接しないと、全部の稜が「開いている」**
+    と出ます——**それは形の話ではなく、書式の話**です。
+
+    **符号つきの体積**も見ます。**負なら、面が裏返っています。**
+    """
+    clear_scene()
+    try:
+        bpy.ops.wm.stl_import(filepath=path)
+    except AttributeError:
+        bpy.ops.import_mesh.stl(filepath=path)
+
+    meshes = [obj for obj in bpy.data.objects if obj.type == "MESH"]
+    if not meshes:
+        return None
+    mesh = bmesh.new()
+    mesh.from_mesh(meshes[0].data)
+    bmesh.ops.remove_doubles(mesh, verts=mesh.verts, dist=1e-5)
+    boundary = sum(1 for edge in mesh.edges if len(edge.link_faces) == 1)
+    non_manifold = sum(1 for edge in mesh.edges if len(edge.link_faces) > 2)
+    volume = mesh.calc_volume(signed=True)
+    mesh.free()
+    return boundary, non_manifold, volume
 
 
 def main():
@@ -224,11 +257,48 @@ def main():
                     [round(x, 4) for x in low], [round(x, 4) for x in high])))
         print("-" * 96)
 
+    # ---- 水密かどうかも、同じ人に数えてもらう（4-435）----
+    print()
+    print("書き出した STL が水密か、Blender に数えてもらう（4-435）")
+    print()
+    print("%-32s %10s %10s %8s %13s %13s" % (
+        "検体", "開いた稜", "非多様体", "裏返り", "Blenderの体積", "B-Repの体積"))
+    print("-" * 96)
+    for subject in subjects:
+        name = subject["name"]
+        path = os.path.join(exports, name + ".stl")
+        if not os.path.exists(path):
+            print("%-32s **STL がありません**" % name)
+            failures += 1
+            continue
+        try:
+            report = watertight_report(path)
+        except Exception as exc:
+            print("%-32s **読めません**: %r" % (name, exc))
+            failures += 1
+            continue
+        if report is None:
+            print("%-32s **メッシュがありません**" % name)
+            failures += 1
+            continue
+        boundary, non_manifold, volume = report
+        # **メッシュの体積は、曲面のある立体では B-Rep より小さく出ます**
+        # （内接するから）。**一致は求めません**——**閉じていること**と、
+        # **裏返っていないこと**を見ます。
+        ok = boundary == 0 and non_manifold == 0 and volume > 0.0
+        if not ok:
+            failures += 1
+        print("%-32s %10d %10d %8s %13.4f %13.4f %s" % (
+            name, boundary, non_manifold,
+            "あり" if volume < 0.0 else "なし",
+            abs(volume), subject["brep_volume"], "ok" if ok else "**ちがう**"))
+    print("-" * 96)
+
     print()
     if failures:
         print("**食い違い %d 件。**" % failures)
     else:
-        print("**glTF / STL / OBJ とも、8 検体すべてで枚数・点の数・境界箱が一致しました。**")
+        print("**glTF / STL / OBJ とも 8 検体すべてで一致し、STL は 8 検体とも水密でした。**")
     return 1 if failures else 0
 
 
