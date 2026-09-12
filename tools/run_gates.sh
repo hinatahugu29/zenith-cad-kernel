@@ -237,6 +237,32 @@ else
     # 「古い実行ファイル」と同じ一族）。
     ./target/release/examples/export_mesh_suite > "$OUT/mesh_exports.txt" 2>&1 || true
   fi
+  # **配る包みを、Blender の中で読ませます**（4-433）。
+  #
+  # **4-400 が 3 つの段を分けました**——**カーネルにある → Python から
+  # 呼べる → 包みに入っている**。**4 段目があります**——
+  # **Blender の中で読める**。**そこは一度も測っていませんでした。**
+  #
+  # **`check_python_surface` はこちらの Python で読みます。**
+  # **Blender は自前の Python を積んでいます**（版により 3.10 〜 3.13）。
+  # **`abi3-py310` なので読めるはず**ですが、**「はず」で通してきました。**
+  # **8 版で確かめました**（3.5 〜 5.1。Python 3.10.9 〜 3.13.9）。
+  if [ -n "$BLENDER" ]; then
+    started=$(date +%s)
+    ZENITH_ROOT="$PWD" "$BLENDER" --background --factory-startup       --python tools/blender_load_addon.py > "$OUT/blender_addon.txt" 2>&1
+    code=$?
+    elapsed=$(( $(date +%s) - started ))
+    if [ "$code" != "0" ]; then
+      fail=1
+      red="$red blender_addon_load"
+      printf "  %-30s **赤**  exit=%s  (%ss)  %s
+" "包みを Blender で読む" "$code" "$elapsed" "$OUT/blender_addon.txt"
+    else
+      printf "  %-30s 緑    (%ss)
+" "包みを Blender で読む" "$elapsed"
+    fi
+  fi
+
   if [ -n "$BLENDER" ] && [ -f target/mesh_exports/manifest.json ]; then
     started=$(date +%s)
     "$BLENDER" --background --factory-startup       --python tools/blender_read_gltf_exports.py > "$OUT/blender_gltf.txt" 2>&1
