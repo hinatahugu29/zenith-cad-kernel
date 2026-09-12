@@ -18,6 +18,26 @@ impl GltfExporter {
     }
 
     /// TriangleMesh から glTF 2.0 JSON 文字列を生成
+    ///
+    /// # 向き（**節点の回転**）
+    ///
+    /// **glTF 2.0 は「+Y が上」と決めています**（仕様 3.5）。
+    /// **このカーネルは z-up** なので、**そのまま書くと、仕様に沿った
+    /// 読み手では横倒しになります。**
+    ///
+    /// **2026/09/12 まで、そうなっていました**（4-432）。**自前の
+    /// パーサは生のバッファを読むので気づけません**——**Blender に
+    /// 読ませて初めて出ました**（境界箱が 8 検体中 7 件で
+    /// `(x, y, z)` → `(x, -z, y)` にずれる。球だけは対称なので合う）。
+    ///
+    /// **直し方は 2 つ**あります——**①点を回してから書く**、
+    /// **②点はそのままで、節点に回転を置く**。**②にしました。**
+    /// **バッファの中身が CAD の座標のまま**なので、**生で読む道具
+    /// （`tools/verify_mesh_exports.py`）が、そのまま読めます。**
+    ///
+    /// 回転は **X まわりに −90 度**、四元数で
+    /// `[-sin45, 0, 0, cos45]`。**これで `(x, y, z)` が `(x, z, -y)`**
+    /// ——**z-up が y-up になります。**
     pub fn export_to_json(mesh: &TriangleMesh) -> Result<String, String> {
         let num_verts = mesh.positions.len();
         let num_tris = mesh.indices.len();
@@ -95,7 +115,8 @@ impl GltfExporter {
   "nodes": [
     {{
       "mesh": 0,
-      "name": "Zenith_Solid_Mesh"
+      "name": "Zenith_Solid_Mesh",
+      "rotation": [-0.7071067811865476, 0.0, 0.0, 0.7071067811865476]
     }}
   ],
   "meshes": [

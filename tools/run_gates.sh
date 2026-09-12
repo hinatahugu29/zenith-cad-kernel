@@ -205,6 +205,54 @@ else
     fi
   fi
 
+  # **書き出した glTF を、Blender に読ませます**（4-432）。
+  #
+  # **glTF だけ、他人に読ませていませんでした**（4-389 の積み残し）
+  # ——FreeCAD の `Mesh` は断り、`trimesh` も `pygltflib` もこの環境に
+  # 入っていないからです。**Blender の取り込みは Khronos が保守している
+  # 実装**（`io_scene_gltf2`）で、**自前のパーサではありません。**
+  #
+  # **入れた初回に、向きの誤りが出ました**——**8 検体中 7 件で境界箱が
+  # `(x, y, z)` → `(x, -z, y)` にずれ**、**球だけは対称なので合って**
+  # いました。**glTF は +Y が上**（仕様 3.5）で、**z-up のまま書いて
+  # いた**のです。**節点に回転を置いて直しました。**
+  #
+  # **Blender が無ければ、赤にはせず飛ばします**——**「無い」を
+  # 「緑」と読み違えないため**に、**行は必ず出します。**
+  BLENDER="${ZENITH_BLENDER:-}"
+  if [ -z "$BLENDER" ]; then
+    for candidate in "/c/Program Files/Blender Foundation/Blender 4.4/blender.exe"                      "/c/Program Files/Blender Foundation/Blender 4.3/blender.exe"                      "/c/Program Files/Blender Foundation/Blender 4.2/blender.exe"; do
+      if [ -x "$candidate" ]; then
+        BLENDER="$candidate"
+        break
+      fi
+    done
+  fi
+  if [ -z "$BLENDER" ]; then
+    printf "  %-30s 飛ばす（Blender がありません。緑ではありません）
+" "glTF を Blender に"
+  else
+    # **検体は、ここで書き出します**——**門が自己完結していないと、
+    # 「前に回したときの検体」を読むことになります**（5 章の
+    # 「古い実行ファイル」と同じ一族）。
+    ./target/release/examples/export_mesh_suite > "$OUT/mesh_exports.txt" 2>&1 || true
+  fi
+  if [ -n "$BLENDER" ] && [ -f target/mesh_exports/manifest.json ]; then
+    started=$(date +%s)
+    "$BLENDER" --background --factory-startup       --python tools/blender_read_gltf_exports.py > "$OUT/blender_gltf.txt" 2>&1
+    code=$?
+    elapsed=$(( $(date +%s) - started ))
+    if [ "$code" != "0" ]; then
+      fail=1
+      red="$red blender_gltf"
+      printf "  %-30s **赤**  exit=%s  (%ss)  %s
+" "glTF を Blender に" "$code" "$elapsed" "$OUT/blender_gltf.txt"
+    else
+      printf "  %-30s 緑    (%ss)
+" "glTF を Blender に" "$elapsed"
+    fi
+  fi
+
   # **読ませる STEP は、追跡下の検体から選びます**（`reference/` は
   # 2026/09/08 に消えました）。
   export ZENITH_ARGS_STEP="${ZENITH_ARGS_STEP:-crates/zenith_algo/tests/fixtures/occ_reference_cylinder.step}"
