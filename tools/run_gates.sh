@@ -160,43 +160,49 @@ fi
 if [ -z "$PYTHON" ]; then
   echo "  **Python がありません。** 下の 2 つは回していません（緑ではありません）。"
   echo "    tools/check_python_surface.py / tools/check_python_arguments.py"
-elif ! cargo build --release -p zenith_py > "$OUT/pybuild.txt" 2>&1; then
+elif ! PYO3_PYTHON="$("$PYTHON" -c 'import sys; print(sys.executable)')"         cargo build --release -p zenith_py > "$OUT/pybuild.txt" 2>&1; then
   echo "  **拡張モジュールが建ちません。** $OUT/pybuild.txt"
   fail=1
   red="$red zenith_py"
 else
-  # **配る包みが、いま建てたものと同じか**（4-426）。
+  # **配る包みが、いまのソースより新しいか**（4-426、4-431）。
   #
   # **2026/09/08 に「18 日古いまま」と分かりました**（4-405）。
-  # **記録しただけで、門を置きませんでした**——**2026/09/12 に見たら、
-  # また 4 日古く**、**4-409 から 4-425 までが 1 つも入っていません**
-  # でした（**プロセスごと落ちる欠陥の直しも、法線の直しも**）。
+  # **記録しただけで門を置かず**、**2026/09/12 に見たらまた 4 日古く**、
+  # **4-409 から 4-425 までが 1 つも入っていません**でした。
   #
   # **包みは `.gitignore` の外**なので `git status` に出ず、
   # **どの門も `target/release` のほうを見ています**。**ここだけが、
   # 配る形を見ます。**
+  #
+  # **⚠ バイトで比べるのはやめました**（4-431）。**建て方が違うと
+  # 中身が違います**——`tools/build_pyd.py` は `PYO3_PYTHON` を立てて
+  # 建て、門は立てずに建てるので、**同じソースからでも大きさが違い**
+  # （実測: 5842432 と 5747712）、**どちらが最後に建てたかで赤と緑が
+  # 入れ替わりました。**
+  #
+  # **見たいのは「配る形が、いまのソースから作られたか」**です。
+  # **ソースより新しければ緑**にします。
   PACKAGE="blender_addon/H-CAD_V_1_0_0/zenith_cad.pyd"
-  BUILT="target/release/zenith_cad.dll"
-  if [ ! -f "$BUILT" ]; then
-    BUILT="target/release/libzenith_cad.so"
-  fi
   if [ ! -f "$PACKAGE" ]; then
     printf "  %-30s **赤**  配る包みがありません（py tools/build_pyd.py）
 " "配る包み"
     fail=1
     red="$red addon_package"
-  elif ! cmp -s "$PACKAGE" "$BUILT"; then
-    # **通しテストのあとは、ここが赤になります**（4-429）——
-    # `cargo test --workspace --release` が拡張を建て直すので、
-    # **その前に作った包みは古くなります**。**包みは最後に作る**のが
-    # 順序です（テスト → `py tools/build_pyd.py` → 門）。
-    printf "  %-30s **赤**  いま建てたものと中身が違います（py tools/build_pyd.py を、通しテストのあとに）
-" "配る包み"
-    fail=1
-    red="$red addon_package"
   else
-    printf "  %-30s 緑    (同じ中身)
+    newest=$(find crates -name '*.rs' -newer "$PACKAGE" -print -quit 2>/dev/null)
+    if [ -z "$newest" ]; then
+      newest=$(find crates -name 'Cargo.toml' -newer "$PACKAGE" -print -quit 2>/dev/null)
+    fi
+    if [ -n "$newest" ]; then
+      printf "  %-30s **赤**  %s より古い（py tools/build_pyd.py）
+" "配る包み" "$newest"
+      fail=1
+      red="$red addon_package"
+    else
+      printf "  %-30s 緑    (ソースより新しい)
 " "配る包み"
+    fi
   fi
 
   # **読ませる STEP は、追跡下の検体から選びます**（`reference/` は

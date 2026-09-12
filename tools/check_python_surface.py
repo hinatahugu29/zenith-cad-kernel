@@ -618,6 +618,41 @@ def inward_normals(mesh):
     return float(wrong)
 
 
+# **特徴稜のしきい値**（4-430）。
+#
+# **しきい値は「以上」**です——**角がしきい値ちょうどの稜は残ります。**
+#
+# **模型の二面角そのものをしきい値にすると、答えが割れます**——
+# **円柱の縁 256 本は、幾何としては全部 90 度**ですが、**計算すると
+# 90 度 ± 3e-11 に散る**ので、**「ちょうど 90」では 160 本しか
+# 残りません。** **ここでは、離したしきい値で留めます**——
+# **ちょうどの値は、留めても意味がありません。**
+FEATURE_CHECKS = [
+    ("特徴稜 箱 25 度（既定）",
+     lambda: float(len(z.Solid.box(30.0, 20.0, 10.0)
+                       .tessellate(8, 8).feature_edges(25.0))), 12.0, 1e-12),
+    ("特徴稜 箱 89.9 度（まだ残る）",
+     lambda: float(len(z.Solid.box(30.0, 20.0, 10.0)
+                       .tessellate(8, 8).feature_edges(89.9))), 12.0, 1e-12),
+    ("特徴稜 箱 90.1 度（もう残らない）",
+     lambda: float(len(z.Solid.box(30.0, 20.0, 10.0)
+                       .tessellate(8, 8).feature_edges(90.1))), 0.0, 1e-12),
+    ("特徴稜 円柱 25 度（縁 2 周ぶん）",
+     lambda: float(len(z.Solid.cylinder(5.0, 12.0)
+                       .tessellate(32, 32).feature_edges(25.0))), 256.0, 1e-12),
+    ("特徴稜 円柱 89.9 度",
+     lambda: float(len(z.Solid.cylinder(5.0, 12.0)
+                       .tessellate(32, 32).feature_edges(89.9))), 256.0, 1e-12),
+    ("特徴稜 円柱 90.1 度",
+     lambda: float(len(z.Solid.cylinder(5.0, 12.0)
+                       .tessellate(32, 32).feature_edges(90.1))), 0.0, 1e-12),
+    # **球は滑らか**——**25 度では 1 本も出ません。**
+    ("特徴稜 球 25 度（滑らかなので 0）",
+     lambda: float(len(z.Solid.sphere(7.0)
+                       .tessellate(32, 32).feature_edges(25.0))), 0.0, 1e-12),
+]
+
+
 # **稜の長さ**（4-428）。
 #
 # **2026/09/12 まで、どの門も見ていませんでした。** **だから 10% ずれた
@@ -843,6 +878,25 @@ for name, call, expected, allowance in SOLID_CHECKS:
         wrong += 1
     print("%-40s%18.6f%18.6f%12.3e  %s"
           % (name, expected, got, residual, "ok" if ok else "**ちがう**"))
+print("-" * 100)
+print()
+
+# **特徴稜のしきい値**（4-430）。**「以上」であること、離して取ること。**
+print("%-40s%18s%18s%12s  %s" % ("特徴稜", "あるべき", "測った値", "相対差", "結果"))
+print("-" * 100)
+for name, call, expected, allowance in FEATURE_CHECKS:
+    try:
+        got = call()
+    except Exception as error:
+        wrong += 1
+        print("%-40s%18.6f%18s%12s  **断られました**: %s"
+              % (name, expected, "-", "-", str(error)[:24]))
+        continue
+    residual = abs(got - expected) / max(abs(expected), 1.0)
+    if residual > allowance:
+        wrong += 1
+    print("%-40s%18.6f%18.6f%12.3e  %s"
+          % (name, expected, got, residual, "ok" if residual <= allowance else "**ちがう**"))
 print("-" * 100)
 print()
 
