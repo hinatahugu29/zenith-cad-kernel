@@ -1807,8 +1807,20 @@ impl BrepIntersectionBuilder {
             for (label, point) in [("始点", start), ("終点", end)] {
                 if locate_point_on_wire(boundary, point, tol).is_none() {
                     let inside = point_inside_face_trim(face, point, tol);
+                    // **面の平面から、どれだけ外れているか**（4-446）。
+                    //
+                    // **「境界に届かない」には 2 通りあります**——**その面の
+                    // 平面から浮いている**（＝当てる面を間違えている）か、
+                    // **平面の上にいて、境界から離れている**（＝本当に途中で
+                    // 終わっている）か。**中／外だけでは、この 2 つが混ざります。**
+                    //
+                    // **実測**（`ZENITH_SKETCH_BOOL_ONLY=接する`、4-446）——
+                    // **188 件すべてが「平面の上」**でした。**浮いているものは
+                    // 1 件もありません。** 内訳は **中 126 / 外 62**、
+                    // いちばん近い境界までは **いちばん近くても 0.5 以上**です。
+                    let off_plane = (point - plane.origin).dot(&plane.normal).abs();
                     eprintln!(
-                        "INSIDEWHY {label}が境界に届きません: トリムの中か = {}",
+                        "INSIDEWHY {label}が境界に届きません: トリムの中か = {} 平面から {off_plane:.9}",
                         match inside {
                             Some(true) => "中",
                             Some(false) => "外",
@@ -3633,6 +3645,12 @@ fn locate_point_on_wire(edges: &[OrientedEdge], point: Point3, tol: &Tolerance) 
     // **見たいのは「どの稜にも乗らなかったとき、いちばん近いのはどれだけか」**
     // です。
     let mut nearest_miss = f64::INFINITY;
+    // **どの稜の、どこが、いちばん近かったか**（4-446。`ZENITH_ONWIRE_WHY=1`）。
+    //
+    // 4-444 で「**A の外周の稜を、B 側の分割点で割る**のが要る」と書きました。
+    // **割る場所を決めるには、距離だけでは足りません**——**どの稜の、
+    // 媒介変数のどこか**が要ります。ここはその 2 つを併せて持ちます。
+    let mut nearest_where: Option<(usize, f64)> = None;
     for (edge_index, edge) in edges.iter().enumerate() {
         let distance_at = |t: f64| (edge.evaluate_normalized(t) - point).norm();
 
@@ -3661,7 +3679,10 @@ fn locate_point_on_wire(edges: &[OrientedEdge], point: Point3, tol: &Tolerance) 
 
         let t = 0.5 * (low + high);
         let distance = distance_at(t);
-        nearest_miss = nearest_miss.min(distance);
+        if distance < nearest_miss {
+            nearest_miss = distance;
+            nearest_where = Some((edge_index, t));
+        }
         if distance > tol.linear * 10.0 {
             continue;
         }
@@ -3672,9 +3693,20 @@ fn locate_point_on_wire(edges: &[OrientedEdge], point: Point3, tol: &Tolerance) 
 
     if best.is_none() && nearest_miss.is_finite() && std::env::var_os("ZENITH_ONWIRE_WHY").is_some()
     {
+        let (edge_index, t) =
+            nearest_where.expect("nearest_miss が有限なら、場所も控えています");
+        let edge = &edges[edge_index];
+        let foot = edge.evaluate_normalized(t);
+        let head = edge.evaluate_normalized(0.0);
+        let tail = edge.evaluate_normalized(1.0);
         eprintln!(
-            "ONWIREWHY どの稜にも乗りません。いちばん近い稜まで {nearest_miss:.9}（受け入れ {:.9}）",
-            tol.linear * 10.0
+            "ONWIREWHY どの稜にも乗りません。いちばん近い稜まで {nearest_miss:.9}（受け入れ {:.9}） 稜 {edge_index}/{} t={t:.6} 足=({:.6},{:.6},{:.6}) 稜端=({:.6},{:.6},{:.6})→({:.6},{:.6},{:.6}) 点=({:.6},{:.6},{:.6})",
+            tol.linear * 10.0,
+            edges.len(),
+            foot.x, foot.y, foot.z,
+            head.x, head.y, head.z,
+            tail.x, tail.y, tail.z,
+            point.x, point.y, point.z
         );
     }
     best.map(|(_, hit)| hit)
