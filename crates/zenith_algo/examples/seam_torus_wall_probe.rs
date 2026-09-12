@@ -149,6 +149,50 @@ fn main() {
                     })
                     .sum();
                 measured.insert(label, volume);
+                // **数え方を 3 つとも出します**（4-442）。
+                // **端点だけで数える**と、**同じ端点を持つ別の稜**
+                // （弧を 2 本）が、いっしょくたになります。
+                // **中点も入れる**と、そこは分かれますが、
+                // **同じ稜を別の媒介変数で持っている**ときに見逃します。
+                // **カーネル自身の検査**が、最後の物差しです。
+                let by_ends: usize = solids
+                    .iter()
+                    .map(|solid| {
+                        use std::collections::BTreeMap;
+                        let q = |p: zenith_math::Point3| {
+                            ((p.x * 1e7).round() as i64, (p.y * 1e7).round() as i64, (p.z * 1e7).round() as i64)
+                        };
+                        let mut uses: BTreeMap<_, usize> = BTreeMap::new();
+                        for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
+                            for face in &shell.faces {
+                                for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                                    for oriented in &wire.edges {
+                                        let a = q(oriented.edge.start_vertex.point);
+                                        let b = q(oriented.edge.end_vertex.point);
+                                        *uses.entry(if a <= b { (a, b) } else { (b, a) }).or_insert(0) += 1;
+                                    }
+                                }
+                            }
+                        }
+                        uses.values().filter(|c| **c != 2).count()
+                    })
+                    .sum();
+                let kernel_ok = solids.iter().all(|solid| solid.is_topologically_valid(&tol));
+                // **第三者に数えてもらうため、STL に書き出します**（4-442）。
+                if let Ok(dir) = std::env::var("ZENITH_SEAM_STL_DIR") {
+                    for (index, solid) in solids.iter().enumerate() {
+                        let mesh = zenith_tess::tessellate_solid(
+                            solid,
+                            &zenith_tess::TessellationParams { u_divisions: 48, v_divisions: 48 },
+                        );
+                        let path = format!("{dir}/{label}_{index}.stl");
+                        let _ = zenith_io::StlExporter::export_binary(&mesh, &path);
+                    }
+                }
+                println!(
+                    "               数え方: 端点だけ {by_ends} / 端点と中点 {bad} / カーネルの検査 {}",
+                    if kernel_ok { "通る" } else { "**落ちる**" }
+                );
                 println!(
                     "{label:<14} 返りました: 立体 {} 個、面 {faces} 枚、非多様体の稜 {bad} 本、体積 {volume:.6}",
                     solids.len()

@@ -82,16 +82,42 @@ fn non_manifold_brep_edges(solid: &Solid) -> usize {
         let q = |v: f64| (v * 1e7).round() as i64;
         (q(p.x), q(p.y), q(p.z))
     };
-    let mut uses: std::collections::HashMap<((i64, i64, i64), (i64, i64, i64)), usize> =
-        std::collections::HashMap::new();
+    // **端点だけでは、稜を見分けられません**（4-442）。
+    //
+    // **同じ 2 点を結ぶ稜は、2 本あり得ます**——**弧を 2 本**で
+    // 輪を作る形です。**端点だけで鍵にすると、その 2 本が 1 本に
+    // 潰れ**、**使用回数が 4 になって「非多様体」と出ます。**
+    //
+    // **実測（4-442。どちらも回したトーラス 2 つ）**——**端点だけで
+    // 数えると差 2 / 積 3**、**中点も入れると 0**。**どちらが正しいか
+    // は、4 つの独立な物差しで決めました。**
+    //
+    // | 物差し | 答え |
+    // | :--- | :--- |
+    // | `Solid::is_topologically_valid` | **通る** |
+    // | 表示メッシュの非多様体（`non_manifold_mesh_edges`） | **0** |
+    // | **Blender に数えさせる**（開いた稜・非多様体） | **0 / 0** |
+    // | 恒等式 `V(和)+V(積) = V(A)+V(B)` | **1.187e-8** |
+    //
+    // **4 つとも「多様体」**でした。**端点だけの数え方が、偽陽性**です。
+    //
+    // **⚠ 中点を入れると、逆の見逃しが起こり得ます**——**同じ稜を
+    // 別の媒介変数で持っている**と、中点がずれて別物に見えます。
+    // **そこは `Solid::is_topologically_valid` が受け持ちます**
+    // （この門は、そちらも通しています）。
+    let mut uses: std::collections::HashMap<
+        (((i64, i64, i64), (i64, i64, i64)), (i64, i64, i64)),
+        usize,
+    > = std::collections::HashMap::new();
     for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
         for face in &shell.faces {
             for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
                 for oriented in &wire.edges {
                     let a = quantise(oriented.edge.start_vertex.point);
                     let b = quantise(oriented.edge.end_vertex.point);
-                    let key = if a <= b { (a, b) } else { (b, a) };
-                    *uses.entry(key).or_insert(0) += 1;
+                    let ends = if a <= b { (a, b) } else { (b, a) };
+                    let middle = quantise(oriented.evaluate_normalized(0.5));
+                    *uses.entry((ends, middle)).or_insert(0) += 1;
                 }
             }
         }
@@ -964,9 +990,11 @@ fn cases() -> Vec<Case> {
         note: ["未測定だった置き方", "同上", "同上"],
     });
 
-    // **これは、外部ファイルを 1 つも使わずに H8 の壁を再現する検体です**
-    // （4-411）。**既定では走らせません**——`ZENITH_CONTACT_SEAMS=1` で
-    // 足します。`ZENITH_TILTED` と同じ立て方です。
+    // **これは、外部ファイルを 1 つも使わずに H8 の壁を再現していた検体です**
+    // （4-411）。**2026/09/13 から、既定で走ります**（4-441、4-442）
+    // ——**通るようになった**からです。
+    //
+    // **以下は、外していた頃の記録**です。
     //
     // **なぜ外してあるか**: **3 演算とも「未実装」で断られ**、この門の
     // 規約ではそれは赤だからです。**断り文は H8 の壁そのもの**でした——
@@ -985,7 +1013,9 @@ fn cases() -> Vec<Case> {
     // 「門が緑」と「この置き方が通る」を混ぜないためです。
     // **H8 に手を付ける人は、まずこれを回してください**——`linkrods` の
     // 132 本より、**12 本のほうが追えます**。
-    if std::env::var_os("ZENITH_CONTACT_SEAMS").is_some() {
+    // **いまは既定で走ります。** `ZENITH_CONTACT_SEAMS` はもう見ません
+    // ——**外していた理由（必ず赤になる）が消えた**からです。
+    {
         out.push(Case {
             name: "torus x torus (both turned, tubes overlapping)",
             why: "**どちらも回した**トーラス 2 つ（一方は継ぎ目を 29 度、他方は 61 度傾ける）。管どうしが交わり、**両方の継ぎ目が交線にかかります**",
@@ -997,7 +1027,7 @@ fn cases() -> Vec<Case> {
                 0.0,
             ),
             note: [
-                "実測: **3 演算とも「未実装」で断られます**（4-411）。縫合で相手のいない稜 12、非多様体の稜 3、面片 33。**外部ファイル無しで H8 の壁が出る検体**",
+                "実測: **3 演算とも立体を返します**（4-441 で通るようになりました。和 35 面 / 差 23 面 / 積 13 面、非多様体 0）。**2026/09/09 〜 09/12 は「未実装」で断られ**、縫合で相手のいない稜 12・非多様体の稜 3・面片 33 でした——**外部ファイル無しで H8 の壁が出る検体**でした",
                 "同上",
                 "同上",
             ],
