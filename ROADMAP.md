@@ -117,7 +117,7 @@ Parasolid, ACIS, OpenCASCADE, そして Plasticity のようなモダン CAD の
 | **Shell（シェル）** | 面の連結集合（開シェル / 閉シェル判定） | ✅ 完了 | `zenith_topo::Shell` |
 | **Solid（ソリッド）** | 閉シェル（Outer Shell）および内部空洞（Void Shells）を持つ3次元立体 | ✅ 完了 | `zenith_topo::Solid` |
 | **穴あき面トポロジー** | `FACE_BOUND`（内側穴ループ）を持つ面の多重閉ループ管理 | ✅ 完了 | `zenith_topo::Face` |
-| **トポロジー一貫性検証** | オイラー標数・エッジ共有整合性・マニホールド検査 | ✅ 完了 | `zenith_topo::validation` |
+| **トポロジー一貫性検証** | オイラー標数・エッジ共有整合性・マニホールド検査 | ✅ 完了 | **`zenith_topo::validation` という module はありません**（2026/09/12。HANDOVER 4-440）。**実体は `Solid::is_topologically_valid`（`solid.rs`）・`Shell::validate_closed`（`shell.rs`）・`Face::validate_pcurves` / `validate_boundary_on_surface`（`face.rs`）**です |
 
 ---
 
@@ -226,7 +226,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **Shell（シェル）** | 面の連結集合（開シェル / 閉シェル判定） | ✅ 完了 | `zenith_topo::Shell` |
 | **Solid（ソリッド）** | 閉シェル（Outer Shell）および内部空洞（Void Shells）を持つ3次元立体 | ✅ 完了 | `zenith_topo::Solid` |
 | **穴あき面トポロジー** | `FACE_BOUND`（内側穴ループ）を持つ面の多重閉ループ管理 | ✅ 完了 | `zenith_topo::Face` |
-| **トポロジー一貫性検証** | オイラー標数・エッジ共有整合性・マニホールド検査 | ✅ 完了 | `zenith_topo::validation` |
+| **トポロジー一貫性検証** | オイラー標数・エッジ共有整合性・マニホールド検査 | ✅ 完了 | **`zenith_topo::validation` という module はありません**（2026/09/12。HANDOVER 4-440）。**実体は `Solid::is_topologically_valid`（`solid.rs`）・`Shell::validate_closed`（`shell.rs`）・`Face::validate_pcurves` / `validate_boundary_on_surface`（`face.rs`）**です |
 
 ---
 
@@ -335,7 +335,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **Shell（シェル）** | 面の連結集合（開シェル / 閉シェル判定） | ✅ 完了 | `zenith_topo::Shell` |
 | **Solid（ソリッド）** | 閉シェル（Outer Shell）および内部空洞（Void Shells）を持つ3次元立体 | ✅ 完了 | `zenith_topo::Solid` |
 | **穴あき面トポロジー** | `FACE_BOUND`（内側穴ループ）を持つ面の多重閉ループ管理 | ✅ 完了 | `zenith_topo::Face` |
-| **トポロジー一貫性検証** | オイラー標数・エッジ共有整合性・マニホールド検査 | ✅ 完了 | `zenith_topo::validation` |
+| **トポロジー一貫性検証** | オイラー標数・エッジ共有整合性・マニホールド検査 | ✅ 完了 | **`zenith_topo::validation` という module はありません**（2026/09/12。HANDOVER 4-440）。**実体は `Solid::is_topologically_valid`（`solid.rs`）・`Shell::validate_closed`（`shell.rs`）・`Face::validate_pcurves` / `validate_boundary_on_surface`（`face.rs`）**です |
 
 ---
 
@@ -444,7 +444,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **Shell（シェル）** | 面の連結集合（開シェル / 閉シェル判定） | ✅ 完了 | `zenith_topo::Shell` |
 | **Solid（ソリッド）** | 閉シェル（Outer Shell）および内部空洞（Void Shells）を持つ3次元立体 | ✅ 完了 | `zenith_topo::Solid` |
 | **穴あき面トポロジー** | `FACE_BOUND`（内側穴ループ）を持つ面の多重閉ループ管理 | ✅ 完了 | `zenith_topo::Face` |
-| **トポロジー一貫性検証** | オイラー標数・エッジ共有整合性・マニホールド検査 | ✅ 完了 | `zenith_topo::validation` |
+| **トポロジー一貫性検証** | オイラー標数・エッジ共有整合性・マニホールド検査 | ✅ 完了 | **`zenith_topo::validation` という module はありません**（2026/09/12。HANDOVER 4-440）。**実体は `Solid::is_topologically_valid`（`solid.rs`）・`Shell::validate_closed`（`shell.rs`）・`Face::validate_pcurves` / `validate_boundary_on_surface`（`face.rs`）**です |
 
 ---
 
