@@ -145,6 +145,43 @@ done
 #
 # **Python か拡張モジュールが無ければ、赤にはせず、名前を出して飛ばします**
 # ——**「無い」を「緑」と読み違えないため**に、行は必ず出します。
+# **文書の「完了」が、実体を指しているか**（4-440）。
+#
+# **2026/09/12 に、実体の無い「完了」が見つかりました**（4-439）——
+# **`blender_addon::zenith_patch_addon.py` は、どこにもありません**
+# でした。**同じ形を、ここで数えます。**
+#
+# **Python は要りません**（crates の中を読むだけ）ので、
+# **Python の口より前**に置きます。
+echo
+echo "== 文書の指し先 =="
+DOC_PYTHON="${ZENITH_PYTHON:-}"
+if [ -z "$DOC_PYTHON" ]; then
+  for candidate in py python3 python; do
+    if command -v "$candidate" > /dev/null 2>&1; then
+      DOC_PYTHON="$candidate"
+      break
+    fi
+  done
+fi
+if [ -z "$DOC_PYTHON" ]; then
+  echo "  **Python がありません。** check_doc_claims は回していません（緑ではありません）。"
+else
+  started=$(date +%s)
+  "$DOC_PYTHON" tools/check_doc_claims.py > "$OUT/doc_claims.txt" 2>&1
+  code=$?
+  elapsed=$(( $(date +%s) - started ))
+  if [ "$code" != "0" ]; then
+    fail=1
+    red="$red doc_claims"
+    printf "  %-30s **赤**  exit=%s  (%ss)  %s
+" "check_doc_claims" "$code" "$elapsed" "$OUT/doc_claims.txt"
+  else
+    printf "  %-30s 緑    (%ss)  %s
+" "check_doc_claims" "$elapsed"       "$(grep -o '当てた名前 [0-9]* 件' "$OUT/doc_claims.txt" | head -1)"
+  fi
+fi
+
 echo
 echo "== Python の口 =="
 PYTHON="${ZENITH_PYTHON:-}"
