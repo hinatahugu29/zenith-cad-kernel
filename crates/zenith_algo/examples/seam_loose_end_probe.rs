@@ -168,7 +168,6 @@ fn main() {
     println!("**閉じた輪という不変量で、拾い直す**");
     println!();
 
-    let mut repaired = candidates.len();
     let mut added = 0usize;
     let mut known: Vec<(Point3, Point3)> = candidates
         .iter()
@@ -244,7 +243,7 @@ fn main() {
             break;
         }
     }
-    repaired = known.len();
+    let repaired = known.len();
     println!();
     println!("交線 {} 本 -> **{repaired} 本**（{added} 本 足した）", candidates.len());
 }

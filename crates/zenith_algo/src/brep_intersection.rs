@@ -4090,6 +4090,24 @@ fn clip_chain_to_face_trim(face: &Face, chain: &[Edge], tol: &Tolerance) -> Opti
     }
 }
 
+/// **その点が、その面の曲面の上に乗っているか**（4-445。診断用）。
+///
+/// **平面も見ます**——**`ExtremumEngine::point_to_surface` は NURBS しか
+/// 受けません**ので、**平面が絡む端が「どこにも乗っていない」ように
+/// 見えて**いました。
+fn point_on_face_surface(face: &Face, point: Point3, allowance: f64) -> bool {
+    match &face.geometry {
+        FaceGeometry::Plane(plane) => (point - plane.origin).dot(&plane.normal).abs() <= allowance,
+        FaceGeometry::Nurbs(surface) => {
+            matches!(
+                ExtremumEngine::point_to_surface(point, surface, 32, 1e-9),
+                Ok(projection) if projection.distance <= allowance
+            )
+        }
+        _ => false,
+    }
+}
+
 /// **閉じた輪という不変量で、足りない交線を拾い直す**（4-441）。
 ///
 /// # なぜ要るのか
@@ -4162,11 +4180,71 @@ fn repair_open_intersection_loops(
         }
         if explain {
             eprintln!("REPAIRWHY 浮いた端 {} 個", loose.len());
+            // **どの種類の面に乗っているか**まで出します（4-445）。
+            // **修理は NURBS × NURBS しか見ません**ので、**平面が
+            // 絡む端は素通り**します。**素通りしたことが見えないと、
+            // 「効かない」と「見ていない」を混ぜます。**
+            let kind = |geometry: &FaceGeometry| match geometry {
+                FaceGeometry::Plane(_) => "平面",
+                FaceGeometry::Nurbs(_) => "NURBS",
+                FaceGeometry::Coons(_) => "Coons",
+                _ => "その他",
+            };
+            for point in &loose {
+                let mut on_a = Vec::new();
+                for (index, face) in faces_a.iter().enumerate() {
+                    if let FaceGeometry::Nurbs(surface) = &face.geometry {
+                        if let Ok(projection) =
+                            ExtremumEngine::point_to_surface(*point, surface, 32, tol.parametric)
+                        {
+                            if projection.distance <= 1e-6 {
+                                on_a.push(format!("{index}:NURBS"));
+                                continue;
+                            }
+                        }
+                    }
+                    if point_on_face_surface(face, *point, 1e-6) {
+                        on_a.push(format!("{index}:{}", kind(&face.geometry)));
+                    }
+                }
+                let mut on_b = Vec::new();
+                for (index, face) in faces_b.iter().enumerate() {
+                    if let FaceGeometry::Nurbs(surface) = &face.geometry {
+                        if let Ok(projection) =
+                            ExtremumEngine::point_to_surface(*point, surface, 32, tol.parametric)
+                        {
+                            if projection.distance <= 1e-6 {
+                                on_b.push(format!("{index}:NURBS"));
+                                continue;
+                            }
+                        }
+                    }
+                    if point_on_face_surface(face, *point, 1e-6) {
+                        on_b.push(format!("{index}:{}", kind(&face.geometry)));
+                    }
+                }
+                eprintln!(
+                    "REPAIRWHY   端 ({:.3},{:.3},{:.3})  A面 [{}] / B面 [{}]",
+                    point.x, point.y, point.z,
+                    on_a.join(", "), on_b.join(", ")
+                );
+            }
         }
 
         let mut gained = 0usize;
         for point in &loose {
             for (ai, face_a) in faces_a.iter().enumerate() {
+                // **見るのは NURBS × NURBS だけ**です（4-445）。
+                //
+                // **平面まで広げてみました。駄目でした**——**`face_patch`
+                // で平面を双線形パッチに起こして同じ手を当てると、
+                // **板と帯の検体では 1 本も足せない**まま（大半は
+                // 「もう持っています」）、**通っていた `cone × torus` が
+                // 壊れました**（和で非多様体の稜 20 本、積で 6 本。
+                // `cone_torus_mesh_test` が 2 本落ちます）。
+                //
+                // **足りない交線が原因ではない所へ、交線を足しに行くと、
+                // 余計なものが入ります。** **戻しました。**
                 let FaceGeometry::Nurbs(surface_a) = &face_a.geometry else {
                     continue;
                 };
@@ -4225,6 +4303,11 @@ fn repair_open_intersection_loops(
                         step *= 0.5;
                     }
                     let Some(curve) = fitted else {
+                        if explain {
+                            eprintln!(
+                                "REPAIRWHY     A面{ai} x B面{bi}: 歩けないか、曲線にできません"
+                            );
+                        }
                         continue;
                     };
                     let (t0, t1) = curve.param_range();
@@ -4240,6 +4323,9 @@ fn repair_open_intersection_loops(
                         let e = existing.edge.end_vertex.point;
                         (same(s, start) && same(e, end)) || (same(s, end) && same(e, start))
                     }) {
+                        if explain {
+                            eprintln!("REPAIRWHY     A面{ai} x B面{bi}: もう持っています");
+                        }
                         continue;
                     }
                     let edge = Edge::new(
