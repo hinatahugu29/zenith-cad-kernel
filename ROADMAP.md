@@ -187,7 +187,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **OBJ 3D メッシュ出力** | 頂点・法線・UVテクスチャ座標を含む OBJ エクスポート | ✅ 完了 | `zenith_io::ObjExporter` |
 | **glTF 2.0 Web 3D エクスポート** | PBRマテリアル・BASE64埋め込み対応の次世代 Web 3D フォーマット | ✅ 完了 | `zenith_io::GltfExporter` |
 | **Blender 5.x C-Python 拡張 (PyO3)** | 単一バイナリ `zenith_cad.pyd` による超高速ゼロコピー連携 | ✅ 完了 | `zenith_py` |
-| **Blender 3D Viewport UI アドオン** | Nパネル統合、ワンクリック生成・ダイレクトモデリングUI | ✅ 完了 | `blender_addon::zenith_patch_addon.py` |
+| **Blender 3D Viewport UI アドオン** | Nパネル統合、ワンクリック生成・ダイレクトモデリングUI | **⚠ 実体が見つかりません**（2026/09/12。HANDOVER 4-439） | **`zenith_patch_addon.py` は、作業ツリーにも git の履歴にも、利用者の Blender にもありません。**`blender_addon/` は丸ごと `.gitignore` 済みで、**配っている ZIP の中身は `zenith_cad.pyd` 1 つだけ**（4-426、4-438）——**アドオンとしては入りません** |
 | **IGES 5.3 トポロジー入出力** | レガシーCADシステムとの下位互換性（Type 186 Manifold Solid） | ✅ 完了 | `zenith_io::IgesExporter` |
 
 ---
@@ -296,7 +296,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **OBJ 3D メッシュ出力** | 頂点・法線・UVテクスチャ座標を含む OBJ エクスポート | ✅ 完了 | `zenith_io::ObjExporter` |
 | **glTF 2.0 Web 3D エクスポート** | PBRマテリアル・BASE64埋め込み対応の次世代 Web 3D フォーマット | ✅ 完了 | `zenith_io::GltfExporter` |
 | **Blender 5.x C-Python 拡張 (PyO3)** | 単一バイナリ `zenith_cad.pyd` による超高速ゼロコピー連携 | ✅ 完了 | `zenith_py` |
-| **Blender 3D Viewport UI アドオン** | Nパネル統合、ワンクリック生成・ダイレクトモデリングUI | ✅ 完了 | `blender_addon::zenith_patch_addon.py` |
+| **Blender 3D Viewport UI アドオン** | Nパネル統合、ワンクリック生成・ダイレクトモデリングUI | **⚠ 実体が見つかりません**（2026/09/12。HANDOVER 4-439） | **`zenith_patch_addon.py` は、作業ツリーにも git の履歴にも、利用者の Blender にもありません。**`blender_addon/` は丸ごと `.gitignore` 済みで、**配っている ZIP の中身は `zenith_cad.pyd` 1 つだけ**（4-426、4-438）——**アドオンとしては入りません** |
 | **IGES 5.3 トポロジー入出力** | レガシーCADシステムとの下位互換性 | 📅 予定 | `zenith_io::IgesIO` |
 
 ---
@@ -404,7 +404,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **STL バイナリ/アスキー出力** | 3Dプリント用標準フォーマットへの高精度エクスポート | ✅ 完了 | `zenith_io::StlExporter` |
 | **OBJ 3D メッシュ出力** | 頂点・法線・UVテクスチャ座標を含む OBJ エクスポート | ✅ 完了 | `zenith_io::ObjExporter` |
 | **Blender 5.x C-Python 拡張 (PyO3)** | 単一バイナリ `zenith_cad.pyd` による超高速ゼロコピー連携 | ✅ 完了 | `zenith_py` |
-| **Blender 3D Viewport UI アドオン** | Nパネル統合、ワンクリック生成・ダイレクトモデリングUI | ✅ 完了 | `blender_addon::zenith_patch_addon.py` |
+| **Blender 3D Viewport UI アドオン** | Nパネル統合、ワンクリック生成・ダイレクトモデリングUI | **⚠ 実体が見つかりません**（2026/09/12。HANDOVER 4-439） | **`zenith_patch_addon.py` は、作業ツリーにも git の履歴にも、利用者の Blender にもありません。**`blender_addon/` は丸ごと `.gitignore` 済みで、**配っている ZIP の中身は `zenith_cad.pyd` 1 つだけ**（4-426、4-438）——**アドオンとしては入りません** |
 | **glTF 2.0 Web 3D エクスポート** | PBRマテリアル対応の次世代 Web 3D フォーマット | 📅 予定 | `zenith_io::GltfExporter` |
 | **IGES 5.3 トポロジー入出力** | レガシーCADシステムとの下位互換性 | 📅 予定 | `zenith_io::IgesIO` |
 
@@ -512,7 +512,7 @@ CADのコアとなる立体の生成・加工・変形アルゴリズム群。
 | **STL 出力 (Binary / ASCII)** | 3Dプリンタスライサー（Bambu Studio, PrusaSlicer 等）完全対応のSTL出力 | ✅ 完了 | `zenith_io::StlExporter` |
 | **OBJ メッシュ出力** | 法線・UV付きの標準 Wavefront OBJ 出力 | ✅ 完了 | `zenith_io::ObjExporter` |
 | **Python バインディング** | PyO3 による C-Python 拡張モジュール（`zenith_cad.pyd`）提供 | ✅ 完了 | `zenith_py` |
-| **Blender 5.x アドオン** | 自由曲面・プリミティブ・ダイレクト操作・穴埋めを含むGUIアドオン | ✅ 完了 | `blender_addon/zenith_patch_addon.py` |
+| **Blender 5.x アドオン** | 自由曲面・プリミティブ・ダイレクト操作・穴埋めを含むGUIアドオン | **⚠ 実体が見つかりません**（2026/09/12。HANDOVER 4-439） | **同上。** **`.pyd` は Blender 5.1 の中で読めます**が（4-433。Python 3.13.9）、**それは「モジュールとして import できる」であって「アドオン」ではありません** |
 | **FreeCAD 1.1.1 相互運用** | OpenCASCADE 7.x への完全無損失 STEP インポート（検証実証済み） | ✅ 完了 | `zenith_io::StepExporter` |
 | **STEP インポーター (STEP Read)** | 外部 STEP ファイルの B-Rep ソリッド読み込み・解析 | ⏳ 進行中 | `zenith_io::StepImporter` |
 | **IGES 出力 (IGES 5.3)** | 航空宇宙・レガシーCAD向け IGES エンティティ出力 | 📅 予定 | `zenith_io::IgesExporter` |
