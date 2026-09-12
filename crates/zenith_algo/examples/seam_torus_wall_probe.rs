@@ -153,59 +153,104 @@ fn main() {
     check_loose_ends(&a, &b, &tol);
 }
 
-/// **浮いた端が、その組の両方のパッチに乗っているか**（4-412）。
+/// **交線の端を数える**（4-436。**4-412 は 4 点をべた書きしていました**）。
 ///
-/// 交線が 2 本足りないと数えたあと、**落ちた組を名指し**しました——
-/// `A面15 × B面10` と `A面15 × B面8`、どちらも**辿れた枝 0 本**。
+/// **閉じた立体どうしの交線は、閉じた輪になります**——**どの端点も
+/// ちょうど 2 回**使われるはずです。**1 回しか使われない端点が
+/// 「浮いた端」**で、**そこで輪が切れています。**
 ///
-/// **「その組に交線が通るはずだ」は、まだ推測です。** ここで確かめます
-/// ——**浮いた端を、両方のパッチへ射影**します。**両方に乗っていれば、
-/// 交線はそこを通っており、追跡器が取り落としています。**
+/// **べた書きだと、幾何や実装が変わったときに古いままになります**
+/// ——**2026/09/09 の 4 点を、そのまま持ち歩いていました。**
+/// **いまは、その場で数えます。**
 fn check_loose_ends(a: &Solid, b: &Solid, tol: &Tolerance) {
+    use std::collections::BTreeMap;
+    use zenith_algo::BrepIntersectionBuilder;
     use zenith_geom::ExtremumEngine;
     use zenith_math::Point3;
     use zenith_topo::FaceGeometry;
 
-    let surface = |solid: &Solid, index: usize| match &solid.outer_shell.faces[index].geometry {
-        FaceGeometry::Nurbs(nurbs) => Some(nurbs.clone()),
-        _ => None,
+    let candidates = BrepIntersectionBuilder::collect_intersection_edge_candidates(
+        &a.outer_shell.faces,
+        &b.outer_shell.faces,
+        tol,
+    );
+
+    // **端点は、丸めて数えます**——**同じ点が別の曲線から来ると、
+    // 最後の桁が違います。** 1e-7 で丸めます（4-412 の註と同じ）。
+    let key = |point: Point3| {
+        (
+            (point.x * 1e7).round() as i64,
+            (point.y * 1e7).round() as i64,
+            (point.z * 1e7).round() as i64,
+        )
     };
-    let distance = |point: Point3, index: usize, solid: &Solid| -> String {
-        match surface(solid, index) {
-            Some(nurbs) => match ExtremumEngine::point_to_surface(point, &nurbs, 32, tol.parametric)
-            {
-                Ok(projection) => format!("{:.3e}", projection.distance),
-                Err(_) => "射影できず".to_string(),
-            },
-            None => "nurbs ではない".to_string(),
+    let mut uses: BTreeMap<(i64, i64, i64), (usize, Point3, Vec<(usize, usize)>)> =
+        BTreeMap::new();
+    for candidate in &candidates {
+        for point in [
+            candidate.edge.start_vertex.point,
+            candidate.edge.end_vertex.point,
+        ] {
+            let entry = uses
+                .entry(key(point))
+                .or_insert((0, point, Vec::new()));
+            entry.0 += 1;
+            entry.2.push((candidate.face_a_index, candidate.face_b_index));
+        }
+    }
+
+    let loose: Vec<_> = uses.values().filter(|(count, _, _)| *count != 2).collect();
+
+    println!("**交線の端を数える**（4-436）");
+    println!();
+    println!(
+        "交線 {} 本、端点 {} 個、**ちょうど 2 回でない端点 {} 個**",
+        candidates.len(),
+        uses.len(),
+        loose.len()
+    );
+    println!();
+    if loose.is_empty() {
+        println!("**輪は閉じています。**");
+        return;
+    }
+
+    // **浮いた端が、どの面に乗っているか。** **両方に乗っていれば、
+    // 交線はそこを通っており、追跡器が取り落としています**（4-412）。
+    let distance = |point: Point3, index: usize, solid: &Solid| -> f64 {
+        match &solid.outer_shell.faces[index].geometry {
+            FaceGeometry::Nurbs(nurbs) => {
+                match ExtremumEngine::point_to_surface(point, nurbs, 32, tol.parametric) {
+                    Ok(projection) => projection.distance,
+                    Err(_) => f64::INFINITY,
+                }
+            }
+            _ => f64::INFINITY,
         }
     };
 
-    println!("**浮いた端は、その組の両方のパッチに乗っているか**（4-412）");
-    println!();
-    println!("{:<34}{:>13}{:>13}{:>13}{:>13}{:>13}", "浮いた端", "A面14 まで", "A面15 まで", "B面8 まで", "B面9 まで", "B面10 まで");
-    println!("{}", "-".repeat(99));
-    for (x, y, z) in [
-        (11.422866, -2.207950, -3.983248),
-        (11.632495, -2.947042, -4.000000),
-        (10.226803, -6.277938, -4.000000),
-        (7.773197, -6.542084, -3.551570),
-    ] {
-        let point = Point3::new(x, y, z);
+    println!("{:<34}{:>6}  {}", "浮いた端", "使用", "乗っている面（1e-6 以内）");
+    println!("{}", "-".repeat(92));
+    for (count, point, pairs) in &loose {
+        let mut on_a = Vec::new();
+        for index in 0..a.outer_shell.faces.len() {
+            if distance(*point, index, a) <= 1e-6 {
+                on_a.push(index);
+            }
+        }
+        let mut on_b = Vec::new();
+        for index in 0..b.outer_shell.faces.len() {
+            if distance(*point, index, b) <= 1e-6 {
+                on_b.push(index);
+            }
+        }
         println!(
-            "({:>9.4},{:>9.4},{:>9.4}){:>13}{:>13}{:>13}{:>13}{:>13}",
-            x,
-            y,
-            z,
-            distance(point, 14, a),
-            distance(point, 15, a),
-            distance(point, 8, b),
-            distance(point, 9, b),
-            distance(point, 10, b),
+            "({:>9.4},{:>9.4},{:>9.4}){:>6}  A面 {:?} / B面 {:?}   出どころ {:?}",
+            point.x, point.y, point.z, count, on_a, on_b, pairs
         );
     }
-    println!("{}", "-".repeat(99));
+    println!("{}", "-".repeat(92));
     println!();
-    println!("**両方に乗っていれば、交線はそこを通っています**——");
-    println!("**取り落としているのは `fit_all_branches` のほう**です。");
+    println!("**両方の面に乗っているのに交線が来ていないなら、追跡器の取り落とし**です。");
+    println!("**どちらかに乗っていないなら、そこは本当に交線の端**です。");
 }

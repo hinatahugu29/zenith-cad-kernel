@@ -190,7 +190,12 @@ else
     fail=1
     red="$red addon_package"
   else
-    newest=$(find crates -name '*.rs' -newer "$PACKAGE" -print -quit 2>/dev/null)
+    # **見るのは、拡張に入るソースだけ**です（4-437）。
+    #
+    # **`examples/` と `tests/` は、拡張に入りません**——**そこを
+    # 触っただけで赤になるのは、嘘**です。**実際に 1 度なりました**
+    # （`seam_torus_wall_probe.rs` を直したら「包みが古い」と言われた）。
+    newest=$(find crates -name '*.rs' -newer "$PACKAGE"                -not -path '*/examples/*' -not -path '*/tests/*'                -print -quit 2>/dev/null)
     if [ -z "$newest" ]; then
       newest=$(find crates -name 'Cargo.toml' -newer "$PACKAGE" -print -quit 2>/dev/null)
     fi
