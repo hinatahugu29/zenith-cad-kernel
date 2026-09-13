@@ -100,7 +100,8 @@ gate_membership_probe foreign_distance_probe foreign_slice_probe
 grid_fallback_probe foreign_edit_probe foreign_inertia_probe
 curved_placement_probe oblique_section_probe foreign_cross_pair_probe
 face_merge_probe step_representation_probe step_unit_probe
-thicken_sheet_probe sketch_boolean_probe unused_builder_probe"
+thicken_sheet_probe sketch_boolean_probe unused_builder_probe
+tangent_sweep_probe"
 
 if [ "$QUICK" = "0" ]; then
   GATES="$GATES contact_placement_probe"
