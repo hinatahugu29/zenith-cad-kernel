@@ -1340,6 +1340,10 @@ impl BrepIntersectionBuilder {
                     edge: candidate.edge,
                 }),
         );
+        // **公差の下で離れている端を、1 つに寄せます**（4-448。
+        // `ZENITH_WELD_ENDS=1` で入ります。**既定では走りません**）。
+        let welded = weld_intersection_edge_ends(&mut edge_candidates, tol);
+        let _ = welded;
         // **閉じた輪という不変量で、足りない交線を拾い直します**（4-441）。
         let repaired = repair_open_intersection_loops(&faces_a, &faces_b, &mut edge_candidates, tol);
         let _ = repaired;
@@ -4139,6 +4143,86 @@ fn point_on_face_surface(face: &Face, point: Point3, allowance: f64) -> bool {
         _ => false,
     }
 }
+
+/// **公差の下で離れている端を、1 つに寄せる**（4-448）。
+///
+/// # なぜ要るのか
+///
+/// 4-447 で測りました——**「接する」検体の浮いた端 5 個のうち 4 個は、
+/// 2 個ずつが同じ点**でした。**離れているのは 1.2e-7**、**線形公差
+/// 1e-6 の 8 分の 1** です。**公差で束ねると、2 点とも使用 2 になって
+/// 閉じます。**
+///
+/// **交線が足りないのではありません。** **同じ点を 2 つに数えて
+/// いた**だけです。**直す先が、まるで違います。**
+///
+/// # どうやるか
+///
+/// [`PointWelder`] に預けます——**丸めではありません**。**丸めは、
+/// 升の境に乗った 2 点を、どれだけ升を粗くしても割ります。**
+///
+/// **端点を動かしたら、曲線の端も動かします。** **頂点だけ動かすと、
+/// 頂点と曲線が食い違ったまま下の段へ行きます**——**それは、直した
+/// つもりで壊しています。**
+///
+/// **動かす幅は、必ず公差の内側**です（寄せる条件がそれです）。
+///
+/// # まだ既定ではありません
+///
+/// `ZENITH_WELD_ENDS=1` **で入ります**。**4-441 の修理が、同じ端の
+/// 数え方に乗っています**——**既定にするなら、継ぎ目トーラスの側も
+/// 一緒に測ってから**です（4-448）。
+///
+/// 戻り値は**寄せた端の数**です。
+fn weld_intersection_edge_ends(
+    candidates: &mut [IntersectionEdgeCandidate],
+    tol: &Tolerance,
+) -> usize {
+    if std::env::var_os("ZENITH_WELD_ENDS").is_none() {
+        return 0;
+    }
+    // **升は公差の倍**に取ります。**隣の升まで見る**ので、これで
+    // 公差の内側は必ず同じ代表に着きます。
+    let mut welder = PointWelder::new(tol.linear * 2.0, tol.linear);
+    let mut seats: Vec<(usize, usize)> = Vec::with_capacity(candidates.len());
+    for candidate in candidates.iter() {
+        let start = welder.representative(candidate.edge.start_vertex.point);
+        let end = welder.representative(candidate.edge.end_vertex.point);
+        seats.push((start, end));
+    }
+
+    let mut moved = 0usize;
+    for (candidate, (start_seat, end_seat)) in candidates.iter_mut().zip(seats) {
+        for (seat, at_start) in [(start_seat, true), (end_seat, false)] {
+            let seat_point = welder.point(seat);
+            let vertex = if at_start {
+                &mut candidate.edge.start_vertex
+            } else {
+                &mut candidate.edge.end_vertex
+            };
+            if (vertex.point - seat_point).norm() <= f64::EPSILON {
+                continue;
+            }
+            vertex.point = seat_point;
+            // **曲線の端も、同じ所へ。**
+            let control_points = &mut candidate.edge.curve.control_points;
+            if let Some(control) = if at_start {
+                control_points.first_mut()
+            } else {
+                control_points.last_mut()
+            } {
+                control.point = seat_point;
+            }
+            moved += 1;
+        }
+    }
+
+    if moved > 0 && std::env::var_os("ZENITH_REPAIR_WHY").is_some() {
+        eprintln!("WELDWHY 公差（{:.3e}）で端を {moved} 個寄せました", tol.linear);
+    }
+    moved
+}
+
 
 /// **閉じた輪という不変量で、足りない交線を拾い直す**（4-441）。
 ///
