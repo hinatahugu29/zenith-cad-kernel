@@ -177,6 +177,22 @@ pub struct BooleanShellAssembly {
     /// [`crate::contact::find_result_pinch`] は測る場所を失います
     /// （2026/08/30 に一度そうしました）。
     pub dropped_contact_curves: Vec<Edge>,
+    /// **落とさなかった、接している線**（4-449）。
+    ///
+    /// [`Self::dropped_contact_curves`] は**落とした線だけ**です。
+    /// **接している線が面を割れてしまうと、落とされないので、そこに
+    /// 入りません**——**そして、答えが非多様体でも、そのまま返ります。**
+    ///
+    /// **2026/09/13 に、そうなりました**（4-449）。**穴を横切る割りを
+    /// 残りの再挑戦にも回した途端**、接する検体の積が**1 つの立体として
+    /// 返りました**——**体積は正しく**、**形は 2 つに割れている**もの
+    /// です。
+    ///
+    /// **接しているか（法線が平行か）だけ**で選びます。**材料を数えるのは
+    /// [`crate::contact::find_result_pinch`] の仕事**で、そちらは高いので、
+    /// **渡す前にここで絞ります**——**全部渡すと、`foreign_cross_pair_probe`
+    /// が 501 秒から 901 秒になりました。**
+    pub kept_contact_curves: Vec<Edge>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1366,6 +1382,35 @@ impl BrepIntersectionBuilder {
             tol,
         );
 
+        // **落とさなかった、接している線を控えます**（4-449）。
+        //
+        // **パッチは面ごとに 1 度だけ作ります**——候補ごとに作り直すと、
+        // **同じ面を何十回も NURBS に変換**します。
+        let mut kept_contact_curves: Vec<Edge> = Vec::new();
+        {
+            let mut patches_a: Vec<Option<Option<NurbsSurface3>>> = vec![None; faces_a.len()];
+            let mut patches_b: Vec<Option<Option<NurbsSurface3>>> = vec![None; faces_b.len()];
+            for candidate in &edge_candidates {
+                if candidate.face_a_index >= faces_a.len()
+                    || candidate.face_b_index >= faces_b.len()
+                {
+                    continue;
+                }
+                let patch_a = patches_a[candidate.face_a_index]
+                    .get_or_insert_with(|| face_patch(&faces_a[candidate.face_a_index]))
+                    .clone();
+                let patch_b = patches_b[candidate.face_b_index]
+                    .get_or_insert_with(|| face_patch(&faces_b[candidate.face_b_index]))
+                    .clone();
+                let (Some(patch_a), Some(patch_b)) = (patch_a, patch_b) else {
+                    continue;
+                };
+                if curve_lies_tangentially(&patch_a, &patch_b, &candidate.edge, tol) {
+                    kept_contact_curves.push(candidate.edge.clone());
+                }
+            }
+        }
+
         BooleanShellAssembly {
             face_pair_candidate_count,
             edge_candidates,
@@ -1373,6 +1418,7 @@ impl BrepIntersectionBuilder {
             cap_generation,
             assembly,
             dropped_contact_curves,
+            kept_contact_curves,
         }
     }
 
@@ -2753,6 +2799,63 @@ impl BrepIntersectionBuilder {
                 if applied_this_chain {
                     applied_split_count += chain.len();
                     skipped_split_count = skipped_split_count.saturating_sub(chain.len());
+                }
+            }
+
+            // **残りが穴に届いているなら、穴を横切る受け皿へ**（4-449）。
+            //
+            // `split_planar_face_across_holes` は上にもありますが、
+            // **`applied_split_count == 0` に縛られています**——
+            // **1 本でも当たると、1 度も走りません。**
+            //
+            // 実測（接する検体、板の底面 z = 0。**内側の輪 1 個**）——
+            // 交線 3 本のうち **1 本が当たり**、残り 2 本（**x = 18 の線が
+            // 穴で 2 つに切れたもの**）は鎖にまとめても
+            // `Split chain start does not lie on the outer boundary` で
+            // 断られます。**鎖の端が、外周ではなく穴の縁に着く**からです。
+            //
+            // **その結果、底面は x = 10 でしか割れず、x = 10〜18 の帯
+            // （相手の中）が「外」の名札のまま残ります**——
+            // `selected_piece_side_probe` で **562 標本のうち 276 が
+            // 相手の中**、と出ます。
+            //
+            // **穴を持つ片にだけ当てます。** 穴が無ければ
+            // `split_planar_face_across_holes` は即座に断るので、
+            // **回しても無駄**です。
+            if !leftover.is_empty() {
+                let mut next_faces = Vec::new();
+                let mut applied_across = 0usize;
+                for current_face in faces {
+                    if current_face.inner_wires.is_empty() {
+                        next_faces.push(current_face);
+                        continue;
+                    }
+                    match split_planar_face_across_holes(&current_face, &leftover, tol) {
+                        Ok(pieces) if pieces.len() >= 2 => {
+                            applied_across += 1;
+                            next_faces.extend(pieces);
+                        }
+                        other => {
+                            if leftover_why {
+                                match &other {
+                                    Ok(pieces) => eprintln!(
+                                        "LEFTWHY   穴を横切る: 片 {} 枚で採らず",
+                                        pieces.len()
+                                    ),
+                                    Err(reason) => eprintln!(
+                                        "LEFTWHY   穴を横切る: {}",
+                                        why_text(reason)
+                                    ),
+                                }
+                            }
+                            next_faces.push(current_face);
+                        }
+                    }
+                }
+                faces = next_faces;
+                if applied_across > 0 {
+                    applied_split_count += leftover.len();
+                    skipped_split_count = skipped_split_count.saturating_sub(leftover.len());
                 }
             }
         }
@@ -6465,14 +6568,38 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
                 centre += point.coords;
             }
             centre /= points.len() as f64;
+            // **重心だけでは、どの面から来た破片か決まりません**（4-449）。
+            //
+            // 4-448 で「穴の円筒の破片が選ばれていない」ところまで来ました。
+            // **それを確かめるには、重心ではなく、面の種類と広がり**が
+            // 要ります——**円筒の四半分は、重心が面の上に乗りません**ので、
+            // **重心を見ても円筒だと分かりません。**
+            let kind = match &piece.face.geometry {
+                FaceGeometry::Plane(_) => "平面",
+                FaceGeometry::Nurbs(_) => "NURBS",
+                FaceGeometry::Coons(_) => "Coons",
+                _ => "その他",
+            };
+            let mut low = points[0];
+            let mut high = points[0];
+            for point in &points {
+                low.x = low.x.min(point.x);
+                low.y = low.y.min(point.y);
+                low.z = low.z.min(point.z);
+                high.x = high.x.max(point.x);
+                high.y = high.y.max(point.y);
+                high.z = high.z.max(point.z);
+            }
             eprintln!(
-                "PIECEWHY {:?} {:?} 重心 ({:.4} {:.4} {:.4}) 稜 {}",
+                "PIECEWHY {:?} {:?} {kind} 重心 ({:.4} {:.4} {:.4}) 稜 {} 内輪 {} 箱 ({:.3},{:.3},{:.3})〜({:.3},{:.3},{:.3})",
                 piece.operand,
                 piece.location,
                 centre.x,
                 centre.y,
                 centre.z,
-                piece.face.outer_wire.edges.len()
+                piece.face.outer_wire.edges.len(),
+                piece.face.inner_wires.len(),
+                low.x, low.y, low.z, high.x, high.y, high.z
             );
         }
     }
@@ -12271,6 +12398,45 @@ fn contact_curve_is_not_bounding(
             if explain {
                 eprintln!("CONTACTCURVE 縁です（正弦 {sine:.3e}、位置 {fraction}）");
             }
+            return false;
+        }
+    }
+    true
+}
+
+/// その線に沿って、2 枚の面が**接している**か（4-449）。
+///
+/// [`contact_curve_is_not_bounding`] の 1 つ目の条件だけを取り出したもの
+/// です。**あちらは材料まで数えます**——64 点の輪で内外を測るので、
+/// **高い**です。**ここは法線の向きだけ**を見ます。
+///
+/// **3 つの位置（1/4, 1/2, 3/4）で、法線の外積が 1e-6 より小さい**なら
+/// 接している、とします。**閾値も位置も、あちらと同じ**です——
+/// **変えると、2 つの判定が食い違います。**
+fn curve_lies_tangentially(
+    patch_a: &NurbsSurface3,
+    patch_b: &NurbsSurface3,
+    edge: &Edge,
+    tol: &Tolerance,
+) -> bool {
+    let (t_min, t_max) = edge.curve.param_range();
+    if !(t_max > t_min) {
+        return false;
+    }
+    let span = (edge.curve.evaluate(t_max) - edge.curve.evaluate(t_min)).norm();
+    if span <= tol.linear * 100.0 {
+        return false;
+    }
+    for fraction in [0.25_f64, 0.5, 0.75] {
+        let t = t_min + (t_max - t_min) * fraction;
+        let point = edge.curve.evaluate(t);
+        let (Some(normal_a), Some(normal_b)) = (
+            surface_normal_at(patch_a, point),
+            surface_normal_at(patch_b, point),
+        ) else {
+            return false;
+        };
+        if normal_a.cross(&normal_b).norm() > 1e-6 {
             return false;
         }
     }

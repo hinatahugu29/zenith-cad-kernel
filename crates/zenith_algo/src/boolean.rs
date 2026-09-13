@@ -411,14 +411,37 @@ impl BooleanEngine {
         //
         // **接触が無い配置では走りません。** `dropped_contact_curve_count`
         // が 0 のときは、この検査は一度も呼ばれません。
-        if !shell_assembly.dropped_contact_curves.is_empty() {
-            if let Some(pinch) = crate::contact::find_result_pinch(
-                solid_a,
-                solid_b,
-                &shell_assembly.dropped_contact_curves,
-                op,
-                tol,
-            ) {
+        //
+        // **落とした線だけでは足りません**（4-449）。**接している線が
+        // 面を割れてしまうと、落とされないので、この検査に掛かりません。**
+        //
+        // **2026/09/13 に、そうなりました。** 4-449 で「穴を横切る割り」を
+        // 残りの再挑戦にも回したところ、**接する検体の積が、1 つの立体
+        // として返りました**——**体積は正しい**（1035.8554。閉じた式と
+        // 一致）**のに、答えは (10, 15) の線で 2 つに割れている**もの
+        // です。**3-1 が禁じている「もっともらしい立体」**そのものです。
+        //
+        // **前は、一般経路が通らなかったので、最後の受け皿にある同じ
+        // 検査が拾っていました。** **通るようになった途端、すり抜け
+        // ました**——**4-189 の註が書いていたのと、同じ形**です。
+        //
+        // **だから、交線の全部で見ます。** 落ちた線も、生きている線も。
+        // **交線を全部渡してはいけません。** **`find_result_pinch` は
+        // 交線 1 本あたり 64 点の輪で内外を測ります**——**全部渡したら、
+        // `foreign_cross_pair_probe` が 501 秒から 901 秒**、
+        // `check_python_arguments` が **183 秒から 849 秒**になりました。
+        //
+        // **渡すのは、接している線だけ**です（法線が平行な線。
+        // `kept_contact_curves`）。**接していない線のまわりでは、材料が
+        // 2 つに割れることはありません**——**割れるのは、接している所**
+        // だからです。
+        let mut contact_check_edges: Vec<zenith_topo::Edge> =
+            shell_assembly.dropped_contact_curves.clone();
+        contact_check_edges.extend(shell_assembly.kept_contact_curves.iter().cloned());
+        if !contact_check_edges.is_empty() {
+            if let Some(pinch) =
+                crate::contact::find_result_pinch(solid_a, solid_b, &contact_check_edges, op, tol)
+            {
                 return Err(format!(
                     "Exact B-Rep boolean refuses this placement: {}",
                     pinch.describe()
