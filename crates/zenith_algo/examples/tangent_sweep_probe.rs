@@ -155,8 +155,20 @@ fn main() {
         let mut first_refused: Option<f64> = None;
         let mut last_refused: Option<f64> = None;
 
+        // **1 つだけ回す口**（`ZENITH_SWEEP_ONLY=10.01`）。
+        //
+        // **`ZENITH_BATCH_WHY=1` は面の番号しか言いません。** 15 通りぶんの
+        // 出力が混ざると、**どの置き方のものか分かりません。**
+        let only: Option<f64> = std::env::var("ZENITH_SWEEP_ONLY")
+            .ok()
+            .and_then(|text| text.parse().ok());
         for offset in offsets {
             let x = 10.0 + offset;
+            if let Some(only) = only {
+                if (x - only).abs() > 1e-9 {
+                    continue;
+                }
+            }
             let Some((a, b)) = placement(x, height, &tol) else {
                 println!("{x:>12.6}  **立体が作れません**");
                 continue;
@@ -201,7 +213,7 @@ fn main() {
                             eprintln!(
                                 "SWEEPWHY x={x:.6} {} — {}",
                                 ["和", "積", "差"][index],
-                                reason.chars().take(180).collect::<String>()
+                                reason.chars().take(900).collect::<String>()
                             );
                         }
                     }
@@ -212,6 +224,29 @@ fn main() {
             if offset > 0.0 && per_op[0].contains('未') {
                 first_refused.get_or_insert(offset);
                 last_refused = Some(offset);
+            }
+
+            // **通る置き方と通らない置き方を、同じ物差しで並べます**（4-451）。
+            //
+            // **断り文は、断られたときにしか出ません。** **通ったほうの
+            // 縫合の数字が見えないと、「何が違うのか」が決まりません。**
+            if std::env::var_os("ZENITH_SWEEP_WHY").is_some() {
+                let assembly = zenith_algo::BrepIntersectionBuilder::collect_boolean_shell_assembly(
+                    &a,
+                    &b,
+                    BooleanOpType::Union,
+                    &tol,
+                );
+                let report = &assembly.selection.stitch_report;
+                eprintln!(
+                    "SWEEPSTITCH x={x:.6} 交線 {} 本、面片 {}、稜の使用 {}、合わない {}、非多様体 {}、同じ向き {}",
+                    assembly.edge_candidates.len(),
+                    report.face_piece_count,
+                    report.edge_use_count,
+                    report.unmatched_edge_use_count,
+                    report.non_manifold_edge_use_count,
+                    report.same_direction_edge_use_count
+                );
             }
 
             let want = closed_form_intersection(x, height);
