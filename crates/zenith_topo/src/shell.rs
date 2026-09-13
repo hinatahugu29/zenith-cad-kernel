@@ -1,5 +1,6 @@
 use crate::face::{Face, FaceGeometry};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use zenith_math::{BoundingBox3, Point2, Point3, Tolerance};
 
@@ -45,6 +46,21 @@ pub struct ShellValidationReport {
     /// であってゲートではない（`is_valid` には影響しない）。
     #[serde(default)]
     pub unshared_edge_entity_use_count: usize,
+    /// **頂点のまわりが 1 周になっていない**頂点の数（4-450）。
+    ///
+    /// 閉じた 2 次元多様体なら、**頂点に集まる面は、その頂点に集まる稜を
+    /// 伝って 1 周で繋がります**。**2 つの塊が点で触れているなら、
+    /// そこは 2 周**になります。
+    ///
+    /// **稜の数え方では出ません**——稜はどれも 2 回ずつ使われています。
+    /// **繋がっているのが稜ではなく点**だからです。**恒等式でも出ません**
+    /// ——**体積は本当に合っている**ので（4-449 で 2 件踏みました）。
+    ///
+    /// **効かせています**（`errors` に積むので `is_valid` が false に
+    /// なります）。**測ってから決めました**——既存の検体では 1 度も
+    /// 鳴りません（4-450）。
+    #[serde(default)]
+    pub pinched_vertex_count: usize,
     pub errors: Vec<String>,
 }
 
@@ -131,6 +147,7 @@ impl Shell {
             pcurve_mismatch_count: 0,
             max_pcurve_distance: 0.0,
             unshared_edge_entity_use_count: 0,
+            pinched_vertex_count: 0,
             errors: Vec::new(),
         };
 
@@ -258,6 +275,8 @@ impl Shell {
                 ));
             }
         }
+
+        count_pinched_vertices(&edge_uses, &mut report, tol);
 
         report
     }
@@ -697,4 +716,136 @@ fn same_middle(a: &EdgeUse, b: &EdgeUse, tol: f64) -> bool {
 
 fn points_same(a: Point3, b: Point3, tol: f64) -> bool {
     (a - b).norm() <= tol
+}
+
+/// **頂点のまわりが 1 周になっているか**を数える（4-450）。
+///
+/// # なぜ要るのか
+///
+/// **稜の数え方は、点で触れている所を見つけません。** 2 つの塊が 1 点で
+/// 触れていても、**稜はどれも 2 回ずつ使われています**。**恒等式も
+/// 見つけません**——**体積は本当に合っている**からです（4-449）。
+///
+/// # どうやるか
+///
+/// **頂点に集まる面を、その頂点に集まる稜で繋ぎます。** 繋いだ組が
+/// 2 つ以上できたら、**そこは 1 周になっていません**。
+///
+/// **頂点は公差で束ねます**——**丸めではありません**。升目で引いてから
+/// **まわりの升も見て**、公差の内側かを測ります（[`crate::shell`] の
+/// 他の判定と同じ流儀）。
+///
+/// # 効かせています
+///
+/// **`errors` に積みます**——つまり `is_valid` が false になります。
+/// **測ってから決めました**（4-450）：**既存の検体では、ここが 1 度も
+/// 鳴りません**。**点で触れる置き方は、既に塊 2 つとして返っている**
+/// ので、1 周が崩れる所がありません。
+fn count_pinched_vertices(
+    edge_uses: &[EdgeUse],
+    report: &mut ShellValidationReport,
+    tol: &Tolerance,
+) {
+    if edge_uses.is_empty() {
+        return;
+    }
+    // **升の一辺は公差の倍**。**隣の升まで見る**ので、これで公差の内側は
+    // 必ず同じ席に着きます。
+    let grid = (tol.linear * 2.0).max(1e-12);
+    let cell = |point: Point3| {
+        (
+            (point.x / grid).floor() as i64,
+            (point.y / grid).floor() as i64,
+            (point.z / grid).floor() as i64,
+        )
+    };
+    let mut seats: Vec<Point3> = Vec::new();
+    let mut buckets: BTreeMap<(i64, i64, i64), Vec<usize>> = BTreeMap::new();
+    let mut seat_of = |point: Point3, seats: &mut Vec<Point3>| -> usize {
+        let (cx, cy, cz) = cell(point);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(bucket) = buckets.get(&(cx + dx, cy + dy, cz + dz)) {
+                        for index in bucket {
+                            if (seats[*index] - point).norm() <= tol.linear {
+                                return *index;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let index = seats.len();
+        seats.push(point);
+        buckets.entry((cx, cy, cz)).or_default().push(index);
+        index
+    };
+
+    // 頂点 → その頂点に集まる (面, 稜の席の組)
+    let mut around: BTreeMap<usize, Vec<(usize, (usize, usize))>> = BTreeMap::new();
+    for use_ in edge_uses {
+        let start = seat_of(use_.start, &mut seats);
+        let end = seat_of(use_.end, &mut seats);
+        if start == end {
+            // **輪になった稜**（円の継ぎ目など）。**両端が同じ席**なので、
+            // 1 周かどうかの手がかりになりません。
+            continue;
+        }
+        let key = (start.min(end), start.max(end));
+        around
+            .entry(start)
+            .or_default()
+            .push((use_.face_index, key));
+        around.entry(end).or_default().push((use_.face_index, key));
+    }
+
+    for (vertex, uses) in &around {
+        let mut faces: Vec<usize> = uses.iter().map(|(face, _)| *face).collect();
+        faces.sort_unstable();
+        faces.dedup();
+        // **面が 2 枚までなら、輪になりようがありません。**
+        if faces.len() < 3 {
+            continue;
+        }
+        let mut parent: Vec<usize> = (0..faces.len()).collect();
+        let mut by_edge: BTreeMap<(usize, usize), Vec<usize>> = BTreeMap::new();
+        for (face, key) in uses {
+            let Ok(index) = faces.binary_search(face) else {
+                continue;
+            };
+            by_edge.entry(*key).or_default().push(index);
+        }
+        for sharers in by_edge.values() {
+            for pair in sharers.windows(2) {
+                let left = find_root(&mut parent, pair[0]);
+                let right = find_root(&mut parent, pair[1]);
+                if left != right {
+                    parent[left] = right;
+                }
+            }
+        }
+        let mut groups: Vec<usize> = (0..faces.len()).map(|i| find_root(&mut parent, i)).collect();
+        groups.sort_unstable();
+        groups.dedup();
+        if groups.len() > 1 {
+            report.pinched_vertex_count += 1;
+            let point = seats[*vertex];
+            report.errors.push(format!(
+                "Vertex ({:.6} {:.6} {:.6}) has {} separate fans of faces, not one",
+                point.x,
+                point.y,
+                point.z,
+                groups.len()
+            ));
+        }
+    }
+}
+
+fn find_root(parent: &mut [usize], mut index: usize) -> usize {
+    while parent[index] != index {
+        parent[index] = parent[parent[index]];
+        index = parent[index];
+    }
+    index
 }

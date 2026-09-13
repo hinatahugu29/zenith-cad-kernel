@@ -435,9 +435,15 @@ impl BooleanEngine {
         // `kept_contact_curves`）。**接していない線のまわりでは、材料が
         // 2 つに割れることはありません**——**割れるのは、接している所**
         // だからです。
-        let mut contact_check_edges: Vec<zenith_topo::Edge> =
-            shell_assembly.dropped_contact_curves.clone();
-        contact_check_edges.extend(shell_assembly.kept_contact_curves.iter().cloned());
+        //
+        // **`ZENITH_NO_PINCH_CHECK=1` で止められます**（4-450。**測るための
+        // 口**）。**止めると、接している所で 2 つに割れた答えが、1 つの
+        // 立体として返ります**——**それを測りたいときだけ**使ってください。
+        let mut contact_check_edges: Vec<zenith_topo::Edge> = Vec::new();
+        if std::env::var_os("ZENITH_NO_PINCH_CHECK").is_none() {
+            contact_check_edges.extend(shell_assembly.dropped_contact_curves.iter().cloned());
+            contact_check_edges.extend(shell_assembly.kept_contact_curves.iter().cloned());
+        }
         if !contact_check_edges.is_empty() {
             if let Some(pinch) =
                 crate::contact::find_result_pinch(solid_a, solid_b, &contact_check_edges, op, tol)
