@@ -75,10 +75,10 @@ fn volume_of(solids: &[Solid]) -> f64 {
 ///
 /// **穴は中心 (15, 15)・半径 5** なので、**`x = 10` でちょうど接します**。
 /// **`x > 10` なら食い込み、`x < 10` なら離れています**（穴の縁からは）。
-fn placement(x: f64, height: f64, tol: &Tolerance) -> Option<(Solid, Solid)> {
+fn placement(x: f64, height: f64, radius: f64, tol: &Tolerance) -> Option<(Solid, Solid)> {
     let plane = WorkPlane::xy();
     let mut holed = rectangle(0.0, 0.0, 30.0, 30.0);
-    add_circle(&mut holed, 15.0, 15.0, 5.0);
+    add_circle(&mut holed, 15.0, 15.0, radius);
     // 帯の東の縁は 18 で止めます（穴の東側には届きません）。
     let bar = rectangle(x, -20.0, 18.0 - x, 70.0);
     let a = extrude_sketch(&holed, &plane, height, tol).ok()?;
@@ -99,8 +99,8 @@ fn placement(x: f64, height: f64, tol: &Tolerance) -> Option<(Solid, Solid)> {
 /// `πr² − (r²·acos(d/r) − d·√(r²−d²))`、`d = 3`。
 ///
 /// **x0 > 10 なら、さらに x < x0 の弓形も抜けます。**
-fn closed_form_intersection(x0: f64, height: f64) -> f64 {
-    let r: f64 = 5.0;
+fn closed_form_intersection(x0: f64, height: f64, radius: f64) -> f64 {
+    let r: f64 = radius;
     let disc = std::f64::consts::PI * r * r;
     let segment = |d: f64| {
         if d >= r {
@@ -132,8 +132,33 @@ fn main() {
     println!("**断りの帯の幅が半径で決まっているなら、一緒に動きます。**");
 
     let mut broken = 0usize;
-    let mut widths: Vec<(f64, f64, f64)> = Vec::new();
+    let mut widths: Vec<(f64, f64, f64, f64)> = Vec::new();
 
+    // **穴の半径を変える口**（`ZENITH_SWEEP_RADIUS=3,8`。4-458）。
+    //
+    // 4-454 が「**縁が絶対の長さか、比か**——穴の半径を変えて、縁が
+    // 倍になるか」を次の手に挙げていました。**4-457 で縁そのものは
+    // 消えました**が、**消えたのがこの半径でだけ、ということはあり
+    // 得ます**。**別の半径でも閉じているか**は、測らなければ書けません。
+    //
+    // **門が測る半径は 5 のまま**です。足すと時間が倍々になります。
+    let radii: Vec<f64> = std::env::var("ZENITH_SWEEP_RADIUS")
+        .ok()
+        .map(|text| {
+            text.split(',')
+                .filter_map(|piece| piece.trim().parse::<f64>().ok())
+                .collect()
+        })
+        .filter(|values: &Vec<f64>| !values.is_empty())
+        .unwrap_or_else(|| vec![5.0]);
+
+    for radius in radii.iter().copied() {
+    // **接するのは、穴の西の端**。半径が変われば、そこも動きます。
+    let touch = 15.0 - radius;
+    if radii.len() > 1 {
+        println!();
+        println!("###### 穴の半径 {radius}（接するのは x = {touch}） ######");
+    }
     for height in [8.0_f64, 16.0] {
         let contact_length = height - 2.0;
         println!();
@@ -175,13 +200,13 @@ fn main() {
             .ok()
             .and_then(|text| text.parse().ok());
         for offset in offsets {
-            let x = 10.0 + offset;
+            let x = touch + offset;
             if let Some(only) = only {
                 if (x - only).abs() > 1e-9 {
                     continue;
                 }
             }
-            let Some((a, b)) = placement(x, height, &tol) else {
+            let Some((a, b)) = placement(x, height, radius, &tol) else {
                 println!("{x:>12.6}  **立体が作れません**");
                 continue;
             };
@@ -261,7 +286,7 @@ fn main() {
                 );
             }
 
-            let want = closed_form_intersection(x, height);
+            let want = closed_form_intersection(x, height, radius);
             let (shown, residual_text) = match (volumes[0], volumes[1], volumes[2]) {
                 (Some(union), Some(meet), Some(minus)) => {
                     let va = volume_of(std::slice::from_ref(&a));
@@ -299,18 +324,22 @@ fn main() {
         }
 
         widths.push((
+            radius,
             height,
             first_refused.unwrap_or(f64::NAN),
             last_refused.unwrap_or(f64::NAN),
         ));
     }
+    }
 
     println!();
     println!("**和が「未実装」で断られる帯**（接する所より先）");
     println!();
-    for (height, first, last) in &widths {
-        println!("  高さ {height:>5}: 離れ {first:.0e} 〜 {last:.0e}（輪の半径 {:.4}）",
-            (height - 2.0) * 1e-2);
+    for (radius, height, first, last) in &widths {
+        println!(
+            "  半径 {radius:>4}・高さ {height:>5}: 離れ {first:.0e} 〜 {last:.0e}（輪の半径 {:.4}）",
+            (height - 2.0) * 1e-2
+        );
     }
 
     println!();
