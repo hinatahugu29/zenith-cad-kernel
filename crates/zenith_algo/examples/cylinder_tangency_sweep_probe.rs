@@ -93,6 +93,8 @@ fn main() {
     let touch = R1 + R2;
     let mut broken = 0usize;
     let mut refused_while_apart = 0usize;
+    // **返ってきたのに閉じた式から外れたもの**（4-462）。ここだけが赤です。
+    let mut wrong = 0usize;
 
     // **近い側（食い込み）を負、遠い側（離れ）を正**に取ります。
     let mut offsets: Vec<f64> = vec![
@@ -141,7 +143,46 @@ fn main() {
         .enumerate()
         {
             match BooleanEngine::boolean_solids_exact_result(&a, &b, op, &tol) {
-                Ok(result) => volumes[index] = Some(volume_of(&result.solids)),
+                Ok(result) => {
+                    let measured = volume_of(&result.solids);
+                    volumes[index] = Some(measured);
+                    // **返ってきた演算は、1 つずつ閉じた式に当てます**
+                    // （4-462）。
+                    //
+                    // **恒等式だけでは足りません。** 3 演算のうち 1 つでも
+                    // 断られると恒等式が組めず、**残りが正しいかを見る
+                    // 物差しが表から消えます**。**実測でそこに誤答が
+                    // 隠れていました**——差が「A そのもの」（切り込みの
+                    // 無い立体）を返していたのに、**表は「差 ○」**でした。
+                    let disc_a = std::f64::consts::PI * R1 * R1 * HEIGHT;
+                    let disc_b = std::f64::consts::PI * R2 * R2 * HEIGHT;
+                    let lens = lens_area(d) * HEIGHT;
+                    let want_op = [disc_a + disc_b - lens, lens, disc_a - lens][index];
+                    let off = (measured - want_op).abs() / want_op.abs().max(1.0);
+                    if off > 1e-5 {
+                        wrong += 1;
+                        per_op[index] = ["**和 誤**", "**積 誤**", "**差 誤**"][index];
+                        println!(
+                            "  **誤答** d={d:.6} {}: 返り {measured:.9}、閉じた式 {want_op:.9}（相対差 {off:.3e}）",
+                            ["和", "積", "差"][index]
+                        );
+                    }
+                    // **返った体積も出します**（4-462）。**返ったこと自体は
+                    // 合っていることではありません**——3 演算のうち 1 つでも
+                    // 断られると恒等式が組めないので、**残りが正しいかを
+                    // 見る物差しが、表からは消えます。**
+                    if std::env::var_os("ZENITH_TANGENT_WHY").is_some() {
+                        let disc_a = std::f64::consts::PI * R1 * R1 * HEIGHT;
+                        let disc_b = std::f64::consts::PI * R2 * R2 * HEIGHT;
+                        let lens = lens_area(d) * HEIGHT;
+                        let want = [disc_a + disc_b - lens, lens, disc_a - lens][index];
+                        eprintln!(
+                            "TANGENTVOL d={d:.6} {}: 返り {measured:.9}、閉じた式 {want:.9}、差 {:.3e}",
+                            ["和", "積", "差"][index],
+                            (measured - want).abs()
+                        );
+                    }
+                }
                 Err(reason) => {
                     // **断り方で分けます**（4-451 と同じ読み方）。
                     per_op[index] = if reason.contains("not implemented") {
@@ -207,6 +248,10 @@ fn main() {
     println!();
     println!("**接する所より外での断り: {refused_while_apart} 件**");
     println!();
+    if wrong > 0 {
+        println!("**返ってきたのに閉じた式から外れた演算が {wrong} 件あります。**");
+        std::process::exit(1);
+    }
     if broken > 0 {
         println!("**返ってきたのに答えが合わないものが {broken} 件あります。**");
         std::process::exit(1);

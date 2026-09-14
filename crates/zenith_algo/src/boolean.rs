@@ -564,8 +564,42 @@ impl BooleanEngine {
         // なので**最後の受け皿**に置きます。一般経路が閉じた多様体を作れた
         // ならそちらが先に返り、作れなかったとき（接しているだけの配置が
         // まさにそれです）だけ、ここに来ます。
+        // **交線が横断しているなら、ここへ来てはいけません**（4-462）。
+        //
+        // `interiors_overlap` は 512 点の標本で、**「重なっている」ことは
+        // 示せますが「重なっていない」ことは示せません**——上の註が、
+        // まさにそう書いています。**それでも「重なっていない」側で
+        // A をそのまま返して**いました。
+        //
+        // **実測**（半径 5 と 3 の平行円柱、食い込み 1.0e-3。4-462）:
+        // **交線が 10 本あるのに標本が 1 つも当たらず**、差が
+        // **471.238898**（= πr²h、**A そのもの**）を返します。閉じた式は
+        // **471.238408**。**切り込みが 1 つも入っていない立体**を、
+        // **もっともらしい形で返していました**——このリポジトリが
+        // いちばん避けてきた失敗です（HANDOVER 第2章、規約 3-1）。
+        //
+        // **この受け皿が要るのは「面で接しているだけ」の配置**です。
+        // そこでは**交線は全部、接している線**になります。**1 本でも
+        // 横断している線があれば、中身は重なっています**——標本が
+        // 当たらなくても、です。
+        //
+        // **断るほうへ倒します。** 通らなければ下の `find_result_pinch`
+        // と「未実装」に落ちます。**誤答よりは、断りです。**
         if matches!(op, BooleanOpType::Difference) && !Self::interiors_overlap(solid_a, solid_b) {
-            return Ok(ExactBooleanResult::single(solid_a.clone()));
+            let crossing = shell_assembly
+                .edge_candidates
+                .len()
+                .saturating_sub(shell_assembly.kept_contact_curves.len());
+            if crossing == 0 {
+                return Ok(ExactBooleanResult::single(solid_a.clone()));
+            }
+            if std::env::var_os("ZENITH_REFUSE_WHY").is_some() {
+                eprintln!(
+                    "REFUSEWHY 差の受け皿を使いません: 交線 {} 本のうち {} 本が横断しています（標本は「重なっていない」と言いました）",
+                    shell_assembly.edge_candidates.len(),
+                    crossing
+                );
+            }
         }
 
         // **答えそのものが非多様体である配置がここに来ます。**

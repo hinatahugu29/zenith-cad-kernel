@@ -5841,7 +5841,7 @@ fn classify_face_against_mesh(
                 // 経過は 4-461 に書いてあります。
                 let inside = off
                     .iter()
-                    .filter(|point| crate::BooleanEngine::is_point_inside_mesh(**point, mesh))
+                    .filter(|point| other.and_then(|s| crate::boolean_validation::exact_inside(**point, s, tol)).unwrap_or_else(|| crate::BooleanEngine::is_point_inside_mesh(**point, mesh)))
                     .count();
                 return if inside * 2 > off.len() {
                     FaceRegionLocation::Inside
