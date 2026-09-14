@@ -8767,16 +8767,47 @@ fn clip_curve_to_both_planar_trims(
     face_b: &Face,
     tol: &Tolerance,
 ) -> Vec<Edge> {
+    // **どの段で端が動いたか**（4-457。`ZENITH_CLIPSTAGE_WHY=1`）。
+    //
+    // 4-456 で「A面5xB面5 の端だけが閉じた式から 1.5e-6 ずれている」
+    // ところまで来ました。**出したのは解析の道**なので、ずれは
+    // **出した後の切り詰め**で入っています。**切り詰めは 2 面 × 2 種類
+    // あり、どれが動かしたかで直す場所が変わります。**
+    let explain = std::env::var_os("ZENITH_CLIPSTAGE_WHY").is_some();
+    let show = |label: &str, pieces: &[Edge]| {
+        for piece in pieces {
+            let start = piece.start_vertex.point;
+            let end = piece.end_vertex.point;
+            eprintln!(
+                "CLIPSTAGE {label}: ({:.9} {:.9} {:.9}) -> ({:.9} {:.9} {:.9})",
+                start.x, start.y, start.z, end.x, end.y, end.z
+            );
+        }
+    };
+
     let mut pieces = vec![edge.clone()];
-    for face in [face_a, face_b] {
+    if explain {
+        show("元", &pieces);
+    }
+    for (which, face) in [("A", face_a), ("B", face_b)] {
         pieces = pieces
             .iter()
             .flat_map(|piece| {
                 // **平面なら平面の切り方、曲面なら曲面の切り方**（4-361）。
                 // 曲面のほうは長らく素通りしていました。
-                clip_curve_to_planar_face_trim(piece, face, tol)
-                    .or_else(|| clip_curve_to_nurbs_face_trim(piece, face, tol))
-                    .unwrap_or_else(|| vec![piece.clone()])
+                if let Some(clipped) = clip_curve_to_planar_face_trim(piece, face, tol) {
+                    if explain {
+                        show(&format!("{which} 平面のトリムで切った"), &clipped);
+                    }
+                    return clipped;
+                }
+                if let Some(clipped) = clip_curve_to_nurbs_face_trim(piece, face, tol) {
+                    if explain {
+                        show(&format!("{which} 曲面のトリムで切った"), &clipped);
+                    }
+                    return clipped;
+                }
+                vec![piece.clone()]
             })
             .collect();
     }
@@ -8949,7 +8980,21 @@ fn clip_curve_to_planar_face_trim(edge: &Edge, face: &Face, tol: &Tolerance) -> 
         return None;
     }
     // 面の広がりに対する余裕。境界の上に乗った点は内側として扱う。
-    let margin = tol.parametric.max(1e-9);
+    //
+    // **単位を直しました**（4-457）。ここは **uv 空間の長さ**で効きますが、
+    // 長らく `tol.parametric`（既定 **1e-7**）を入れていました——
+    // **曲線の媒介変数のための公差**です。
+    //
+    // **切り詰めの二分は、この余裕の外の縁で止まります。** 交線が境界に
+    // 浅く当たっていると、**そこが 1/sin 倍に拡大されます**——実測で、
+    // 半径 5 の穴の縁では **9.7e-8 が 15.8 倍されて 1.5e-6**。
+    // **線形公差 1e-6 を超えるので、切った端どうしが繋がらず、面が
+    // 割れませんでした**（4-451〜4-456 の「幅 0.02 の帯」）。
+    //
+    // **長さには長さの公差を**——線形公差の 1/1000（既定で **1e-9**）。
+    // **1e-7 より狭いので、いままで「境界の上」と読んでいた点が
+    // 外に出ることはあっても、内に入ることはありません。**
+    let margin = (tol.linear * 1e-3).max(1e-12);
     let inside = |t: f64| -> bool {
         let point = edge.curve.evaluate(t.clamp(t0, t1));
         let uv = project_to_plane_uv(point, plane);
@@ -8971,6 +9016,36 @@ fn clip_curve_to_planar_face_trim(edge: &Edge, face: &Face, tol: &Tolerance) -> 
                     .unwrap_or_else(|| point_in_polygon_2d(uv, hole, -margin))
             })
     };
+
+    // **判定が、外周の曲線で出たか、折れ線で出たか**（4-457。
+    // `ZENITH_CLIPSTAGE_WHY=1`）。**止まる位置の精度が、ここで変わります。**
+    if std::env::var_os("ZENITH_CLIPSTAGE_WHY").is_some() {
+        let probe = edge.curve.evaluate(t0 + span * 0.5);
+        let uv = project_to_plane_uv(probe, plane);
+        let by_curve = point_inside_pcurve_loop(uv, &pcurves.outer_loop, tol);
+        let (mut lo, mut hi) = (
+            Point2::new(f64::INFINITY, f64::INFINITY),
+            Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY),
+        );
+        for uv in &polygon {
+            lo.x = lo.x.min(uv.x);
+            lo.y = lo.y.min(uv.y);
+            hi.x = hi.x.max(uv.x);
+            hi.y = hi.y.max(uv.y);
+        }
+        eprintln!(
+            "CLIPSTAGE   判定は {}、折れ線の uv 範囲 ({:.9},{:.9})-({:.9},{:.9})、余裕 {:.3e}",
+            match by_curve {
+                Some(_) => "外周の曲線",
+                None => "**折れ線**",
+            },
+            lo.x,
+            lo.y,
+            hi.x,
+            hi.y,
+            margin
+        );
+    }
 
     const SAMPLES: usize = 257;
     let flags: Vec<bool> = (0..=SAMPLES)
@@ -12791,7 +12866,7 @@ fn march_one_branch(
 fn point_inside_pcurve_loop(
     point: Point2,
     loop_data: &FacePcurveLoop,
-    _tol: &Tolerance,
+    tol: &Tolerance,
 ) -> Option<bool> {
     // ループの広がり。線分はここから確実に外へ出る長さにします。
     let mut low = Point2::new(f64::INFINITY, f64::INFINITY);
@@ -12811,6 +12886,27 @@ fn point_inside_pcurve_loop(
     let span = (high.x - low.x).abs().max((high.y - low.y).abs()).max(1.0);
     let reach = span * 4.0;
     let separation = 1e-9;
+    // **「境界の上」の幅は、長さで決めます**（4-457）。
+    //
+    // `separation` は**光線の媒介変数**に対する値です。`reach` は
+    // ループの差し渡しの 4 倍なので、**同じ 1e-9 でも、実寸の緩みは
+    // 形の大きさで変わります**——差し渡し 70 のループでは **2.8e-7**。
+    //
+    // **この幅の外側の縁で、切り詰めの二分が止まります。** 交線が
+    // 境界に浅く当たっていると、**その緩みが 1/sin 倍に拡大**されます
+    // ——実測で、半径 5 の穴の縁では **15.8 倍の 1.5e-6**。
+    // **線形公差 1e-6 を超えるので、そこで切った端どうしが繋がらず、
+    // 面が割れませんでした**（4-451〜4-456 の「幅 0.02 の帯」）。
+    //
+    // **長さで押さえます**——実寸で線形公差の 1/1000（既定で 1e-9）。
+    // **`separation` を超えることはありません**ので、**いままで
+    // 「境界の上」と読んでいた点が、外に出ることはあっても
+    // 内に入ることはありません**。
+    //
+    // **交点どうしが潰れているか（頂点を貫いたか）の判定は、
+    // `separation` のままです。** そちらを詰めると、**本当に
+    // 頂点を貫いた光線を「2 回横切った」と数え**かねません。
+    let on_boundary = (tol.linear * 1e-3 / reach).clamp(1e-15, separation);
 
     for raw_direction in [
         Vec2::new(1.0, 0.37),
@@ -12832,10 +12928,14 @@ fn point_inside_pcurve_loop(
             for t in found {
                 // 線分の手前と奥だけを見ます。始点そのものに乗った交点は、
                 // 点が境界の上にあるということなので、内側として扱います。
-                if t < -separation || t > 1.0 + separation {
+                // **後ろ側を拾う幅も、長さで決めます**（4-457）。
+                // `separation`（1e-9）のままだと、`reach` が 280 のループでは
+                // **2.8e-7 だけ後ろにある横切りを、前にあると数えます**——
+                // **境界を 2.8e-7 出た点が、まだ内側**になります。
+                if t < -on_boundary || t > 1.0 + on_boundary {
                     continue;
                 }
-                if t.abs() <= separation {
+                if t.abs() <= on_boundary {
                     return Some(true);
                 }
                 crossings.push(t);
