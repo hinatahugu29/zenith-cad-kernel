@@ -455,19 +455,79 @@ impl BooleanEngine {
             }
         }
 
+        // **組み上げに落ちたとき、それが「正しい断り」なのかを言います**
+        // （4-459）。
+        //
+        // 縫合が閉じた多様体だと言っても、**立体の検証はそこから先を
+        // 見ます**——たとえば「頂点のまわりが 1 周か」（4-450）。
+        // **そこで落ちると、いままでは検証の文面がそのまま出ていました。**
+        //
+        // ```text
+        // Solid validation failed with 1 outer-shell errors
+        // (Vertex (18.000000 15.000000 6.000000) has 2 separate fans of faces, not one)
+        // ```
+        //
+        // **これは正しい断りです**（そこで材料が 2 つに分かれるので、
+        // 多様体の B-Rep には持てません）。**が、そうは書いていません。**
+        // **使う人には「壊れたので返せない」と読めます**（4-458）。
+        //
+        // **勝手に「正しい断り」と名乗らせません。** **本当に答えが
+        // 非多様体かを、`find_result_pinch` に測らせてから**名乗ります。
+        // **測って出なければ、検証の文面をそのまま返します**——
+        // **そちらは、本物の欠陥かもしれません。**
+        //
+        // **いまのところ、名乗る検体はありません**（4-459）。**4-458 の
+        // 半径 3 の差では、つまみの検査が出ません**——**つまみは交線の
+        // まわりを測るので、接している線が交線に出ていなければ見えない**
+        // からです。**そこを捕まえているのは 4-450 の頂点の検査だけ**です。
+        // **`ZENITH_REFUSE_WHY=1` が、どちらだったかを言います。**
+        let name_if_truly_non_manifold = |error: String| -> String {
+            if !error.contains("separate fans") && !error.contains("non-manifold") {
+                return error;
+            }
+            let edges: Vec<Edge> = shell_assembly
+                .edge_candidates
+                .iter()
+                .map(|candidate| candidate.edge.clone())
+                .collect();
+            let pinch = crate::contact::find_result_pinch(solid_a, solid_b, &edges, op, tol);
+            if std::env::var_os("ZENITH_REFUSE_WHY").is_some() {
+                eprintln!(
+                    "REFUSEWHY 組み上げが落ちた（交線 {} 本で測った）: つまみは {} → {}",
+                    edges.len(),
+                    if pinch.is_some() { "出た" } else { "**出ない**" },
+                    if pinch.is_some() {
+                        "名指しで断る"
+                    } else {
+                        "検証の文面をそのまま返す"
+                    }
+                );
+            }
+            match pinch {
+                Some(pinch) => format!(
+                    "Exact B-Rep boolean refuses this placement: {} (the assembled shell failed validation with: {})",
+                    pinch.describe(),
+                    error
+                ),
+                None => error,
+            }
+        };
+
         if shell_assembly.selection.stitch_report.is_closed_manifold() {
             return crate::BrepIntersectionBuilder::build_solids_from_selected_face_pieces(
                 &shell_assembly.selection.selected_face_pieces,
                 tol,
             )
-            .map(ExactBooleanResult::from_solids);
+            .map(ExactBooleanResult::from_solids)
+            .map_err(name_if_truly_non_manifold);
         }
         if shell_assembly.assembly.stitch_report.is_closed_manifold() {
             return crate::BrepIntersectionBuilder::build_solids_from_selected_face_pieces(
                 &shell_assembly.assembly.selected_face_pieces,
                 tol,
             )
-            .map(ExactBooleanResult::from_solids);
+            .map(ExactBooleanResult::from_solids)
+            .map_err(name_if_truly_non_manifold);
         }
 
         let report =
