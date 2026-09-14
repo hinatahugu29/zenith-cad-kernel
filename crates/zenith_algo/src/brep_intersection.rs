@@ -56,6 +56,13 @@ pub struct IntersectionEdgeCandidate {
     pub face_a_index: usize,
     pub face_b_index: usize,
     pub edge: Edge,
+    /// **解析的に出た交線か、辿って出した交線か**（4-457）。
+    ///
+    /// [`FaceIntersectionCandidate::analytic`] を、ここまで運びます。
+    /// **端の精度が桁で違う**ので、**繋がらなかった端**を見るときに
+    /// 「どちらの道で出た端か」が分からないと、原因を書けません
+    /// （4-456 で 1 度、書けずに止まりました）。
+    pub analytic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -655,6 +662,7 @@ impl BrepIntersectionBuilder {
                                     face_a_index: candidate.face_a_index,
                                     face_b_index: candidate.face_b_index,
                                     edge,
+                                    analytic: candidate.analytic,
                                 })
                                 .collect::<Vec<_>>(),
                         )
@@ -666,6 +674,7 @@ impl BrepIntersectionBuilder {
                     face_a_index: candidate.face_a_index,
                     face_b_index: candidate.face_b_index,
                     edge,
+                    analytic: candidate.analytic,
                 }])
             })
             .flatten()
@@ -797,9 +806,15 @@ impl BrepIntersectionBuilder {
                 );
                 let chord_middle = Point3::from((start.coords + end.coords) * 0.5);
                 eprintln!(
-                    "CANDWHY A面{} x B面{}: ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6}) mid ({:.6} {:.6} {:.6}) 弦 {:.6} 膨らみ {:.6}",
+                    // **出した道も書きます**（4-457）。**同じ 2 面から出た
+                    // 交線でも、解析的に出たものと辿って出したものでは、
+                    // 端の精度が桁で違います**——4-456 で測った
+                    // 「鎖が繋がらない 1.5e-6」は、**どちらの道で出た端か**が
+                    // 分からないと原因を書けませんでした。
+                    "CANDWHY A面{} x B面{}[{}]: ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6}) mid ({:.6} {:.6} {:.6}) 弦 {:.6} 膨らみ {:.6}",
                     candidate.face_a_index,
                     candidate.face_b_index,
+                    if candidate.analytic { "解析" } else { "辿り" },
                     start.x, start.y, start.z,
                     end.x, end.y, end.z,
                     middle.x, middle.y, middle.z,
@@ -1354,6 +1369,7 @@ impl BrepIntersectionBuilder {
                     face_a_index: candidate.face_b_index,
                     face_b_index: candidate.face_a_index,
                     edge: candidate.edge,
+                    analytic: candidate.analytic,
                 }),
         );
         // **公差の下で離れている端を、1 つに寄せます**（4-448。
@@ -4563,6 +4579,9 @@ fn repair_open_intersection_loops(
                         face_a_index: ai,
                         face_b_index: bi,
                         edge,
+                        // **修理が足したもの**（4-441）。面の組を閉じた式で
+                        // 解いて出したのではないので、`analytic` ではありません。
+                        analytic: false,
                     });
                     gained += 1;
                 }
@@ -10007,6 +10026,23 @@ pub fn cylinder_patch_is_recognized(surface: &NurbsSurface3, tol: &Tolerance) ->
     recognize_cylinder_patch(surface, tol).is_some()
 }
 
+/// **認識した円柱の読み取りを、そのまま返す口**（4-457）。
+///
+/// `cylinder_patch_is_recognized` は「当たったか」しか言いません。
+/// **交線の位置を決めているのは、当たったかどうかではなく、
+/// そのとき読み取った中心と半径**です（`intersect_ruling_plane_cylinder_patch`
+/// は `patch.radius` と `patch.base_center` だけから交点を出します）。
+/// **その 2 つが、元の形からどれだけ離れているか**を測れるようにします。
+///
+/// 返すのは `(底面の中心, 半径, 軸, 高さ)`。
+pub fn cylinder_patch_reading(
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> Option<(Point3, f64, Vec3, f64)> {
+    let patch = recognize_cylinder_patch(surface, tol)?;
+    Some((patch.base_center, patch.radius, patch.axis, patch.height))
+}
+
 fn recognize_cylinder_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<CylinderPatch> {
     if surface.degree_v != 1 || surface.degree_u != 2 {
         return None;
@@ -11158,6 +11194,9 @@ fn collect_edges_already_on_a_plane(
                     face_a_index,
                     face_b_index,
                     edge: edge.clone(),
+                    // **相手の稜を、そのまま取っています**。辿っていないので
+                    // 端は元の稜の精度そのままです。
+                    analytic: true,
                 });
             }
         }
