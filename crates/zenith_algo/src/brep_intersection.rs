@@ -5795,6 +5795,16 @@ fn classify_face_against_mesh(
         // 集めるのは高すぎます——実測でここが律速でした。
         crate::distance::has_boundary_within(point, solid, tol.linear * 100.0)
     };
+    if std::env::var_os("ZENITH_EXACTIN_WHY").is_some() {
+        eprintln!(
+            "EXACTINWHY 入口 ({:.6} {:.6} {:.6}): メッシュまで {:.3e}、near = {}",
+            sample.x,
+            sample.y,
+            sample.z,
+            point_mesh_distance(sample, mesh),
+            near(sample)
+        );
+    }
     if near(sample) {
         // **1点で触れていることは、重なっていることではありません。**
         //
@@ -5817,6 +5827,18 @@ fn classify_face_against_mesh(
             let near_count = spread.iter().filter(|point| near(**point)).count();
             if near_count * 2 < spread.len() {
                 let off: Vec<Point3> = spread.into_iter().filter(|point| !near(*point)).collect();
+                // **ここもメッシュに訊いています**（4-461 で測りました）。
+                //
+                // 4-460 は関数の最後だけを直しました。**薄い重なりの
+                // 代表点は、そこへ届きません**——メッシュまで 8.9e-5 で、
+                // `near` の枡（1e-4）の内側に入るので、**この多数決の
+                // ほうへ来ます。**
+                //
+                // **`exact_inside` に替えてみました。混ざりました**——
+                // **和が 3 か所（食い込み 1.2e-3・1.0e-3・8e-4）通る
+                // ようになる代わりに、差が 1 か所（1.2e-3）落ちます。**
+                // **説明が立っていないので、入れていません。**
+                // 経過は 4-461 に書いてあります。
                 let inside = off
                     .iter()
                     .filter(|point| crate::BooleanEngine::is_point_inside_mesh(**point, mesh))
@@ -5870,7 +5892,27 @@ fn classify_face_against_mesh(
     // **境界の上（`None`）なら、下のメッシュに戻します。** そこは
     // `near` が拾う話で、ここで決めることではありません。
     if let Some(solid) = other {
-        if point_mesh_distance(sample, mesh) <= scale * 1e-2 {
+        let to_mesh = point_mesh_distance(sample, mesh);
+        if std::env::var_os("ZENITH_EXACTIN_WHY").is_some() {
+            eprintln!(
+                "EXACTINWHY 代表点 ({:.6} {:.6} {:.6}): メッシュまで {:.3e}（走る境目 {:.3e}）→ {}",
+                sample.x,
+                sample.y,
+                sample.z,
+                to_mesh,
+                scale * 1e-2,
+                if to_mesh <= scale * 1e-2 {
+                    match crate::boolean_validation::exact_inside(sample, solid, tol) {
+                        Some(true) => "面に訊いた: **内**".to_string(),
+                        Some(false) => "面に訊いた: **外**".to_string(),
+                        None => "面に訊いた: **決まらない**（境界の上）".to_string(),
+                    }
+                } else {
+                    "**遠いので訊かない**".to_string()
+                }
+            );
+        }
+        if to_mesh <= scale * 1e-2 {
             if let Some(inside) = crate::boolean_validation::exact_inside(sample, solid, tol) {
                 return if inside {
                     FaceRegionLocation::Inside
