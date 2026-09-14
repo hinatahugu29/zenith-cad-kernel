@@ -5847,6 +5847,40 @@ fn classify_face_against_mesh(
     // 突き合わなくなります（4-128 で直したのと同じ機構）。
     //
     // **直す場所は接点の着地のほうです。** ここではありません。
+    // **メッシュは弦でできているので、曲面の内側を通ります**（4-459）。
+    //
+    // 上の `near` は「**相手の境界の上か**」を厳密に見ますが、幅は
+    // 1e-4 です。**それより深く、しかし弦のたわみより浅い所**——
+    // 実測で 7.4e-4——にある点は、**真の面の内側にいるのに、メッシュの
+    // 外**に落ちます。**内側の片を「外」と読んで採るので、A の薄片も
+    // B の薄片も採られ、同じ所が 2 重に貼られます**（縫合が
+    // 「非多様体の稜の使用 32 件」と言う）。
+    //
+    // たわみは刻みで決まります——四半パッチあたり 24（1 周 96）なら
+    // `r(1 − cos(π/96))`、半径 3 で **1.61e-3**、半径 5 で **2.68e-3**。
+    // **刻みを細かくしても、それより薄い重なりが必ずあります。**
+    // **閾値を動かすのは直しではありません。**
+    //
+    // **面そのものに訊きます。** ただし**近い所だけ**です——
+    // `exact_inside` は全部の面へ射影するので、**遠い面で走らせると
+    // 律速になります**（4-294）。**走らせる条件は `near` と同じ**
+    // （メッシュまで形の 1% 以内）なので、**余分に払うのは、すでに
+    // `has_boundary_within` を払っている点だけ**です。
+    //
+    // **境界の上（`None`）なら、下のメッシュに戻します。** そこは
+    // `near` が拾う話で、ここで決めることではありません。
+    if let Some(solid) = other {
+        if point_mesh_distance(sample, mesh) <= scale * 1e-2 {
+            if let Some(inside) = crate::boolean_validation::exact_inside(sample, solid, tol) {
+                return if inside {
+                    FaceRegionLocation::Inside
+                } else {
+                    FaceRegionLocation::Outside
+                };
+            }
+        }
+    }
+
     if crate::BooleanEngine::is_point_inside_mesh(sample, mesh) {
         FaceRegionLocation::Inside
     } else {
