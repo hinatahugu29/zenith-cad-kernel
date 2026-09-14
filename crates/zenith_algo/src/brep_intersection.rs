@@ -4615,6 +4615,43 @@ fn group_edges_into_chains(edges: &[Edge], tol: &Tolerance) -> Vec<Vec<Edge>> {
             chain.push(edge);
         }
 
+        // 鎖が伸びなくなった所で、**繋がらなかった端どうしの距離**を出す
+        // （4-456。`ZENITH_CHAINJOIN_WHY=1`）。4-455 で「通る側は鎖 1 本、
+        // 断る側は鎖 2 本」までは分かったが、**共有しなくなる境目が
+        // 公差の下の差なのか、別の桁なのか**を測っていなかった。
+        if !remaining.is_empty() && std::env::var_os("ZENITH_CHAINJOIN_WHY").is_some() {
+            let mut best: Option<(f64, Point3, Point3, &'static str)> = None;
+            for candidate in &remaining {
+                for (theirs, mine, which) in [
+                    (candidate.start_vertex.point, tail, "尾"),
+                    (candidate.end_vertex.point, tail, "尾"),
+                    (candidate.start_vertex.point, head, "頭"),
+                    (candidate.end_vertex.point, head, "頭"),
+                ] {
+                    let gap = (theirs - mine).norm();
+                    if best.map_or(true, |(b, _, _, _)| gap < b) {
+                        best = Some((gap, mine, theirs, which));
+                    }
+                }
+            }
+            if let Some((gap, mine, theirs, which)) = best {
+                eprintln!(
+                    "CHAINJOINWHY 鎖 {}（{} 本）が伸びず、残り {} 本: \
+いちばん近い端どうしは {:.6e}（受け入れ {:.6e}、{:.3} 倍）",
+                    chains.len(),
+                    chain.len(),
+                    remaining.len(),
+                    gap,
+                    tol.linear,
+                    gap / tol.linear,
+                );
+                eprintln!(
+                    "CHAINJOINWHY   こちらの{} ({:.6} {:.6} {:.6}) ←→ 向こう ({:.6} {:.6} {:.6})",
+                    which, mine.x, mine.y, mine.z, theirs.x, theirs.y, theirs.z,
+                );
+            }
+        }
+
         chains.push(chain);
     }
 

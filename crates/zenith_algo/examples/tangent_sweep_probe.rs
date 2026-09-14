@@ -148,10 +148,22 @@ fn main() {
         );
         println!("{}", "-".repeat(100));
 
-        let offsets = [
+        let mut offsets: Vec<f64> = vec![
             -1.0_f64, -0.1, -0.01, -1e-4, 0.0, 1e-4, 0.01, 0.02, 0.03, 0.05, 0.07,
             0.1, 0.2, 0.3, 1.0,
         ];
+        // **刻みを足す口**（`ZENITH_SWEEP_EXTRA=0.0225,0.023,0.0235`）。
+        //
+        // **縁を詰めるたびに固定の並びを書き換えていました**（4-453）。
+        // **門が測る並びは動かさず**、調べたい離れだけを足せるようにします。
+        if let Ok(text) = std::env::var("ZENITH_SWEEP_EXTRA") {
+            for piece in text.split(',') {
+                if let Ok(value) = piece.trim().parse::<f64>() {
+                    offsets.push(value);
+                }
+            }
+            offsets.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        }
         let mut first_refused: Option<f64> = None;
         let mut last_refused: Option<f64> = None;
 
