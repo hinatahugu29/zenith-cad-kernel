@@ -5825,6 +5825,24 @@ fn classify_face_against_mesh(
         let spread = spread_face_points(face, 9);
         if spread.len() >= 4 {
             let near_count = spread.iter().filter(|point| near(**point)).count();
+            // **数え上げの境目が、どこに来ているか**（4-463。
+            // `ZENITH_EXACTIN_WHY=1`）。**`near_count * 2 < spread.len()`
+            // は多数決**で、**同じ形の 2 枚が別々に転ぶことがあります。**
+            if std::env::var_os("ZENITH_EXACTIN_WHY").is_some() {
+                eprintln!(
+                    "EXACTINWHY 散らし ({:.6} {:.6} {:.6}): {} 点中 {} 点が near → {}",
+                    sample.x,
+                    sample.y,
+                    sample.z,
+                    spread.len(),
+                    near_count,
+                    if near_count * 2 < spread.len() {
+                        "多数決へ"
+                    } else {
+                        "**Boundary**"
+                    }
+                );
+            }
             if near_count * 2 < spread.len() {
                 let off: Vec<Point3> = spread.into_iter().filter(|point| !near(*point)).collect();
                 // **ここもメッシュに訊いています**（4-461 で測りました）。
@@ -5834,14 +5852,26 @@ fn classify_face_against_mesh(
                 // `near` の枡（1e-4）の内側に入るので、**この多数決の
                 // ほうへ来ます。**
                 //
-                // **`exact_inside` に替えてみました。混ざりました**——
-                // **和が 3 か所（食い込み 1.2e-3・1.0e-3・8e-4）通る
-                // ようになる代わりに、差が 1 か所（1.2e-3）落ちます。**
-                // **説明が立っていないので、入れていません。**
-                // 経過は 4-461 に書いてあります。
+                // **面に訊くようにしました**（4-462）。
+                //
+                // 4-461 で替えてみたときは「**和が 3 か所通る代わりに
+                // 差が 1 か所落ちる**」に見え、取り引きだと読んで
+                // 入れませんでした。**落ちた差が何を返していたかを
+                // 出したら、A そのもの（切り込みの無い立体）でした**
+                // ——**取り引きではなく、誤答が 1 つ消えた**のです。
+                //
+                // **決まらない（境界の上）ときだけ、メッシュに戻します。**
                 let inside = off
                     .iter()
-                    .filter(|point| other.and_then(|s| crate::boolean_validation::exact_inside(**point, s, tol)).unwrap_or_else(|| crate::BooleanEngine::is_point_inside_mesh(**point, mesh)))
+                    .filter(|point| {
+                        other
+                            .and_then(|solid| {
+                                crate::boolean_validation::exact_inside(**point, solid, tol)
+                            })
+                            .unwrap_or_else(|| {
+                                crate::BooleanEngine::is_point_inside_mesh(**point, mesh)
+                            })
+                    })
                     .count();
                 return if inside * 2 > off.len() {
                     FaceRegionLocation::Inside
