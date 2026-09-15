@@ -5758,6 +5758,82 @@ fn mesh_extent(mesh: &TriangleMesh) -> f64 {
     (high - low).norm()
 }
 
+/// **この面と「同じ所に乗っている」面が、相手にあるか**（4-465）。
+///
+/// # なぜ要るか
+///
+/// `Boundary`（＝両方に採らせる印）は、いま**代表点のまわり 9 点が
+/// 相手の境界に近いか**で決めています。**点の近さは、薄い小片で
+/// 転びます**（4-463）。**狭める向きの手は 2 つとも積を壊しました**
+/// （4-463、4-464）。
+///
+/// **`Boundary` が本当に言いたいのは「面と面が同じ所に乗っている」**
+/// です。それは点の近さではなく、**支持の一致**で決まります。
+///
+/// # 何を見るか
+///
+/// **面の支持だけ**です——トリム（どこまで使っているか）は見ません。
+/// **平面なら法線と原点のオフセット**、**円柱なら軸・半径・軸の位置**。
+/// **どちらも閉じた式で比べられます**（認識の精度は 4-457 で 1e-9）。
+///
+/// **まだ判定には使っていません。** **数えるためだけ**に置いています
+/// ——**いまの `Boundary` のうち何件がこれで説明できるか**が分かる
+/// まで、置き換えは書けません。
+fn face_shares_support_with_solid(face: &Face, solid: &Solid, tol: &Tolerance) -> bool {
+    // **借りて回ります**（4-466）。
+    //
+    // ここは `all_solid_faces` を呼んでいました。**あれは面を 1 枚ずつ
+    // 深く複製します**（ワイヤも曲線も p-curve も）。**分類のたびに
+    // 相手の全面を複製**していたので、**門ぜんぶが 1778 秒 → 3832 秒
+    // （2.15 倍）**になりました。**答えは同じで、値段だけが違います。**
+    let others = || {
+        solid
+            .outer_shell
+            .faces
+            .iter()
+            .chain(solid.inner_shells.iter().flat_map(|shell| shell.faces.iter()))
+    };
+    match &face.geometry {
+        FaceGeometry::Plane(plane) => {
+            let normal = plane.normal;
+            others().any(|other| {
+                let FaceGeometry::Plane(theirs) = &other.geometry else {
+                    return false;
+                };
+                // 向きは逆でも同じ平面です。
+                if normal.cross(&theirs.normal).norm() > tol.angular {
+                    return false;
+                }
+                (theirs.origin - plane.origin).dot(&normal).abs() <= tol.linear * 100.0
+            })
+        }
+        FaceGeometry::Nurbs(surface) => {
+            let Some(mine) = recognize_cylinder_patch(surface, tol) else {
+                return false;
+            };
+            others().any(|other| {
+                let FaceGeometry::Nurbs(theirs) = &other.geometry else {
+                    return false;
+                };
+                let Some(theirs) = recognize_cylinder_patch(theirs, tol) else {
+                    return false;
+                };
+                if mine.axis.cross(&theirs.axis).norm() > tol.angular {
+                    return false;
+                }
+                if (mine.radius - theirs.radius).abs() > tol.linear * mine.radius.max(1.0) {
+                    return false;
+                }
+                // 軸の位置。軸方向の差は見ません（同じ直線であればよい）。
+                let between = theirs.base_center - mine.base_center;
+                let across = between - mine.axis * between.dot(&mine.axis);
+                across.norm() <= tol.linear * mine.radius.max(1.0) * 100.0
+            })
+        }
+        _ => false,
+    }
+}
+
 fn classify_face_against_mesh(
     face: &Face,
     mesh: &TriangleMesh,
@@ -5822,6 +5898,34 @@ fn classify_face_against_mesh(
         // いるときは、この検査を通しません——`Inside` / `Outside` を
         // 新たに `Boundary` に変えることはないので、いま通っている経路の
         // 判定は動きません。
+        // **支持が一致するなら、多数決を待ちません**（4-465）。
+        //
+        // **`Boundary` が言いたいのは「この面は、相手の面と同じ所に
+        // 乗っている」**です。**それは面と面の関係**で、点の近さは
+        // その代わりでしかありません。
+        //
+        // **代わりが効かない所で、転んでいました**（4-463）——
+        // レンズの先の同じ形の小片が、**z = 0 では 9 点中 5 点、
+        // z = 6 では 4 点**。**1 点差で片方だけ `Boundary`** になり、
+        // 差の縫合が合いませんでした。**どちらも、相手の蓋と同じ
+        // 平面に乗っています。**
+        //
+        // **狭める向きの手は 2 つとも積を壊しました**（4-463、4-464）。
+        // **広げる向きが残っていました。**
+        //
+        // **効いた範囲**（半径 5 と 3 の平行円柱、`cylinder_tangency_sweep_probe`）:
+        // **食い込み 2.4e-3 〜 2e-4 の 10 か所すべてで、断りが消え**、
+        // 3 演算とも閉じた式に乗ります（恒等式の残差 1e-12〜1e-10）。
+        // **接する所より外での断りは 12 件 → 2 件。**
+        //
+        // **`near` の中にいます**ので、**離れた面には掛かりません**
+        // ——「支持が同じ」だけでは足りず、「近くにいる」ことも要ります。
+        if other.map_or(false, |solid| {
+            face_shares_support_with_solid(face, solid, tol)
+        }) {
+            return FaceRegionLocation::Boundary;
+        }
+
         let spread = spread_face_points(face, 9);
         if spread.len() >= 4 {
             let near_count = spread.iter().filter(|point| near(**point)).count();
@@ -5879,6 +5983,31 @@ fn classify_face_against_mesh(
                     FaceRegionLocation::Outside
                 };
             }
+        }
+        // **`Boundary` が、何を根拠にしているか**（4-465。
+        // `ZENITH_BOUNDARY_WHY=1`）。
+        //
+        // 4-463 と 4-464 で、**点の近さから `Boundary` を決めるのを
+        // 狭める手は 2 つとも積を壊しました**。**置き換えるなら、
+        // 面と面の関係で決める**——それが効くのは「同じ所に乗って
+        // いる面」だけなので、**いまの `Boundary` のうち何件がそれか**
+        // を数えないと、置き換えられるかが決まりません。
+        if std::env::var_os("ZENITH_BOUNDARY_WHY").is_some() {
+            let shares = other
+                .map(|solid| face_shares_support_with_solid(face, solid, tol))
+                .unwrap_or(false);
+            eprintln!(
+                "BOUNDARYWHY ({:.6} {:.6} {:.6}) {}: 支持が一致する相手の面は {}",
+                sample.x,
+                sample.y,
+                sample.z,
+                match &face.geometry {
+                    FaceGeometry::Plane(_) => "平面",
+                    FaceGeometry::Nurbs(_) => "NURBS",
+                    _ => "その他",
+                },
+                if shares { "**ある**" } else { "**ない**" }
+            );
         }
         return FaceRegionLocation::Boundary;
     }
