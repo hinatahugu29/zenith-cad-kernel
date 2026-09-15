@@ -5926,6 +5926,35 @@ fn classify_face_against_mesh(
             return FaceRegionLocation::Boundary;
         }
 
+        // **近さの多数決より先に、面で内外を決めます**（4-467）。
+        //
+        // ここから下は「**代表点が相手の境界の近くにいる**」ときの話
+        // です。**近くにいることと、境界の上にいることは違います。**
+        //
+        // 実測（4-465 のあと、食い込み 1e-4 の平行円柱）: **レンズの
+        // 薄片が 4 枚とも `Boundary`** になり、**和が両方から採って
+        // 「非多様体の稜の使用 32 件」**で落ちていました。**薄片は
+        // 相手の内側にいます**——**支持は違う**（半径 5 と 3）ので、
+        // すぐ上の一致では拾えません。**近いだけで「境界の上」と
+        // 数えていました。**
+        //
+        // **`exact_inside` は、境界の上（公差の内）では `None` を
+        // 返します。** **決まるなら、それが答え**です。**決まらない
+        // ときだけ**、下の多数決と `Boundary` に回します。
+        //
+        // **効いた範囲**: `cylinder_tangency_sweep_probe` の
+        // **接する所より外での断りが 2 件 → 0 件**。
+        // **接する所そのものは、いままでどおり名指しで断ります。**
+        if let Some(solid) = other {
+            if let Some(inside) = crate::boolean_validation::exact_inside(sample, solid, tol) {
+                return if inside {
+                    FaceRegionLocation::Inside
+                } else {
+                    FaceRegionLocation::Outside
+                };
+            }
+        }
+
         let spread = spread_face_points(face, 9);
         if spread.len() >= 4 {
             let near_count = spread.iter().filter(|point| near(**point)).count();
