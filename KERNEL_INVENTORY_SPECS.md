@@ -1,6 +1,7 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
 **Document Version:** 1.9.0 (4-109〜4-113: 抜き勾配・断面の接触・非STEP出力の外部検算・DXFの層を反映)
-**Last Updated:** 2026-08-27
+**Last Updated:** 2026-08-27（**第3章の通しテスト数と常設プローブ数だけ、
+2026-09-16 に測り直しました**。それ以外の記述は上の版のままです）
 **Status:** Official Production Specification
 
 > **この文書は「何があるか」の棚卸しです。「どこまで測ったか」「何が
@@ -232,11 +233,16 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ## 3. テストスイート検証結果
 
-2026年9月7日にワークスペース全体を Release 構成で回し、**697/697件の成功**を
-確認しました。警告 0。
+**2026年9月16日の実測**: `cargo test --release --workspace --exclude zenith_py`
+で **145 バイナリ / 734 件通過 / 失敗 0 / 無視 0 / 警告 0**。
+
+> **下の「138 バイナリ / 717 件」は 2026/09/08 の数字**で、**数え方が
+> 違います**（`--workspace --release`、`zenith_py` を含む）。
+> **どちらが多いかではなく、どのコマンドで数えたか**を見てください。
+> **数え方で値が変わります**（HANDOVER 4-115）。
 
 - **総テスト数:** **138 テストバイナリ / 717 件 / 失敗 0 / 警告 0**（`cargo test --workspace --release` の実測。**2026/09/08**。717 になったのは 9/8 で、697 から 20 件足しました——**スケッチの回転（パップスの定理）3 件**（4-391）、**穴つきスケッチ 4 件**（4-392）、**過剰拘束の「冗長」と「矛盾」の見分け 4 件**（4-393）、**座標変換の逆 4 件**（4-397。`zenith_math` には `tests/` そのものがありませんでした）、**スケッチから立体にする Python の口 5 件**（4-400、4-401）。それ以前の 697 は 9/7 で、696 から 1 件足しました——**穴の中は面の外**であることを、**わざと壊すと落ちる**形で固定したものです（4-363。その前の 696 は 9/5 に穴の縁の見分け方を固定したもので、4-318）。**`zenith_py` を含みます**——2026/08/30 まで `--exclude zenith_py` で数えており、**Blender へ届く層を1度も測っていませんでした**（9-H の H1 でそこを門へ戻しました。HANDOVER 4-171）。**数え方で値が変わります**——どのコマンドで何を数えたかを、必ず一緒に書いてください（HANDOVER 4-115）
-- **常設プローブ（診断・ゲート）:** `crates/zenith_algo/examples` に **93 本**（2026/09/07 実測。`ls crates/zenith_algo/examples/*.rs | wc -l` で数えられます）。一覧と、それぞれ何を赤にするかは [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に。CI は `.github/workflows/gates.yml`
+- **常設プローブ（診断・ゲート）:** `crates/zenith_algo/examples` に **110 本**（2026/09/16 実測。`ls crates/zenith_algo/examples/*.rs | wc -l` で数えられます）。一覧と、それぞれ何を赤にするかは [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に。CI は `.github/workflows/gates.yml`
 - **外部カーネルとの突き合わせ:** FreeCAD 相互検証 27/27、ショーケース 54/54、書き戻し 7/7、IGES 5/5
 - **非STEP出力（STL / OBJ / glTF / DXF）:** 8/8（`py tools/verify_mesh_exports.py`。FreeCAD 不要で CI に入っている）
 - **Python 往復:** `tools/verify_solid_api.py`（B-Rep ハンドルの口）と `tools/verify_python_binding.py`（メッシュを返す旧い口）とも全合格
