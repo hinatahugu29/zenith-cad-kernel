@@ -1,16 +1,21 @@
 # Zenith CAD Kernel
 
-**個人ひとりと AI が、18 日で書いた B-Rep CAD カーネルです。**
+**個人ひとりと AI が、29 日で書いた B-Rep CAD カーネルです。**
 
 > **English summary** — Zenith is a from-scratch B-Rep CAD kernel written in Rust
-> (~119,000 lines, 8 crates), built by **one person working with an AI assistant
-> over 17 days** (2026-08-19 → 2026-09-04, 841 commits). It performs exact boolean
+> (~132,000 lines, 8 crates), built by **one person working with an AI assistant
+> over 29 days** (2026-08-19 → 2026-09-16, 1,089 commits). It performs exact boolean
 > operations on solids, reads and writes STEP, and tessellates to watertight meshes.
 >
 > **Every claim in this repository is backed by a re-runnable measurement.**
 > `VERIFICATION_PLAYBOOK.md` tells you how to re-measure each one.
 > `HANDOVER.md` records the **failed** hypotheses with their numbers, next to the
 > successes — on 2026-09-04 alone, eight guesses were wrong and are written down.
+>
+> **Two claims below cannot be re-measured in this checkout.** The OCCT sample
+> files (`screw.step`, `linkrods.step`) are not redistributed here, so the six
+> gates that use them **do not run** — "not run" is not "green". Everything else
+> is re-runnable as written.
 >
 > It is **not** a finished product and **not** a drop-in OCCT replacement.
 > OCCT is used here as a **yardstick**, not a target.
@@ -24,36 +29,55 @@ CAD カーネル——立体を厳密に足したり引いたりする、CAD の
 数えるほどしか無く、書くのは**組織の仕事**だと思われてきました。実際、
 OpenCASCADE は 30 年かけて育っています。
 
-このリポジトリは、**それを個人ひとりと AI が 18 日でどこまで持っていけるか**の
+このリポジトリは、**それを個人ひとりと AI が 29 日でどこまで持っていけるか**の
 記録です。
 
 | | |
 | :--- | ---: |
-| 期間 | **2026/08/19 〜 09/05（18 日）** |
-| コミット | **854** |
-| Rust | **119,293 行 / 326 ファイル / 8 crate**（2026/09/05 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
-| 掃き出し（計測プログラム） | **90 本** |
-| テスト | **137 バイナリ / 697 件 / 失敗 0 / 警告 0** |
-| 記録 | **308 本**（`HANDOVER.md`。ルートの md は全部で 28,580 行） |
+| 期間 | **2026/08/19 〜 09/16（29 日）** |
+| コミット | **1,089** |
+| Rust | **132,230 行 / 358 ファイル / 8 crate**（2026/09/16 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
+| 掃き出し（計測プログラム） | **110 本** |
+| テスト | **145 バイナリ / 734 件 / 失敗 0 / 警告 0**（`cargo test --release --workspace --exclude zenith_py`） |
+| 門 | **49 本**（`bash tools/run_gates.sh --quick`。**うち 6 本は外部ファイルが無く回っていません**） |
+| 記録 | **455 本**（`HANDOVER.md`。ルートの md は全部で 43,169 行） |
 
 **書いた人はひとりです。** 設計判断も、どこを測るかも、何を入れて何を捨てるかも、
 人間が決めています。AI がやったのは、**実装と、測ることと、書き留めること**です。
 
 ## いま何ができて、何ができないか
 
-**できること**（すべて再測定できます。手順は
-[`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md)）
+**できること**（手順は [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md)。
+**★印の 2 つは、この作業コピーでは回せません**——下の断りを読んでください）
 
 - **厳密なブーリアン**——47 配置・141 演算で **135 成功・6 断り**（断りは
   すべて「答えが本当に非多様体だから」で、**未実装による断りは 0**）。
   B-Rep もメッシュも**非多様体 0**。**恒等式**（`|A∪B|+|A∩B| = |A|+|B|`）を
-  41 配置で測って**破れ 0**、残差の最悪 **3.900e-8**
+  41 配置で測って**破れ 0**、残差の最悪 **3.900e-8**（2026/09/11 実測）
 - **大きさの桁**——0.005 〜 100 倍で破れ 0
 - **自分の出力を入力に戻す**——10 連鎖 30 演算すべて成功
-- **STEP の読み書き**——OCCT が配る実物の `screw.step` が**読めて、切れて、
-  恒等式が 3.845e-13 で閉じます**
-- **水密なメッシュ**——自作の立体は **11 通りの刻み（4〜64）すべてで**穴 0・
-  重なり 0。**読んだ `screw.step`・`linkrods.step` も 11 通りすべてで 0／0**
+- **浅く当たる所**——**平面 × 曲面**（穴の縁に帯を当てる）と
+  **円柱 × 円柱**（平行な 2 本を近づける）を、**接する所の前後で掃いて
+  断り 0・誤答 0**（2026/09/16。4-457、4-465、4-467。
+  `tangent_sweep_probe`、`cylinder_tangency_sweep_probe`）。
+  **接する所そのものだけは、答えが非多様体なので名指しで断ります**
+- ★ **STEP の読み書き**——OCCT が配る実物の `screw.step` が**読めて、切れて、
+  恒等式が 3.845e-13 で閉じます**（2026/09/05 実測）
+- ★ **水密なメッシュ**——自作の立体は **11 通りの刻み（4〜64）すべてで**穴 0・
+  重なり 0（**これは回せます**）。**読んだ `screw.step`・`linkrods.step` も
+  11 通りすべてで 0／0**（2026/09/06 実測）
+
+> ### ★ について——**いま、この作業コピーでは確かめられません**
+>
+> **`reference/OCCT/data/step/` がありません。** OCCT が配るサンプル
+> （`screw.step`、`linkrods.step`）を、このリポジトリでは再配布していない
+> ためです。**それを使う 6 つの門は回りません。**
+>
+> **「回っていない」であって「緑」ではありません。** 上の ★ は
+> **過去に測った値の記録**で、**いま再現できる主張ではありません。**
+>
+> **回したい方へ**: OCCT の `data/step/` から 2 ファイルを
+> `reference/OCCT/data/step/` に置けば、門は全部回ります。
 
 **できないこと**（隠しません）
 
@@ -88,7 +112,7 @@ OpenCASCADE は 30 年かけて育っています。
 
 CAD カーネルは長らく「個人が手を出す領域ではない」とされてきました。それが
 **本当に技術的な壁だったのか、それとも人手の壁だったのか**——このリポジトリは、
-その問いに 18 日ぶんの実測で答えようとしています。
+その問いに 29 日ぶんの実測で答えようとしています。
 
 もしこれが**火種**になって、「自分もやってみるか」と思う人が出てくるなら、
 それがいちばんの成果です。**カーネル開発を、組織の仕事から個人の射程へ。**
@@ -102,7 +126,7 @@ CAD カーネルは長らく「個人が手を出す領域ではない」とさ�
 | **測ってから直す** | 「たぶんここだろう」で手を入れない。**2026/09/04 だけで、思いついた機構を 8 回外しました**——8 つとも、先に数えるか関数を開くだけで済みました |
 | **効果が測れないものは入れない** | 動かした数字が示せないコードは、正しそうに見えても捨てます |
 | **外した仮説を、数字ごと残す** | `HANDOVER.md` には**失敗が成功と同じ密度で**書いてあります。**同じ道を歩き直さないため**です |
-| **門を通してから入れる** | 道を変える修理は、通しテストだけでなく **7 つの門すべて**を通します |
+| **門を通してから入れる** | 道を変える修理は、通しテストだけでなく **49 本の門すべて**（`bash tools/run_gates.sh --quick`）を通します |
 
 **主張はすべて再現できます。** 文書の数字を信じる必要はありません——
 [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) に、**どのコマンドで
@@ -127,7 +151,7 @@ CAD カーネルは長らく「個人が手を出す領域ではない」とさ�
 
 | 文書 | 何が書いてあるか | 計画／実測 |
 | :--- | :--- | :--- |
-| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 303 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
+| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 455 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
 | [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) | **主張を自分で測り直す手順。**どのコマンドで何を数えたか | **実測** |
 | [`KERNEL_SPECS.md`](KERNEL_SPECS.md) | いまの仕様と実装範囲 | 実測 |
 | [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) | 機能一覧と制限 | 実測 |
@@ -145,9 +169,14 @@ CAD カーネルは長らく「個人が手を出す領域ではない」とさ�
 
 1. [`HANDOVER.md`](HANDOVER.md) — 現在地点、作業ブランチ、次に着手する候補
    （**次の方針は 9-H**。段取りと数値目標 **H1〜H8** がここにあります。
-   **H1〜H7 は達成済み**で、いま追うのは **H8 だけ**です。H6 は 2026/09/02 に
+   **H1〜H7 は達成済み**、**H8 は `screw.step` で達成、`linkrods.step` で
+   まだ**です。**2026/09/13 に H8 の壁が 1 つ抜けました**——閉じた輪という
+   不変量から足りない交線を拾い直す手で、9/9 から断られていた検体が
+   3 演算とも返るようになりました（4-441）。H6 は 2026/09/02 に
    達成しました——射影の収束判定の**単位が合っていなかった**のが原因で、
-   `scale_sweep_probe` の門を **0.005 まで**下げて破れ 0 です。4-259）
+   `scale_sweep_probe` の門を **0.005 まで**下げて破れ 0 です。4-259。
+   **下の「現在地点」の節は 2026/09/08（4-399）で止まっています**——
+   **それ以降の 4-400〜4-468 は `HANDOVER.md` だけにあります**）
 2. [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) — 主張を再測定する手順
 3. [`KERNEL_SPECS.md`](KERNEL_SPECS.md) — 現在の仕様と実装範囲
 4. [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) — 機能一覧と制限
@@ -176,7 +205,26 @@ git diff main...HEAD --stat
 cargo run --release -p zenith_algo --example foreign_cross_pair_probe
 ```
 
-### いまの現在地点（上の要約より細かい話）
+### 2026/09/08 以降にやったこと（要約）
+
+**下の「現在地点」の節は 4-399（2026/09/08）で止まっています。**
+**それ以降は `HANDOVER.md` の 4-400〜4-468 にあります。** 大きいものを 3 つ:
+
+- **H8 の壁が 1 つ抜けました**（4-441）——**閉じた輪という不変量から、
+  足りない交線を拾い直す**。9/9 から断られていた検体が 3 演算とも返り、
+  恒等式が 1.187e-8 で閉じます
+- **「浅く当たる所」の帯を 2 つ閉じました**（4-451〜4-468、17 手）。
+  **根は 3 つ**で、**3 つとも「代わりのもので測っていた」**という同じ形
+  でした——**媒介変数で長さを**（4-457）、**三角形で曲面を**（4-460、4-462）、
+  **距離で関係を**（4-465、4-467）
+- **静かな誤答を 1 つ潰しました**（4-462）——**差が「A そのもの」
+  （切り込みの無い立体）を返していました**。**門は緑のまま**でした。
+  原因は 512 点の標本が体積 6e-4 のレンズを外していたこと。
+  **断りに変え、門が返り値を 1 演算ずつ閉じた式に当てる**ようにしました
+
+**球どうしには、まだ帯が残っています**（4-468。ただし閾値ではなく散発的）。
+
+### いまの現在地点（上の要約より細かい話。**4-399／2026-09-08 までの話です**）
 
 **数字の正は [`HANDOVER.md`](HANDOVER.md) です。** ここと上の要約は、
 そこからの引き写しです——**食い違っていたら、`HANDOVER.md` を信じてください。**
