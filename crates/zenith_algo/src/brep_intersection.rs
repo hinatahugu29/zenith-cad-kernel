@@ -4026,7 +4026,22 @@ fn deduplicate_split_edges(edges: &[Edge], tol: &Tolerance) -> Vec<Edge> {
                 && points_same_3d(existing_end, end, tol.linear))
                 || (points_same_3d(existing_start, end, tol.linear)
                     && points_same_3d(existing_end, start, tol.linear));
-            same_span && points_same_3d(edge_midpoint(existing), midpoint, tol.linear * 10.0)
+            // **中点の枡を、弦の長さに合わせます**（4-472）。
+            //
+            // **`tol.linear * 10`（1e-5）は絶対の長さ**でした。**辿って
+            // 出した同じ弧の 2 本は、浅く重なるほど食い違いが大きく
+            // なります**——実測（半径 5 と 3 の球）で、食い込み 1.5e-2
+            // なら **5.7e-6**（枡の内側）、1.15e-2 では **約 1.0e-5**
+            // （枡のすぐ外）。**同じ弧なのに、片方だけ残りました。**
+            //
+            // **別々の弧なら、桁が違います**（4-442 が中点を足した理由）
+            // ——この検体では、弦 0.29 に対して**膨らみが 0.061**。
+            // **弦の 1/1000（2.9e-4）は、そのはるか下**です。
+            //
+            // **絶対の枡も残します**（短い弧では比が効かないので）。
+            let span = (end - start).norm();
+            let allowance = (tol.linear * 10.0).max(span * 1e-3);
+            same_span && points_same_3d(edge_midpoint(existing), midpoint, allowance)
         });
         if !duplicate {
             unique.push(edge.clone());
