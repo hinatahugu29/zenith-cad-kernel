@@ -727,6 +727,27 @@ impl FaceSplitter {
                 .collect()
         };
 
+        // **歩いた境界が何本になったか**（4-471。`ZENITH_SPLIT_WHY=1`）。
+        //
+        // 片は「**歩いた境界 ＋ 切り込み**」で組みます。**面積が 0 に
+        // なる片**（4-470）は、`ZENITH_UV_DUMP` で見ると**同じ弧を行って
+        // 戻るだけ**でした——**歩いた境界のほうが、切り込みと同じ道に
+        // なっている**という意味です。
+        //
+        // **from と to、そして歩きの本数**を出せば、そこが決まります。
+        if std::env::var_os("ZENITH_SPLIT_WHY").is_some() {
+            eprintln!(
+                "WALKWHY 境界の辺 {} 本、from {:.4} to {:.4}（隔たり {:.4}）→ 歩き 前 {} 本 / 後 {} 本、切り込み {} 本",
+                edges.len(),
+                from,
+                to,
+                separation,
+                forward.len(),
+                backward.len(),
+                cut.len()
+            );
+        }
+
         let mut pieces = build(pairings[0]);
         for swap in pairings.iter().skip(1) {
             if Self::checked_areas("split_by_chain", face, &pieces).is_ok() {

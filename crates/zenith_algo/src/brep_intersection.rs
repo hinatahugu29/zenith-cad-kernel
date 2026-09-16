@@ -997,6 +997,30 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // **面へ配る前に、同じ交線を 1 本にまとめます**（4-471）。
+        //
+        // **辿って出した交線は、同じ弧が 2 本来ることがあります。**
+        // 実測（半径 5 と 3 の球、食い込み 1.5e-2）: `A面0 x B面2` が
+        // **端点はぴたり同じ、中点だけ 5.7e-6 違う弧を 2 本**出します。
+        //
+        // **2 本目は、1 本目が割った跡の境界に乗ります**ので、
+        // **片の片方が面積 0 になり**（4-470）、「割れなかった」と
+        // 数えられます。**面ごとの「飛ばした」の数が、離れとともに
+        // 入れ替わって見えていたのは、これ**です（4-469）。
+        //
+        // `deduplicate_split_edges` は**端点が同じで中点が 1e-5 以内**
+        // なら同じ弧と見ます（4-442 で中点を足しました——端点だけだと、
+        // **同じ 2 点を結ぶ別々の弧**まで潰れます）。**5.7e-6 は、その
+        // 内側**です。**道具はありました。ここで呼んでいませんでした。**
+        let edges_by_face_a = edges_by_face_a
+            .into_iter()
+            .map(|(index, edges)| (index, deduplicate_split_edges(&edges, tol)))
+            .collect();
+        let edges_by_face_b = edges_by_face_b
+            .into_iter()
+            .map(|(index, edges)| (index, deduplicate_split_edges(&edges, tol)))
+            .collect();
+
         PlanarOperandBatchSplits {
             splits_a: collect_batch_splits_for_faces(faces_a, edges_by_face_a, tol, "A"),
             splits_b: collect_batch_splits_for_faces(faces_b, edges_by_face_b, tol, "B"),
