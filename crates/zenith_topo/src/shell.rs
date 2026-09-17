@@ -517,10 +517,29 @@ fn validate_planar_face_orientation(
         return;
     };
     let area = pcurve_loop_signed_area(&pcurves.outer_loop.segments, 8);
-    if seam_only_loop_allowed && area.abs() <= tol.parametric {
+    // **面積を、長さの物差しで測ってはいけません**（4-476）。
+    //
+    // `tol.parametric` は長さの緩みです。面積と直に比べると、**小さい面ほど
+    // 潰れて見えます**——半径 5e-5 の真っ当な円板は面積 7.8e-9 で、
+    // 1e-7 を下回ります。**潰れているとは「差し渡しに対して幅が無い」こと**
+    // なので、枡もループ自身の差し渡しに合わせます。
+    // **緩める向きにだけ効かせます**（差し渡し 0.1 以上では今までどおり）。
+    //
+    // **ただし、緩めていいのは「カーネルが解ける大きさ」の中だけ**です。
+    // 差し渡しそのものが線形公差の数倍しかない面は、**小さい面ではなく
+    // 解像度の外**です——`robustness_probe` の「everything at 1e-6 scale」が
+    // それで、緩めた途端に**断りが誤答に変わりました**（384 標本中 99 が不一致）。
+    // **差し渡しが線形公差の 10 倍を超えるときだけ**、枡を差し渡しに合わせます。
+    let span = pcurve_loop_span(&pcurves.outer_loop.segments, 8);
+    let degenerate_area = if span > tol.linear * 10.0 {
+        (span * tol.linear).clamp(1e-15, tol.parametric)
+    } else {
+        tol.parametric
+    };
+    if seam_only_loop_allowed && area.abs() <= degenerate_area {
         return;
     }
-    if area.abs() <= tol.parametric {
+    if area.abs() <= degenerate_area {
         report.degenerate_face_count += 1;
         report.min_planar_face_area = report.min_planar_face_area.min(area.abs());
         report.errors.push(format!(
@@ -537,7 +556,7 @@ fn validate_planar_face_orientation(
         -area
     };
     report.min_planar_face_oriented_area = report.min_planar_face_oriented_area.min(oriented_area);
-    if oriented_area <= tol.parametric {
+    if oriented_area <= degenerate_area {
         report.planar_face_orientation_mismatch_count += 1;
         // **どちらが裏返っているのかを名指しします**（4-280）。
         //
@@ -659,6 +678,28 @@ fn pcurve_loop_signed_area(
     }
 
     signed_area_2d(&points)
+}
+
+/// **ループの差し渡し**（uv の外接箱の対角線）。
+///
+/// **潰れているかどうかは、面積だけでは決まりません**（4-476）。
+/// 長さ 1・幅 1e-9 の裂け目と、半径 5e-5 の円板は、どちらも面積が
+/// 1e-9 前後です。**前者だけを潰れていると呼ぶ**ために、差し渡しを使います。
+fn pcurve_loop_span(segments: &[crate::face::FacePcurveSegment], samples_per_segment: usize) -> f64 {
+    let mut min = Point2::new(f64::INFINITY, f64::INFINITY);
+    let mut max = Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for segment in segments {
+        for point in segment.curve.sample_points(samples_per_segment) {
+            min.x = min.x.min(point.x);
+            min.y = min.y.min(point.y);
+            max.x = max.x.max(point.x);
+            max.y = max.y.max(point.y);
+        }
+    }
+    if !min.x.is_finite() || !max.x.is_finite() {
+        return 0.0;
+    }
+    ((max.x - min.x).powi(2) + (max.y - min.y).powi(2)).sqrt()
 }
 
 fn signed_area_2d(points: &[Point2]) -> f64 {
