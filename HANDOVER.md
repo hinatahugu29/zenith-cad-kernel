@@ -109,6 +109,11 @@
 >   **`build_planar_caps_from_intersection_edge_candidates` は重複除去を
 >   通していません**（いまは呼び手が 0。4-477）
 >
+> **⚠ 門の一式は、4-479 を足す前の姿で緑です。** `curved_pair_identity_probe`
+> **そのものは rc=0 で緑**（338 秒）、**通しテストも足したあとで 149 本 /**
+> **738 件通過**ですが、**`bash tools/run_gates.sh --quick` を通しで回した**
+> **のは 4-478 までの姿**です。**次の回の頭で、まず一式を回してください。**
+>
 > **`external_data_probe` は赤のまま**です（`linkrods.step` と
 > `screw.step` が無いので、それを使う 6 つの門は回っていません）
 > ——**「回っていない」であって「緑」ではありません。**
