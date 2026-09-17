@@ -103,7 +103,7 @@ face_merge_probe step_representation_probe step_unit_probe
 thicken_sheet_probe sketch_boolean_probe unused_builder_probe
 tangent_sweep_probe cylinder_tangency_sweep_probe
 sphere_tangency_sweep_probe sphere_cap_sweep_probe
-cone_apex_sweep_probe"
+cone_apex_sweep_probe torus_plane_sweep_probe"
 
 if [ "$QUICK" = "0" ]; then
   GATES="$GATES contact_placement_probe"

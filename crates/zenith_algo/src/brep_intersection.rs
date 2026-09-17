@@ -7850,59 +7850,86 @@ fn largest_domain_triangle_centroid(face: &Face) -> Option<(f64, f64)> {
 
 /// Picks the material point of a pierced planar face that sits furthest from
 /// every trim loop, so classification samples solid material and not a hole.
+/// **面の中の点を 1 つ選ぶ**。穴からいちばん遠い所。
+///
+/// # **細い輪では、粗い格子に 1 点も入りません**（4-477）
+///
+/// 格子は外周の外接箱に張ります。**細い輪**——たとえば平面がトーラスの
+/// てっぺんを 1e-3 だけ切ったときの、幅 0.126・差し渡し 12 の輪——では、
+/// **24 分割（刻み 0.527）の格子点が 1 つも輪の中に落ちません**。
+///
+/// **落ちないと `None` を返し**、呼び手（`representative_face_point`）は
+/// **外周の平均**に落ちます。**輪の平均は輪の中ではありません**——
+/// **穴のまん中**です。実測では、そこがトーラスの外なので
+/// **輪の面片が `Outside` と読まれ**、和が面を二重に採って
+/// **非多様体の稜の使用 24 件**で落ちていました。
+///
+/// **見つからなければ、細かくして探し直します。** 粗い格子で見つかる
+/// 面（ほとんど）では、**1 度目で返るので今までと同じ費用**です。
 fn planar_point_clear_of_holes(face: &Face, plane: &zenith_geom::PlaneSurface3) -> Option<Point3> {
-    const GRID: usize = 24;
-
-    let outer: Vec<Point2> = face
-        .outer_wire
-        .sample_points(8)
-        .iter()
-        .map(|point| project_to_plane_uv(*point, plane))
-        .collect();
-    if outer.len() < 3 {
-        return None;
-    }
-    let holes: Vec<Vec<Point2>> = face
-        .inner_wires
-        .iter()
-        .map(|wire| {
-            wire.sample_points(8)
-                .iter()
-                .map(|point| project_to_plane_uv(*point, plane))
-                .collect()
-        })
-        .collect();
-
-    let (mut min_u, mut max_u) = (f64::INFINITY, f64::NEG_INFINITY);
-    let (mut min_v, mut max_v) = (f64::INFINITY, f64::NEG_INFINITY);
-    for uv in &outer {
-        min_u = min_u.min(uv.x);
-        max_u = max_u.max(uv.x);
-        min_v = min_v.min(uv.y);
-        max_v = max_v.max(uv.y);
-    }
 
     let mut best: Option<(f64, Point2)> = None;
-    for i in 1..GRID {
-        for j in 1..GRID {
-            let uv = Point2::new(
-                min_u + (max_u - min_u) * (i as f64 / GRID as f64),
-                min_v + (max_v - min_v) * (j as f64 / GRID as f64),
-            );
-            if !point_in_polygon_2d(uv, &outer, 0.0) {
-                continue;
-            }
-            if holes.iter().any(|hole| point_in_polygon_2d(uv, hole, 0.0)) {
-                continue;
-            }
+    // **輪をどれだけ細かく刻むか**と、**格子をどれだけ細かく張るか**は、
+    // **二人三脚**です（4-477）。**刻みが粗いと、輪そのものが潰れます**
+    // ——半径 6.03 の円を 32 点で結ぶと、弦のたわみは 0.029。
+    // **幅 0.057 の輪**では、内と外の多角形が食い合って**中身が消え**、
+    // 格子をいくら細かくしても 1 点も入りません。
+    for (samples, grid) in [(8usize, 24usize), (32, 96), (128, 384)] {
+        let outer: Vec<Point2> = face
+            .outer_wire
+            .sample_points(samples)
+            .iter()
+            .map(|point| project_to_plane_uv(*point, plane))
+            .collect();
+        if outer.len() < 3 {
+            return None;
+        }
+        let holes: Vec<Vec<Point2>> = face
+            .inner_wires
+            .iter()
+            .map(|wire| {
+                wire.sample_points(samples)
+                    .iter()
+                    .map(|point| project_to_plane_uv(*point, plane))
+                    .collect()
+            })
+            .collect();
 
-            let clearance = std::iter::once(&outer)
-                .chain(holes.iter())
-                .map(|polygon| polygon_min_distance_2d(uv, polygon))
-                .fold(f64::INFINITY, f64::min);
-            if best.is_none_or(|(best_clearance, _)| clearance > best_clearance) {
-                best = Some((clearance, uv));
+        let (mut min_u, mut max_u) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (mut min_v, mut max_v) = (f64::INFINITY, f64::NEG_INFINITY);
+        for uv in &outer {
+            min_u = min_u.min(uv.x);
+            max_u = max_u.max(uv.x);
+            min_v = min_v.min(uv.y);
+            max_v = max_v.max(uv.y);
+        }
+
+        for i in 1..grid {
+            for j in 1..grid {
+                let uv = Point2::new(
+                    min_u + (max_u - min_u) * (i as f64 / grid as f64),
+                    min_v + (max_v - min_v) * (j as f64 / grid as f64),
+                );
+                if !point_in_polygon_2d(uv, &outer, 0.0) {
+                    continue;
+                }
+                if holes.iter().any(|hole| point_in_polygon_2d(uv, hole, 0.0)) {
+                    continue;
+                }
+
+                let clearance = std::iter::once(&outer)
+                    .chain(holes.iter())
+                    .map(|polygon| polygon_min_distance_2d(uv, polygon))
+                    .fold(f64::INFINITY, f64::min);
+                if best.is_none_or(|(best_clearance, _)| clearance > best_clearance) {
+                    best = Some((clearance, uv));
+                }
             }
+        }
+        // **見つかったら、そこで止めます**——細かくするのは、
+        // **1 点も入らなかったとき**だけです。
+        if best.is_some() {
+            break;
         }
     }
 
