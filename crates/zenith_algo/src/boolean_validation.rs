@@ -323,12 +323,49 @@ impl BooleanResultVerifier {
             max_pt.z - min_pt.z,
         );
 
+        // **答えが違いうるのは、2 つが重なっている所だけ**です（4-478）。
+        //
+        // 全体の外接箱に一様に撒くと、**重なりが小さいほど、そこへ落ちる
+        // 点が減ります**。実測: 半径 2・長さ 36 の円柱 2 本を直交させると、
+        // **積が空で返り**、**384 点のうち食い違うのは 4 点**——
+        // 許しは 4 点なので、**通ってしまいました**（長さ 34 では 5 点で
+        // 止まりました）。**同じ間違いが、長いほど見えなくなります。**
+        //
+        // **重なりの箱にも、同じ数だけ撒きます。** 重なりが無ければ
+        // 何も足しません。
+        let mut samples: Vec<Point3> = Vec::with_capacity(params.sample_count * 2);
         for index in 0..params.sample_count {
-            let point = Point3::new(
+            samples.push(Point3::new(
                 min_pt.x + span.x * halton(index + 1, 2),
                 min_pt.y + span.y * halton(index + 1, 3),
                 min_pt.z + span.z * halton(index + 1, 5),
-            );
+            ));
+        }
+        if let (Some(a), Some(b)) = (bbox_a, bbox_b) {
+            let low = Point3::new(a.0.x.max(b.0.x), a.0.y.max(b.0.y), a.0.z.max(b.0.z));
+            let high = Point3::new(a.1.x.min(b.1.x), a.1.y.min(b.1.y), a.1.z.min(b.1.z));
+            let overlap = Vec3::new(high.x - low.x, high.y - low.y, high.z - low.z);
+            // **公差より薄い重なりには、撒きません**（4-478）。
+            //
+            // 厚み 1e-9 で重なる箱 2 つでは、**積を空で返すのは公差の内**
+            // です。そこへ密に撒くと、**メッシュは 1e-9 の板を本物として
+            // 数える**ので、**「答えが違う」と言い出します**
+            // （実測: 730 点中 347 点）。**測れない薄さを、測ろうとしては
+            // いけません。**
+            let thinnest = overlap.x.min(overlap.y).min(overlap.z);
+            let resolvable = thinnest > span.norm() * 1e-6;
+            if low.x < high.x && low.y < high.y && low.z < high.z && resolvable {
+                for index in 0..params.sample_count {
+                    samples.push(Point3::new(
+                        low.x + overlap.x * halton(index + 1, 2),
+                        low.y + overlap.y * halton(index + 1, 3),
+                        low.z + overlap.z * halton(index + 1, 5),
+                    ));
+                }
+            }
+        }
+
+        for point in samples {
             report.sample_count += 1;
 
             let Some(in_a) = classify_point(point, &mesh_a, bbox_a) else {

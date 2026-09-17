@@ -10054,7 +10054,25 @@ fn intersect_nurbs_patches(
     tol: &Tolerance,
 ) -> FaceIntersectionKind {
     let extent = surface_patch_extent(surface_a).max(surface_patch_extent(surface_b));
-    let first_step = (extent * 0.1).max(tol.linear * 100.0);
+    // **歩幅は、交線が住める所の大きさで決めます**（4-478）。
+    //
+    // パッチの 1 割にすると、**長い面では歩幅が交線より大きくなります**。
+    // 実測: 半径 2・長さ 36 の円柱 2 本を直交させると、パッチの差し渡しは
+    // 36、**歩幅 3.6** ——シュタインメッツの交線は弦 3.46 しかありません。
+    // **辿りは天辺の切れ端（弦 0.28）しか拾わず**、積が**空で返って**
+    // いました（そしてその誤答は、外接箱に一様に撒く検査をすり抜けました）。
+    //
+    // **交線は、2 つの外接箱が重なる所にしかいません。** そこの差し渡しを
+    // 上限に使います。**重ならなければ交線もない**ので、そのときは
+    // 今までどおりパッチの大きさで構いません。
+    //
+    // **狭める向きにだけ、はっきり効く所でだけ**掛けます。**重なりが
+    // パッチの半分より大きいなら、今までの歩幅のまま**です——
+    // **既に通っている配置の当てはめを動かさない**ためです
+    // （動かすと、半球の体積が 1e-8 から 6.6e-8 へずれました）。
+    let reach = patch_overlap_extent(surface_a, surface_b).unwrap_or(extent);
+    let scale = if reach < extent * 0.2 { reach } else { extent };
+    let first_step = (scale * 0.1).max(tol.linear * 100.0);
     let deviation_limit = tol.linear;
 
     // 枝は2本まで見る。1枚のパッチと1枚のパッチが3本以上で交わる配置は
@@ -10203,6 +10221,58 @@ fn marched_runs_along_a_patch_edge(
 }
 
 /// パッチの広がり。歩幅を形の大きさに合わせるために使う。
+/// **2 つのパッチの外接箱が重なる所の差し渡し**（4-478）。
+///
+/// **交線は、ここにしか居られません。** 重なりが無ければ `None`。
+/// 箱は粗い格子（5 × 5）で作ります——**歩幅を決めるためだけ**なので、
+/// 厳密である必要はありません。
+fn patch_overlap_extent(a: &NurbsSurface3, b: &NurbsSurface3) -> Option<f64> {
+    let box_of = |surface: &NurbsSurface3| {
+        let ((u0, u1), (v0, v1)) = surface.param_range();
+        let mut low = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut high = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for i in 0..=4 {
+            let u = u0 + (u1 - u0) * i as f64 / 4.0;
+            for j in 0..=4 {
+                let v = v0 + (v1 - v0) * j as f64 / 4.0;
+                let point = surface.evaluate(u, v);
+                low.x = low.x.min(point.x);
+                low.y = low.y.min(point.y);
+                low.z = low.z.min(point.z);
+                high.x = high.x.max(point.x);
+                high.y = high.y.max(point.y);
+                high.z = high.z.max(point.z);
+            }
+        }
+        (low, high)
+    };
+    let (a_low, a_high) = box_of(a);
+    let (b_low, b_high) = box_of(b);
+    if !a_low.x.is_finite() || !b_low.x.is_finite() {
+        return None;
+    }
+    let low = Point3::new(
+        a_low.x.max(b_low.x),
+        a_low.y.max(b_low.y),
+        a_low.z.max(b_low.z),
+    );
+    let high = Point3::new(
+        a_high.x.min(b_high.x),
+        a_high.y.min(b_high.y),
+        a_high.z.min(b_high.z),
+    );
+    let span = Vec3::new(high.x - low.x, high.y - low.y, high.z - low.z);
+    if span.x < 0.0 || span.y < 0.0 || span.z < 0.0 {
+        return None;
+    }
+    let diagonal = span.norm();
+    if diagonal > 0.0 {
+        Some(diagonal)
+    } else {
+        None
+    }
+}
+
 fn surface_patch_extent(surface: &NurbsSurface3) -> f64 {
     let ((u0, u1), (v0, v1)) = surface.param_range();
     let corners = [

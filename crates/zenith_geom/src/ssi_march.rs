@@ -239,6 +239,73 @@ impl IntersectionMarcher {
     /// 格子の各点から最近傍射影を回すと、1点あたり粗サンプリングとニュートンが
     /// 走って高くつく（ブーリアンで面の組ごとに呼ぶと 45 ケースの走査が
     /// 4分47秒になった）。両方の格子を並べて近い組を選び、そこだけ詰める。
+    /// **窓が元の半分より狭いときだけ、窓を採る**（4-478）。
+    fn narrow_if_much_smaller(
+        full: ((f64, f64), (f64, f64)),
+        window: ((f64, f64), (f64, f64)),
+    ) -> ((f64, f64), (f64, f64)) {
+        let ((u0, u1), (v0, v1)) = full;
+        let ((wu0, wu1), (wv0, wv1)) = window;
+        let shrinks = (wu1 - wu0) < (u1 - u0) * 0.2 || (wv1 - wv0) < (v1 - v0) * 0.2;
+        if shrinks {
+            window
+        } else {
+            full
+        }
+    }
+
+    /// **相手の外接箱に入る所だけを囲む、パラメータの窓**（4-478）。
+    ///
+    /// 粗い格子で面を舐め、**箱に入った点のパラメータの最小と最大**を取り、
+    /// **格子 1 目ぶん広げて**返します（縁で切り落とさないため）。
+    /// **1 点も入らなければ、元の範囲のまま**返します——狭めるのは、
+    /// **狭めても取りこぼさないと分かるとき**だけです。
+    fn param_window(
+        surface: &NurbsSurface3,
+        box_of_other: (Point3, Point3),
+        steps: usize,
+    ) -> ((f64, f64), (f64, f64)) {
+        let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+        let scan = steps.clamp(8, 24);
+        let (mut lo_u, mut hi_u) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (mut lo_v, mut hi_v) = (f64::INFINITY, f64::NEG_INFINITY);
+        // 箱は**制御点の凸包**なので面より大きめです。さらに緩めません。
+        for i in 0..=scan {
+            let u = u_min + (u_max - u_min) * i as f64 / scan as f64;
+            for j in 0..=scan {
+                let v = v_min + (v_max - v_min) * j as f64 / scan as f64;
+                let point = surface.evaluate(u, v);
+                let inside = point.x >= box_of_other.0.x
+                    && point.x <= box_of_other.1.x
+                    && point.y >= box_of_other.0.y
+                    && point.y <= box_of_other.1.y
+                    && point.z >= box_of_other.0.z
+                    && point.z <= box_of_other.1.z;
+                if inside {
+                    lo_u = lo_u.min(u);
+                    hi_u = hi_u.max(u);
+                    lo_v = lo_v.min(v);
+                    hi_v = hi_v.max(v);
+                }
+            }
+        }
+        if !lo_u.is_finite() || !lo_v.is_finite() {
+            return ((u_min, u_max), (v_min, v_max));
+        }
+        let pad_u = (u_max - u_min) / scan as f64;
+        let pad_v = (v_max - v_min) / scan as f64;
+        (
+            (
+                (lo_u - pad_u).max(u_min),
+                (hi_u + pad_u).min(u_max),
+            ),
+            (
+                (lo_v - pad_v).max(v_min),
+                (hi_v + pad_v).min(v_max),
+            ),
+        )
+    }
+
     pub fn find_seeds(
         s1: &NurbsSurface3,
         s2: &NurbsSurface3,
@@ -254,8 +321,27 @@ impl IntersectionMarcher {
 
         crate::work_counter::count_seed_search();
         let steps = grid.max(4);
-        let ((u_min, u_max), (v_min, v_max)) = s1.param_range();
-        let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
+        // **種を探すのは、相手の箱の中だけで足ります**（4-478）。
+        //
+        // 格子は**パラメータ空間で一様**なので、**面が長いほど、格子の目は
+        // 世界の中で粗くなります**。実測: 半径 2・長さ 36 の円柱 2 本を
+        // 直交させると、目の間隔は 3——**交わりの幅 4 とほぼ同じ**で、
+        // **種が 1 つも近づかず**、交線が 1 本も出ませんでした（積が空で
+        // 返っていました）。**長さ 160 では目が 13**です。
+        //
+        // **格子を細かくすれば直りますが、`find_seeds` は格子の 4 乗**
+        // です（両側の総当たり）。12 → 96 で 2 万 8 千組が 8 千 8 百万組に
+        // なります。**細かくするのではなく、狭くします**——**交線は
+        // 相手の外接箱の中にしか居られません。**
+        //
+        // **狭めるのは、はっきり狭くなるときだけ**です。**窓が元の半分より
+        // 大きいなら、元のまま**使います——**既に通っている配置で種が
+        // 変わると、当てはめがわずかに動く**からです（半球の体積が
+        // 1e-8 から 6.6e-8 へずれました）。
+        let ((u_min, u_max), (v_min, v_max)) =
+            Self::narrow_if_much_smaller(s1.param_range(), Self::param_window(s1, bbox_b, steps));
+        let ((s_min, s_max), (t_min, t_max)) =
+            Self::narrow_if_much_smaller(s2.param_range(), Self::param_window(s2, bbox_a, steps));
 
         let mut grid_a = Vec::with_capacity((steps + 1) * (steps + 1));
         for i in 0..=steps {
@@ -1618,7 +1704,16 @@ impl IntersectionMarcher {
             .and_then(|text| text.parse::<usize>().ok())
             .filter(|count| *count > 0)
             .unwrap_or(max_branches * 2);
-        for (seed_u, seed_v) in Self::find_seeds(s1, s2, 12, seeds) {
+        // **種を探す格子の細かさ**（4-478。`ZENITH_SSI_GRID=<n>`。既定 12）。
+        //
+        // **格子はパラメータ空間で一様**なので、**面が長いほど、格子の
+        // 目は世界の中で粗くなります**。測るための口です。
+        let grid = std::env::var("ZENITH_SSI_GRID")
+            .ok()
+            .and_then(|text| text.parse::<usize>().ok())
+            .filter(|value| *value >= 4)
+            .unwrap_or(12);
+        for (seed_u, seed_v) in Self::find_seeds(s1, s2, grid, seeds) {
             if found.len() >= max_branches {
                 break;
             }
