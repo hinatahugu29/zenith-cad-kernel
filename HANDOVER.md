@@ -114,6 +114,12 @@
 > **738 件通過**ですが、**`bash tools/run_gates.sh --quick` を通しで回した**
 > **のは 4-478 までの姿**です。**次の回の頭で、まず一式を回してください。**
 >
+> **足したあとで、手で回した門は 12 本**——`boolean_gate_probe`、
+> `robustness_probe`、`boolean_topology_probe`、`closure_probe`、
+> **掃き出し 7 本**（`tangent` / `cylinder_tangency` / `sphere_tangency` /
+> `sphere_cap` / `cone_apex` / `torus_plane` / `cross_cylinder`）、
+> `curved_pair_identity`。**12 本とも rc=0**。**残りは回していません。**
+>
 > **`external_data_probe` は赤のまま**です（`linkrods.step` と
 > `screw.step` が無いので、それを使う 6 つの門は回っていません）
 > ——**「回っていない」であって「緑」ではありません。**
