@@ -114,11 +114,14 @@
 > **738 件通過**ですが、**`bash tools/run_gates.sh --quick` を通しで回した**
 > **のは 4-478 までの姿**です。**次の回の頭で、まず一式を回してください。**
 >
-> **足したあとで、手で回した門は 12 本**——`boolean_gate_probe`、
-> `robustness_probe`、`boolean_topology_probe`、`closure_probe`、
-> **掃き出し 7 本**（`tangent` / `cylinder_tangency` / `sphere_tangency` /
-> `sphere_cap` / `cone_apex` / `torus_plane` / `cross_cylinder`）、
-> `curved_pair_identity`。**12 本とも rc=0**。**残りは回していません。**
+> **足したあとで、手で回した門は 43 本**（`== 門 ==` の 50 本のうち）。
+> **43 本とも rc=0** です。**回していない 7 本**——`step_import_audit` と
+> `foreign_*` 6 本で、**どれも外部の STEP を読む門**（`foreign_cross_pair_probe`
+> だけで 680〜800 秒かかります）。**そこは緑と書けません。**
+>
+> **一式（`run_gates.sh --quick`）として通したのは、やはり 4-478 まで**です
+> ——**通しテストと文書の指し先と Python の口を、同じ 1 回で通した姿**が
+> 4-479 にはありません。**次の回の頭で回してください。**
 >
 > **`external_data_probe` は赤のまま**です（`linkrods.step` と
 > `screw.step` が無いので、それを使う 6 つの門は回っていません）
