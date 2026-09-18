@@ -120,6 +120,24 @@ impl IntersectionMarcher {
             if sine_here >= TANGENCY_SINE_LIMIT * 100.0 {
                 continue;
             }
+            // **もう接点に着いている端は、動かしません**（4-481）。
+            //
+            // 合わせは「接点に着けていない端」を着けるためのものです。
+            // **着いている端に掛けると、かえってずらします**——接点では
+            // 位置が残差で決まらないので（4-81）、**解き直した答えは
+            // √ε ぶん動きます**。実測（トーラス 2 つを 12 離す）:
+            // **ぴたり `(6, 0, -2)` にいた端が `(6, 2.3e-5, -2)` へ**
+            // 動き、**稜への刻みが受け入れ 1e-5 に落ちて**、差の縫合が
+            // 非多様体になっていました。
+            //
+            // **判定は、解き終わりと同じ物差し**（外積の長さ 1e-9）です。
+            // **そこを満たしているなら、もう解く必要がありません。**
+            let already = Self::normal_cross(s1, s2, &state)
+                .map(|cross| cross.norm())
+                .unwrap_or(f64::INFINITY);
+            if already <= 1e-9 {
+                continue;
+            }
             let mut refined = state;
             if Self::newton_to_tangency_least_squares(s1, s2, &mut refined, tol).is_none() {
                 continue;
@@ -1617,6 +1635,23 @@ impl IntersectionMarcher {
             }
         }
 
+        if std::env::var_os("ZENITH_RUNEND_WHY").is_some() {
+            if let Some(last) = points.last() {
+                eprintln!(
+                    "RUNENDWHY 向き {} 点 {} 終わり方 {}{}{}: 末端 ({:.9} {:.9} {:.9})、2 面の隔たり {:.3e}",
+                    if step >= 0.0 { "前" } else { "後" },
+                    points.len(),
+                    if closed { "閉" } else { "" },
+                    if hit_boundary { "縁" } else { "" },
+                    if hit_tangency { "接" } else { "" },
+                    last.point.x,
+                    last.point.y,
+                    last.point.z,
+                    (s1.evaluate(last.uv1.0, last.uv1.1) - s2.evaluate(last.uv2.0, last.uv2.1))
+                        .norm()
+                );
+            }
+        }
         Run {
             points,
             closed,
