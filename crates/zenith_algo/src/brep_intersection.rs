@@ -10154,6 +10154,22 @@ fn intersect_nurbs_patches(
         let (t0, t1) = curve.param_range();
         let start = curve.evaluate(t0);
         let end = curve.evaluate(t1);
+        // **当てはめた曲線の端が、辿った点の端とどれだけ違うか**（4-481）。
+        //
+        // 稜の端点は**当てはめた曲線から取ります**。**辿りの端は縁の上に
+        // ぴたり乗っていても、当てはめが端を動かせば、そこで嘘が入ります**
+        // ——実測（トーラス 2 つを 12 離す）で、**片方の端だけが 2.3e-5**
+        // 離れ、**稜への刻みが落ちて**いました。
+        if explain {
+            if let (Some(first), Some(last)) = (marched.points.first(), marched.points.last()) {
+                eprintln!(
+                    "SSIWHY   端のずれ: 始 {:.3e}、終 {:.3e}（辿った点 {} 個）",
+                    (start - first.point).norm(),
+                    (end - last.point).norm(),
+                    marched.points.len()
+                );
+            }
+        }
         if (end - start).norm() <= tol.linear {
             if explain {
                 eprintln!(
