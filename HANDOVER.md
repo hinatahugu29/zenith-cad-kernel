@@ -125,7 +125,7 @@
 > が **終了コード 0**、`== 門 ==` の **50 本すべて緑**、通しテスト
 > **150 本 / 739 件通過 / 0 件失敗**、文書の指し先と Python の口も緑。
 > **`foreign_cross_pair_probe` 346 秒、`cross_cylinder_sweep_probe` 206 秒、**
-> **`curved_pair_identity_probe` 287 秒**。
+> **`curved_pair_identity_probe` 1,290 秒**（4-483 で 20 通り足したぶん。**門でいちばん重い**）。
 >
 > **`external_data_probe` は赤のまま**です（`linkrods.step` と
 > `screw.step` が無いので、それを使う 6 つの門は回っていません）
