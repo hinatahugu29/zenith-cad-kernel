@@ -38,7 +38,7 @@ OpenCASCADE は 30 年かけて育っています。
 | コミット | **1,104** |
 | Rust | **133,671 行 / 366 ファイル / 8 crate**（2026/09/18 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
 | 掃き出し（計測プログラム） | **115 本**（`ls crates/zenith_algo/examples/*.rs | wc -l`） |
-| テスト | **149 バイナリ / 738 件 / 失敗 0 / 警告 0**（`cargo test --release --workspace --exclude zenith_py`） |
+| テスト | **150 バイナリ / 739 件 / 失敗 0 / 警告 0**（`cargo test --release --workspace --exclude zenith_py`） |
 | 門 | **50 本**（`bash tools/run_gates.sh --quick` の `== 門 ==`。通しテスト・文書の指し先・Python の口まで数えると **58 項目**。**うち 6 本は外部ファイルが無く回っていません**） |
 | 記録 | **465 本**（`grep -c "^### 4-" HANDOVER.md`。ルートの md は全部で 43,936 行） |
 

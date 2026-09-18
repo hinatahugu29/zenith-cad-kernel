@@ -128,8 +128,12 @@ fn the_turned_tori_close_the_inclusion_exclusion_identity() {
 /// ——**ブーリアンの中でだけ修理が走る**ので、この口から見ると
 /// **修理前の姿**が見えます。
 ///
-/// **そこに浮いた端が 4 つある**のに、**ブーリアンは通る**——
+/// **そこに浮いた端が 2 つある**のに、**ブーリアンは通る**——
 /// **間を埋めているのが修理**です。
+///
+/// **4-480 までは 4 つ**でした。**種の探し方が良くなって 2 つ**に
+/// なっています（`find_seeds` が粗い当たりの周りをもう一度見る）。
+/// **修理が要らなくなったわけではありません。**
 ///
 /// > **⚠ 環境変数で切り替える試験は書けません**（4-443）。
 /// > **`std::env::set_var` はプロセス全体に効き**、**試験は同じ
@@ -171,9 +175,16 @@ fn without_the_repair_the_intersection_curves_do_not_close() {
     }
     let loose = uses.values().filter(|count| **count != 2).count();
 
+    // **4 つ → 2 つに減りました**（4-480）。**修理が動いたのではなく、
+    // 修理の前が良くなりました**——`find_seeds` が**粗い当たりの周りを
+    // もう一度見る**ようになり、**前は見つからなかった交線が 1 本
+    // 見つかる**ので、浮いた端が 2 つ埋まります。
+    //
+    // **0 ではありません。** **まだ修理が要ります**——下のブーリアンが
+    // 通るのは、**残りの 2 つを修理が埋めているから**です。
     assert_eq!(
-        loose, 4,
-        "the un-repaired intersection curves should still leave 4 loose ends;          if this changed, the repair moved somewhere else and this test is stale"
+        loose, 2,
+        "the un-repaired intersection curves should still leave 2 loose ends;          if this changed, the repair moved somewhere else and this test is stale"
     );
 
     // **それでもブーリアンは通ります**——**間を埋めているのが修理**です。

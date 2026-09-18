@@ -389,13 +389,107 @@ impl IntersectionMarcher {
             return Vec::new();
         }
 
+        // **粗い当たりの周りを、もう一度見ます**（4-480）。
+        //
+        // 格子は**パラメータ空間で一様**なので、**面が長いほど、目は世界の
+        // 中で粗くなります**。4-478 では**窓**で狭めましたが、窓は
+        // **軸に平行な箱**で作るので、**斜めに寝た長い形には効きません**
+        // ——長さ 160 を 45° に倒すと、箱は一辺 113 の立方体に近づきます。
+        //
+        // **箱をやめて、距離で決めます。** ここには既に
+        // 「**A の各点にいちばん近い B の点**」が距離順で並んでいます。
+        // **その上位のあたりへ、もう一度格子を張ります**（2 段）。
+        // **粗い種は捨てません**——**足すだけ**なので、いま通っている
+        // 配置の種が消えることはありません。
+        let mut candidates: Vec<(f64, (f64, f64), (f64, f64))> = pairs
+            .iter()
+            .map(|(distance, index_a, index_b)| {
+                let (u, v, _) = grid_a[*index_a];
+                let (s, t, _) = grid_b[*index_b];
+                (*distance, (u, v), (s, t))
+            })
+            .collect();
+
+        let mut refined: Vec<(f64, (f64, f64), (f64, f64))> = Vec::new();
+        for (_, (u, v), (s, t)) in candidates.iter().take(3) {
+            let mut centre = ((*u, *v), (*s, *t));
+            let mut half_u = (u_max - u_min) / steps as f64;
+            let mut half_v = (v_max - v_min) / steps as f64;
+            let mut half_s = (s_max - s_min) / steps as f64;
+            let mut half_t = (t_max - t_min) / steps as f64;
+            // **何段まで降りるかは、縮み方が決めます。** 1 段で目の細かさは
+            // 4 倍になるので、**長い面ほど段が要ります**（長さ 160・45° は
+            // 2 段では足りず、3 段で届きました）。**近づかなくなったら止め**、
+            // **4 段で打ち切ります**。
+            let mut previous = f64::INFINITY;
+            let mut deepest: Option<(f64, (f64, f64), (f64, f64))> = None;
+            for _ in 0..4 {
+                let fine = 8usize;
+                let mut near_a = Vec::with_capacity((fine + 1) * (fine + 1));
+                for i in 0..=fine {
+                    let uu = (centre.0 .0 - half_u + 2.0 * half_u * i as f64 / fine as f64)
+                        .clamp(u_min, u_max);
+                    for j in 0..=fine {
+                        let vv = (centre.0 .1 - half_v + 2.0 * half_v * j as f64 / fine as f64)
+                            .clamp(v_min, v_max);
+                        near_a.push((uu, vv, s1.evaluate(uu, vv)));
+                    }
+                }
+                let mut near_b = Vec::with_capacity((fine + 1) * (fine + 1));
+                for i in 0..=fine {
+                    let ss = (centre.1 .0 - half_s + 2.0 * half_s * i as f64 / fine as f64)
+                        .clamp(s_min, s_max);
+                    for j in 0..=fine {
+                        let tt = (centre.1 .1 - half_t + 2.0 * half_t * j as f64 / fine as f64)
+                            .clamp(t_min, t_max);
+                        near_b.push((ss, tt, s2.evaluate(ss, tt)));
+                    }
+                }
+                let mut best: Option<(f64, (f64, f64), (f64, f64))> = None;
+                for (ua, va, point_a) in &near_a {
+                    for (sb, tb, point_b) in &near_b {
+                        let distance = (point_a - point_b).norm();
+                        if best.is_none_or(|(current, _, _)| distance < current) {
+                            best = Some((distance, (*ua, *va), (*sb, *tb)));
+                        }
+                    }
+                }
+                let Some((distance, a_uv, b_uv)) = best else {
+                    break;
+                };
+                deepest = Some((distance, a_uv, b_uv));
+                if distance > previous * 0.9 {
+                    break;
+                }
+                previous = distance;
+                centre = (a_uv, b_uv);
+                half_u /= 4.0;
+                half_v /= 4.0;
+                half_s /= 4.0;
+                half_t /= 4.0;
+            }
+            // **1 か所につき 1 つだけ**足します。**段ごとに足すと、
+            // 同じ所の種で先頭が埋まり**、**別の場所の種が押し出されます**
+            // ——実測（4-480）: 半球の積が**断り**に変わりました
+            // （交線 2 本。**種が 1 か所に固まった**ため）。
+            if let Some(entry) = deepest {
+                refined.push(entry);
+            }
+        }
+        // **粗い種を捨てません。** 上位 3 か所を**より良い版で置き換える**
+        // だけにして、**残りの粗い種はそのままの順で後ろに並べます**。
+        let tail: Vec<(f64, (f64, f64), (f64, f64))> = candidates.split_off(3.min(candidates.len()));
+        candidates = refined;
+        candidates.extend(tail);
+
         let mut seeds = Vec::new();
-        for (_, index_a, index_b) in pairs.iter().take(limit * 8) {
+        for (_, (u, v), (s, t)) in candidates.iter().take(limit * 8) {
             if seeds.len() >= limit {
                 break;
             }
-            let (u, v, point) = grid_a[*index_a];
-            let (s, t, _) = grid_b[*index_b];
+            let (u, v) = (*u, *v);
+            let (s, t) = (*s, *t);
+            let point = s1.evaluate(u, v);
             let Ok(projection) =
                 ExtremumEngine::point_to_surface_seeded(point, s2, s, t, 64, 1e-13)
             else {
