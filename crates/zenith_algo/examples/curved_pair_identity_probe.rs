@@ -22,6 +22,11 @@
 //! **断りは誤りではありません**（3-1）。**返ってきたのに 2 本の式に
 //! 合わないもの**だけを赤にします。
 //!
+//! # つまみ
+//!
+//! * `ZENITH_PAIRID_WHY=1` — 断り文を出します
+//! * `ZENITH_PAIRID_ONLY=<名前の一部>` — その置き方だけ測ります
+//!
 //! # 使い方
 //!
 //! ```bash
@@ -75,6 +80,13 @@ fn measure(
     wrong: &mut usize,
     refused: &mut usize,
 ) {
+    // **1 つだけ見たいとき**の口（`ZENITH_PAIRID_ONLY=<名前の一部>`）。
+    // 診断を出しながら 21 通り全部を回すと、読むほうが追えません。
+    if let Ok(needle) = std::env::var("ZENITH_PAIRID_ONLY") {
+        if !label.contains(needle.trim()) {
+            return;
+        }
+    }
     let volume_a = volume_of(std::slice::from_ref(a));
     let volume_b = volume_of(std::slice::from_ref(b));
     let results = run_ops(a, b, tol);
