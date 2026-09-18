@@ -3,7 +3,9 @@
 //! # なぜ要るのか
 //!
 //! 4-451〜4-478 で、**浅く当たる所**を 7 つの組で掃きました。
-//! **残っているのは、円錐どうしとトーラスどうし**です。
+//! **残っているのは、円錐どうしとトーラスどうし**でした。
+//! **種類の違う組**（円錐 × 円柱、円錐 × 球、トーラス × 円柱、
+//! トーラス × 球、円柱 × 球）も、ここで掃きます（4-483）。
 //!
 //! **どちらも閉じた式がありません**（一般の置き方では）。
 //! **だから測れない、ではありません**——**恒等式があります**。
@@ -223,6 +225,74 @@ fn main() {
         );
     }
 
+    // ---- 種類の違う曲面どうし（4-483）----
+    //
+    // **同じ種類どうしは掃きました**（円錐 × 円錐、トーラス × トーラス）。
+    // **種類が違う組は、掃いていません。**
+    let cylinder = || PrimitiveBuilder::make_cylinder(3.0, 10.0).expect("円柱");
+    let sphere = || PrimitiveBuilder::make_sphere(4.0).expect("球");
+
+    for shift in [0.0_f64, 2.0, 4.0, 7.9] {
+        let a = cone();
+        let b = BrepTransform::translate_solid(&cylinder(), Vec3::new(shift, 0.0, 2.0));
+        measure(
+            &format!("円錐 × 円柱 横に {shift}"),
+            &a,
+            &b,
+            &tol,
+            &mut wrong,
+            &mut refused,
+        );
+    }
+    for shift in [0.0_f64, 3.0, 6.0, 8.9] {
+        let a = cone();
+        let b = BrepTransform::translate_solid(&sphere(), Vec3::new(shift, 0.0, 5.0));
+        measure(
+            &format!("円錐 × 球 横に {shift}"),
+            &a,
+            &b,
+            &tol,
+            &mut wrong,
+            &mut refused,
+        );
+    }
+    for shift in [0.0_f64, 4.0, 6.0, 10.9] {
+        let a = torus();
+        let b = BrepTransform::translate_solid(&cylinder(), Vec3::new(shift, 0.0, -5.0));
+        measure(
+            &format!("トーラス × 円柱 横に {shift}"),
+            &a,
+            &b,
+            &tol,
+            &mut wrong,
+            &mut refused,
+        );
+    }
+    for shift in [0.0_f64, 6.0, 9.0, 11.9] {
+        let a = torus();
+        let b = BrepTransform::translate_solid(&sphere(), Vec3::new(shift, 0.0, 0.0));
+        measure(
+            &format!("トーラス × 球 横に {shift}"),
+            &a,
+            &b,
+            &tol,
+            &mut wrong,
+            &mut refused,
+        );
+    }
+    for shift in [0.0_f64, 3.0, 6.0, 6.9] {
+        let a = cylinder();
+        let b = BrepTransform::translate_solid(&sphere(), Vec3::new(shift, 0.0, 5.0));
+        measure(
+            &format!("円柱 × 球 横に {shift}"),
+            &a,
+            &b,
+            &tol,
+            &mut wrong,
+            &mut refused,
+        );
+    }
+
     println!();
     println!("**断りの数: {refused} 件**（**断りは誤りではありません**——3-1）");
     println!();
@@ -231,4 +301,31 @@ fn main() {
         std::process::exit(1);
     }
     println!("**返ったものは全部、2 本の恒等式と 1e-6 以内で合っています。**");
+
+    // **断りが増えたら、赤にします**（4-483）。
+    //
+    // **断りは誤りではありません**（3-1）。**それでも、いままで返って
+    // いたものが返らなくなったら、それは失ったもの**です。
+    //
+    // **実際に、静かに失いました**——4-478 と 4-482 の直しで、
+    // **トーラスどうしの「横に 2」と「横に 6」が返らなくなって**いて、
+    // **門は緑のまま**でした（この門は**誤答だけ**を赤にしていたので）。
+    // **数えるようにします。**
+    //
+    // **増やすときは、この数を測って書き換えてください**——
+    // **下げるのは歓迎、上げるのは「何を失ったか」を書いてから**。
+    const REFUSALS_MEASURED: usize = 7;
+    if refused > REFUSALS_MEASURED {
+        println!();
+        println!(
+            "**断りが {refused} 件に増えました**（測ってあるのは {REFUSALS_MEASURED} 件）。             **返っていたものが返らなくなっています。**"
+        );
+        std::process::exit(1);
+    }
+    if refused < REFUSALS_MEASURED {
+        println!();
+        println!(
+            "**断りが {refused} 件に減りました**（測ってあるのは {REFUSALS_MEASURED} 件）。             **`REFUSALS_MEASURED` を {refused} に書き換えてください。**"
+        );
+    }
 }
