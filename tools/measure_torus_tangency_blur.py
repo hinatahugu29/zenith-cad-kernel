@@ -1,48 +1,78 @@
-#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""**接点の近くで、位置がどこまで決まるか**を閉じた式で測る（4-483）。
+"""**接点の近くで、端の位置がどこまで決まるか**を閉じた式で測る（4-483）。
 
-主半径 6・管半径 2 のトーラス 2 つを 2R = 12 離すと、管の底の円が
-互いの上をなぞる。接点から A の上を動かしても、B からの距離が
-ほとんど増えない——**残差では端の位置が決まらない**ことの根拠。
+主半径 6・管半径 2 のトーラス 2 つを **2R = 12** 離すと、
+**管の底の円が互いの上をなぞります**。接点から動かしても、
+相手の面からの距離がほとんど増えません——**残差では端の位置が
+決まらない**ことの根拠です。
+
+**カーネルは要りません。** Python だけで走ります。
 
     py tools/measure_torus_tangency_blur.py
 """
-import math
-# A: 中心 (0,0,0)、主半径 6・管半径 2  /  B: 中心 (12,0,0)、同じ
-R, r, D = 6.0, 2.0, 12.0
-def g_b(x, y, z):
-    rho = math.hypot(x - D, y)
-    return (rho - R) ** 2 + z * z - r * r      # B の陰関数（0 なら B の上）
-def grad_norm_b(x, y, z):
-    rho = math.hypot(x - D, y)
-    drho = 2.0 * (rho - R)
-    gx = drho * (x - D) / rho
-    gy = drho * y / rho
-    gz = 2.0 * z
-    return math.sqrt(gx * gx + gy * gy + gz * gz)
 
-print("接点 (6, 0, -2) から、A の上を y 方向へ動いたときの「B からの隔たり」")
-print()
-print(f"{'動いた距離 d':>14}{'B からの距離':>16}")
-print("-" * 32)
-rows = []
-for d in [1e-7, 1e-6, 1e-5, 2.3e-5, 1e-4, 1e-3, 1e-2]:
-    x = math.sqrt(R * R - d * d)               # A の管の中心円（rho = 6）の上
-    y, z = d, -r                               # 管の底なので z = -2、ここは A の上
-    gap = abs(g_b(x, y, z)) / max(grad_norm_b(x, y, z), 1e-300)
-    rows.append((d, gap))
-    print(f"{d:>14.1e}{gap:>16.3e}")
-print()
-# 残差 1e-10 に落ちる d を二分で求める
-lo, hi = 1e-9, 1e-2
-for _ in range(200):
-    mid = math.sqrt(lo * hi)
-    x = math.sqrt(R * R - mid * mid)
-    gap = abs(g_b(x, mid, -r)) / max(grad_norm_b(x, mid, -r), 1e-300)
-    if gap < 1e-10:
-        lo = mid
-    else:
-        hi = mid
-print(f"**B からの距離が 1e-10 に達するのは d = {math.sqrt(lo*hi):.3e}**")
-print("（つまり、この距離までは「両方の面の上にある」と残差では区別できません）")
+import math
+import sys
+
+# **Windows の既定のコンソールは cp932** なので、日本語で落ちます。
+# 測り口が文字の都合で落ちるのは、ばかばかしいので直しておきます。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+R, r = 6.0, 2.0
+
+
+def distance_to_other(separation, along):
+    """**A の管の底の円**（rho = R, z = -r）の上で `y = along` の点が、
+    **B からどれだけ離れているか**（陰関数を勾配で割った近似距離）。"""
+    if along > R:
+        return None
+    x = math.sqrt(R * R - along * along)
+    y, z = along, -r
+    rho = math.hypot(x - separation, y)
+    value = (rho - R) ** 2 + z * z - r * r
+    slope = 2.0 * (rho - R)
+    gx = slope * (x - separation) / max(rho, 1e-300)
+    gy = slope * y / max(rho, 1e-300)
+    gz = 2.0 * z
+    norm = math.sqrt(gx * gx + gy * gy + gz * gz)
+    return abs(value) / max(norm, 1e-300)
+
+
+def main():
+    print("接点 (6, 0, -2) から、A の上を y 方向へ動いたときの「B からの距離」")
+    print("（主半径 6・管半径 2 のトーラス 2 つを、2R = 12 離した置き方）")
+    print()
+    print(f"{'動いた距離':>14}{'B からの距離':>18}")
+    print("-" * 34)
+    for along in [1e-7, 1e-6, 1e-5, 2.3e-5, 1e-4, 1e-3, 1e-2]:
+        print(f"{along:>14.1e}{distance_to_other(12.0, along):>18.3e}")
+    print()
+    print("**1e-2 動いても、まだ 1e-10 の内側**です。")
+    print("**残差では、端の位置が 1e-2 まで決まりません。**")
+
+    print()
+    print("=" * 68)
+    print()
+    print("**なぞるのは、どの隔たりか**")
+    print()
+    print(f"{'離した距離':>12}{'d=0':>14}{'d=1e-2':>14}  読み")
+    print("-" * 62)
+    for separation in [2.0, 4.0, 8.0, 10.0, 11.0, 11.9, 12.0, 12.1, 13.0, 14.0, 16.0]:
+        here = distance_to_other(separation, 0.0)
+        there = distance_to_other(separation, 1e-2)
+        if here is None or there is None:
+            continue
+        if here < 1e-12 and there < 1e-9:
+            note = "**なぞっている**（残差で端が決まらない）"
+        elif here < 1e-12:
+            note = "点で触れている"
+        else:
+            note = "触れていない"
+        print(f"{separation:>12.1f}{here:>14.3e}{there:>14.3e}  {note}")
+    print()
+    print("**なぞるのは 2R = 12 のときだけ**です。**掃く表に入れたのは偶然**でした。")
+
+
+if __name__ == "__main__":
+    main()
