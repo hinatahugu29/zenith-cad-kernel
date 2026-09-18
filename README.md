@@ -4,7 +4,7 @@
 
 > **English summary** — Zenith is a from-scratch B-Rep CAD kernel written in Rust
 > (~132,000 lines, 8 crates), built by **one person working with an AI assistant
-> over 31 days** (2026-08-19 → 2026-09-18, 1,104 commits). It performs exact boolean
+> over 32 days** (2026-08-19 → 2026-09-19, 1,123 commits). It performs exact boolean
 > operations on solids, reads and writes STEP, and tessellates to watertight meshes.
 >
 > **Every claim in this repository is backed by a re-runnable measurement.**
@@ -34,13 +34,13 @@ OpenCASCADE は 30 年かけて育っています。
 
 | | |
 | :--- | ---: |
-| 期間 | **2026/08/19 〜 09/18（31 日）** |
-| コミット | **1,104** |
-| Rust | **133,671 行 / 366 ファイル / 8 crate**（2026/09/18 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
+| 期間 | **2026/08/19 〜 09/19（32 日）** |
+| コミット | **1,123** |
+| Rust | **134,226 行 / 368 ファイル / 8 crate**（2026/09/19 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
 | 掃き出し（計測プログラム） | **115 本**（`ls crates/zenith_algo/examples/*.rs | wc -l`） |
 | テスト | **150 バイナリ / 739 件 / 失敗 0 / 警告 0**（`cargo test --release --workspace --exclude zenith_py`） |
 | 門 | **50 本**（`bash tools/run_gates.sh --quick` の `== 門 ==`。通しテスト・文書の指し先・Python の口まで数えると **58 項目**。**うち 6 本は外部ファイルが無く回っていません**） |
-| 記録 | **465 本**（`grep -c "^### 4-" HANDOVER.md`。ルートの md は全部で 43,936 行） |
+| 記録 | **470 本**（`grep -c "^### 4-" HANDOVER.md`。ルートの md は全部で 44,664 行） |
 
 **書いた人はひとりです。** 設計判断も、どこを測るかも、何を入れて何を捨てるかも、
 人間が決めています。AI がやったのは、**実装と、測ることと、書き留めること**です。
@@ -151,7 +151,7 @@ CAD カーネルは長らく「個人が手を出す領域ではない」とさ�
 
 | 文書 | 何が書いてあるか | 計画／実測 |
 | :--- | :--- | :--- |
-| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 465 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
+| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 470 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
 | [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) | **主張を自分で測り直す手順。**どのコマンドで何を数えたか | **実測** |
 | [`KERNEL_SPECS.md`](KERNEL_SPECS.md) | いまの仕様と実装範囲 | 実測 |
 | [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) | 機能一覧と制限 | 実測 |
