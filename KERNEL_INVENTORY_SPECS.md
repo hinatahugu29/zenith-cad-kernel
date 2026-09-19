@@ -242,7 +242,7 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 > **数え方で値が変わります**（HANDOVER 4-115）。
 
 - **総テスト数:** **138 テストバイナリ / 717 件 / 失敗 0 / 警告 0**（`cargo test --workspace --release` の実測。**2026/09/08**。717 になったのは 9/8 で、697 から 20 件足しました——**スケッチの回転（パップスの定理）3 件**（4-391）、**穴つきスケッチ 4 件**（4-392）、**過剰拘束の「冗長」と「矛盾」の見分け 4 件**（4-393）、**座標変換の逆 4 件**（4-397。`zenith_math` には `tests/` そのものがありませんでした）、**スケッチから立体にする Python の口 5 件**（4-400、4-401）。それ以前の 697 は 9/7 で、696 から 1 件足しました——**穴の中は面の外**であることを、**わざと壊すと落ちる**形で固定したものです（4-363。その前の 696 は 9/5 に穴の縁の見分け方を固定したもので、4-318）。**`zenith_py` を含みます**——2026/08/30 まで `--exclude zenith_py` で数えており、**Blender へ届く層を1度も測っていませんでした**（9-H の H1 でそこを門へ戻しました。HANDOVER 4-171）。**数え方で値が変わります**——どのコマンドで何を数えたかを、必ず一緒に書いてください（HANDOVER 4-115）
-- **常設プローブ（診断・ゲート）:** `crates/zenith_algo/examples` に **115 本**（2026/09/19 実測。`ls crates/zenith_algo/examples/*.rs | wc -l` で数えられます）。一覧と、それぞれ何を赤にするかは [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に。CI は `.github/workflows/gates.yml`
+- **常設プローブ（診断・ゲート）:** `crates/zenith_algo/examples` に **116 本**（2026/09/19 実測。`ls crates/zenith_algo/examples/*.rs | wc -l` で数えられます）。一覧と、それぞれ何を赤にするかは [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) の道具表に。CI は `.github/workflows/gates.yml`
 - **外部カーネルとの突き合わせ:** FreeCAD 相互検証 27/27、ショーケース 54/54、書き戻し 7/7、IGES 5/5
 - **非STEP出力（STL / OBJ / glTF / DXF）:** 8/8（`py tools/verify_mesh_exports.py`。FreeCAD 不要で CI に入っている）
 - **Python 往復:** `tools/verify_solid_api.py`（B-Rep ハンドルの口）と `tools/verify_python_binding.py`（メッシュを返す旧い口）とも全合格
