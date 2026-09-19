@@ -1678,6 +1678,21 @@ impl IntersectionMarcher {
                 );
             }
         }
+        if std::env::var_os("ZENITH_RUNEND_WHY").is_some() {
+            if let Some(last) = points.last() {
+                let first = points[0];
+                eprintln!(
+                    "RUNENDWHY 向き {} 点 {} 終わり {}{}{}: {:.4} {:.4} {:.4} -> {:.4} {:.4} {:.4}",
+                    if step >= 0.0 { "前" } else { "後" },
+                    points.len(),
+                    if closed { "閉" } else { "" },
+                    if hit_boundary { "縁" } else { "" },
+                    if hit_tangency { "接" } else { "" },
+                    first.point.x, first.point.y, first.point.z,
+                    last.point.x, last.point.y, last.point.z
+                );
+            }
+        }
         Run {
             points,
             closed,
