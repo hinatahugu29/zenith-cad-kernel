@@ -105,7 +105,7 @@ tangent_sweep_probe cylinder_tangency_sweep_probe
 sphere_tangency_sweep_probe sphere_cap_sweep_probe
 cone_apex_sweep_probe torus_plane_sweep_probe
 cross_cylinder_sweep_probe curved_pair_identity_probe
-aspect_sweep_probe"
+aspect_sweep_probe curved_pair_placement_probe"
 
 if [ "$QUICK" = "0" ]; then
   GATES="$GATES contact_placement_probe"
