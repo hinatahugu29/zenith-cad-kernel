@@ -314,7 +314,9 @@ fn main() {
     //
     // **増やすときは、この数を測って書き換えてください**——
     // **下げるのは歓迎、上げるのは「何を失ったか」を書いてから**。
-    const REFUSALS_MEASURED: usize = 7;
+    // **7 → 1 に減りました**（4-484）。**トーラスどうしの「横に 2」と
+    // 「横に 6」が戻り**、残るのは**「横に 12」の差だけ**です。
+    const REFUSALS_MEASURED: usize = 1;
     if refused > REFUSALS_MEASURED {
         println!();
         println!(

@@ -37,7 +37,7 @@
 > | 通しテスト | **150 バイナリ / 739 件通過 / 失敗 0 / 警告 0**、**18 分 9 秒**（1,089 秒） | `cargo test --release --workspace --exclude zenith_py` |
 > | 門 | **`== 門 ==` に 50 本、すべて緑**（終了コード 0）。**うち 6 本は外部ファイルが無く回っていません** | `bash tools/run_gates.sh --quick` |
 > | 掃き出し | **115 本** | `ls crates/zenith_algo/examples/*.rs \| wc -l` |
-> | いちばん重い門 | `curved_pair_identity_probe` **1,290 秒**（9 割はトーラスどうし） | `cargo run --release -p zenith_algo --example curved_pair_identity_probe` |
+> | いちばん重い門 | `curved_pair_identity_probe` **459 秒**（4-484 の前は 1,290 秒。**断られる配置が減ると速くなります**——断りは落ちるまで走り切るので） | `cargo run --release -p zenith_algo --example curved_pair_identity_probe` |
 >
 > **回す順番を間違えないでください**（4-429）——
 > **①通しテスト → ②`py tools/build_pyd.py` → ③`bash tools/run_gates.sh`**。
@@ -478,7 +478,7 @@ B-Rep と合うか・3形式が互いに一致するか・glTF の accessor と 
 | `cone_apex_sweep_probe` | 平面 × 円錐（頂点の近く） | 相似な小円錐 | 断り 0・誤答 0（深さ 1e-4 まで） |
 | `torus_plane_sweep_probe` | 平面 × トーラス（管のてっぺん） | パップス | 断り 0・誤答 0（深さ 1e-5 まで） |
 | `cross_cylinder_sweep_probe` | 円柱 × 円柱（角度と隔たりを振る） | `16r³/(3 sin θ)` と恒等式 | 角度 8 通りすべて乗る |
-| `curved_pair_identity_probe` | 円錐どうし・トーラスどうし・種類違い 5 組 | **恒等式 2 本** | 誤答 0、**断り 7**（数を見張ります） |
+| `curved_pair_identity_probe` | 円錐どうし・トーラスどうし・種類違い 5 組 | **恒等式 2 本** | 誤答 0、**断り 1**（41 組中 40 が 3 演算とも返る。数を見張ります） |
 
 **つまみ**は名前ごとに違いますが、形は同じです——
 `ZENITH_*_EXTRA`（掃く点を足す）、`ZENITH_*_ONLY`（1 点だけ回す）、

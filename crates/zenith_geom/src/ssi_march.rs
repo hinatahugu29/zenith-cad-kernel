@@ -330,6 +330,31 @@ impl IntersectionMarcher {
         grid: usize,
         limit: usize,
     ) -> Vec<(f64, f64)> {
+        Self::find_seeds_inner(s1, s2, grid, limit, false)
+    }
+
+    /// **粗い格子で 1 本も辿れなかったときの、二の矢**（4-484）。
+    ///
+    /// **当たりの周りへ、もう一度格子を張って**種を作ります。
+    /// **粗い種と混ぜてはいけません**——実測（4-484）: 細かい種が
+    /// 見つけた枝が**他の枝を締め出し**、**前は返っていた配置が
+    /// 返らなくなりました**。**足すのはいいが、押しのけてはいけません。**
+    pub fn find_seeds_refined(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        grid: usize,
+        limit: usize,
+    ) -> Vec<(f64, f64)> {
+        Self::find_seeds_inner(s1, s2, grid, limit, true)
+    }
+
+    fn find_seeds_inner(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        grid: usize,
+        limit: usize,
+        refine: bool,
+    ) -> Vec<(f64, f64)> {
         // 制御点の凸包が交差していなければ、NURBSの凸包性により曲面同士は絶対に交差しない
         let bbox_a = surface_control_bbox(s1);
         let bbox_b = surface_control_bbox(s2);
@@ -429,7 +454,7 @@ impl IntersectionMarcher {
             .collect();
 
         let mut refined: Vec<(f64, (f64, f64), (f64, f64))> = Vec::new();
-        for (_, (u, v), (s, t)) in candidates.iter().take(3) {
+        for (_, (u, v), (s, t)) in candidates.iter().take(if refine { 3 } else { 0 }) {
             let mut centre = ((*u, *v), (*s, *t));
             let mut half_u = (u_max - u_min) / steps as f64;
             let mut half_v = (v_max - v_min) / steps as f64;
@@ -494,11 +519,12 @@ impl IntersectionMarcher {
                 refined.push(entry);
             }
         }
-        // **粗い種を捨てません。** 上位 3 か所を**より良い版で置き換える**
-        // だけにして、**残りの粗い種はそのままの順で後ろに並べます**。
-        let tail: Vec<(f64, (f64, f64), (f64, f64))> = candidates.split_off(3.min(candidates.len()));
-        candidates = refined;
-        candidates.extend(tail);
+        // **細かい種だけを返します**（4-484）。**この道は「粗いので
+        // 1 本も辿れなかった」ときにしか通りません**ので、**粗い種と
+        // 混ぜる必要がありません**。**混ぜると押しのけます。**
+        if refine {
+            candidates = refined;
+        }
 
         let mut seeds = Vec::new();
         for (_, (u, v), (s, t)) in candidates.iter().take(limit * 8) {
@@ -1842,7 +1868,23 @@ impl IntersectionMarcher {
             .and_then(|text| text.parse::<usize>().ok())
             .filter(|value| *value >= 4)
             .unwrap_or(12);
-        for (seed_u, seed_v) in Self::find_seeds(s1, s2, grid, seeds) {
+        // **二段構えです**（4-484）。**まず粗い格子の種だけで辿り**、
+        // **1 本も辿れなかったときだけ、細かい種で辿り直します**。
+        //
+        // **混ぜてはいけません**——実測（4-484）: 細かい種が見つけた枝が
+        // **他の枝を締め出し**（枝の上限は 2 本）、**トーラスを 2 離した
+        // 配置が返らなくなりました**（返る版は 288.1688）。
+        // **押しのけずに足すには、順番ではなく段を分けるしかありません。**
+        for pass in 0..2 {
+            if pass == 1 && !found.is_empty() {
+                break;
+            }
+            let seed_list = if pass == 0 {
+                Self::find_seeds(s1, s2, grid, seeds)
+            } else {
+                Self::find_seeds_refined(s1, s2, grid, seeds)
+            };
+            for (seed_u, seed_v) in seed_list {
             if found.len() >= max_branches {
                 break;
             }
@@ -1948,6 +1990,7 @@ impl IntersectionMarcher {
                 step = next;
                 let _ = attempt;
             }
+        }
         }
 
         found
