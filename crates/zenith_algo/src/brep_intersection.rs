@@ -9131,7 +9131,8 @@ fn clip_curve_to_both_planar_trims(
                     }
                     return clipped;
                 }
-                if let Some(clipped) = clip_curve_to_nurbs_face_trim(piece, face, tol) {
+                if let Some(clipped) = clip_curve_to_nurbs_face_trim_side(piece, face, which, tol)
+                {
                     if explain {
                         show(&format!("{which} 曲面のトリムで切った"), &clipped);
                     }
@@ -9168,6 +9169,29 @@ fn clip_curve_to_both_planar_trims(
 /// **やり方は 4-342 と同じ**です——密に標本して**内外が入れ替わるところ**で
 /// 割り、境目は**二分で 40 段**詰めます。内外は `point_inside_face_trim`
 /// （4-342）で見ます。**中にある区間だけ**を返します。
+/// **どちら側で切るかを選べる口**（4-489 の測り）。
+///
+/// `ZENITH_NURBS_CLIP=A` なら **A 側だけ**、それ以外の値なら**両側**。
+/// **片側だけにしたいのは、4-384・4-387 の実測**があるからです——
+/// **両側で切ると連鎖ブーリアンが 3/3 → 0/3 になる**のに、
+/// **減る面は片側（B）ばかり**でした。
+fn clip_curve_to_nurbs_face_trim_side(
+    edge: &Edge,
+    face: &Face,
+    which: &str,
+    tol: &Tolerance,
+) -> Option<Vec<Edge>> {
+    let setting = std::env::var("ZENITH_NURBS_CLIP").ok()?;
+    if setting.eq_ignore_ascii_case("a") && which != "A" {
+        return None;
+    }
+    if setting.eq_ignore_ascii_case("b") && which != "B" {
+        return None;
+    }
+    clip_curve_to_nurbs_face_trim_inner(edge, face, tol)
+}
+
+#[allow(dead_code)]
 fn clip_curve_to_nurbs_face_trim(edge: &Edge, face: &Face, tol: &Tolerance) -> Option<Vec<Edge>> {
     // **既定では走りません**（4-366）。`ZENITH_NURBS_CLIP=1` で入ります。
     //
