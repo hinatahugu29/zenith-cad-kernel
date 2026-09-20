@@ -77,6 +77,21 @@ fn main() {
         println!("An unclear refusal is a defect of its own: the caller is told the p-curves");
         println!("disagree, not which dimension is out of range.");
     }
+
+    // **返らなくなったものを、赤にします**（4-501）。
+    //
+    // **`refused` を数えている門が、その数を守っていませんでした。**
+    // 実測: `foreign_boolean_probe` で **1 件を静かに失って**いました
+    // （`NOCUT 4 / 拒否 0` → `NOCUT 3 / 拒否 1`。門は緑のまま）。
+    // **同じ形の穴が、この口にもありました。**
+    //
+    // **増えたら赤、減ったら「書き換えてください」。**
+    const REFUSALS_MEASURED: usize = 0;
+    println!();
+    if refused + unclear > REFUSALS_MEASURED {
+        println!("**返っていたものが返らなくなっています**——断り {} 件（測ってあるのは {REFUSALS_MEASURED} 件）。", refused + unclear);
+        std::process::exit(1);
+    }
 }
 
 fn first_line(message: &str) -> String {

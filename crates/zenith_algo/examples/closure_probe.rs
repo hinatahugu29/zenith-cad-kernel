@@ -369,4 +369,22 @@ fn main() {
     println!();
     println!("refused is not a defect. WRONG and PANIC are, because the caller");
     println!("cannot tell either of them from an answer.");
+
+    // **返らなくなったものを、赤にします**（4-501）。
+    //
+    // **`refused` を数えている門が、その数を守っていませんでした。**
+    // 実測: `foreign_boolean_probe` で **1 件を静かに失って**いました
+    // （`NOCUT 4 / 拒否 0` → `NOCUT 3 / 拒否 1`。門は緑のまま）。
+    // **同じ形の穴が、この口にもありました。**
+    //
+    // **増えたら赤、減ったら「書き換えてください」。**
+    const REFUSALS_MEASURED: usize = 1;
+    println!();
+    if refused > REFUSALS_MEASURED {
+        println!("**返っていたものが返らなくなっています**——断り {refused} 件（測ってあるのは {REFUSALS_MEASURED} 件）。");
+        std::process::exit(1);
+    }
+    if refused < REFUSALS_MEASURED {
+        println!("**断りが {refused} 件に減りました**（測ってあるのは {REFUSALS_MEASURED} 件）。**`REFUSALS_MEASURED` を書き換えてください。**");
+    }
 }
