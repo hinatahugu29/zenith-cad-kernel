@@ -10574,10 +10574,20 @@ fn fit_section_circle(curve: &NurbsCurve3, tol: &Tolerance) -> Option<(Point3, f
         let offset = point - origin;
         Point2::new(offset.dot(&frame_u), offset.dot(&frame_v))
     };
+    // **3 点は、1/3 ずつ離して取ります**（4-503）。
+    //
+    // **端どうしを使っていました**（`samples[0]` と `samples[len-1]`）。
+    // **1 周ぶんの断面では、その 2 点は同じ点**です——**外接円が決まらず**、
+    // **「円に当てはまらない」と断って**いました。実測
+    // （`ZENITH_CYLREC_WHY=1`）: **読んだ 9×2 の曲面 7 枚が、全部これ**
+    // （`linkrods` の 4 枚、`screw` の 3 枚）。
+    //
+    // **1/3 ずつなら、閉じていても開いていても 3 点は離れます。**
+    let last = samples.len() - 1;
     let center_2d = circumcenter_2d(
         to_frame(samples[0]),
-        to_frame(samples[samples.len() / 2]),
-        to_frame(samples[samples.len() - 1]),
+        to_frame(samples[last / 3]),
+        to_frame(samples[last * 2 / 3]),
         tol,
     )?;
     let center = origin + frame_u * center_2d.x + frame_v * center_2d.y;
@@ -10638,34 +10648,73 @@ fn recognize_cylinder_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<
     if surface.degree_v != 1 || surface.degree_u != 2 {
         return None;
     }
-    if surface.control_points.len() != surface.degree_u + 1
+    // **列が 2 本（母線が直線）であることは要ります。** 行の数は問いません。
+    //
+    // **長らく「ちょうど 3 行」しか受け付けませんでした**（4-503）——
+    // **1/4 円のパッチだけ**です。**読んだファイルは、1 周を 1 枚で
+    // 持っています**——実測（`step_surface_shape_probe`）:
+    // **`linkrods.step` の 31 枚のうち 4 枚が「次数 2×1・制御点 9×2」**、
+    // **`screw.step` は 6 枚のうち 3 枚**。**9 行は 4 つの 1/4 円を繋いだ
+    // 円**で、**形は同じ**です。
+    //
+    // **行の数を緩めても、確かめる所は変わりません**——**この関数は
+    // 断面を標本して円に当てはめ、軸に直交するかを見ます**
+    // （`fit_section_circle`）。**形を仮定せず、訊いています。**
+    //
+    // **`ZENITH_STRICT_CYLINDER_ROWS=1` で、元の「3 行ちょうど」に戻せます**
+    // （測る口）。
+    let rows = surface.control_points.len();
+    let strict = std::env::var_os("ZENITH_STRICT_CYLINDER_ROWS").is_some();
+    if rows < surface.degree_u + 1
+        || (strict && rows != surface.degree_u + 1)
         || surface.control_points.iter().any(|row| row.len() != 2)
     {
         return None;
     }
 
-    let base = cylinder_section_curve(surface, 0.0)?;
-    let top = cylinder_section_curve(surface, 1.0)?;
-    let (base_center, radius, base_normal) = fit_section_circle(&base, tol)?;
-    let (top_center, top_radius, top_normal) = fit_section_circle(&top, tol)?;
+    // **どこで落ちたかを言う口**（4-503。`ZENITH_CYLREC_WHY=1`）。
+    // **「受け付けたのは 0 枚」だけでは、直す先が分かりません。**
+    let why = std::env::var_os("ZENITH_CYLREC_WHY").is_some();
+    macro_rules! refuse {
+        ($($arg:tt)*) => {{
+            if why {
+                eprintln!("CYLRECWHY {}", format!($($arg)*));
+            }
+            return None;
+        }};
+    }
+
+    let Some(base) = cylinder_section_curve(surface, 0.0) else {
+        refuse!("底の断面が作れません");
+    };
+    let Some(top) = cylinder_section_curve(surface, 1.0) else {
+        refuse!("天の断面が作れません");
+    };
+    let Some((base_center, radius, base_normal)) = fit_section_circle(&base, tol) else {
+        refuse!("底の断面が円に当てはまりません（行 {rows}）");
+    };
+    let Some((top_center, top_radius, top_normal)) = fit_section_circle(&top, tol) else {
+        refuse!("天の断面が円に当てはまりません（行 {rows}）");
+    };
 
     let scale = radius.max(top_radius);
     if scale <= tol.linear {
-        return None;
+        refuse!("半径が 0（{scale:.3e}）");
     }
 
     let span = top_center - base_center;
     let height = span.norm();
     if height <= tol.linear {
-        return None;
+        refuse!("高さが 0（{height:.3e}）");
     }
     let axis = span / height;
 
     // 断面の平面は軸に直交していなければならない。頂点に潰れた側は面を持たない
     // ので、そこは見ない。
     for normal in [base_normal, top_normal].into_iter().flatten() {
-        if normal.cross(&axis).norm() > tol.angular {
-            return None;
+        let off = normal.cross(&axis).norm();
+        if off > tol.angular {
+            refuse!("断面の平面が軸に直交しません（外積 {off:.3e}、許容 {:.3e}）", tol.angular);
         }
     }
 
@@ -10685,7 +10734,12 @@ fn recognize_cylinder_patch(surface: &NurbsSurface3, tol: &Tolerance) -> Option<
             if axial.abs() > tol.linear * scale
                 || (radial - expected_radius).abs() > tol.linear * scale
             {
-                return None;
+                refuse!(
+                    "途中の断面が外れます（α={alpha:.2}、軸ずれ {:.3e}、半径ずれ {:.3e}、許容 {:.3e}）",
+                    axial.abs(),
+                    (radial - expected_radius).abs(),
+                    tol.linear * scale
+                );
             }
         }
     }
