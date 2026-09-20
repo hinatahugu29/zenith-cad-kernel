@@ -555,9 +555,10 @@ impl FaceSplitter {
         cut: &[OrientedEdge],
         tol: &Tolerance,
     ) -> Result<(Vec<Face>, FaceSplitReport), String> {
-        if !face.inner_wires.is_empty() {
-            return Err("splitting a face that has holes is not implemented".to_string());
-        }
+        // **穴のある面も、境界から境界へ切れます**（4-492）。
+        //
+        // **もとの穴は、下で片へ配り分けます**——**またいでいる穴は
+        // 断ります**（本当に交わっているので、ここでは扱えません）。
         let edges = &face.outer_wire.edges;
         if edges.len() < 2 {
             return Err("a face boundary needs at least two edges to be split".to_string());
@@ -822,6 +823,10 @@ impl FaceSplitter {
                 ));
             }
         }
+
+        // **もとの穴を、片へ配り分けます**（4-492）。**面積の検査より
+        // 先**に配ります——**穴を抜いた面積で突き合わせる**ためです。
+        let pieces = distribute_holes(face, pieces, tol)?;
 
         // 4. 面積を測って足す。ここが合わなければ領域を取り違えている。
         let check = Self::checked_areas("split_by_chain", face, &pieces)?;
@@ -1335,6 +1340,66 @@ fn move_traversal_end(
 /// 面の外周 p-curve を、**辺ごとに端点と中点**で並べて出す。
 ///
 /// 診断にしか使いません（4-304）。
+/// **もとの穴を、割ってできた片へ配り分ける**（4-492）。
+///
+/// **穴は、ちょうど 1 枚の片の中にいるはず**です。
+///
+/// * **どの片にも入らない** → 断ります（**切り込みが穴を横切っている**）
+/// * **2 枚以上に入る** → 断ります（測り方が壊れているか、重なっています）
+/// * **測れない** → 断ります（**測れないなら、決めません**）
+fn distribute_holes(face: &Face, pieces: Vec<Face>, tol: &Tolerance) -> Result<Vec<Face>, String> {
+    if face.inner_wires.is_empty() {
+        return Ok(pieces);
+    }
+    let mut holes_for: Vec<Vec<Wire>> = vec![Vec::new(); pieces.len()];
+    for hole in &face.inner_wires {
+        let mut owners: Vec<usize> = Vec::new();
+        for (index, piece) in pieces.iter().enumerate() {
+            match hole_sits_inside(piece, hole, tol) {
+                Some(true) => owners.push(index),
+                Some(false) => {}
+                None => {
+                    return Err(
+                        "a hole of this face could not be measured against the pieces".to_string()
+                    )
+                }
+            }
+        }
+        match owners.as_slice() {
+            [only] => holes_for[*only].push(hole.clone()),
+            [] => {
+                return Err(
+                    "a hole of this face is not inside any piece; the cut probably crosses it"
+                        .to_string(),
+                )
+            }
+            _ => {
+                return Err(
+                    "a hole of this face lands in more than one piece".to_string()
+                )
+            }
+        }
+    }
+    Ok(pieces
+        .into_iter()
+        .zip(holes_for)
+        .map(|(piece, holes)| {
+            if holes.is_empty() {
+                return piece;
+            }
+            let mut inner = piece.inner_wires.clone();
+            inner.extend(holes);
+            Face::new(
+                piece.geometry.clone(),
+                piece.outer_wire.clone(),
+                inner,
+                piece.orientation,
+                piece.tolerance,
+            )
+        })
+        .collect())
+}
+
 /// **穴が、この面の外周（＝新しいループ）の中にいるか**（4-491）。
 ///
 /// **uv で見ます。** 穴の代表点を面のパラメータへ落とし、
