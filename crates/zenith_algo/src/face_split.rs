@@ -864,8 +864,17 @@ impl FaceSplitter {
         // 「領域の取り方が悪い」と読んで、正しい巡回を疑いに行きます
         // （4-213 で実際にそうなりました）。
         if let Some(index) = check.unmeasurable_piece {
+            // **なぜ読めないかも言います**（4-497）。「読めない」だけでは、
+            // **直す先が分かりません**——実測（尖った円錐 高さ 200、
+            // `unmatched_edge_probe -- cone200 x union`）: ここで止まって
+            // いるのに、**断り文からは p-curve の話だと分かるだけ**でした。
+            let why = pieces[index]
+                .pcurves(&Tolerance::default())
+                .err()
+                .map(|reason| format!("（{reason}）"))
+                .unwrap_or_default();
             return Err(format!(
-                "{label}: piece {index} has no readable p-curve, so this split cannot be checked (the 3D fallback would measure the untrimmed patch)"
+                "{label}: piece {index} has no readable p-curve{why}, so this split cannot be checked (the 3D fallback would measure the untrimmed patch)"
             ));
         }
         if let Some((index, area)) = null_piece(&check) {
