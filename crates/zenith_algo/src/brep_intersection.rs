@@ -11199,7 +11199,14 @@ fn intersect_plane_cylinder_patch(
     }
     // 軸に平行な平面が母線を切り、斜めの平面が楕円を切るのは円柱の話。
     // 円錐では双曲線・放物線になり、いずれもパッチのパラメータ線ではない。
+    //
+    // **双曲線のほうは、書けます**（4-500）——**軸に平行な平面 × 円錐**。
+    // **有理 2 次ベジエで厳密**です。**辿らずに出せるので、辿りの
+    // 点の上限にも、当てはめの許容にも当たりません**（4-495・4-499）。
     if !patch.is_cylindrical(tol) {
+        if normal.dot(&patch.axis).abs() <= tol.angular {
+            return intersect_axis_parallel_plane_cone_patch(plane, normal, surface, &patch, tol);
+        }
         return FaceIntersectionKind::Unsupported;
     }
     if normal.dot(&patch.axis).abs() <= tol.angular {
@@ -11207,6 +11214,175 @@ fn intersect_plane_cylinder_patch(
     }
 
     intersect_oblique_plane_cylinder_patch(plane, normal, surface, &patch, tol)
+}
+
+/// **軸に平行な平面で円錐を切る**——**双曲線を、厳密に**（4-500）。
+///
+/// # なぜ要るか
+///
+/// **円錐 × 箱は、これまで辿っていました**。**尖った円錐では、それが
+/// 通りません**——**相対 1e-6 の精度の交線を 2048 点で辿れず**（4-495）、
+/// **緩めれば p-curve が読めず**（4-497）、**もっと緩めれば面積が合わない**
+/// （4-499）。**3 枚とも、辿ることから来ています。**
+///
+/// # 何をするか
+///
+/// 平面は軸に平行なので、**軸から平面までの距離 `m` はどこでも同じ**です。
+/// 平面の中に、**軸方向 `a` と、それに直交する `b = n × a`** で座標を張ると、
+/// 交線は
+///
+/// ```text
+///   v² = R² − m²     （R は、その高さでの円錐の半径）
+/// ```
+///
+/// ——**双曲線**です。`R = m cosh θ`、`v = m sinh θ` と置くと、
+///
+/// ```text
+///   P(θ) = O + A cosh θ + B sinh θ
+/// ```
+///
+/// の形になります（`O` は中心、`A`・`B` は軸ベクトル）。
+///
+/// **有理 2 次ベジエは、これを厳密に表せます**——**円の `w = cos(Δ/2)` の
+/// 双曲線版が `w = cosh(Δ/2)`** です（θ → iθ で移り合います）。
+/// 制御点は両端と、**接線の交点** `O + (A cosh θm + B sinh θm) / w`。
+///
+/// # 採る前に測ります
+///
+/// **出した弧を標本して、両方の面に乗っているかを確かめます**——
+/// 平面からの距離と、**パッチへ射影した距離**、そして**射影の (u,v) が
+/// パッチの中に入っているか**。**1 つでも外れたら `Unsupported`**——
+/// **これまで通り辿りに回します**。**もっともらしい弧を返しません**（3-1）。
+fn intersect_axis_parallel_plane_cone_patch(
+    plane: &PlaneSurface3,
+    plane_normal: Vec3,
+    surface: &NurbsSurface3,
+    patch: &CylinderPatch,
+    tol: &Tolerance,
+) -> FaceIntersectionKind {
+    // 半径の伸び（軸方向 1 あたり）。円柱ならここには来ません。
+    let slope = (patch.top_radius - patch.radius) / patch.height;
+    if slope.abs() <= f64::EPSILON {
+        return FaceIntersectionKind::Unsupported;
+    }
+    // 軸から平面までの距離。軸は平面に平行なので、どの点でも同じです。
+    let signed = plane_normal.dot(&(plane.origin - patch.base_center));
+    let m = signed.abs();
+    // **軸を含む平面は、双曲線ではなく 2 本の母線**になります。
+    // **別の形なので、ここでは断ります**（辿りに回します）。
+    if m <= tol.linear {
+        return FaceIntersectionKind::Unsupported;
+    }
+
+    // 平面の中の座標。`a` は軸、`b` はそれに直交する平面内の向き。
+    let a = patch.axis;
+    let Some(b) = plane_normal.cross(&a).try_normalize_safe(1e-12) else {
+        return FaceIntersectionKind::Unsupported;
+    };
+    // 底面の中心を平面へ落とした点。
+    let foot = patch.base_center + plane_normal * signed;
+
+    // R = radius + slope * s、R = m cosh θ。
+    // s = (R − radius) / slope なので、
+    //   P(θ) = O + A cosh θ + B sinh θ、
+    //   O = foot − a * (radius / slope)、A = a * (m / slope)、B = b * m。
+    let origin = foot - a * (patch.radius / slope);
+    let a_vec = a * (m / slope);
+    let b_vec = b * m;
+
+    // **θ の範囲は、パッチの帯から決まります**（軸方向 0 〜 height）。
+    // R は [radius, top_radius] を動き、**双曲線は R ≥ m の所にしかいません**。
+    let r_low = patch.radius.min(patch.top_radius).max(m);
+    let r_high = patch.radius.max(patch.top_radius);
+    if r_high <= r_low + tol.linear {
+        // **平面がパッチに届いていません。** `Unsupported` は
+        // **「これまで通り辿りに回す」**という意味です（呼び手が
+        // `intersect_planar_face_with_patch` へ落とします）。
+        return FaceIntersectionKind::Unsupported;
+    }
+    let theta_of = |r: f64| ((r / m).max(1.0)).acosh();
+    let theta_low = theta_of(r_low);
+    let theta_high = theta_of(r_high);
+
+    let mut edges = Vec::new();
+    for sign in [1.0_f64, -1.0] {
+        let (theta0, theta1) = (sign * theta_low, sign * theta_high);
+        let point_at = |theta: f64| origin + a_vec * theta.cosh() + b_vec * theta.sinh();
+        let half = (theta1 - theta0) * 0.5;
+        let weight = half.cosh();
+        let middle_theta = (theta0 + theta1) * 0.5;
+        let middle =
+            origin + (a_vec * middle_theta.cosh() + b_vec * middle_theta.sinh()) / weight;
+        let start = point_at(theta0);
+        let end = point_at(theta1);
+        let Ok(curve) = NurbsCurve3::new(
+            2,
+            vec![
+                ControlPoint3::unweighted(start),
+                ControlPoint3::new(middle, weight),
+                ControlPoint3::unweighted(end),
+            ],
+            KnotVector::new(vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0]),
+        ) else {
+            continue;
+        };
+        if !curve_lies_on_plane_and_patch(&curve, plane, surface, tol) {
+            continue;
+        }
+        edges.push(Edge::new(
+            curve,
+            Vertex::new(start, tol.linear),
+            Vertex::new(end, tol.linear),
+            tol.linear,
+        ));
+    }
+
+    match edges.len() {
+        0 => FaceIntersectionKind::Unsupported,
+        1 => FaceIntersectionKind::Curve {
+            edge: edges.into_iter().next().unwrap(),
+        },
+        _ => FaceIntersectionKind::Curves { edges },
+    }
+}
+
+/// **出した弧が、本当に両方の面に乗っているか**（4-500）。
+///
+/// 平面からの距離と、**パッチへの射影の距離**を見ます。**射影の (u,v) が
+/// パッチのパラメータ領域の中にあること**も見ます——**外にあるなら、
+/// その弧はこのパッチの上にはいません**（別の象限のぶんです）。
+fn curve_lies_on_plane_and_patch(
+    curve: &NurbsCurve3,
+    plane: &PlaneSurface3,
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) -> bool {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let u_margin = (u_max - u_min) * 1e-6;
+    let v_margin = (v_max - v_min) * 1e-6;
+    let (t0, t1) = curve.param_range();
+    const SAMPLES: usize = 16;
+    for step in 0..=SAMPLES {
+        let t = t0 + (t1 - t0) * (step as f64 / SAMPLES as f64);
+        let point = curve.evaluate(t);
+        if !point_lies_on_plane(point, plane, tol) {
+            return false;
+        }
+        let Ok(projection) = ExtremumEngine::point_to_surface(point, surface, 32, 1e-13) else {
+            return false;
+        };
+        if projection.distance > tol.linear {
+            return false;
+        }
+        if projection.u < u_min - u_margin
+            || projection.u > u_max + u_margin
+            || projection.v < v_min - v_margin
+            || projection.v > v_max + v_margin
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Intersects a plane oblique to the cylinder axis, producing an elliptical arc.
