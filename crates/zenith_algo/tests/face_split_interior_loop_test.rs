@@ -154,3 +154,94 @@ fn a_loop_off_the_face_is_refused() {
         "the reason should say the loop is off the face, got: {error}"
     );
 }
+
+/// **もとから穴のある面**を、内側のループで割る（4-491）。
+///
+/// それまで「**穴のある面は未実装**」と断っていました。実測（`linkrods.step`）:
+/// **穴を 1 つ持つ面に、閉じた輪が 4 本届いていて、1 つも割れません**でした。
+///
+/// 割り方は素直です——**もとの穴を、内側の片と外側の片に配り分ける**。
+/// **またいでいる穴は断ります**（本当に交わっているので、ここでは扱えません）。
+#[test]
+fn a_face_that_already_has_a_hole_still_splits() {
+    let tol = Tolerance::default();
+
+    // 20 × 20 の板の**隅**に 2 × 2 の穴を開けます（中心から (6,6) の所）。
+    let hole_edges: Vec<Edge> = {
+        let corners = [
+            Point3::new(5.0, 5.0, 0.0),
+            Point3::new(7.0, 5.0, 0.0),
+            Point3::new(7.0, 7.0, 0.0),
+            Point3::new(5.0, 7.0, 0.0),
+        ];
+        // **穴は外周と逆に巻きます。**
+        (0..4)
+            .map(|index| segment(corners[(4 - index) % 4], corners[(3 - index) % 4]))
+            .collect()
+    };
+    let plane = PlaneSurface3::new(
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    )
+    .expect("a plane");
+    let outer = Wire::new(
+        rectangle(10.0, 0.0)
+            .into_iter()
+            .map(OrientedEdge::forward)
+            .collect(),
+    );
+    let hole = Wire::new(hole_edges.into_iter().map(OrientedEdge::forward).collect());
+    let face = Face::new(
+        FaceGeometry::Plane(plane),
+        outer,
+        vec![hole],
+        zenith_topo::Orientation::Forward,
+        1e-9,
+    );
+
+    // 真ん中に 6 × 6 のループ。**穴（隅）はこの中に入りません。**
+    let cut = rectangle(3.0, 0.0);
+    let (pieces, report) = FaceSplitter::split_by_interior_loop(&face, &cut, &tol)
+        .expect("穴のある面も、内側のループで割れること");
+
+    assert_eq!(pieces.len(), 2, "内側のループは 2 枚にします");
+    assert!(
+        report.area_residual <= 1e-9,
+        "片の面積が元に戻りません: {:.3e}",
+        report.area_residual
+    );
+
+    let params = TessellationParams::default();
+    let mut areas: Vec<f64> = pieces
+        .iter()
+        .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+        .collect();
+    areas.sort_by(f64::total_cmp);
+    // 内側の片 = 36、外側の片 = 400 - 36 - 4（もとの穴）= 360。
+    assert!(
+        (areas[0] - 36.0).abs() <= 1e-9,
+        "内側の片は 36 のはず、実際は {}",
+        areas[0]
+    );
+    assert!(
+        (areas[1] - 360.0).abs() <= 1e-9,
+        "外側の片は 360 のはず（もとの穴 4 を抜いた分）、実際は {}",
+        areas[1]
+    );
+
+    // **もとの穴は、外側の片が持ちます**（内側のループの外にあるので）。
+    let outer_piece = pieces
+        .iter()
+        .max_by(|a, b| {
+            MassCalculator::compute_face_integral(a, &params)
+                .0
+                .total_cmp(&MassCalculator::compute_face_integral(b, &params).0)
+        })
+        .expect("片");
+    assert_eq!(
+        outer_piece.inner_wires.len(),
+        2,
+        "外側の片は、もとの穴と新しいループの 2 つを穴として持ちます"
+    );
+}

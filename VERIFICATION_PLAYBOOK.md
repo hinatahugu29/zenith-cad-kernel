@@ -34,7 +34,7 @@
 >
 > | 測ったもの | 値 | コマンド |
 > |---|---|---|
-> | 通しテスト | **150 バイナリ / 739 件通過 / 失敗 0 / 警告 0**、**18 分 9 秒**（1,089 秒） | `cargo test --release --workspace --exclude zenith_py` |
+> | 通しテスト | **150 バイナリ / 740 件通過 / 失敗 0 / 警告 0**、**18 分 9 秒**（1,089 秒） | `cargo test --release --workspace --exclude zenith_py` |
 > | 門 | **`== 門 ==` に 52 本、すべて緑**（終了コード 0。**67 分**）。**2026/09/19 に外部ファイルを揃えたので、飛ばしている所はありません** | `bash tools/run_gates.sh --quick` |
 > | 掃き出し | **118 本** | `ls crates/zenith_algo/examples/*.rs \| wc -l` |
 > | いちばん重い門 | `curved_pair_identity_probe` **459 秒**（4-484 の前は 1,290 秒。**断られる配置が減ると速くなります**——断りは落ちるまで走り切るので） | `cargo run --release -p zenith_algo --example curved_pair_identity_probe` |

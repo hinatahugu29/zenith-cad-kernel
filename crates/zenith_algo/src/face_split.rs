@@ -392,9 +392,11 @@ impl FaceSplitter {
         if loop_edges.is_empty() {
             return Err("an interior cut needs at least one curve".to_string());
         }
-        if !face.inner_wires.is_empty() {
-            return Err("splitting a face that already has holes is not implemented".to_string());
-        }
+        // **穴のある面も割ります**（4-491）。
+        //
+        // **もとからある穴を、内側の片と外側の片に配り分ける**だけです。
+        // **配り分けられなければ断ります**——**またいでいる穴**は、
+        // 本当に交わっているので、ここでは扱えません。
 
         let ordered = order_closed_loop(loop_edges, tol)?;
 
@@ -435,11 +437,37 @@ impl FaceSplitter {
         };
 
         let loop_wire = Wire::new(ordered.clone());
+        // **もとの穴を、どちらの片に渡すか**（4-491）。
+        //
+        // **新しいループの中にある穴は内側の片へ**、**外にある穴は
+        // 外側の片へ**。**決められなければ断ります。**
+        let probe_face = Face::new(
+            face.geometry.clone(),
+            loop_wire.clone(),
+            Vec::new(),
+            face.orientation,
+            face.tolerance,
+        );
+        let mut holes_inside: Vec<Wire> = Vec::new();
+        let mut holes_outside: Vec<Wire> = Vec::new();
+        for hole in &face.inner_wires {
+            match hole_sits_inside(&probe_face, hole, tol) {
+                Some(true) => holes_inside.push(hole.clone()),
+                Some(false) => holes_outside.push(hole.clone()),
+                None => {
+                    return Err(
+                        "a hole of this face cannot be placed inside or outside the cut"
+                            .to_string(),
+                    )
+                }
+            }
+        }
+
         // 内側の片は、ループをそのまま外周にする。
         let inside = Face::new(
             face.geometry.clone(),
             loop_wire.clone(),
-            Vec::new(),
+            holes_inside,
             face.orientation,
             face.tolerance,
         );
@@ -454,10 +482,12 @@ impl FaceSplitter {
                 })
                 .collect(),
         );
+        let mut outer_holes = vec![hole];
+        outer_holes.extend(holes_outside);
         let outside = Face::new(
             face.geometry.clone(),
             face.outer_wire.clone(),
-            vec![hole],
+            outer_holes,
             face.orientation,
             face.tolerance,
         );
@@ -1305,6 +1335,53 @@ fn move_traversal_end(
 /// 面の外周 p-curve を、**辺ごとに端点と中点**で並べて出す。
 ///
 /// 診断にしか使いません（4-304）。
+/// **穴が、この面の外周（＝新しいループ）の中にいるか**（4-491）。
+///
+/// **uv で見ます。** 穴の代表点を面のパラメータへ落とし、
+/// **外周の p-curve で作った多角形**の内外を数えます。
+/// **落とせない・多角形が作れないときは `None`**——**測れないなら、
+/// 決めません**（呼び手はそこで断ります）。
+fn hole_sits_inside(face: &Face, hole: &Wire, tol: &Tolerance) -> Option<bool> {
+    let pcurves = face.pcurves(tol).ok()?;
+    let mut polygon: Vec<(f64, f64)> = Vec::new();
+    for segment in &pcurves.outer_loop.segments {
+        for point in segment.curve.sample_points(8) {
+            polygon.push((point.x, point.y));
+        }
+    }
+    if polygon.len() < 3 {
+        return None;
+    }
+    // **穴の代表点**。1 点で足ります——**またいでいる穴は、呼び手が
+    // 面積の突き合わせで捕まえます**（`checked_areas`）。
+    let point = hole.sample_points(4).into_iter().next()?;
+    let uv = match &face.geometry {
+        FaceGeometry::Plane(plane) => {
+            let local = point - plane.origin;
+            (local.dot(&plane.u_axis), local.dot(&plane.v_axis))
+        }
+        FaceGeometry::Nurbs(surface) => {
+            let projection = ExtremumEngine::point_to_surface(point, surface, 64, 1e-12).ok()?;
+            (projection.u, projection.v)
+        }
+        _ => return None,
+    };
+    let mut inside = false;
+    let mut j = polygon.len() - 1;
+    for i in 0..polygon.len() {
+        let (xi, yi) = polygon[i];
+        let (xj, yj) = polygon[j];
+        if (yi > uv.1) != (yj > uv.1) {
+            let x = xi + (uv.1 - yi) / (yj - yi) * (xj - xi);
+            if uv.0 < x {
+                inside = !inside;
+            }
+        }
+        j = i;
+    }
+    Some(inside)
+}
+
 fn dump_uv_loop(face: &Face) {
     let pcurves = match &face.geometry {
         zenith_topo::FaceGeometry::Plane(_) => face.plane_pcurves().ok(),
