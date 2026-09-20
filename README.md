@@ -1,10 +1,10 @@
 # Zenith CAD Kernel
 
-**個人ひとりと AI が、32 日で書いた B-Rep CAD カーネルです。**
+**個人ひとりと AI が、33 日で書いた B-Rep CAD カーネルです。**
 
 > **English summary** — Zenith is a from-scratch B-Rep CAD kernel written in Rust
 > (~134,000 lines, 8 crates), built by **one person working with an AI assistant
-> over 32 days** (2026-08-19 → 2026-09-19, 1,123 commits). It performs exact boolean
+> over 33 days** (2026-08-19 → 2026-09-20, 1,144 commits). It performs exact boolean
 > operations on solids, reads and writes STEP, and tessellates to watertight meshes.
 >
 > **Every claim in this repository is backed by a re-runnable measurement.**
@@ -12,10 +12,10 @@
 > `HANDOVER.md` records the **failed** hypotheses with their numbers, next to the
 > successes — on 2026-09-04 alone, eight guesses were wrong and are written down.
 >
-> **Two claims below cannot be re-measured in this checkout.** The OCCT sample
-> files (`screw.step`, `linkrods.step`) are not redistributed here, so the six
-> gates that use them **do not run** — "not run" is not "green". Everything else
-> is re-runnable as written.
+> **Two OCCT sample files are not redistributed here** (`screw.step`,
+> `linkrods.step`; `reference/` is gitignored). Place them yourself — the README
+> says where from and records their fingerprints — and **every gate runs**,
+> including the ones that read them. Nothing is skipped in the numbers below.
 >
 > It is **not** a finished product and **not** a drop-in OCCT replacement.
 > OCCT is used here as a **yardstick**, not a target.
@@ -29,18 +29,18 @@ CAD カーネル——立体を厳密に足したり引いたりする、CAD の
 数えるほどしか無く、書くのは**組織の仕事**だと思われてきました。実際、
 OpenCASCADE は 30 年かけて育っています。
 
-このリポジトリは、**それを個人ひとりと AI が 29 日でどこまで持っていけるか**の
+このリポジトリは、**それを個人ひとりと AI が 33 日でどこまで持っていけるか**の
 記録です。
 
 | | |
 | :--- | ---: |
-| 期間 | **2026/08/19 〜 09/19（32 日）** |
-| コミット | **1,123** |
-| Rust | **134,226 行 / 368 ファイル / 8 crate**（2026/09/19 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
+| 期間 | **2026/08/19 〜 09/20（33 日）** |
+| コミット | **1,144** |
+| Rust | **135,624 行 / 372 ファイル / 8 crate**（2026/09/20 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
 | 掃き出し（計測プログラム） | **118 本**（`ls crates/zenith_algo/examples/*.rs | wc -l`） |
 | テスト | **151 バイナリ / 742 件 / 失敗 0 / 警告 0**（`cargo test --release --workspace --exclude zenith_py`） |
-| 門 | **52 本すべて緑**（`bash tools/run_gates.sh --quick` の `== 門 ==`。通しテスト・文書の指し先・Python の口まで数えると **58 項目**。**2026/09/19 に外部ファイルを揃えたので、飛ばしている所はありません**。所要 **67 分**） |
-| 記録 | **470 本**（`grep -c "^### 4-" HANDOVER.md`。ルートの md は全部で 44,664 行） |
+| 門 | **52 本すべて緑**（`bash tools/run_gates.sh --quick` の `== 門 ==`。通しテスト・文書の指し先・Python の口まで数えると **58 項目**。**2026/09/19 に外部ファイルを揃えたので、飛ばしている所はありません**。所要 **67 分**。2026/09/20 も rc=0） |
+| 記録 | **485 本**（`grep -c "^### 4-" HANDOVER.md`。ルートの md は全部で 45,808 行） |
 
 **書いた人はひとりです。** 設計判断も、どこを測るかも、何を入れて何を捨てるかも、
 人間が決めています。AI がやったのは、**実装と、測ることと、書き留めること**です。
@@ -67,6 +67,11 @@ OpenCASCADE は 30 年かけて育っています。
   **恒等式 2 本**（`|A|+|B| = |A∪B|+|A∩B|` と `|A|−|A∩B| = |A−B|`）で
   **41 通り測って誤答 0**。**41 のうち 40 が 3 演算とも返ります**
   （2026/09/19。4-479、4-483、4-484。`curved_pair_identity_probe`）
+- **細長い形**——**管が主半径の 1/300 のトーラス、長さが半径の 400 倍の
+  円柱、尖った円錐**を、素の体積と恒等式 2 本で掃いて**誤答 0**
+  （`aspect_sweep_probe`）。**尖った円錐は高さ / 底半径が 40 を超えると
+  断っていましたが、2026/09/20 に高さ 200 が 3 演算とも返るようになりました**
+  （恒等式 **1.4e-15**。**断り 6 → 3 件**。4-498）。**高さ 1000 はまだ断ります**
 - ★ **STEP の読み書き**——OCCT が配る実物の `screw.step` が**読めて、切れて、
   恒等式が 3.845e-13 で閉じます**（2026/09/05 実測）
 - ★ **水密なメッシュ**——自作の立体は **11 通りの刻み（4〜64）すべてで**穴 0・
@@ -88,7 +93,14 @@ OpenCASCADE は 30 年かけて育っています。
   **壁の形が変わりました**——**交線は境界の手前ではなく、境界の外まで
   伸びて**います（`HANDOVER.md` の「H8 の現在地点」に 1 枚でまとめました。
   見る口は `h8_trim_probe`）。**直す手を 3 つ試して、3 つとも測って外して
-  います**
+  います**。
+  **2026/09/20 に、6 秒で回る小さな再現を見つけました**——**尖った円錐 × 箱**
+  （`unmatched_edge_probe -- cone200 x union`。`linkrods` は 1 演算 200 秒）。
+  **切り手が一度も割れない**ことも、**「境界から 1.055 離れている」**という
+  決め手も同じで、**読んだファイルの粗さは関係ありません**（4-496）。
+  **その再現のほうは通せました**（4-498）が、**`linkrods` は 1 つも
+  動きません**——**交線が切れていないので、直した道に入らない**からです。
+  **同じ形でも、詰まっている段は別**でした
 
 > ### ★ について——**2026/09/19 に、また測れるようになりました**
 >
@@ -109,7 +121,10 @@ OpenCASCADE は 30 年かけて育っています。
 - **測った刻みの外は、測っていません。** 上の「11 通り」は**常設検体の
   実測範囲**であって、**どんな刻みでも水密だという証明ではありません**
   ——`screw.step` は 24 分割だけを見ていた頃、**水密に見えて壊れていました**
-- **`linkrods.step`（実物の STEP）は、まだ切れません。** 縫合で相手のいない
+- **`linkrods.step`（実物の STEP）は、まだ切れません。** **いちばん新しい
+  実測は 2026/09/20**——**あぶれ 47**（蓋 4 枚込み。交線 36 本、分割は
+  49 当たり / 10 飛ばし、非多様体 0）。**以下は、そこへ至るまでの
+  日付つきの記録**です。縫合で相手のいない
   稜が **和 46 / 差 46 / 積 40 本**残ります（**2026/09/07 に測り直して同じ
   数字**でした。初出は 09/06 で、同じ日に
   **含む／含まれる稜を刻む段**を入れて 47/47/40 から減りました。4-357）。**根まで
@@ -137,7 +152,7 @@ OpenCASCADE は 30 年かけて育っています。
 
 CAD カーネルは長らく「個人が手を出す領域ではない」とされてきました。それが
 **本当に技術的な壁だったのか、それとも人手の壁だったのか**——このリポジトリは、
-その問いに 29 日ぶんの実測で答えようとしています。
+その問いに 33 日ぶんの実測で答えようとしています。
 
 もしこれが**火種**になって、「自分もやってみるか」と思う人が出てくるなら、
 それがいちばんの成果です。**カーネル開発を、組織の仕事から個人の射程へ。**
@@ -176,7 +191,7 @@ CAD カーネルは長らく「個人が手を出す領域ではない」とさ�
 
 | 文書 | 何が書いてあるか | 計画／実測 |
 | :--- | :--- | :--- |
-| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 470 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
+| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 485 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
 | [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) | **主張を自分で測り直す手順。**どのコマンドで何を数えたか | **実測** |
 | [`KERNEL_SPECS.md`](KERNEL_SPECS.md) | いまの仕様と実装範囲 | 実測 |
 | [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) | 機能一覧と制限 | 実測 |

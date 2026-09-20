@@ -233,7 +233,7 @@ PyO3 によりコンパイルされる `zenith_cad.pyd`。Blender 5.x から直�
 
 ## 3. テストスイート検証結果
 
-**2026年9月19日の実測**: `cargo test --release --workspace --exclude zenith_py`
+**2026年9月20日の実測**: `cargo test --release --workspace --exclude zenith_py`
 で **151 バイナリ / 742 件通過 / 失敗 0 / 無視 0 / 警告 0**。
 
 > **下の「138 バイナリ / 717 件」は 2026/09/08 の数字**で、**数え方が
