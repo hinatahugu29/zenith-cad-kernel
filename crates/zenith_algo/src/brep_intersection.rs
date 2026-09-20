@@ -10143,6 +10143,51 @@ fn intersect_nurbs_patches(
         tol,
     );
 
+    // **切れた枝が出たときだけ、許容を場面の大きさに乗せて辿り直します**
+    // （4-498）。
+    //
+    // **なぜ「だけ」なのか**（4-497・4-498 の実測。`aspect_sweep_probe`）:
+    // **無条件に緩めると、断りは 6 → 15 件に増えます**——**長い円柱が
+    // 返らなくなります**。**切れたときだけなら、いま通っている配置は
+    // 今までの道しか通りません**（1 回目で切れていないからです）。
+    //
+    // **買えるもの**: **尖った円錐 高さ 200 が、3 演算とも返るようになります**
+    // （**あぶれ 3 → 0**。4-496 の再現で測りました）。
+    //
+    // **`ZENITH_SSI_NO_RETRY=1` で止められます**（測る口）。
+    let budget = zenith_geom::march_point_budget();
+    let truncated = |list: &[(zenith_geom::NurbsCurve3, zenith_geom::MarchedIntersection, f64)]| {
+        list.iter().any(|(_, marched, _)| marched.points.len() >= budget)
+    };
+    let branches = if std::env::var_os("ZENITH_SSI_NO_RETRY").is_none()
+        && std::env::var_os("ZENITH_SSI_FITREL").is_none()
+        && truncated(&branches)
+    {
+        // **場面の大きさに乗せた許容**。**1e-6 は、4-497 で窓を探して
+        // 見つけた唯一の値**です（1e-8・3e-8・1e-7 では、まだ切れます）。
+        let relative_limit = tol.linear.max(scale * 1e-6);
+        let retried = zenith_geom::IntersectionMarcher::fit_all_branches(
+            surface_a,
+            surface_b,
+            first_step,
+            relative_limit,
+            std::env::var("ZENITH_SSI_BRANCHES")
+                .ok()
+                .and_then(|text| text.parse::<usize>().ok())
+                .unwrap_or(2),
+            tol,
+        );
+        // **切れが直ったときだけ採ります。** 直っていないなら、
+        // **緩めた分だけ粗い曲線が残る**ので、元のほうがましです。
+        if !retried.is_empty() && !truncated(&retried) {
+            retried
+        } else {
+            branches
+        }
+    } else {
+        branches
+    };
+
     // `ZENITH_SSI_WHY=1` で、辿れた枝と、落とした枝の理由が1行ずつ出ます。
     // **交線が1本も取れないと、その面の組は `Unsupported` になり、ブーリアンは
     // そこから先に進めません。** 落ちた理由が分からないと、交差の実装が悪いのか

@@ -304,6 +304,51 @@ impl Face {
         // **p-curve の粗さは足しません**——足すと「粗いから受け入れ幅が広がり、
         // 広がったからもっと粗くなる」という輪になります（4-284 で実測）。
         let accept = tol.linear.max(self.tolerance).max(1e-6) * 10.0;
+        // **場面の大きさに乗せて測れる口**（4-498。`ZENITH_PCURVE_ACCEPT_REL`。
+        // **既定は無し＝いまのまま**）。
+        //
+        // **なぜ要るか**（4-497 の実測。尖った円錐 高さ 200 × 箱）:
+        // **受け入れ幅は絶対 1e-5** なのに、**パッチの差し渡しは 200**。
+        // **辿りを緩めて交線を完結させると、面から 2.15e-5 外れ**、
+        // **その 2.2 倍差でここが断ります**。**締めれば辿りが終わらない**ので、
+        // **間に窓がありません**（1e-8 から 1e-6 まで測ってあります）。
+        //
+        // **測ってから、既定に入れました**（4-498）。
+        //
+        // * **単独では、1 件も動きません**（`aspect_sweep_probe` の断り 6 件
+        //   ——**基準と同じ**）。**広げても、いま通っている配置は通ります**
+        // * **「切れたら辿り直す」と組にすると、断りが 6 → 3 件**に減ります
+        //   ——**尖った円錐 高さ 200 が 3 演算とも返り、恒等式 1.4e-15**
+        // * **相対の下限は 5e-7 と 7e-7 の間**（5e-7 では断り、7e-7 で通る）。
+        //   **既定はその上の丸い値 1e-6** です
+        //
+        // **`ZENITH_PCURVE_ACCEPT_REL` で上書きできます**（**0 で止まります**）。
+        // **4-284 の輪**（粗さが粗さを呼ぶ）は、**門 52 本で測ってあります**。
+        let accept = match std::env::var("ZENITH_PCURVE_ACCEPT_REL")
+            .ok()
+            .and_then(|text| text.parse::<f64>().ok())
+            .unwrap_or(1e-6)
+        {
+            relative if relative <= 0.0 => accept,
+            relative => {
+                // **差し渡しは、パラメータ領域の四隅の間でいちばん遠い距離**
+                // ——`PCURVEWHY` が出している `span` と**同じ測り方**です。
+                let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+                let corners = [
+                    surface.evaluate(u_min, v_min),
+                    surface.evaluate(u_max, v_min),
+                    surface.evaluate(u_min, v_max),
+                    surface.evaluate(u_max, v_max),
+                ];
+                let mut span = 0.0f64;
+                for (index, left) in corners.iter().enumerate() {
+                    for right in corners.iter().skip(index + 1) {
+                        span = span.max((right - left).norm());
+                    }
+                }
+                accept.max(span * relative)
+            }
+        };
         let outer_loop = derive_wire_nurbs_boundary_pcurves(
             &self.outer_wire,
             surface,
