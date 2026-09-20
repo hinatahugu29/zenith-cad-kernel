@@ -32,7 +32,7 @@ pub use nurbs_curve_2d::{ControlPoint2, NurbsCurve2};
 pub use nurbs_surface::NurbsSurface3;
 pub use offset::OffsetEngine;
 pub use ssi::{SurfaceIntersection, SurfaceIntersectionPoint};
-pub use ssi_march::{IntersectionMarcher, MarchedIntersection};
+pub use ssi_march::{march_point_budget, march_shrink_max, IntersectionMarcher, MarchedIntersection};
 pub use surface::{PlaneSurface3, Surface3};
 pub use surface_blend::SurfaceBlend3;
 pub use triangular_patch::TriangularPatch3;

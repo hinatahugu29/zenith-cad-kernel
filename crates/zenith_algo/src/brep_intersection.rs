@@ -4555,7 +4555,7 @@ fn repair_open_intersection_loops(
                             projection.u,
                             projection.v,
                             step,
-                            2048,
+                            zenith_geom::march_point_budget(),
                             tol,
                         ) {
                             if marched.points.len() >= 4 {
@@ -10097,7 +10097,24 @@ fn intersect_nurbs_patches(
     let reach = patch_overlap_extent(surface_a, surface_b).unwrap_or(extent);
     let scale = if reach < extent * 0.2 { reach } else { extent };
     let first_step = (scale * 0.1).max(tol.linear * 100.0);
-    let deviation_limit = tol.linear;
+    // **当てはめの許容を、場面の大きさに乗せて測れる口**
+    // （4-495。`ZENITH_SSI_FITREL=<相対>`。**既定は無し＝絶対値のまま**）。
+    //
+    // **なぜ要るか**（4-495 の実測。尖った円錐 高さ 200）:
+    // **パッチは 801、許容は 1e-6**——**相対 1.2e-9** です。
+    // **許容を満たす最大の刻みでも、2048 点では渡り切れません**
+    // （上限を 4096 に上げると 4097 点。**どこまで上げても終わらない**）。
+    // **また「物差しが場面と一緒に伸びない」形**です。
+    //
+    // **緩める向きなので、既定では入れません**——**門を全部測ってから**。
+    let deviation_limit = match std::env::var("ZENITH_SSI_FITREL")
+        .ok()
+        .and_then(|text| text.parse::<f64>().ok())
+        .filter(|value| *value > 0.0)
+    {
+        Some(relative) => tol.linear.max(scale * relative),
+        None => tol.linear,
+    };
 
     // 枝は2本まで見る。1枚のパッチと1枚のパッチが3本以上で交わる配置は
     // 今の検体には無く、上限を上げるとブーリアンの走査が目に見えて遅くなる。
@@ -13225,7 +13242,7 @@ fn march_one_branch(
     let mut previous: Option<(f64, f64)> = None;
     for _ in 0..8 {
         let Some(marched) = zenith_geom::IntersectionMarcher::march(
-            patch_a, patch_b, seed.0, seed.1, step, 2048, tol,
+            patch_a, patch_b, seed.0, seed.1, step, zenith_geom::march_point_budget(), tol,
         ) else {
             step *= 0.5;
             continue;
@@ -13254,7 +13271,7 @@ fn march_one_branch(
                 tol.linear,
             ));
         }
-        if marched.points.len() >= 2048 {
+        if marched.points.len() >= zenith_geom::march_point_budget() {
             return None;
         }
         let next = match previous {
@@ -13267,7 +13284,7 @@ fn march_one_branch(
                 } else {
                     let order = (deviation_ratio.ln() / step_ratio.ln()).clamp(0.5, 6.0);
                     let shrink = (deviation / deviation_limit).powf(1.0 / order) * 1.5;
-                    step / shrink.clamp(2.0, 16.0)
+                    step / shrink.clamp(2.0, zenith_geom::march_shrink_max())
                 }
             }
         };

@@ -29,6 +29,35 @@ use crate::nurbs_surface::NurbsSurface3;
 use crate::ssi::SurfaceIntersectionPoint;
 use zenith_math::{Point3, Tolerance, Vec3, Vec3Ext};
 
+/// **辿る点の上限**（4-495 の測り。`ZENITH_SSI_BUDGET`）。
+///
+/// **既定は 2048**——いまと同じです。**長い交線ほど届く距離が縮む**
+/// （4-485。**上限が絶対値**だから）ので、**上げたときに何が起きるかを
+/// 測る口**です。**上げると費用が伸びます**——4-485 で 900 秒。
+pub fn march_point_budget() -> usize {
+    std::env::var("ZENITH_SSI_BUDGET")
+        .ok()
+        .and_then(|text| text.parse::<usize>().ok())
+        .filter(|value| *value >= 64)
+        .unwrap_or(2048)
+}
+
+
+/// **1 回あたり刻みを縮める上限**（4-495 の測り。`ZENITH_SSI_SHRINK_MAX`）。
+///
+/// **既定は 16**——いまと同じです。**なぜ測る口が要るか**（4-495 の実測）:
+/// **尖った円錐（高さ 200）で、採った枝のずれは 1.079e-8**でした。
+/// **許容は 1e-6**——**2 桁も下**です。**刻みを縮め過ぎて、辿りが
+/// 上限を食い尽くしています**（2048 なら 2049 点、4096 なら 4097 点。
+/// **どこまで上げても終わりません**）。
+pub fn march_shrink_max() -> f64 {
+    std::env::var("ZENITH_SSI_SHRINK_MAX")
+        .ok()
+        .and_then(|text| text.parse::<f64>().ok())
+        .filter(|value| *value > 1.0)
+        .unwrap_or(16.0)
+}
+
 /// 辿った交線と、その確からしさ。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarchedIntersection {
@@ -1769,7 +1798,24 @@ impl IntersectionMarcher {
 
         let (t0, t1) = curve.param_range();
         // 補間に使ったのは点の数ぶんの位置なので、標本数はそれと互いに素に取る。
-        let samples = points.len() * 4 + 1;
+        //
+        // **標本の数に上限を置ける口**（4-495 の測り。`ZENITH_SSI_FITSAMPLES`）。
+        // **既定は上限なし**——いまと同じです。**なぜ要るか**: ずれを測る
+        // 1 標本につき**曲面への射影が 2 回**走ります。**点を増やすと、
+        // 辿る費用ではなく測る費用が伸びます**——4-485 で「上限を 4 倍に
+        // 広げたら 1 配置 900 秒」になった所を、**どちらの費用か**で
+        // 切り分けるための口です。
+        let samples = {
+            let dense = points.len() * 4 + 1;
+            match std::env::var("ZENITH_SSI_FITSAMPLES")
+                .ok()
+                .and_then(|text| text.parse::<usize>().ok())
+                .filter(|value| *value >= 16)
+            {
+                Some(cap) => dense.min(cap),
+                None => dense,
+            }
+        };
         let mut worst: f64 = 0.0;
         for step in 0..=samples {
             let fraction = step as f64 / samples as f64;
@@ -1811,7 +1857,7 @@ impl IntersectionMarcher {
             let mut step = first_step;
             let mut previous: Option<f64> = None;
             for _ in 0..6 {
-                if let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, 2048, tol) {
+                if let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, march_point_budget(), tol) {
                     if marched.points.len() >= 4 {
                         if let Some((curve, deviation)) = Self::fit_curve(s1, s2, &marched, 3) {
                             if deviation <= deviation_limit {
@@ -1957,7 +2003,7 @@ impl IntersectionMarcher {
             let mut step = first_step;
             let mut previous: Option<(f64, f64)> = None;
             for attempt in 0..8 {
-                let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, 2048, tol) else {
+                let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, march_point_budget(), tol) else {
                     step *= 0.5;
                     continue;
                 };
@@ -1979,7 +2025,7 @@ impl IntersectionMarcher {
                 }
                 // 点の上限に当たったら、これ以上刻んでも曲線は伸びない。
                 // 切り詰められた交線を返さないために降りる。
-                if marched.points.len() >= 2048 {
+                if marched.points.len() >= march_point_budget() {
                     break;
                 }
 
@@ -1997,7 +2043,7 @@ impl IntersectionMarcher {
                             let shrink = (deviation / deviation_limit).powf(1.0 / order) * 1.5;
                             // 一度に縮めすぎると点の上限に当たって切り詰めた
                             // 交線が返る。1回あたり 16 倍までにしておく。
-                            step / shrink.clamp(2.0, 16.0)
+                            step / shrink.clamp(2.0, march_shrink_max())
                         }
                     }
                 };
