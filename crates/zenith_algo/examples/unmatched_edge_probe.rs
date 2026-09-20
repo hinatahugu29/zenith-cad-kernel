@@ -132,6 +132,24 @@ fn main() {
     };
 
     let tol = Tolerance::default();
+
+    // **尖った円錐は、読むファイルではなく素の立体**（4-496）。
+    // `aspect_sweep_probe` の 2 番目と**同じ場面**を組みます——
+    // **高さ / 底半径 が 40 を超えると 3 演算とも断る**所です（4-485）。
+    // **断りの根はまだ名指しできていません**（4-495 で「点の上限では
+    // ない」ことだけが分かりました）。**あぶれている稜を見るための口**です。
+    if let Some(text) = subject.strip_prefix("cone") {
+        let height: f64 = text.parse().unwrap_or(200.0);
+        let radius = 5.0;
+        let a = PrimitiveBuilder::make_cone(radius, 0.0, height).expect("円錐");
+        let b = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_box(40.0, 40.0, height * 4.0).expect("箱"),
+            Vec3::new(2.0, -20.0, -height),
+        );
+        report(&format!("円錐 高さ {height}"), &a, &b, op, &tol);
+        return;
+    }
+
     let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
         .join(format!("occ_reference_{subject}.step"));
     let Ok(solids) = StepImporter::import_solids_from_file(&path) else {
@@ -140,19 +158,27 @@ fn main() {
     };
     let Some(read) = solids.first() else { return };
 
-    // **本番と同じ入力で見ます。** 演算は入口で立体を整えるので、整えずに
-    // 走査すると別の走行の稜を数えることになります（4-49）。
-    let a = zenith_algo::Regularizer::hold_like_our_own(read, &tol);
-    let (low, high) = mesh_bounds(&tessellate_solid(&a, &params()));
+    // 切り手は**読んだ立体の境界箱**から置きます（`report` が
+    // 整えるので、ここでは整えません）。
+    let (low, high) = mesh_bounds(&tessellate_solid(read, &params()));
     let Some(b) = cutter(&kind, &low, &high) else {
         println!("the cutter could not be built");
         return;
     };
-    let b = zenith_algo::Regularizer::hold_like_our_own(&b, &tol);
 
+    report(&format!("{subject} / {kind}"), read, &b, op, &tol);
+}
+
+/// 選ばれた面片を走査し、**1 回しか使われていない稜**を名指しする。
+fn report(label: &str, a: &Solid, b: &Solid, op: BooleanOpType, tol: &Tolerance) {
+    // **本番と同じ入力で見ます。** 演算は入口で立体を整えるので、整えずに
+    // 走査すると別の走行の稜を数えることになります（4-49）。
+    let (low, high) = mesh_bounds(&tessellate_solid(a, &params()));
+    let a = &zenith_algo::Regularizer::hold_like_our_own(a, tol);
+    let b = &zenith_algo::Regularizer::hold_like_our_own(b, tol);
     let assembly = BrepIntersectionBuilder::collect_boolean_shell_assembly(&a, &b, op, &tol);
     let pieces = &assembly.assembly.selected_face_pieces;
-    println!("{subject} / {kind} / {op:?}");
+    println!("{label} / {op:?}");
     println!(
         "  {} face piece(s), {} cap face(s), stitch: {} unmatched, {} non-manifold, {} same-direction",
         pieces.len(),
