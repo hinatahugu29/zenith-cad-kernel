@@ -10165,7 +10165,17 @@ fn intersect_nurbs_patches(
     {
         // **場面の大きさに乗せた許容**。**1e-6 は、4-497 で窓を探して
         // 見つけた唯一の値**です（1e-8・3e-8・1e-7 では、まだ切れます）。
-        let relative_limit = tol.linear.max(scale * 1e-6);
+        //
+        // **`ZENITH_SSI_RETRY_REL` で測れます**（4-499）。**下げたいのは、
+        // 辿り直した曲線が p-curve の受け入れ幅に入るか**が、
+        // **この値で決まる**からです——実測（尖った円錐 高さ 1000）:
+        // **受け入れ幅 1.0e-3 に対して、ずれ 1.134e-3**。**1.13 倍だけ外**です。
+        let retry_relative = std::env::var("ZENITH_SSI_RETRY_REL")
+            .ok()
+            .and_then(|text| text.parse::<f64>().ok())
+            .filter(|value| *value > 0.0)
+            .unwrap_or(1e-6);
+        let relative_limit = tol.linear.max(scale * retry_relative);
         let retried = zenith_geom::IntersectionMarcher::fit_all_branches(
             surface_a,
             surface_b,
