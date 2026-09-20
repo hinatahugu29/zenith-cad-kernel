@@ -446,4 +446,32 @@ fn main() {
     println!("graded here. Settle each one against an outside ruler:");
     println!("  tools/occ_cut_reference.py <subject> <cutter> --box ...");
     println!("  cargo run --release -p zenith_algo --example cutter_placement_probe");
+
+    // **返らなくなったものを、赤にします**（4-501）。
+    //
+    // **この門は長らく `WRONG` と `PANIC` しか見ていませんでした。**
+    // **`refused` が 0 から 1 に増えても緑のまま**で、実際に
+    // **1 件を静かに失いました**——`cone_full` を角の箱で切る積です
+    // （4-500 で入れた道が、後段のトリム切り詰めと噛み合っていなかった）。
+    // **気づいたのは、別件でこの口を手で回したとき**でした。
+    //
+    // **掃引門と同じ形にします**（4-485 の `REFUSALS_MEASURED`）——
+    // **測ってある数を置き、増えたら赤**。**減ったら、書き換えてくださいと
+    // 言います**（減るのは良いことですが、**測り直した数を残す**ためです）。
+    const REFUSALS_MEASURED: usize = 0;
+    const NOCUT_MEASURED: usize = 4;
+    let refused = tally[1];
+    let nocut = tally[4];
+    println!();
+    if refused > REFUSALS_MEASURED || nocut < NOCUT_MEASURED {
+        println!(
+            "**返っていたものが返らなくなっています**——断り {refused} 件（測ってあるのは {REFUSALS_MEASURED} 件）、NOCUT {nocut} 件（測ってあるのは {NOCUT_MEASURED} 件）。"
+        );
+        std::process::exit(1);
+    }
+    if refused < REFUSALS_MEASURED || nocut > NOCUT_MEASURED {
+        println!(
+            "**数が変わりました**——断り {refused} 件、NOCUT {nocut} 件。**`REFUSALS_MEASURED` / `NOCUT_MEASURED` を書き換えてください。**"
+        );
+    }
 }

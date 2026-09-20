@@ -9931,6 +9931,8 @@ fn intersect_face_supports(
             }
             Some(
                 match intersect_plane_cylinder_patch(
+                    face_a,
+                    face_b,
                     plane,
                     oriented_plane_normal(face_a),
                     surface,
@@ -9961,6 +9963,8 @@ fn intersect_face_supports(
             }
             Some(
                 match intersect_plane_cylinder_patch(
+                    face_b,
+                    face_a,
                     plane,
                     oriented_plane_normal(face_b),
                     surface,
@@ -11180,6 +11184,8 @@ fn intersect_tangent_cylinder_patches(
 }
 
 fn intersect_plane_cylinder_patch(
+    planar_face: &Face,
+    curved_face: &Face,
     plane: &PlaneSurface3,
     plane_normal: Vec3,
     surface: &NurbsSurface3,
@@ -11204,8 +11210,14 @@ fn intersect_plane_cylinder_patch(
     // **有理 2 次ベジエで厳密**です。**辿らずに出せるので、辿りの
     // 点の上限にも、当てはめの許容にも当たりません**（4-495・4-499）。
     if !patch.is_cylindrical(tol) {
-        if normal.dot(&patch.axis).abs() <= tol.angular {
-            return intersect_axis_parallel_plane_cone_patch(plane, normal, surface, &patch, tol);
+        // **止める口**（4-501。`ZENITH_NO_CONE_ANALYTIC=1`）。
+        // **入れた道で何が変わったかを、その場で切り分けるため**です。
+        if normal.dot(&patch.axis).abs() <= tol.angular
+            && std::env::var_os("ZENITH_NO_CONE_ANALYTIC").is_none()
+        {
+            return intersect_axis_parallel_plane_cone_patch(
+                planar_face, curved_face, plane, normal, surface, &patch, tol,
+            );
         }
         return FaceIntersectionKind::Unsupported;
     }
@@ -11250,10 +11262,13 @@ fn intersect_plane_cylinder_patch(
 /// # 採る前に測ります
 ///
 /// **出した弧を標本して、両方の面に乗っているかを確かめます**——
-/// 平面からの距離と、**パッチへ射影した距離**、そして**射影の (u,v) が
+/// 平面からの距離と、**その面のトリムの中にいるか**（4-501。**面は有限です**）、
+/// **パッチへ射影した距離**、そして**射影の (u,v) が
 /// パッチの中に入っているか**。**1 つでも外れたら `Unsupported`**——
 /// **これまで通り辿りに回します**。**もっともらしい弧を返しません**（3-1）。
 fn intersect_axis_parallel_plane_cone_patch(
+    planar_face: &Face,
+    curved_face: &Face,
     plane: &PlaneSurface3,
     plane_normal: Vec3,
     surface: &NurbsSurface3,
@@ -11326,7 +11341,14 @@ fn intersect_axis_parallel_plane_cone_patch(
         ) else {
             continue;
         };
-        if !curve_lies_on_plane_and_patch(&curve, plane, surface, tol) {
+        if !curve_lies_on_plane_and_patch(
+            &curve,
+            planar_face,
+            curved_face,
+            plane,
+            surface,
+            tol,
+        ) {
             continue;
         }
         edges.push(Edge::new(
@@ -11353,6 +11375,8 @@ fn intersect_axis_parallel_plane_cone_patch(
 /// その弧はこのパッチの上にはいません**（別の象限のぶんです）。
 fn curve_lies_on_plane_and_patch(
     curve: &NurbsCurve3,
+    planar_face: &Face,
+    curved_face: &Face,
     plane: &PlaneSurface3,
     surface: &NurbsSurface3,
     tol: &Tolerance,
@@ -11362,10 +11386,26 @@ fn curve_lies_on_plane_and_patch(
     let v_margin = (v_max - v_min) * 1e-6;
     let (t0, t1) = curve.param_range();
     const SAMPLES: usize = 16;
-    for step in 0..=SAMPLES {
+    // **端は見ません**（4-501）。**正しい切り込みの端はトリムの境界の上**に
+    // あり、**内外の判定はそこで割れます**。**中だけを見て決めます。**
+    for step in 1..SAMPLES {
         let t = t0 + (t1 - t0) * (step as f64 / SAMPLES as f64);
         let point = curve.evaluate(t);
         if !point_lies_on_plane(point, plane, tol) {
+            return false;
+        }
+        // **面は有限で、しかも両方ともトリムされています**（4-501）。
+        //
+        // **無限の平面とパッチのパラメータ範囲だけを見ていました。**
+        // 実測: そのせいで**出した弧が後段のトリム切り詰めで丸ごと消え**、
+        // **辿りへ落とし戻すこともできず**、`cone_full` を角の箱で切る積が
+        // **空で返るのをやめて断り**に変わりました
+        // （`foreign_boolean_probe` の `NOCUT 4 / 拒否 0` →
+        // `NOCUT 3 / 拒否 1`。`PAIRWHY` が「トリムへの切り詰めで消えた」）。
+        if point_inside_face_trim(planar_face, point, tol) != Some(true) {
+            return false;
+        }
+        if point_inside_face_trim(curved_face, point, tol) != Some(true) {
             return false;
         }
         let Ok(projection) = ExtremumEngine::point_to_surface(point, surface, 32, 1e-13) else {

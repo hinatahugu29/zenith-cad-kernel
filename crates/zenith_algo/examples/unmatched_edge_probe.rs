@@ -138,8 +138,14 @@ fn main() {
     // **高さ / 底半径 が 40 を超えると 3 演算とも断る**所です（4-485）。
     // **断りの根はまだ名指しできていません**（4-495 で「点の上限では
     // ない」ことだけが分かりました）。**あぶれている稜を見るための口**です。
-    if let Some(text) = subject.strip_prefix("cone") {
-        let height: f64 = text.parse().unwrap_or(200.0);
+    // **高さを書いたときだけ**です（`cone200`）。**`cone` だけなら、
+    // 読むファイルのほう**（`occ_reference_cone.step`）——**実在の検体を
+    // 横取りしません**。
+    if let Some(height) = subject
+        .strip_prefix("cone")
+        .and_then(|text| text.parse::<f64>().ok())
+        .filter(|value| *value > 0.0)
+    {
         let radius = 5.0;
         let a = PrimitiveBuilder::make_cone(radius, 0.0, height).expect("円錐");
         let b = BrepTransform::translate_solid(
