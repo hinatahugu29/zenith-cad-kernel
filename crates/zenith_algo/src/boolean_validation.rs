@@ -432,6 +432,32 @@ impl BooleanResultVerifier {
 /// - 足が境界の上（`tol.linear` 以内）にある。内でも外でもありません。
 /// - どの面のトリム領域にも射影が落ちない。稜の近くで起こります。
 pub fn exact_inside(point: Point3, solid: &Solid, tol: &Tolerance) -> Option<bool> {
+    // **境界箱の外なら、中ではありません**（4-507）。
+    //
+    // **これは推し量りではありません。** `Face::bounding_box` は
+    // **輪と、トリムする前の制御点の両方**を包むので、**立体を必ず含みます**。
+    // **含む箱の外にいるなら、立体の外**です。
+    //
+    // **なぜ要るか**（4-506 の実測）: 読んだ `cone_full`（面 2 枚）で、
+    // **天辺より 3 上の点 (4,4,23) が「中」**と返っていました。
+    // **最近点が頂点 (0,0,20)** で、**そこでは法線が定まらない**のに、
+    // **その 1 枚の法線だけで決めていた**からです（外向き −2.827）。
+    //
+    // **この門は、頂点の問題そのものを直しません**——**箱の中にいて、
+    // なお頂点が最近点になる点は、まだ間違え得ます**。
+    // **安く確実に取れる分だけ、取ります。**
+    let bbox = solid.bounding_box();
+    let margin = tol.linear;
+    if point.x < bbox.min.x - margin
+        || point.y < bbox.min.y - margin
+        || point.z < bbox.min.z - margin
+        || point.x > bbox.max.x + margin
+        || point.y > bbox.max.y + margin
+        || point.z > bbox.max.z + margin
+    {
+        return Some(false);
+    }
+
     let projections = crate::distance::boundary_projections(point, solid);
     let nearest = projections
         .iter()
@@ -459,11 +485,37 @@ pub fn exact_inside(point: Point3, solid: &Solid, tol: &Tolerance) -> Option<boo
     let band = nearest * 1e-6 + 1e-12;
     let graze = nearest * 1e-9;
     let mut grazed = false;
+    // **同着の面が、それぞれ何と言ったか**（4-507。`ZENITH_EXACTIN_WHY=1`）。
+    // **「中」と答えた理由が見えないと、直す先が分かりません**——実測
+    // （4-506）: 読んだ `cone_full` は、**天辺より 3 上の点を「中」**と
+    // 答えました。
+    let why = std::env::var_os("ZENITH_EXACTIN_WHY").is_some();
+    if why {
+        eprintln!(
+            "EXACTINWHY 点 ({:.4},{:.4},{:.4})、最近 {nearest:.3e}、同着 {} 枚",
+            point.x,
+            point.y,
+            point.z,
+            projections
+                .iter()
+                .filter(|projection| projection.distance <= nearest + band)
+                .count()
+        );
+    }
     for projection in projections
         .iter()
         .filter(|projection| projection.distance <= nearest + band)
     {
         let outward = (point - projection.foot).dot(&projection.outward_normal);
+        if why {
+            eprintln!(
+                "EXACTINWHY   足 ({:.4},{:.4},{:.4})、法線の長さ {:.3e}、外向き {outward:.3e}（境目 {graze:.3e}）",
+                projection.foot.x,
+                projection.foot.y,
+                projection.foot.z,
+                projection.outward_normal.norm()
+            );
+        }
         if outward > graze {
             return Some(false);
         }
