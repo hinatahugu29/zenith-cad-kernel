@@ -38,7 +38,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::PathBuf;
 
 use zenith_algo::{
-    BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder, Regularizer,
+    boolean_validation::exact_inside, BooleanEngine, BooleanOpType, BrepTransform, MassCalculator,
+    PrimitiveBuilder, Regularizer,
 };
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -272,6 +273,99 @@ fn run(a: &Solid, b: &Solid, op: BooleanOpType, tol: &Tolerance) -> Outcome {
     }
 }
 
+
+/// **「交わりが空」を、ブーリアンとは別の道で確かめる**（4-506）。
+///
+/// # なぜ要るのか
+///
+/// **積が 0 だと、恒等式は 2 本とも成り立ってしまいます**——
+/// **切り手を丸ごと無視して A を返しても**です。**だからここは長らく
+/// 「採点していない」行**でした（`NOCUT`）。**外の物差しに当てるように、
+/// とだけ書いてありました。**
+///
+/// # 何をするか
+///
+/// **2 つの境界箱が重なる所へ格子を撒き**、**両方の立体の中に入る点が
+/// 1 つでもあるか**を見ます。判定は `exact_inside`——**ブーリアンの
+/// 経路を通らず、面に直接訊きます**。
+///
+/// **1 つでもあれば、積は空ではありません**——**そのとき `NOCUT` は
+/// 誤答です**。
+///
+/// # 測れる範囲を、そのまま言います
+///
+/// **格子より細い重なりは見えません。** 返す値に**格子の間隔**を入れて
+/// あるので、**「どこまで見たか」が読めます**。
+fn overlap_is_empty(
+    a: &Solid,
+    b: &Solid,
+    tol: &Tolerance,
+) -> Option<(bool, f64, usize)> {
+    // **整えてから訊きます**（4-506。4-49 と同じ話です）。
+    //
+    // **`exact_inside` は、整えていない立体では嘘をつきます**——実測:
+    // 読んだ `cone_full`（面 2 枚）に **(4, 4, 23) は中にある**と答えます。
+    // **天辺は z=20** です。**整えると（面 5 枚）正しく「外」**と言います。
+    // **この口を足した最初の版は、それで 1 行を誤って赤にしました。**
+    let a = &Regularizer::hold_like_our_own(a, tol);
+    let b = &Regularizer::hold_like_our_own(b, tol);
+    let (a_low, a_high) = mesh_bounds(&tessellate_solid(a, &params()));
+    let (b_low, b_high) = mesh_bounds(&tessellate_solid(b, &params()));
+    let low = Point3::new(
+        a_low.x.max(b_low.x),
+        a_low.y.max(b_low.y),
+        a_low.z.max(b_low.z),
+    );
+    let high = Point3::new(
+        a_high.x.min(b_high.x),
+        a_high.y.min(b_high.y),
+        a_high.z.min(b_high.z),
+    );
+    if !(high.x > low.x && high.y > low.y && high.z > low.z) {
+        // 境界箱が重ならないなら、交わりは本当に空です。
+        return Some((true, 0.0, 0));
+    }
+    const STEPS: usize = 16;
+    let mut inside_both = 0usize;
+    let mut unclear = 0usize;
+    for i in 0..STEPS {
+        for j in 0..STEPS {
+            for k in 0..STEPS {
+                let point = Point3::new(
+                    low.x + (high.x - low.x) * ((i as f64 + 0.5) / STEPS as f64),
+                    low.y + (high.y - low.y) * ((j as f64 + 0.5) / STEPS as f64),
+                    low.z + (high.z - low.z) * ((k as f64 + 0.5) / STEPS as f64),
+                );
+                match (exact_inside(point, a, tol), exact_inside(point, b, tol)) {
+                    (Some(true), Some(true)) => inside_both += 1,
+                    (Some(_), Some(_)) => {}
+                    _ => unclear += 1,
+                }
+            }
+        }
+    }
+    let spacing = ((high.x - low.x) / STEPS as f64)
+        .max((high.y - low.y) / STEPS as f64)
+        .max((high.z - low.z) / STEPS as f64);
+
+    // **格子は、薄い重なりを見落とします**（間隔より薄ければ素通り）。
+    // **相手の面の上の点も見ます**——**薄いレンズ状の重なりでも、
+    // 相手の皮はその中を通る**からです。**格子とは別の当たり方**です。
+    let mut surface_hits = 0usize;
+    for (probe, other) in [(b, a), (a, b)] {
+        let mesh = tessellate_solid(probe, &params());
+        let stride = (mesh.positions.len() / 800).max(1);
+        for point in mesh.positions.iter().step_by(stride) {
+            if exact_inside(*point, other, tol) == Some(true) {
+                surface_hits += 1;
+                break;
+            }
+        }
+    }
+
+    Some((inside_both == 0 && surface_hits == 0, spacing, unclear))
+}
+
 fn main() {
     let tol = Tolerance::default();
     let subjects = [
@@ -413,7 +507,29 @@ fn main() {
             } else {
                 "ok"
             };
-            if miss > 1e-6 {
+            // **`NOCUT` を、そのままにしません**（4-506）。
+            // **別の道で「本当に空か」を確かめ**、**空でなければ誤答**です。
+            let mut verdict = verdict;
+            let mut nocut_note = String::new();
+            if untouched {
+                match overlap_is_empty(a, &b, &tol) {
+                    Some((true, spacing, unclear)) => {
+                        nocut_note = format!(
+                            "  （空を確かめました: 16^3 の格子（間隔 {spacing:.3e}）と、互いの面の上の点。測れず {unclear}）"
+                        );
+                    }
+                    Some((false, spacing, _)) => {
+                        verdict = "WRONG";
+                        nocut_note = format!(
+                            "  **空ではありません**（格子または相手の面の上の点が、両方の中に入ります。格子の間隔 {spacing:.3e}）"
+                        );
+                    }
+                    None => {
+                        nocut_note = "  （空かどうかは測れませんでした）".to_string();
+                    }
+                }
+            }
+            if verdict == "WRONG" {
                 tally[2] += 1;
             } else if untouched {
                 tally[4] += 1;
@@ -422,7 +538,7 @@ fn main() {
             }
 
             println!(
-                "{name:<18} {:<14} {v_diff:>14.4} {v_inter:>14.4} {v_union:>14.4} {split:>11.2e} {incl_excl:>11.2e}  {verdict:<5} gate {gate_here}/3",
+                "{name:<18} {:<14} {v_diff:>14.4} {v_inter:>14.4} {v_union:>14.4} {split:>11.2e} {incl_excl:>11.2e}  {verdict:<5} gate {gate_here}/3{nocut_note}",
                 placement.name
             );
         }
@@ -442,8 +558,12 @@ fn main() {
     println!("closed form for the cut shape. Refusing is not a defect; WRONG is.");
     println!();
     println!("NOCUT = the intersection came out zero, so both identities hold");
-    println!("even if the cutter was ignored entirely. These rows are NOT");
-    println!("graded here. Settle each one against an outside ruler:");
+    println!("even if the cutter was ignored entirely. **この行も、いまは採点します**");
+    println!("（4-506）——**2 つの境界箱が重なる所に 16^3 の格子を撒き、両方の中に");
+    println!("入る点が 1 つでもあれば誤答**です。判定は `exact_inside` で、");
+    println!("ブーリアンの経路を通りません。**格子より細い重なりは見えません**ので、");
+    println!("行ごとに**格子の間隔**を出しています。");
+    println!("  さらに外の物差しに当てるなら:");
     println!("  tools/occ_cut_reference.py <subject> <cutter> --box ...");
     println!("  cargo run --release -p zenith_algo --example cutter_placement_probe");
 
