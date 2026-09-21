@@ -1,10 +1,10 @@
 # Zenith CAD Kernel
 
-**個人ひとりと AI が、34 日で書いた B-Rep CAD カーネルです。**
+**個人ひとりと AI が、35 日で書いた B-Rep CAD カーネルです。**
 
 > **English summary** — Zenith is a from-scratch B-Rep CAD kernel written in Rust
 > (~134,000 lines, 8 crates), built by **one person working with an AI assistant
-> over 34 days** (2026-08-19 → 2026-09-21, 1,158 commits). It performs exact boolean
+> over 35 days** (2026-08-19 → 2026-09-22, 1,170 commits). It performs exact boolean
 > operations on solids, reads and writes STEP, and tessellates to watertight meshes.
 >
 > **Every claim in this repository is backed by a re-runnable measurement.**
@@ -29,18 +29,18 @@ CAD カーネル——立体を厳密に足したり引いたりする、CAD の
 数えるほどしか無く、書くのは**組織の仕事**だと思われてきました。実際、
 OpenCASCADE は 30 年かけて育っています。
 
-このリポジトリは、**それを個人ひとりと AI が 34 日でどこまで持っていけるか**の
+このリポジトリは、**それを個人ひとりと AI が 35 日でどこまで持っていけるか**の
 記録です。
 
 | | |
 | :--- | ---: |
-| 期間 | **2026/08/19 〜 09/21（34 日）** |
-| コミット | **1,158** |
-| Rust | **136,461 行 / 375 ファイル / 8 crate**（2026/09/21 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
+| 期間 | **2026/08/19 〜 09/22（35 日）** |
+| コミット | **1,170** |
+| Rust | **136,494 行 / 375 ファイル / 8 crate**（2026/09/22 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
 | 掃き出し（計測プログラム） | **118 本**（`ls crates/zenith_algo/examples/*.rs | wc -l`） |
 | テスト | **154 バイナリ / 745 件 / 失敗 0 / 警告 0**（`cargo test --release --workspace --exclude zenith_py`） |
 | 門 | **52 本すべて緑**（`bash tools/run_gates.sh --quick` の `== 門 ==`。通しテスト・文書の指し先・Python の口まで数えると **58 項目**。**2026/09/19 に外部ファイルを揃えたので、飛ばしている所はありません**。所要 **67 分**。2026/09/20 も rc=0） |
-| 記録 | **494 本**（`grep -c "^### 4-" HANDOVER.md`。ルートの md は全部で 46,396 行） |
+| 記録 | **503 本**（`grep -c "^### 4-" HANDOVER.md`。ルートの md は全部で 46,998 行） |
 
 **書いた人はひとりです。** 設計判断も、どこを測るかも、何を入れて何を捨てるかも、
 人間が決めています。AI がやったのは、**実装と、測ることと、書き留めること**です。
@@ -182,7 +182,7 @@ OpenCASCADE は 30 年かけて育っています。
 
 CAD カーネルは長らく「個人が手を出す領域ではない」とされてきました。それが
 **本当に技術的な壁だったのか、それとも人手の壁だったのか**——このリポジトリは、
-その問いに 34 日ぶんの実測で答えようとしています。
+その問いに 35 日ぶんの実測で答えようとしています。
 
 もしこれが**火種**になって、「自分もやってみるか」と思う人が出てくるなら、
 それがいちばんの成果です。**カーネル開発を、組織の仕事から個人の射程へ。**
@@ -221,7 +221,7 @@ CAD カーネルは長らく「個人が手を出す領域ではない」とさ�
 
 | 文書 | 何が書いてあるか | 計画／実測 |
 | :--- | :--- | :--- |
-| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 494 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
+| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 503 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
 | [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) | **主張を自分で測り直す手順。**どのコマンドで何を数えたか | **実測** |
 | [`KERNEL_SPECS.md`](KERNEL_SPECS.md) | いまの仕様と実装範囲 | 実測 |
 | [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) | 機能一覧と制限 | 実測 |
