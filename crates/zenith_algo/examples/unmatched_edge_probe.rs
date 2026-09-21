@@ -138,6 +138,39 @@ fn main() {
     // **高さ / 底半径 が 40 を超えると 3 演算とも断る**所です（4-485）。
     // **断りの根はまだ名指しできていません**（4-495 で「点の上限では
     // ない」ことだけが分かりました）。**あぶれている稜を見るための口**です。
+    // **H8 の検体も、ここから見られます**（4-508。検体名 `linkrods`）。
+    // **切り手は `read_and_cut_probe`・`h8_trim_probe` と同じ**——
+    // **境界箱の 3% 内へ、高さは 0.47**。**同じ場面でないと、同じ数字に
+    // なりません**（4-303 で一度ずれました）。
+    if subject == "linkrods" {
+        let sample = "reference/OCCT/data/step/linkrods.step";
+        let Ok(solids) = StepImporter::import_solids_from_file(sample) else {
+            println!("{sample} が読めません（OCCT の data/step から置いてください）");
+            return;
+        };
+        let Some(read) = solids.into_iter().max_by_key(|s| s.outer_shell.faces.len()) else {
+            return;
+        };
+        let (low, high) = mesh_bounds(&tessellate_solid(&read, &params()));
+        let span = Vec3::new(high.x - low.x, high.y - low.y, high.z - low.z);
+        let (inset, height) = (0.03, 0.47);
+        let cutter = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_box(
+                span.x * (1.0 - inset * 2.0),
+                span.y * (1.0 - inset * 2.0),
+                span.z * height,
+            )
+            .expect("箱"),
+            Vec3::new(
+                low.x + span.x * inset,
+                low.y + span.y * inset,
+                low.z + span.z * (height * 0.5),
+            ),
+        );
+        report("linkrods / 3% 内の箱", &read, &cutter, op, &tol);
+        return;
+    }
+
     // **高さを書いたときだけ**です（`cone200`）。**`cone` だけなら、
     // 読むファイルのほう**（`occ_reference_cone.step`）——**実在の検体を
     // 横取りしません**。
