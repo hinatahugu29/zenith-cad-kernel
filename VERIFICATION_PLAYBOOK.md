@@ -421,6 +421,23 @@ cargo run --release -p zenith_algo --example export_validation_suite
 `helix_spring`（2.01e-8）、**`spur_gear_m2_z18`（7.18e-5。記録どおり
 OpenCASCADE 側の `shape.Volume` の話で、面積は 8.2e-8 で一致）**。
 
+#### **読んだ立体を切った結果も、外の物差しに当てられます**（4-510）
+
+```bash
+cargo run --release -p zenith_algo --example cutter_placement_probe   # 箱を出す
+& "C:\Program Files\FreeCAD 1.1in\python.exe" tools/occ_cut_reference.py sphere slab --box <上の 6 数>
+```
+
+**`--box` を必ず渡してください。** **こちらは「メッシュの境界箱」から
+切り手を置き、OCC は「厳密な境界箱」から置きます**。**丸い形では別の配置に
+なり**、**渡さないと 30 行中 17 行しか一致しません**（**カーネルの差ではなく
+場面の差**）。**渡すと 27 行中 24 行**。
+
+**残る 3 行は `cylinder_nurbs` と `sphere`**——**どちらも有理曲面**で、
+**閉じた式はこちらに味方します**（球冠で 1.32e-8 対 1.35e-3、
+円柱のドリルで 1.04e-5 対 9.68e-3）。**OCC の求積は有理 B-spline 上で
+緩みます**（4-45）。
+
 不一致があれば非ゼロ終了します。CI に置けます。
 
 > **書き出しを飛ばさないこと。** `freecad_cross_validate.py` は

@@ -9,6 +9,14 @@
 には十分。
 
     & "C:\\Program Files\\FreeCAD 1.1\\bin\\python.exe" tools/occ_cut_reference.py revolved_ring corner
+
+**`--box` を渡してください**（4-510）。既定では OCC の**厳密な**境界箱から
+切り手を置きますが、`foreign_boolean_probe` は**メッシュの**境界箱から
+置きます。丸い形では別の配置になり、**渡さないと 30 行中 17 行しか
+一致しません**——カーネルの差ではなく場面の差です。渡すと 27 行中 24 行
+一致し、**残る 3 行は閉じた式でこちらが正しいと決まります**
+（球冠で 1.32e-8 対 1.35e-3）。箱は
+`cargo run --release -p zenith_algo --example cutter_placement_probe` が出します。
 """
 
 import os
