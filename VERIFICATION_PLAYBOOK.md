@@ -414,6 +414,13 @@ cargo run --release -p zenith_algo --example export_validation_suite
 **期待**: `29 of 29 subjects agree across both kernels`、**終了コード 0**。**9/8 に、スケッチから作った 2 検体を足しました**（4-407。`sketch_plate_with_hole`・`sketch_revolved_ring`）——**穴が最初から内側の輪として入る位相を、STEP に書いて他人のカーネルに読ませたことがありませんでした**。実測: **どちらも Solid・妥当・閉じており、残差 9.427e-13 / 4.444e-13 と 1.088e-11 / 1.490e-11**。
 （2026/08/27 実測。23対象だった頃の記述を更新しました）
 
+**2026/09/22 に掛け直しました**（4-509。**4-116 から 4-508 のあと、25 日ぶり**）
+——**29/29 一致、rc=0**。**同じ日に残り 3 本も**: `verify_showcase.py` **54/54**、
+`verify_reexport.py` **7/7**（1e-8 以内）、`verify_mesh_exports.py` **8/8**。
+**残差はほとんど 1e-11 〜 1e-16**、目立つのは `swept_pipe`（8.95e-8）、
+`helix_spring`（2.01e-8）、**`spur_gear_m2_z18`（7.18e-5。記録どおり
+OpenCASCADE 側の `shape.Volume` の話で、面積は 8.2e-8 で一致）**。
+
 不一致があれば非ゼロ終了します。CI に置けます。
 
 > **書き出しを飛ばさないこと。** `freecad_cross_validate.py` は

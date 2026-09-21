@@ -80,6 +80,11 @@ OpenCASCADE は 30 年かけて育っています。
   **空で返るのをやめて断り**に変わっていました。**直し、門が断りの数を
   数えるようにしました**（4-501、4-502）——**数えていない数は、
   守られていません**
+- **外のカーネルと一致します**——**OpenCASCADE で 29 検体すべてが
+  「閉じた妥当な立体」として読み戻せ、体積と表面積が一致**します
+  （**2026/09/22 実測**。ほとんど 1e-11 〜 1e-16。`freecad_cross_validate.py`。
+  **FreeCAD 1.1 が要ります**）。**4-116 から 4-508 までの変更を経ても、
+  外の数は動きませんでした**（4-509）
 - ★ **STEP の読み書き**——OCCT が配る実物の `screw.step` が**読めて、切れて、
   恒等式が 3.845e-13 で閉じます**（2026/09/05 実測）
 - ★ **水密なメッシュ**——自作の立体は **11 通りの刻み（4〜64）すべてで**穴 0・
@@ -212,7 +217,7 @@ CAD カーネルは長らく「個人が手を出す領域ではない」とさ�
 | [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) | 機能一覧と制限 | 実測 |
 | [`ROADMAP.md`](ROADMAP.md) | **これから何を作るかの地図** | **計画** |
 | [`ZENITH_KERNEL_EXPLAINER.md`](ZENITH_KERNEL_EXPLAINER.md) | **初日（2026/08/19）に描いた絵。**当たった所と外れた所が分かる | **計画（記録として保存）** |
-| [`FREECAD_VALIDATION_REPORT.md`](FREECAD_VALIDATION_REPORT.md) | 他カーネル（FreeCAD / OCCT）との突き合わせ | 実測 |
+| [`FREECAD_VALIDATION_REPORT.md`](FREECAD_VALIDATION_REPORT.md) | 他カーネル（FreeCAD / OCCT）との突き合わせ。**2026/09/22 に掛け直して 29/29 一致**（ショーケース 54/54、書き戻し 7/7、非 STEP 出力 8/8。4-509） | 実測 |
 | [`SEAMLESS_CAD_ZENITH_INTEGRATION_SPEC.md`](SEAMLESS_CAD_ZENITH_INTEGRATION_SPEC.md) | Blender 側（Seamless CAD）と繋ぐときの**設計図** | **計画**（本人が冒頭で断っています） |
 | [`SEAMLESS_PROTOCOL.md`](SEAMLESS_PROTOCOL.md) | `cad_server.exe` を置き換えるための**通信の約束** | **計画**（`zenith_server` は 2 つしか実装していません） |
 
