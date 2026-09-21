@@ -4,7 +4,7 @@
 
 > **English summary** — Zenith is a from-scratch B-Rep CAD kernel written in Rust
 > (~134,000 lines, 8 crates), built by **one person working with an AI assistant
-> over 34 days** (2026-08-19 → 2026-09-21, 1,152 commits). It performs exact boolean
+> over 34 days** (2026-08-19 → 2026-09-21, 1,154 commits). It performs exact boolean
 > operations on solids, reads and writes STEP, and tessellates to watertight meshes.
 >
 > **Every claim in this repository is backed by a re-runnable measurement.**
@@ -35,12 +35,12 @@ OpenCASCADE は 30 年かけて育っています。
 | | |
 | :--- | ---: |
 | 期間 | **2026/08/19 〜 09/21（34 日）** |
-| コミット | **1,152** |
+| コミット | **1,154** |
 | Rust | **136,145 行 / 374 ファイル / 8 crate**（2026/09/21 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
 | 掃き出し（計測プログラム） | **118 本**（`ls crates/zenith_algo/examples/*.rs | wc -l`） |
 | テスト | **153 バイナリ / 744 件 / 失敗 0 / 警告 0**（`cargo test --release --workspace --exclude zenith_py`） |
 | 門 | **52 本すべて緑**（`bash tools/run_gates.sh --quick` の `== 門 ==`。通しテスト・文書の指し先・Python の口まで数えると **58 項目**。**2026/09/19 に外部ファイルを揃えたので、飛ばしている所はありません**。所要 **67 分**。2026/09/20 も rc=0） |
-| 記録 | **490 本**（`grep -c "^### 4-" HANDOVER.md`。ルートの md は全部で 46,164 行） |
+| 記録 | **491 本**（`grep -c "^### 4-" HANDOVER.md`。ルートの md は全部で 46,221 行） |
 
 **書いた人はひとりです。** 設計判断も、どこを測るかも、何を入れて何を捨てるかも、
 人間が決めています。AI がやったのは、**実装と、測ることと、書き留めること**です。
@@ -153,7 +153,10 @@ OpenCASCADE は 30 年かけて育っています。
   **2026/09/21 に、その 0 が 7 になりました**（`screw` 3/6、`linkrods` 4/31。
   **1 周ぶんの円柱を受け付けていなかった**のと、**外接円を端どうしで
   取っていた**のと、**根は 2 つ**。4-503）。**ただし `linkrods` の数字は
-  1 つも動きません**——**認識できた 4 枚は、割れない 9 枚とは別の面**です
+  1 つも動きません**——**認識できた 4 枚は、割れない 9 枚とは別の面**です。
+  **その割れない面の正体も測りました**（4-504）——**半径 0.125 の、
+  軸が曲がった管が 16 枚**。**円柱でも円錐でもないので、平面との交わりは
+  円錐曲線になりません**。**「認識器を良くすれば通る」道は、ここで終わり**です
   **読んだファイル特有の問題でもありません**——**自作の立体の連鎖
   ブーリアンでも、同じ壁に当たります**（4-366）
 - 球の極など、**まだ実装していない配置**があります
@@ -203,7 +206,7 @@ CAD カーネルは長らく「個人が手を出す領域ではない」とさ�
 
 | 文書 | 何が書いてあるか | 計画／実測 |
 | :--- | :--- | :--- |
-| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 490 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
+| [`HANDOVER.md`](HANDOVER.md) | **現在地点と 491 本の記録。**失敗も成功と同じ密度で | **実測（これが正）** |
 | [`VERIFICATION_PLAYBOOK.md`](VERIFICATION_PLAYBOOK.md) | **主張を自分で測り直す手順。**どのコマンドで何を数えたか | **実測** |
 | [`KERNEL_SPECS.md`](KERNEL_SPECS.md) | いまの仕様と実装範囲 | 実測 |
 | [`KERNEL_INVENTORY_SPECS.md`](KERNEL_INVENTORY_SPECS.md) | 機能一覧と制限 | 実測 |
