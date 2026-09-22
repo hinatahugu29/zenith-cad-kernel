@@ -352,6 +352,33 @@ impl BrepIntersectionBuilder {
                         );
                     }
                 }
+                if std::env::var("ZENITH_PAIR_TRACE").ok().as_deref()
+                    == Some(format!("{face_a_index},{face_b_index}").as_str())
+                {
+                    let describe = |kind: &Option<FaceIntersectionKind>| -> String {
+                        match kind {
+                            None => "無し".to_string(),
+                            Some(FaceIntersectionKind::Line { .. }) => "Line".to_string(),
+                            Some(FaceIntersectionKind::Curve { .. }) => "Curve 1 本".to_string(),
+                            Some(FaceIntersectionKind::Curves { edges }) => format!("Curves {} 本", edges.len()),
+                            Some(FaceIntersectionKind::Coincident) => "Coincident".to_string(),
+                            Some(_) => "Unsupported".to_string(),
+                        }
+                    };
+                    let raw = intersect_face_supports(face_a, face_b, tol).map(|(kind, _)| kind);
+                    let boxed = raw.clone().and_then(|kind| {
+                        clip_candidate_to_face_bboxes(kind, bboxes_a[face_a_index].as_ref(), bboxes_b[face_b_index].as_ref(), tol)
+                    });
+                    let trimmed = boxed.clone().and_then(|kind| clip_candidate_to_planar_trims(kind, face_a, face_b, tol));
+                    let crossed = trimmed.clone().map(|kind| split_candidate_at_trim_crossings(kind, face_a, face_b, tol));
+                    eprintln!(
+                        "PAIRTRACE A面{face_a_index}xB面{face_b_index}: 素 {} → 箱 {} → 平面トリム {} → 交差で割る {}",
+                        describe(&raw), describe(&boxed), describe(&trimmed), describe(&crossed)
+                    );
+                    if let Some(bbox) = bboxes_a[face_a_index].as_ref() {
+                        eprintln!("PAIRTRACE   A の箱 z [{:.6}, {:.6}] x [{:.4}, {:.4}] y [{:.4}, {:.4}]", bbox.min.z, bbox.max.z, bbox.min.x, bbox.max.x, bbox.min.y, bbox.max.y);
+                    }
+                }
                 if let Some((kind, analytic)) = intersect_face_supports(face_a, face_b, tol)
                     .and_then(|(kind, analytic)| {
                         clip_candidate_to_face_bboxes(
@@ -762,6 +789,15 @@ impl BrepIntersectionBuilder {
         edge_candidates: Vec<IntersectionEdgeCandidate>,
         tol: &Tolerance,
     ) -> PlanarOperandBatchSplits {
+        // **交線の端を、配る前に溶接する口**（4-524。`ZENITH_WELD_ENDS=<距離>`。
+        // **既定では走りません**）。
+        let edge_candidates = match std::env::var("ZENITH_WELD_ENDS")
+            .ok()
+            .and_then(|value| value.parse::<f64>().ok())
+        {
+            Some(weld) if weld > 0.0 => weld_candidate_ends(edge_candidates, weld),
+            _ => edge_candidates,
+        };
         let mut edges_by_face_a: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
         let mut edges_by_face_b: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
 
@@ -10254,6 +10290,37 @@ fn intersect_nurbs_patches(
         branches
     };
 
+    // **1 本も辿れなかったときだけ、当てはめの許容を 10 倍にして辿り直します**
+    // （4-525。`ZENITH_SSI_EMPTY_RETRY=1`。**既定では走りません**）。
+    //
+    // `linkrods` の A面33（次数 6x10、制御点 7x275、z が ±14 まで暴れる網）×
+    // 切り手の天面は、**種は 8 個あるのに、当てはめが最良で 2.4e-6**
+    // ——許容 1e-6 に届かず `0 branch(es)`。**OCC はここで長さ 2.735 の交線を出します。**
+    // **1 回目で見つかった配置は、この道を通りません**（4-498 と同じ「だけ」）。
+    let branches = if branches.is_empty() && std::env::var_os("ZENITH_SSI_EMPTY_RETRY").is_some() {
+        let retried = zenith_geom::IntersectionMarcher::fit_all_branches(
+            surface_a,
+            surface_b,
+            first_step,
+            deviation_limit * 10.0,
+            std::env::var("ZENITH_SSI_BRANCHES")
+                .ok()
+                .and_then(|text| text.parse::<usize>().ok())
+                .unwrap_or(2),
+            tol,
+        );
+        if std::env::var_os("ZENITH_SSI_WHY").is_some() {
+            eprintln!(
+                "SSIWHY 1 本も辿れなかったので、許容 {:.1e} で辿り直しました → {} 本",
+                deviation_limit * 10.0,
+                retried.len()
+            );
+        }
+        retried
+    } else {
+        branches
+    };
+
     // `ZENITH_SSI_WHY=1` で、辿れた枝と、落とした枝の理由が1行ずつ出ます。
     // **交線が1本も取れないと、その面の組は `Unsupported` になり、ブーリアンは
     // そこから先に進めません。** 落ちた理由が分からないと、交差の実装が悪いのか
@@ -13866,4 +13933,63 @@ mod trim_tests {
             "外周の外の点は「外」のはずです"
         );
     }
+}
+
+/// **交線の端を溶接します**（4-524）。`weld` 以内に集まる端を群にし、重心へ動かします。
+fn weld_candidate_ends(
+    mut candidates: Vec<IntersectionEdgeCandidate>,
+    weld: f64,
+) -> Vec<IntersectionEdgeCandidate> {
+    let mut ends: Vec<(usize, bool, Point3)> = Vec::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        ends.push((index, true, candidate.edge.start_vertex.point));
+        ends.push((index, false, candidate.edge.end_vertex.point));
+    }
+    let count = ends.len();
+    let mut parent: Vec<usize> = (0..count).collect();
+    fn root(parent: &mut Vec<usize>, mut at: usize) -> usize {
+        while parent[at] != at {
+            parent[at] = parent[parent[at]];
+            at = parent[at];
+        }
+        at
+    }
+    for i in 0..count {
+        for j in (i + 1)..count {
+            if (ends[i].2 - ends[j].2).norm() <= weld {
+                let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                if a != b {
+                    parent[a] = b;
+                }
+            }
+        }
+    }
+    let mut groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for i in 0..count {
+        let r = root(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+    for members in groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let mut sum = Vec3::new(0.0, 0.0, 0.0);
+        for &i in members {
+            sum += ends[i].2.coords;
+        }
+        let centre = Point3::from(sum / members.len() as f64);
+        for &i in members {
+            let (index, is_start, _) = ends[i];
+            let edge = &mut candidates[index].edge;
+            let points = &mut edge.curve.control_points;
+            let at = if is_start { 0 } else { points.len() - 1 };
+            points[at].point = centre;
+            if is_start {
+                edge.start_vertex.point = centre;
+            } else {
+                edge.end_vertex.point = centre;
+            }
+        }
+    }
+    candidates
 }
