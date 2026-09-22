@@ -1,10 +1,10 @@
 # Zenith CAD Kernel
 
-**個人ひとりと AI が、35 日で書いた B-Rep CAD カーネルです。**
+**個人ひとりと AI が、36 日で書いた B-Rep CAD カーネルです。**
 
 > **English summary** — Zenith is a from-scratch B-Rep CAD kernel written in Rust
 > (~134,000 lines, 8 crates), built by **one person working with an AI assistant
-> over 35 days** (2026-08-19 → 2026-09-23, 1,202 commits). It performs exact boolean
+> over 36 days** (2026-08-19 → 2026-09-23, 1,202 commits). It performs exact boolean
 > operations on solids, reads and writes STEP, and tessellates to watertight meshes.
 >
 > **Every claim in this repository is backed by a re-runnable measurement.**
@@ -29,12 +29,12 @@ CAD カーネル——立体を厳密に足したり引いたりする、CAD の
 数えるほどしか無く、書くのは**組織の仕事**だと思われてきました。実際、
 OpenCASCADE は 30 年かけて育っています。
 
-このリポジトリは、**それを個人ひとりと AI が 35 日でどこまで持っていけるか**の
+このリポジトリは、**それを個人ひとりと AI が 36 日でどこまで持っていけるか**の
 記録です。
 
 | | |
 | :--- | ---: |
-| 期間 | **2026/08/19 〜 09/22（35 日）** |
+| 期間 | **2026/08/19 〜 09/23（36 日）** |
 | コミット | **1,202** |
 | Rust | **137,366 行 / 380 ファイル / 8 crate**（2026/09/23 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
 | 掃き出し（計測プログラム） | **118 本**（`ls crates/zenith_algo/examples/*.rs | wc -l`） |
@@ -182,7 +182,7 @@ OpenCASCADE は 30 年かけて育っています。
 
 CAD カーネルは長らく「個人が手を出す領域ではない」とされてきました。それが
 **本当に技術的な壁だったのか、それとも人手の壁だったのか**——このリポジトリは、
-その問いに 35 日ぶんの実測で答えようとしています。
+その問いに 36 日ぶんの実測で答えようとしています。
 
 もしこれが**火種**になって、「自分もやってみるか」と思う人が出てくるなら、
 それがいちばんの成果です。**カーネル開発を、組織の仕事から個人の射程へ。**
