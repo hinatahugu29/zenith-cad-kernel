@@ -10382,6 +10382,55 @@ fn intersect_nurbs_patches(
         branches
     };
 
+    // **枝が上限より少ないときだけ、種を広く撒いて「新しい枝だけ」足します**
+    // （4-529。`ZENITH_SSI_EXTRA_BRANCHES=1`。**既定では走りません**）。
+    //
+    // **1 回目の枝はそのまま残します**——4-528 で、撒き方を全体で変えると
+    // **他の組の曲線の形が変わり、あぶれが増えました**。ここは**足すだけ**です。
+    let max_branches = std::env::var("ZENITH_SSI_BRANCHES")
+        .ok()
+        .and_then(|text| text.parse::<usize>().ok())
+        .unwrap_or(2);
+    let branches = if !branches.is_empty()
+        && branches.len() < max_branches
+        && std::env::var_os("ZENITH_SSI_EXTRA_BRANCHES").is_some()
+    {
+        let mut branches = branches;
+        let extra = zenith_geom::IntersectionMarcher::fit_all_branches_spread(
+            surface_a,
+            surface_b,
+            first_step,
+            deviation_limit,
+            max_branches,
+            tol,
+        );
+        let near_existing = |point: Point3, existing: &zenith_geom::MarchedIntersection| {
+            existing.points.windows(2).any(|pair| {
+                let (a, b) = (pair[0].point, pair[1].point);
+                let ab = b - a;
+                let length = ab.norm_squared();
+                let t = if length > 0.0 { ((point - a).dot(&ab) / length).clamp(0.0, 1.0) } else { 0.0 };
+                (a + ab * t - point).norm() <= first_step * 0.05
+            })
+        };
+        for candidate in extra {
+            if branches.len() >= max_branches {
+                break;
+            }
+            let middle = candidate.1.points[candidate.1.points.len() / 2].point;
+            if branches.iter().any(|(_, existing, _)| near_existing(middle, existing)) {
+                continue;
+            }
+            if std::env::var_os("ZENITH_SSI_WHY").is_some() {
+                eprintln!("SSIWHY 種を広く撒いて、新しい枝を 1 本足しました（点 {} 個）", candidate.1.points.len());
+            }
+            branches.push(candidate);
+        }
+        branches
+    } else {
+        branches
+    };
+
     // `ZENITH_SSI_WHY=1` で、辿れた枝と、落とした枝の理由が1行ずつ出ます。
     // **交線が1本も取れないと、その面の組は `Unsupported` になり、ブーリアンは
     // そこから先に進めません。** 落ちた理由が分からないと、交差の実装が悪いのか

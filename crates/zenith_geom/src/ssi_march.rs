@@ -1898,6 +1898,39 @@ impl IntersectionMarcher {
         max_branches: usize,
         tol: &Tolerance,
     ) -> Vec<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> {
+        Self::fit_branches_seeded(s1, s2, first_step, deviation_limit, max_branches, false, tol)
+    }
+
+    /// **種を広く撒き、同じ枝は辿ったあとで捨てる版**（4-529）。
+    ///
+    /// `linkrods` の A面6（円柱）× 箱の側面 y = 3.955 は 2 本（x = 3.619 と 4.131）
+    /// で交わるのに、**2 本目の種は距離順 14 番目**で、**1 本目から 0.443**——
+    /// **「同じ枝」の半径 `first_step` = 0.48 の内側**でした（4-528）。
+    /// **種を 16 個以上に、前の判定の半径を 0.25 倍にし、縮めたぶん出る重複は
+    /// 辿ったあとで（中点が既存の折れ線から `first_step` × 0.05 以内なら）捨てます。**
+    ///
+    /// **全部の組に使うと、他の組の曲線の形が変わって悪くなります**（4-528）。
+    /// **呼び手は、1 回目の枝を残したまま、足りないときだけ足すのに使ってください。**
+    pub fn fit_all_branches_spread(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        first_step: f64,
+        deviation_limit: f64,
+        max_branches: usize,
+        tol: &Tolerance,
+    ) -> Vec<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> {
+        Self::fit_branches_seeded(s1, s2, first_step, deviation_limit, max_branches, true, tol)
+    }
+
+    fn fit_branches_seeded(
+        s1: &NurbsSurface3,
+        s2: &NurbsSurface3,
+        first_step: f64,
+        deviation_limit: f64,
+        max_branches: usize,
+        spread: bool,
+        tol: &Tolerance,
+    ) -> Vec<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> {
         let mut found: Vec<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> =
             Vec::new();
 
@@ -1920,6 +1953,7 @@ impl IntersectionMarcher {
             .and_then(|text| text.parse::<usize>().ok())
             .filter(|count| *count > 0)
             .unwrap_or(max_branches * 2);
+        let seeds = if spread { seeds.max(16) } else { seeds };
         // **種を探す格子の細かさ**（4-478。`ZENITH_SSI_GRID=<n>`。既定 12）。
         //
         // **格子はパラメータ空間で一様**なので、**面が長いほど、格子の
@@ -1964,7 +1998,7 @@ impl IntersectionMarcher {
                 .ok()
                 .and_then(|text| text.parse::<f64>().ok())
                 .filter(|factor| *factor > 0.0)
-                .unwrap_or(1.0);
+                .unwrap_or(if spread { 0.25 } else { 1.0 });
             //
             // **半径を縮めるだけでは駄目でした**（4-412 で実測）——0.3 倍で
             // 交線 15 → 41 本、0.1 倍で 63 本、0.03 倍で 64 本。**同じ枝を
@@ -2020,6 +2054,21 @@ impl IntersectionMarcher {
                     // （4-412）。**ほとんど効きません**——種 40 個で交線
                     // 48 → 47 本。**重複は、同じ組の中ではなく、別の組を
                     // またいで出ている**からです。**口は残していません。**
+                    if spread {
+                        let middle = marched.points[marched.points.len() / 2].point;
+                        let duplicate = found.iter().any(|(_, existing, _)| {
+                            existing.points.windows(2).any(|pair| {
+                                let (a, b) = (pair[0].point, pair[1].point);
+                                let ab = b - a;
+                                let length = ab.norm_squared();
+                                let t = if length > 0.0 { ((middle - a).dot(&ab) / length).clamp(0.0, 1.0) } else { 0.0 };
+                                (a + ab * t - middle).norm() <= first_step * 0.05
+                            })
+                        });
+                        if duplicate {
+                            break;
+                        }
+                    }
                     found.push((curve, marched, deviation));
                     break;
                 }
