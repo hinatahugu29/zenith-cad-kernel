@@ -2295,7 +2295,19 @@ impl BrepIntersectionBuilder {
             let explain = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
             let mut reasons: Vec<String> = Vec::new();
 
+            // **1 本の切り込みを、当たった最初の片だけに当てる口**（4-531。
+            // `ZENITH_SPLIT_ONE_PIECE=1`。**既定では走りません**）。
+            //
+            // 既定は**そのときある片すべてに当てます**。**`FaceSplitter::split_by_curves`
+            // は最初に当たった片で打ち切ります**——**当て方が揃っていません**。
+            // **同じ領域の片が二重にできる**（4-530 の非多様体 32）のは、ここが
+            // 疑わしい所です。
+            let one_piece = std::env::var_os("ZENITH_SPLIT_ONE_PIECE").is_some();
             for current_face in faces {
+                if one_piece && applied_this_edge {
+                    next_faces.push(current_face);
+                    continue;
+                }
                 match Self::split_face_by_edge(&current_face, split_edge, tol) {
                     Ok(split_faces) => {
                         applied_split_count += 1;
@@ -2825,6 +2837,12 @@ impl BrepIntersectionBuilder {
                 let mut next_faces = Vec::new();
                 let mut applied_this_chain = false;
                 for current_face in faces {
+                    // **鎖も、当たった最初の片だけに当てる口**（4-531。
+                    // `ZENITH_SPLIT_ONE_PIECE=1`。**既定では走りません**）。
+                    if applied_this_chain && std::env::var_os("ZENITH_SPLIT_ONE_PIECE").is_some() {
+                        next_faces.push(current_face);
+                        continue;
+                    }
                     match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
                         Ok((pieces, report))
                             if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
@@ -2877,6 +2895,10 @@ impl BrepIntersectionBuilder {
                 let mut next_faces = Vec::new();
                 let mut applied_this_chain = false;
                 for current_face in faces {
+                    if applied_this_chain && std::env::var_os("ZENITH_SPLIT_ONE_PIECE").is_some() {
+                        next_faces.push(current_face);
+                        continue;
+                    }
                     let clipped = clip_chain_to_face_trim(&current_face, &chain, tol);
                     let Some(clipped) = clipped else {
                         next_faces.push(current_face);
@@ -3005,6 +3027,22 @@ impl BrepIntersectionBuilder {
                         0.5 * (t0 + t1)
                     });
                     if point_inside_face_trim(&current_face, sample, tol) != Some(true) {
+                        next_faces.push(current_face);
+                        continue;
+                    }
+                    // **もう穴として入っている輪は、二度入れません**（4-531）。
+                    // **同じ領域の片が二重にでき、縫合が非多様体になります**（4-530）。
+                    let already_a_hole = current_face.inner_wires.iter().any(|wire| {
+                        wire.edges.iter().any(|oriented| {
+                            let curve = &oriented.edge.curve;
+                            let (t0, t1) = curve.param_range();
+                            (curve.evaluate(0.5 * (t0 + t1)) - sample).norm() <= tol.linear * 10.0
+                        })
+                    });
+                    if already_a_hole {
+                        if why {
+                            eprintln!("LOOPWHY   もう穴として入っています（飛ばします）");
+                        }
                         next_faces.push(current_face);
                         continue;
                     }

@@ -607,6 +607,15 @@ impl FaceSplitter {
             .ok_or_else(|| "the splitting curve does not end on the boundary".to_string())?;
         let ends_off_boundary = from_distance.max(to_distance);
         if ends_off_boundary > limit {
+            // **穴から穴へ渡る切り込み**（4-523 で設計・測定、4-531 で入れ直し。
+            // `ZENITH_HOLE_CUT=1`。**既定では走りません**）。
+            if std::env::var_os("ZENITH_HOLE_CUT").is_some() {
+                if let Some(result) =
+                    Self::split_hole_to_hole(face, cut, start, end, limit, curve_off_surface, tol)
+                {
+                    return result;
+                }
+            }
             return Err(format!(
                 "the splitting curve ends {ends_off_boundary:.3e} away from the boundary"
             ));
@@ -849,6 +858,151 @@ impl FaceSplitter {
     /// 検算できない（p-curve が取れない）ときと、**面積を囲まない片が出た**
     /// ときは、割れなかったこととして断ります。もっともらしい割り方を返すより、
     /// 割れなかったと言うほうが良い、というのがこのモジュールの方針です。
+    /// **穴から穴へ渡る切り込みで割る**（4-523 の設計、4-531 で入れ直し）。
+    ///
+    /// 読んだ立体の面には、**鎖（底 → 縦 → 天）の両端が、どちらも同じ穴の縁に
+    /// 着く**ものがあります（`linkrods` の A面1・A面6 まわり。1e-5 〜 6e-5）。
+    /// 外周だけを探す道は「境界から 0.465 離れている」と断ります。
+    ///
+    /// 穴の輪を着地点で 2 本の弧に分け、**弧 ＋ 切り込み**で囲む片と、
+    /// **穴を「もう一方の弧 ＋ 切り込み」に置き換えた**片を作ります。
+    /// **弧の選び方と輪の向きは決め打ちせず、4 通りを測って面積残差が
+    /// いちばん小さい組**を採ります（`checked_areas` は**面積の和を見ない**ので、
+    /// **最初に通った組が正しいとは限りません**——4-523 で残差 0.714 の組を拾いました）。
+    ///
+    /// **両端が同じ穴に着かないときは `None`**（呼び手は元の理由で断ります）。
+    fn split_hole_to_hole(
+        face: &Face,
+        cut: &[OrientedEdge],
+        start: Point3,
+        end: Point3,
+        limit: f64,
+        curve_off_surface: f64,
+        tol: &Tolerance,
+    ) -> Option<Result<(Vec<Face>, FaceSplitReport), String>> {
+        let why = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
+        // **穴の縁は、読んだファイルの粗さだけ浮いています**（4-518）。
+        // この道に限り、面の申告する粗さまで着地を認めます。
+        let limit = limit.max(face.tolerance);
+        let (hole_index, from, to, landing) =
+            face.inner_wires
+                .iter()
+                .enumerate()
+                .find_map(|(index, hole)| {
+                    let (from, from_distance) = locate_on_wire(hole, start, tol)?;
+                    let (to, to_distance) = locate_on_wire(hole, end, tol)?;
+                    let landing = from_distance.max(to_distance);
+                    (landing <= limit).then_some((index, from, to, landing))
+                })?;
+        let hole = &face.inner_wires[hole_index];
+        let count = hole.edges.len() as f64;
+        if ((to - from).rem_euclid(count)).min((from - to).rem_euclid(count)) <= 1e-9 {
+            return Some(Err(
+                "both ends of the cut land at the same place on the hole".to_string()
+            ));
+        }
+        let arc_a = match walk(&hole.edges, from, to, tol) {
+            Ok(arc) => arc,
+            Err(reason) => return Some(Err(reason)),
+        };
+        let arc_b = match walk(&hole.edges, to, from, tol) {
+            Ok(arc) => arc,
+            Err(reason) => return Some(Err(reason)),
+        };
+        let start_target = arc_a.first()?.start_vertex().point;
+        let end_target = arc_a.last()?.end_vertex().point;
+        let cut = match snapped_onto_boundary(cut, start_target, end_target, limit) {
+            Ok(cut) => cut,
+            Err(reason) => return Some(Err(reason)),
+        };
+        let reversed = |edges: &[OrientedEdge]| -> Vec<OrientedEdge> {
+            edges
+                .iter()
+                .rev()
+                .map(|oriented| {
+                    OrientedEdge::new(oriented.edge.clone(), oriented.orientation.reversed())
+                })
+                .collect()
+        };
+        let cut_backward = reversed(&cut);
+        // 弧 A は start → end、弧 B は end → start。切り込みは start → end。
+        let loops = [
+            (
+                [arc_a.clone(), cut_backward.clone()].concat(),
+                [arc_b.clone(), cut.clone()].concat(),
+            ),
+            (
+                [arc_b.clone(), cut.clone()].concat(),
+                [arc_a.clone(), cut_backward.clone()].concat(),
+            ),
+        ];
+        let mut last_reason = String::from("no pairing was tried");
+        let mut best: Option<(f64, Vec<Face>, ParameterAreaCheck)> = None;
+        for (piece_loop, hole_loop) in loops.iter() {
+            for flip in [false, true] {
+                let piece_edges = if flip {
+                    reversed(piece_loop)
+                } else {
+                    piece_loop.clone()
+                };
+                let piece = Face::new(
+                    face.geometry.clone(),
+                    Wire::new(piece_edges),
+                    Vec::new(),
+                    face.orientation,
+                    face.tolerance,
+                );
+                let mut holes = face.inner_wires.clone();
+                holes[hole_index] = Wire::new(hole_loop.clone());
+                let rest = Face::new(
+                    face.geometry.clone(),
+                    face.outer_wire.clone(),
+                    holes,
+                    face.orientation,
+                    face.tolerance,
+                );
+                let pieces = vec![piece, rest];
+                if !pieces[0].outer_wire.is_closed(tol)
+                    || !pieces[1].inner_wires[hole_index].is_closed(tol)
+                {
+                    last_reason = "a hole-to-hole piece came out with an open wire".to_string();
+                    continue;
+                }
+                match Self::checked_areas("split_hole_to_hole", face, &pieces) {
+                    Ok(check) => {
+                        let residual = residual_confirmed_in_3d(face, &pieces, &check);
+                        if best.as_ref().map(|(r, _, _)| residual < *r).unwrap_or(true) {
+                            best = Some((residual, pieces, check));
+                        }
+                    }
+                    Err(reason) => last_reason = reason,
+                }
+            }
+        }
+        if let Some((residual, pieces, check)) = best {
+            if why {
+                eprintln!(
+                    "HOLECUTWHY 穴 {hole_index} から穴へ: 着地 {landing:.3e}、面積 {:.4e} → {:?}、残差 {residual:.3e}",
+                    check.original, check.pieces
+                );
+            }
+            return Some(Ok((
+                pieces,
+                FaceSplitReport {
+                    original_parameter_area: check.original,
+                    piece_parameter_areas: check.pieces,
+                    area_residual: residual,
+                    curve_off_surface,
+                    ends_off_boundary: landing,
+                },
+            )));
+        }
+        if why {
+            eprintln!("HOLECUTWHY 穴 {hole_index} から穴へ: どの組も通らず（{last_reason}）");
+        }
+        Some(Err(format!("hole-to-hole cut refused: {last_reason}")))
+    }
+
     fn checked_areas(
         label: &str,
         face: &Face,
