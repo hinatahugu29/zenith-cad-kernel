@@ -4,7 +4,7 @@
 
 > **English summary** — Zenith is a from-scratch B-Rep CAD kernel written in Rust
 > (~134,000 lines, 8 crates), built by **one person working with an AI assistant
-> over 35 days** (2026-08-19 → 2026-09-22, 1,189 commits). It performs exact boolean
+> over 35 days** (2026-08-19 → 2026-09-22, 1,192 commits). It performs exact boolean
 > operations on solids, reads and writes STEP, and tessellates to watertight meshes.
 >
 > **Every claim in this repository is backed by a re-runnable measurement.**
@@ -35,7 +35,7 @@ OpenCASCADE は 30 年かけて育っています。
 | | |
 | :--- | ---: |
 | 期間 | **2026/08/19 〜 09/22（35 日）** |
-| コミット | **1,189** |
+| コミット | **1,192** |
 | Rust | **136,970 行 / 377 ファイル / 8 crate**（2026/09/22 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
 | 掃き出し（計測プログラム） | **118 本**（`ls crates/zenith_algo/examples/*.rs | wc -l`） |
 | テスト | **154 バイナリ / 745 件 / 失敗 0 / 警告 0**（`cargo test --release --workspace --exclude zenith_py`） |
