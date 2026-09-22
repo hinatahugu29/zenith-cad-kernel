@@ -2974,6 +2974,67 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // **鎖を当てたあとで、残った閉じた輪を穴として入れます**（4-526。
+        // `ZENITH_LEFTOVER_LOOPS=1`。**既定では走りません**）。
+        //
+        // 4-310 は「輪と鎖が混ざると輪が入らない。直すなら余った鎖も同じ流れで
+        // 当てる」と書きました。**鎖が当たるようになった後（4-525 の溶接）**、
+        // `linkrods` の切り手の底面では**リンクの端の断面に、ピン穴の円が入らず**、
+        // **代表点が穴の中に落ちて、断面が丸ごと「外」**になっていました
+        // （B面0 の片、面積 0.453、代表点はピン穴の中心から 0.09）。
+        if applied_split_count > 0
+            && !leftover.is_empty()
+            && std::env::var_os("ZENITH_LEFTOVER_LOOPS").is_some()
+        {
+            let extraction = collect_closed_intersection_edge_loops(&leftover, tol);
+            let why = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
+            for closed in &extraction.loops {
+                let mut next_faces = Vec::new();
+                let mut placed = false;
+                for current_face in faces {
+                    if placed {
+                        next_faces.push(current_face);
+                        continue;
+                    }
+                    // **輪がこの片の内側にあるときだけ**入れます。
+                    // `split_by_interior_loop` は含むかを確かめないので、
+                    // **隅の小さな片（面積 0.035）に大きな輪を入れ、面積が
+                    // 負の片を作りました**（-0.806。4-526 の 1 回目）。
+                    let sample = closed.edges[0].curve.evaluate({
+                        let (t0, t1) = closed.edges[0].curve.param_range();
+                        0.5 * (t0 + t1)
+                    });
+                    if point_inside_face_trim(&current_face, sample, tol) != Some(true) {
+                        next_faces.push(current_face);
+                        continue;
+                    }
+                    match crate::FaceSplitter::split_by_interior_loop(&current_face, &closed.edges, tol) {
+                        Ok((pieces, report))
+                            if report.area_residual <= 1e-6
+                                && pieces.len() >= 2 =>
+                        {
+                            placed = true;
+                            applied_split_count += 1;
+                            skipped_split_count = skipped_split_count.saturating_sub(closed.edges.len());
+                            next_faces.extend(pieces);
+                        }
+                        other => {
+                            if why {
+                                if let Err(reason) = &other {
+                                    eprintln!("LOOPWHY   残った輪（稜 {} 本）: {}", closed.edges.len(), why_text(reason));
+                                }
+                            }
+                            next_faces.push(current_face);
+                        }
+                    }
+                }
+                if why {
+                    eprintln!("LOOPWHY 残った輪（稜 {} 本）→ {}", closed.edges.len(), if placed { "穴として入った" } else { "どの片にも入らず" });
+                }
+                faces = next_faces;
+            }
+        }
+
         Ok(PlanarFaceMultiSplitResult {
             faces,
             applied_split_count,
