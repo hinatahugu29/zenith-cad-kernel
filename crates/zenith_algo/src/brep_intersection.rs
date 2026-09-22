@@ -1980,7 +1980,45 @@ impl BrepIntersectionBuilder {
                             face, split_edge, tol,
                         )
                         .map_err(|general_error| format!("{iso_errors}; {general_error}"))?;
-                        if report.area_residual > 1e-6 {
+                        // **面の粗さぶんの帯を許します**（4-520 で測り、4-522 で既定に）。
+                        // 読んだ面の輪は面から浮いている
+                        // ので（4-515、4-518）、割った片の面積の和は**粗さ × 境界の
+                        // 長さ**ぶんずれ得ます。
+                        // **自作の面（粗さ 1e-6）には効かせません**——周の長い面で
+                        // 検算を緩めることになり、領域の取り違えを見逃します。
+                        // **既定で入ります**（4-522）。`ZENITH_NO_AREA_TOL=1` で止まります。
+                        let allowed = if std::env::var_os("ZENITH_NO_AREA_TOL").is_none()
+                            && face.tolerance > 1e-6
+                        {
+                            let perimeter: f64 = face
+                                .outer_wire
+                                .edges
+                                .iter()
+                                .map(|oriented| {
+                                    let curve = &oriented.edge.curve;
+                                    let (t0, t1) = curve.param_range();
+                                    (0..16)
+                                        .map(|step| {
+                                            let at = |k: usize| {
+                                                curve.evaluate(t0 + (t1 - t0) * k as f64 / 16.0)
+                                            };
+                                            (at(step + 1) - at(step)).norm()
+                                        })
+                                        .sum::<f64>()
+                                })
+                                .sum();
+                            let widened = 1e-6f64.max(face.tolerance * perimeter);
+                            if std::env::var_os("ZENITH_SPLIT_WHY").is_some() {
+                                eprintln!(
+                                    "AREATOLWHY 失った {:.3e}、許容 {widened:.3e}（粗さ {:.3e} × 周 {perimeter:.4}）",
+                                    report.area_residual, face.tolerance
+                                );
+                            }
+                            widened
+                        } else {
+                            1e-6
+                        };
+                        if report.area_residual > allowed {
                             return Err(format!(
                                 "{iso_errors}; the general split lost {:.3e} of the face area",
                                 report.area_residual
@@ -9181,11 +9219,25 @@ fn clip_curve_to_nurbs_face_trim_side(
     which: &str,
     tol: &Tolerance,
 ) -> Option<Vec<Edge>> {
-    let setting = std::env::var("ZENITH_NURBS_CLIP").ok()?;
+    // **既定は `read`**（4-522）——読んだ面だけを切ります。
+    // `ZENITH_NO_READ_CLIP=1` で止まります（4-521 以前の既定＝切らない）。
+    let setting = match std::env::var("ZENITH_NURBS_CLIP") {
+        Ok(setting) => setting,
+        Err(_) if std::env::var_os("ZENITH_NO_READ_CLIP").is_some() => return None,
+        Err(_) => "read".to_string(),
+    };
     if setting.eq_ignore_ascii_case("a") && which != "A" {
         return None;
     }
     if setting.eq_ignore_ascii_case("b") && which != "B" {
+        return None;
+    }
+    // **読んだ面だけを切る**（4-521。`ZENITH_NURBS_CLIP=read`）。
+    //
+    // 連鎖①（`rechained_boolean_probe`）を壊すのは**自作の面**を切ったとき
+    // （4-384、4-489）。**読んだ面は自分の粗さを申告します**（4-266。
+    // `face.tolerance` > 1e-6）——**そこだけ**に効かせます。
+    if setting.eq_ignore_ascii_case("read") && face.tolerance <= 1e-6 {
         return None;
     }
     clip_curve_to_nurbs_face_trim_inner(edge, face, tol)
