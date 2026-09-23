@@ -3745,6 +3745,8 @@ fn select_operand_faces_after_batch_split(
         .map(|batch| (batch.face_index, batch.result.faces.clone()))
         .collect();
     let mut selected = Vec::new();
+    // 4-532 の口が使う、採った片の鍵。
+    let mut selected_keys: Vec<(usize, [i64; 3])> = Vec::new();
 
     for (face_index, original_face) in faces.iter().enumerate() {
         let face_pieces = split_faces_by_index
@@ -3901,6 +3903,30 @@ fn select_operand_faces_after_batch_split(
                         );
                     }
                 }
+            }
+            // **同じ面から出た、同じ広さ・同じ代表点の片は 1 枚だけ採る口**
+            // （4-532。`ZENITH_DEDUP_SELECTED=1`。**既定では走りません**）。
+            //
+            // `linkrods` の A面6 は、**同じ領域の片を 2 枚**持ちます（4-531。
+            // 面積 0.407334 が 2 枚ずつ、2 組）。**輪の取り方が違うので、囲み箱でも
+            // 外周でも見分けられません**——**面積と代表点で見ます**。
+            if std::env::var_os("ZENITH_DEDUP_SELECTED").is_some() {
+                let round = |value: f64| (value * 1e6).round() as i64;
+                let here = representative_face_point(face);
+                let key = (
+                    face_index,
+                    [round(here.x), round(here.y), round(here.z)],
+                );
+                if selected_keys.contains(&key) {
+                    if std::env::var_os("ZENITH_SELECT_WHY").is_some() {
+                        eprintln!(
+                            "SELECTWHY   面{face_index} の同じ片（代表点 {:.4} {:.4} {:.4}）は、もう採ってあります",
+                            here.x, here.y, here.z
+                        );
+                    }
+                    continue;
+                }
+                selected_keys.push(key);
             }
             if keep_piece(operand, location, op) {
                 // **空洞の壁は、この立体では実効法線が材料の中を向いています**
