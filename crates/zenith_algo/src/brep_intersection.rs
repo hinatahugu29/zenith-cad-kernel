@@ -1273,6 +1273,13 @@ impl BrepIntersectionBuilder {
             drop_mixed_hole_rims(&mut selected_face_pieces, tol);
         }
 
+        // **親（帯）と子（その半分）が両方選ばれているのを外します**（4-536。
+        // `ZENITH_DROP_PARENT_PIECES=1`。**既定では走りません**）。
+        if std::env::var_os("ZENITH_DROP_PARENT_PIECES").is_some() {
+            let dropped = drop_pieces_that_contain_others(&mut selected_face_pieces, tol);
+            eprintln!("DROPPARENT 他の片を含む片を {dropped} 枚落としました");
+        }
+
         // **同じ稜から出た端を揃えます**（4-533。`ZENITH_ID_WELD=<上限>`。
         // **既定では走りません**）。上限は動かしてよい距離で、`1` と書けば
         // 継ぎ目の隙間ぶん（5e-4）を既定にします。
@@ -14390,4 +14397,119 @@ fn weld_piece_ends_by_edge_id(pieces: &mut [SelectedBooleanFacePiece], cap: f64)
         }
     }
     moved
+}
+
+/// **親（帯）と子（その半分）が両方選ばれているのを外します**（4-536。
+/// `ZENITH_DROP_PARENT_PIECES=1`。**既定では走りません**）。
+///
+/// 4-535 で測った形です——**A面819（8 本の稜を全部使う帯）と、A面816・A面817
+/// （4 本ずつ使う、その半分）が同時に答えに入り**、同じ稜が 3 回使われていました。
+/// **帯を作っているのは `ZENITH_LEFTOVER_LOOPS`** ですが、**外すと和に非多様体 48 本**
+/// が出ます（その口は必要な仕事もしている）。**要るのは「入れない」ことではなく、
+/// 「入れたら、その子を落とす」こと**です。
+///
+/// **他の片の代表点を、自分のトリムの中に含む片**を落とします。**同じ立体の側
+/// （A どうし・B どうし）だけ**を比べ、**代表点がその面の曲面の上にあること**も
+/// 確かめます——**別の曲面の点を射影すると、どこかには落ちる**からです。
+///
+/// 落とした枚数を返します。
+fn drop_pieces_that_contain_others(
+    pieces: &mut Vec<SelectedBooleanFacePiece>,
+    tol: &Tolerance,
+) -> usize {
+    let count = pieces.len();
+    if count < 2 {
+        return 0;
+    }
+    let reps: Vec<Point3> = pieces
+        .iter()
+        .map(|piece| representative_face_point(&piece.face))
+        .collect();
+    let areas: Vec<f64> = pieces
+        .iter()
+        .map(|piece| {
+            crate::MassCalculator::compute_face_integral(&piece.face, &TessellationParams::default())
+                .0
+                .abs()
+        })
+        .collect();
+
+    // **代表点が、その面の曲面の上にあるか。** 射影して戻した点との距離で見ます。
+    let on_surface = |face: &Face, point: Point3| -> bool {
+        match &face.geometry {
+            FaceGeometry::Plane(plane) => {
+                let uv = project_to_plane_uv(point, plane);
+                (plane.evaluate(uv.x, uv.y) - point).norm() <= tol.linear.max(face.tolerance)
+            }
+            FaceGeometry::Nurbs(surface) => {
+                match ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric) {
+                    Ok(projection) => projection.distance <= tol.linear.max(face.tolerance),
+                    Err(_) => false,
+                }
+            }
+            _ => false,
+        }
+    };
+
+    let mut dropped = vec![false; count];
+    let (mut same_side, mut wider, mut seated) = (0usize, 0usize, 0usize);
+    for outer in 0..count {
+        for inner in 0..count {
+            if outer == inner || dropped[outer] || dropped[inner] {
+                continue;
+            }
+            if pieces[outer].operand != pieces[inner].operand {
+                continue;
+            }
+            same_side += 1;
+            // **広いほうだけが親になれます。**
+            if areas[outer] <= areas[inner] * (1.0 + 1e-9) {
+                continue;
+            }
+            wider += 1;
+            if !on_surface(&pieces[outer].face, reps[inner]) {
+                continue;
+            }
+            seated += 1;
+            let verdict = point_inside_face_trim(&pieces[outer].face, reps[inner], tol);
+            eprintln!(
+                "DROPPARENT   片 {}（面積 {:.6}、外周 {} 本、内輪 {}）に、片 {}（面積 {:.6}）の代表点 ({:.4} {:.4} {:.4}）は {:?}",
+                pieces[outer].face.id,
+                areas[outer],
+                pieces[outer].face.outer_wire.edges.len(),
+                pieces[outer].face.inner_wires.len(),
+                pieces[inner].face.id,
+                areas[inner],
+                reps[inner].x,
+                reps[inner].y,
+                reps[inner].z,
+                verdict
+            );
+            if verdict == Some(true) {
+                if std::env::var_os("ZENITH_SELECT_WHY").is_some() {
+                    eprintln!(
+                        "DROPPARENT 片 {}（面積 {:.6}）は、片 {}（面積 {:.6}）を含みます——落とします",
+                        pieces[outer].face.id,
+                        areas[outer],
+                        pieces[inner].face.id,
+                        areas[inner]
+                    );
+                }
+                dropped[outer] = true;
+            }
+        }
+    }
+
+    eprintln!(
+        "DROPPARENT 同じ側の組 {same_side}、広いほう {wider}、曲面の上 {seated}"
+    );
+
+    let mut index = 0;
+    let before = pieces.len();
+    pieces.retain(|_| {
+        let keep = !dropped[index];
+        index += 1;
+        keep
+    });
+    before - pieces.len()
 }
