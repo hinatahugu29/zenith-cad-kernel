@@ -3118,6 +3118,10 @@ struct StitchEdgeUse {
     /// **診断だけに使います。** どちらの立体の面片から来た稜か。
     /// 照合には使いません（4-174）。
     operand: BooleanOperand,
+    /// **この稜を出した面が申告する粗さ**（4-534。`ZENITH_FACE_TOL_STITCH=1`
+    /// のときだけ照合に使います）。読んだ面は 4.1e-4 まで申告し、自作の面は
+    /// 1e-6 です。**OCC はこの流儀で縫います**（4-518）。
+    tolerance: f64,
 }
 
 /// **断り文を、途中で切らずに出す**（4-369）。
@@ -7180,6 +7184,7 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
             piece.face.id,
             piece.reverse_orientation,
             piece.operand,
+            piece.face.tolerance,
             &mut edge_uses,
         );
         for wire in &piece.face.inner_wires {
@@ -7188,6 +7193,7 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
                 piece.face.id,
                 piece.reverse_orientation,
                 piece.operand,
+                piece.face.tolerance,
                 &mut edge_uses,
             );
         }
@@ -7201,6 +7207,7 @@ fn collect_wire_stitch_edge_uses(
     face_id: u64,
     reverse_orientation: bool,
     operand: BooleanOperand,
+    tolerance: f64,
     edge_uses: &mut Vec<StitchEdgeUse>,
 ) {
     for edge in &wire.edges {
@@ -7215,6 +7222,7 @@ fn collect_wire_stitch_edge_uses(
                 end: start,
                 middle,
                 operand,
+                tolerance,
             });
         } else {
             edge_uses.push(StitchEdgeUse {
@@ -7223,6 +7231,7 @@ fn collect_wire_stitch_edge_uses(
                 end,
                 middle,
                 operand,
+                tolerance,
             });
         }
     }
@@ -7870,7 +7879,27 @@ fn distance_to_arc_carrier(a: Point3, b: Point3, c: Point3, point: Point3) -> f6
     }
 }
 
+/// **面が申告する粗さで縫う口**（4-534。`ZENITH_FACE_TOL_STITCH=1`。
+/// **既定では走りません**）。
+///
+/// **4-511 の「幅を一律 1e-4 に広げる」とは別物です。** あちらは積のあぶれを
+/// 56 → 32 に減らす代わりに、**和と差に非多様体を 9 本**出しました——
+/// **きれいな面（自作の立体）まで広げた**からです。ここで広がるのは
+/// **読んだ面（粗さ > 1e-6）に触れている所だけ**で、自作の面どうしは 1e-6 のまま。
+/// **OCC はこの流儀です**（稜ごとに公差を持つ。4-518）。
+///
+/// **STEP は稜の公差を持ちません**（`step_import.rs` は一律 1e-6 を入れます）ので、
+/// **面の粗さ**を使います。
+fn stitch_match_tolerance(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -> f64 {
+    if std::env::var_os("ZENITH_FACE_TOL_STITCH").is_some() {
+        tol.max(a.tolerance).max(b.tolerance)
+    } else {
+        tol
+    }
+}
+
 fn same_undirected_stitch_edge(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -> bool {
+    let tol = stitch_match_tolerance(a, b, tol);
     let ends_match = (points_same_3d(a.start, b.start, tol) && points_same_3d(a.end, b.end, tol))
         || (points_same_3d(a.start, b.end, tol) && points_same_3d(a.end, b.start, tol));
     // **端点が同じでも、別の弧かもしれません。** 途中の点まで見ます。
@@ -7881,6 +7910,7 @@ fn same_undirected_stitch_edge(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -
 }
 
 fn opposite_stitch_edge_direction(a: &StitchEdgeUse, b: &StitchEdgeUse, tol: f64) -> bool {
+    let tol = stitch_match_tolerance(a, b, tol);
     points_same_3d(a.start, b.end, tol) && points_same_3d(a.end, b.start, tol)
 }
 
