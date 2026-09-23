@@ -2347,6 +2347,22 @@ impl BrepIntersectionBuilder {
                 }
                 match Self::split_face_by_edge(&current_face, split_edge, tol) {
                     Ok(split_faces) => {
+                        // **「当たった」は、片が増えたという意味ではありません**
+                        // （4-540）。**1 枚しか返らない当たりがあります。**
+                        if explain {
+                            let middle = split_edge.curve.evaluate(
+                                (split_edge.curve.param_range().0
+                                    + split_edge.curve.param_range().1)
+                                    * 0.5,
+                            );
+                            eprintln!(
+                                "SPLITONE 中点 ({:.4} {:.4} {:.4}) → 片 {} 枚",
+                                middle.x,
+                                middle.y,
+                                middle.z,
+                                split_faces.len()
+                            );
+                        }
                         applied_split_count += 1;
                         applied_this_edge = true;
                         next_faces.extend(split_faces);
@@ -2515,7 +2531,7 @@ impl BrepIntersectionBuilder {
                         };
                         match crate::FaceSplitter::split_by_chain(&current_face, &clipped, tol) {
                             Ok((pieces, report))
-                                if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                                if report.area_residual <= chain_area_allowance(&current_face) && pieces.len() >= 2 =>
                             {
                                 applied += 1;
                                 next_faces.extend(pieces);
@@ -2666,7 +2682,7 @@ impl BrepIntersectionBuilder {
                         };
                     match outcome {
                         Ok((pieces, report))
-                            if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                            if report.area_residual <= chain_area_allowance(&current_face) && pieces.len() >= 2 =>
                         {
                             applied += 1;
                             chain_applied += 1;
@@ -2771,7 +2787,7 @@ impl BrepIntersectionBuilder {
                     for current_face in chain_faces {
                         match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
                             Ok((pieces, report))
-                                if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                                if report.area_residual <= chain_area_allowance(&current_face) && pieces.len() >= 2 =>
                             {
                                 applied += 1;
                                 next_faces.extend(pieces);
@@ -2818,7 +2834,7 @@ impl BrepIntersectionBuilder {
             if let Ok((pieces, report)) =
                 crate::FaceSplitter::split_by_interior_loop(face, split_edges, tol)
             {
-                if report.area_residual <= 1e-6 && pieces.len() >= 2 {
+                if report.area_residual <= chain_area_allowance(face) && pieces.len() >= 2 {
                     return Ok(PlanarFaceMultiSplitResult {
                         faces: pieces,
                         applied_split_count: split_edges.len(),
@@ -2882,7 +2898,7 @@ impl BrepIntersectionBuilder {
                     }
                     match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
                         Ok((pieces, report))
-                            if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                            if report.area_residual <= chain_area_allowance(&current_face) && pieces.len() >= 2 =>
                         {
                             applied_this_chain = true;
                             next_faces.extend(pieces);
@@ -2943,7 +2959,7 @@ impl BrepIntersectionBuilder {
                     };
                     match crate::FaceSplitter::split_by_chain(&current_face, &clipped, tol) {
                         Ok((pieces, report))
-                            if report.area_residual <= 1e-6 && pieces.len() >= 2 =>
+                            if report.area_residual <= chain_area_allowance(&current_face) && pieces.len() >= 2 =>
                         {
                             applied_this_chain = true;
                             next_faces.extend(pieces);
@@ -3118,7 +3134,7 @@ impl BrepIntersectionBuilder {
                     }
                     match crate::FaceSplitter::split_by_interior_loop(&current_face, &closed.edges, tol) {
                         Ok((pieces, report))
-                            if report.area_residual <= 1e-6
+                            if report.area_residual <= chain_area_allowance(&current_face)
                                 && pieces.len() >= 2 =>
                         {
                             placed = true;
@@ -3204,6 +3220,42 @@ fn why_text(reason: &str) -> String {
         return reason.to_string();
     }
     reason.chars().take(limit).collect()
+}
+
+/// **読んだ面の「面積が戻ったか」の許容**（4-520 で測り、4-522 で既定に。
+/// **鎖の段へ入れる口は 4-540、`ZENITH_CHAIN_AREA_TOL=1`。既定では走りません**）。
+///
+/// 読んだ面の輪は面から浮いている（4-515、4-518）ので、割った片の面積の和は
+/// **粗さ × 境界の長さ**ぶんずれ得ます。**自作の面（粗さ 1e-6）には効かせません**
+/// ——周の長い面で検算を緩めることになり、領域の取り違えを見逃します。
+///
+/// **4-522 の許容は `split_face_by_edge` にしか入っていませんでした。**
+/// **鎖の段は `1e-6` のまま**——**同じ問いに 2 つの物差し**です。
+/// 実測（4-540、A面1）: 鎖 0 は残差 **6.953e-7** で通り、鎖 1 は **1.843e-6**
+/// で落ちます。**落ちた鎖が、積に足りない 1 枚**でした。
+fn chain_area_allowance(face: &Face) -> f64 {
+    if std::env::var_os("ZENITH_CHAIN_AREA_TOL").is_none()
+        || std::env::var_os("ZENITH_NO_AREA_TOL").is_some()
+        || face.tolerance <= 1e-6
+    {
+        return 1e-6;
+    }
+    let perimeter: f64 = face
+        .outer_wire
+        .edges
+        .iter()
+        .map(|oriented| {
+            let curve = &oriented.edge.curve;
+            let (t0, t1) = curve.param_range();
+            (0..16)
+                .map(|step| {
+                    let at = |k: usize| curve.evaluate(t0 + (t1 - t0) * k as f64 / 16.0);
+                    (at(step + 1) - at(step)).norm()
+                })
+                .sum::<f64>()
+        })
+        .sum();
+    1e-6f64.max(face.tolerance * perimeter)
 }
 
 fn collect_batch_splits_for_faces(
