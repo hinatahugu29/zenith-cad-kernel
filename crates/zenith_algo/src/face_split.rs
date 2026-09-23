@@ -400,6 +400,39 @@ impl FaceSplitter {
 
         let ordered = order_closed_loop(loop_edges, tol)?;
 
+        // **輪が、外周の箱の中にあるか**（4-537。`ZENITH_HOLE_BOX_GUARD=1`。
+        // **既定では走りません**）。
+        //
+        // **下の検査は「曲面の上にあるか」しか見ていません。** **巻いている
+        // 曲面では、裏側も「上」です**——実測（`linkrods`、積）: **A面819
+        // （外周の箱 x 4.131〜4.592）が、x 3.276〜3.619 にある輪を 2 つ
+        // 穴として抱えて**いました。その輪は **A面816・817 が外周として
+        // 使っている**ので、同じ稜が 3 回使われ、**非多様体 24 本**に
+        // なります（4-535、4-536）。
+        //
+        // **`Face::bounding_box()` では見られません**——NURBS のとき
+        // **曲面まるごと**（円柱の全周）を含めるので、いつも「中」です。
+        // **外周の輪の箱**で見ます。
+        if std::env::var_os("ZENITH_HOLE_BOX_GUARD").is_some() {
+            let box_of = face.outer_wire.bounding_box();
+            let slack = tol.linear.max(face.tolerance) * 10.0;
+            for piece in &ordered {
+                let point = piece.edge.start_vertex.point;
+                if point.x < box_of.min.x - slack
+                    || point.x > box_of.max.x + slack
+                    || point.y < box_of.min.y - slack
+                    || point.y > box_of.max.y + slack
+                    || point.z < box_of.min.z - slack
+                    || point.z > box_of.max.z + slack
+                {
+                    return Err(format!(
+                        "the interior loop sits outside the outer boundary box ({:.4} {:.4} {:.4})",
+                        point.x, point.y, point.z
+                    ));
+                }
+            }
+        }
+
         // ループが本当にこの面の上にあるか。構成に使っていない位置で測る。
         let scale = boundary_extent(&face.outer_wire).max(1.0);
         let limit = tol.linear * 10.0 * scale;
@@ -1583,6 +1616,31 @@ fn hole_sits_inside(face: &Face, hole: &Wire, tol: &Tolerance) -> Option<bool> {
     // **穴の代表点**。1 点で足ります——**またいでいる穴は、呼び手が
     // 面積の突き合わせで捕まえます**（`checked_areas`）。
     let point = hole.sample_points(4).into_iter().next()?;
+    // **3D の箱でも確かめる口**（4-537。`ZENITH_HOLE_BOX_GUARD=1`。
+    // **既定では走りません**）。
+    //
+    // **下の判定は uv だけです。** **巻いている曲面では、裏側の点も
+    // 射影すれば中に落ちます**——実測（`linkrods`、積）: **A面819
+    // （箱 x 4.131〜4.592）が、x 3.276〜3.619 にある輪を 2 つ穴として
+    // 抱えて**いました。その輪は **A面816・817 が外周として使っている**ので、
+    // 同じ稜が 3 回使われ、**非多様体 24 本**になります（4-535、4-536）。
+    //
+    // **箱は巻きません。**
+    if std::env::var_os("ZENITH_HOLE_BOX_GUARD").is_some() {
+        // **外周の輪の箱で見ます。** `Face::bounding_box()` は NURBS のとき
+        // **曲面まるごと**（円柱の全周）を含めるので、**いつも「中」**になります。
+        let box_of = face.outer_wire.bounding_box();
+        let slack = tol.linear.max(face.tolerance) * 10.0;
+        if point.x < box_of.min.x - slack
+            || point.x > box_of.max.x + slack
+            || point.y < box_of.min.y - slack
+            || point.y > box_of.max.y + slack
+            || point.z < box_of.min.z - slack
+            || point.z > box_of.max.z + slack
+        {
+            return Some(false);
+        }
+    }
     let uv = match &face.geometry {
         FaceGeometry::Plane(plane) => {
             let local = point - plane.origin;

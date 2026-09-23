@@ -3049,6 +3049,39 @@ impl BrepIntersectionBuilder {
                         next_faces.push(current_face);
                         continue;
                     }
+                    // **3D の箱でも確かめます**（4-537）。
+                    //
+                    // **uv だけでは、巻いている曲面で嘘になります。** 実測
+                    // （`linkrods`、積）: **A面819（箱 x 4.131〜4.592）が、
+                    // x 3.276〜3.619 にある輪を 2 つ穴として抱えて**いました
+                    // ——**自分の外周の外にある輪**です。その輪は **A面816・817
+                    // が外周として使っている**ので、同じ稜が 3 回使われ、
+                    // **非多様体 24 本**になっていました（4-535、4-536）。
+                    //
+                    // **円柱の裏側の点も、uv へ射影すれば中に落ちます。**
+                    // **箱は巻きません。**
+                    {
+                        // **外周の輪の箱で見ます**（`Face::bounding_box()` は
+                        // NURBS のとき曲面まるごとを含めます）。
+                        let box_of = current_face.outer_wire.bounding_box();
+                        let slack = tol.linear.max(current_face.tolerance) * 10.0;
+                        let outside = sample.x < box_of.min.x - slack
+                            || sample.x > box_of.max.x + slack
+                            || sample.y < box_of.min.y - slack
+                            || sample.y > box_of.max.y + slack
+                            || sample.z < box_of.min.z - slack
+                            || sample.z > box_of.max.z + slack;
+                        if outside {
+                            if why {
+                                eprintln!(
+                                    "LEFTOVERLOOP 輪の点 ({:.4} {:.4} {:.4}) は、片の箱の外です——入れません",
+                                    sample.x, sample.y, sample.z
+                                );
+                            }
+                            next_faces.push(current_face);
+                            continue;
+                        }
+                    }
                     // **もう穴として入っている輪は、二度入れません**（4-531）。
                     // **同じ領域の片が二重にでき、縫合が非多様体になります**（4-530）。
                     let already_a_hole = current_face.inner_wires.iter().any(|wire| {
@@ -7172,7 +7205,12 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
                 high.z = high.z.max(point.z);
             }
             eprintln!(
-                "PIECEWHY {:?} {:?} {kind} 重心 ({:.4} {:.4} {:.4}) 稜 {} 内輪 {} 箱 ({:.3},{:.3},{:.3})〜({:.3},{:.3},{:.3})",
+                // **面の番号を出します**（4-537）。**稜の側（`STITCH_WHY`）は番号で
+                // 言うのに、片の側は座標でしか言っていませんでした**——
+                // **同じ走りの出力どうしが突き合わせられません**。
+                // **突き合わせは番号で**（4-518 の教訓）。
+                "PIECEWHY 面{} {:?} {:?} {kind} 重心 ({:.4} {:.4} {:.4}) 稜 {} 内輪 {} 箱 ({:.3},{:.3},{:.3})〜({:.3},{:.3},{:.3})",
+                piece.face.id,
                 piece.operand,
                 piece.location,
                 centre.x,
@@ -7182,6 +7220,26 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
                 piece.face.inner_wires.len(),
                 low.x, low.y, low.z, high.x, high.y, high.z
             );
+            // **内輪が、外周の箱の中にあるか**（4-537）。**巻いた曲面では
+            // uv の判定が嘘をつく**ので、ここは 3D で見ます。
+            for (index, wire) in piece.face.inner_wires.iter().enumerate() {
+                let Some(point) = wire.sample_points(4).into_iter().next() else {
+                    continue;
+                };
+                let inside = point.x >= low.x - 1e-6
+                    && point.x <= high.x + 1e-6
+                    && point.y >= low.y - 1e-6
+                    && point.y <= high.y + 1e-6
+                    && point.z >= low.z - 1e-6
+                    && point.z <= high.z + 1e-6;
+                eprintln!(
+                    "PIECEWHY   内輪{index}: 点 ({:.4} {:.4} {:.4}) は外周の箱の{}",
+                    point.x,
+                    point.y,
+                    point.z,
+                    if inside { "中" } else { "**外**" }
+                );
+            }
         }
     }
     let mut edge_uses = Vec::new();
