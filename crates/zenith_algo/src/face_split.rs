@@ -620,14 +620,31 @@ impl FaceSplitter {
         };
 
         // 1. 切り込みが本当にこの面の上にあるか。構成に使っていない位置で測る。
+        //
+        // **ここの天井は、上の `limit` とは別の問いです**（4-538。
+        // `ZENITH_ON_FACE_TOL=1`。**既定では走りません**）。
+        //
+        // `limit` は「**端をどれだけ動かしてよいか**」で、狭いほうが安全です。
+        // こちらは「**この切り込みは、この面の上と言えるか**」で、**面自身が
+        // 申告した粗さより厳しく問うのは筋が通りません**——読んだ面の輪は、
+        // **自分の曲面から 1.1e-4 浮いています**（4-488 の実測）。
+        // **`ZENITH_FACE_SNAP`（4-388）は両方いっぺんに広げるので外れました**
+        // （4-505）。**片方だけ広げたらどうなるかは、まだ測っていません。**
+        let on_face_limit = if std::env::var_os("ZENITH_ON_FACE_TOL").is_some() {
+            limit.max(face.tolerance + face.pcurve_tolerance)
+        } else {
+            limit
+        };
         let mut curve_off_surface: f64 = 0.0;
         for piece in cut {
             curve_off_surface =
                 curve_off_surface.max(Self::distance_to_surface(face, &piece.edge.curve, 23)?);
         }
-        if curve_off_surface > limit {
+        if curve_off_surface > on_face_limit {
             return Err(format!(
-                "the splitting curve leaves the face by {curve_off_surface:.3e}, over {limit:.3e}"
+                "the splitting curve leaves the face by {curve_off_surface:.3e}, over {on_face_limit:.3e} (face {:.3e} + pcurve {:.3e})",
+                face.tolerance,
+                face.pcurve_tolerance
             ));
         }
 

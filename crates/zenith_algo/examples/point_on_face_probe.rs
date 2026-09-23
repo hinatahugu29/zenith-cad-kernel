@@ -14,6 +14,25 @@ fn main() {
         .join("linkrods.step");
     let solids = StepImporter::import_solids_from_file(&path).expect("読めません");
     let solid = solids.iter().max_by_key(|s| s.outer_shell.faces.len()).unwrap();
+    // **面を指さずに、近い順に並べる口**（4-538。面の番号に `-1` を渡します）。
+    // **あぶれた稜の端が、どの面のものか**を名指しするために足しました。
+    if args[0] < 0.0 {
+        let mut rows: Vec<(f64, usize)> = Vec::new();
+        for (at, face) in solid.outer_shell.faces.iter().enumerate() {
+            let FaceGeometry::Nurbs(surface) = &face.geometry else {
+                continue;
+            };
+            if let Ok(projection) = ExtremumEngine::point_to_surface(point, surface, 64, 1e-13) {
+                rows.push((projection.distance, at));
+            }
+        }
+        rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (distance, at) in rows.iter().take(6) {
+            println!("面{at}: 距離 {distance:.3e}");
+        }
+        return;
+    }
+
     let FaceGeometry::Nurbs(surface) = &solid.outer_shell.faces[index].geometry else {
         println!("面{index} は NURBS ではありません");
         return;

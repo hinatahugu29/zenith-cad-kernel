@@ -375,6 +375,24 @@ impl BrepIntersectionBuilder {
                         "PAIRTRACE A面{face_a_index}xB面{face_b_index}: 素 {} → 箱 {} → 平面トリム {} → 交差で割る {}",
                         describe(&raw), describe(&boxed), describe(&trimmed), describe(&crossed)
                     );
+                    // **段ごとに端そのものを出します**（4-538）。本数だけでは
+                    // 「落ちたのか、短くなったのか」が分かりません。
+                    for (label, kind) in [
+                        ("素", &raw),
+                        ("箱", &boxed),
+                        ("平面トリム", &trimmed),
+                        ("交差で割る", &crossed),
+                    ] {
+                        let Some(kind) = kind.as_ref() else { continue };
+                        let ends = candidate_end_points(kind);
+                        for pair in ends.chunks(2) {
+                            let [from, to] = pair else { continue };
+                            eprintln!(
+                                "PAIRTRACE   {label}: ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6})",
+                                from.x, from.y, from.z, to.x, to.y, to.z
+                            );
+                        }
+                    }
                     if let Some(bbox) = bboxes_a[face_a_index].as_ref() {
                         eprintln!("PAIRTRACE   A の箱 z [{:.6}, {:.6}] x [{:.4}, {:.4}] y [{:.4}, {:.4}]", bbox.min.z, bbox.max.z, bbox.min.x, bbox.max.x, bbox.min.y, bbox.max.y);
                     }
