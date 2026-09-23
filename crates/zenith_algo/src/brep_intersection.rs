@@ -1273,6 +1273,17 @@ impl BrepIntersectionBuilder {
             drop_mixed_hole_rims(&mut selected_face_pieces, tol);
         }
 
+        // **同じ稜から出た端を揃えます**（4-533。`ZENITH_ID_WELD=<上限>`。
+        // **既定では走りません**）。上限は動かしてよい距離で、`1` と書けば
+        // 継ぎ目の隙間ぶん（5e-4）を既定にします。
+        if let Ok(value) = std::env::var("ZENITH_ID_WELD") {
+            let cap = value.parse::<f64>().ok().filter(|v| *v > 0.0).unwrap_or(5e-4);
+            let cap = if cap == 1.0 { 5e-4 } else { cap };
+            let moved = weld_piece_ends_by_edge_id(&mut selected_face_pieces, cap);
+            eprintln!("IDWELD 上限 {cap:.3e} で端を {moved} 個動かしました");
+        }
+
+
         // 隣り合う面の片方だけが辺の途中で切られていると、辺の長さが食い違って
         // 縫合が合わない。相手が持つ頂点を境界辺へ刻み込んで対応させる。
         // 面の形は変わらず、境界に頂点が増えるだけ。
@@ -1390,6 +1401,7 @@ impl BrepIntersectionBuilder {
                 selected_face_pieces.push(best_piece);
             }
         }
+
         let stitch_report = diagnose_selected_face_stitching(&selected_face_pieces, tol);
 
         BooleanFaceAssembly {
@@ -14107,6 +14119,81 @@ mod trim_tests {
             "外周の外の点は「外」のはずです"
         );
     }
+
+    /// **同じ番号の稜の端を揃えます**（4-533）。
+    ///
+    /// A 側の写しと B 側の写しは、**割る段で、それぞれの面の外周へ吸着**
+    /// するので別の点で終わります（`face_split.rs` の `snapped_onto_boundary`）。
+    /// ここでは、その形を**手で**作って、溶接が両方を重心へ寄せること、
+    /// **同じ座標に居る隣の稜の端も一緒に動く**（輪が開かない）ことを見ます。
+    #[test]
+    fn id_weld_pulls_both_copies_of_one_edge_to_one_point() {
+        let tol = 1e-6;
+        // 同じ番号の稜を 2 枚の片が持ち、**終点だけ 2e-4 ずれている**形。
+        let start = Point3::new(0.0, 0.0, 0.0);
+        let end_a = Point3::new(1.0, 0.0, 0.0);
+        let end_b = Point3::new(1.0 + 2e-4, 0.0, 0.0);
+        let shared = Edge::new(
+            NurbsCurve3::bspline_from_points(1, vec![start, end_a]).expect("直線"),
+            Vertex::new(start, tol),
+            Vertex::new(end_a, tol),
+            tol,
+        );
+        let mut copy_b = shared.clone();
+        copy_b.curve = NurbsCurve3::bspline_from_points(1, vec![start, end_b]).expect("直線");
+        copy_b.end_vertex = Vertex::new(end_b, tol);
+        assert_eq!(shared.id, copy_b.id, "写しは同じ番号を持ちます");
+
+        // それぞれの片で、**戻りの稜**が同じ端から出ています（輪の隣）。
+        let back = |from: Point3, to: Point3| {
+            OrientedEdge::forward(Edge::new(
+                NurbsCurve3::bspline_from_points(1, vec![from, to]).expect("直線"),
+                Vertex::new(from, tol),
+                Vertex::new(to, tol),
+                tol,
+            ))
+        };
+        let piece = |edge: Edge, far: Point3| SelectedBooleanFacePiece {
+            operand: BooleanOperand::A,
+            face: Face::new(
+                FaceGeometry::Plane(
+                    PlaneSurface3::new(
+                        Point3::new(0.0, 0.0, 0.0),
+                        Vec3::new(1.0, 0.0, 0.0),
+                        Vec3::new(0.0, 1.0, 0.0),
+                    )
+                    .expect("平面"),
+                ),
+                Wire::new(vec![OrientedEdge::forward(edge.clone()), back(far, start)]),
+                Vec::new(),
+                Orientation::Forward,
+                tol,
+            ),
+            location: FaceRegionLocation::Boundary,
+            reverse_orientation: false,
+        };
+        let mut pieces = vec![piece(shared, end_a), piece(copy_b, end_b)];
+
+        let moved = weld_piece_ends_by_edge_id(&mut pieces, 5e-4);
+        assert!(moved >= 4, "両方の写しと、その隣の稜が動くはずです（{moved}）");
+
+        let middle = 1.0 + 1e-4;
+        for piece in &pieces {
+            for oriented in &piece.face.outer_wire.edges {
+                for point in [
+                    oriented.edge.start_vertex.point,
+                    oriented.edge.end_vertex.point,
+                ] {
+                    if point.x > 0.5 {
+                        assert!(
+                            (point.x - middle).abs() <= 1e-12,
+                            "端は重心 {middle} へ寄るはずです（{point:?}）"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// **交線の端を溶接します**（4-524）。`weld` 以内に集まる端を群にし、重心へ動かします。
@@ -14166,4 +14253,111 @@ fn weld_candidate_ends(
         }
     }
     candidates
+}
+
+/// **同じ稜から出た端を、割ったあとで揃えます**（4-533。`ZENITH_ID_WELD=1`
+/// **で入ります**。**既定では走りません**）。
+///
+/// 交線は、A 側と B 側に**同じ稜（同じ `id`）として**配られます。ところが
+/// `split_with_ordered_cut` は、切り込みの端を**その面の外周へ吸着**します
+/// （`face_split.rs` の `snapped_onto_boundary`）。A の外周と B の外周が
+/// 隙間ぶんずれている所（`linkrods` の 20 本の継ぎ目。実測 1.6e-5〜4.2e-4）
+/// では、**同じ交線の A 版と B 版が別の点で終わります**。縫合は端を
+/// `tol.linear`（1e-6）で見るので、そこが「相手のいない稜」になります。
+///
+/// **縫合の幅を広げる手とは違います。** 4-511 で幅を 1e-4 にしたら、積の
+/// 相手のいない稜は 56→32 に減りましたが、**和と差に非多様体が 9 本**
+/// 出ました——遠くの別の稜まで噛み合ってしまうからです。ここは**同じ `id`
+/// を持つ稜の端だけ**を動かすので、無関係な頂点は巻き込みません。
+///
+/// 動かした端の数を返します。
+fn weld_piece_ends_by_edge_id(pieces: &mut [SelectedBooleanFacePiece], cap: f64) -> usize {
+    // 1. 稜の id ごとに、両端の点を集めます。
+    let mut ends_by_id: BTreeMap<u64, Vec<Point3>> = BTreeMap::new();
+    for piece in pieces.iter() {
+        for wire in std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                let entry = ends_by_id.entry(oriented.edge.id).or_default();
+                entry.push(oriented.edge.start_vertex.point);
+                entry.push(oriented.edge.end_vertex.point);
+            }
+        }
+    }
+
+    // 2. id ごとに、点を「始めの側」と「終わりの側」の 2 群に分けて重心を取ります。
+    //    **2 回以上使われている id だけ**が対象です。
+    let mut moves: Vec<(Point3, Point3)> = Vec::new();
+    for points in ends_by_id.values() {
+        if points.len() < 4 {
+            continue; // 使用が 1 回だけ。揃える相手がいません。
+        }
+        let seed_start = points[0];
+        let seed_end = points[1];
+        let mut group_start: Vec<Point3> = Vec::new();
+        let mut group_end: Vec<Point3> = Vec::new();
+        for &point in points {
+            if (point - seed_start).norm() <= (point - seed_end).norm() {
+                group_start.push(point);
+            } else {
+                group_end.push(point);
+            }
+        }
+        for group in [group_start, group_end] {
+            if group.len() < 2 {
+                continue;
+            }
+            let mut sum = Vec3::new(0.0, 0.0, 0.0);
+            for point in &group {
+                sum += point.coords;
+            }
+            let centre = Point3::from(sum / group.len() as f64);
+            // **離れすぎているものは触りません。** 同じ id でも、群の分け方を
+            // 間違えていれば大きく動かしてしまいます。
+            if group
+                .iter()
+                .any(|point| (point - centre).norm() > cap)
+            {
+                continue;
+            }
+            for point in group {
+                if (point - centre).norm() > f64::EPSILON {
+                    moves.push((point, centre));
+                }
+            }
+        }
+    }
+    if moves.is_empty() {
+        return 0;
+    }
+
+    // 3. 動かします。**輪が開かないように、同じ座標に居る端は全部動かします**
+    //    ——隣の稜の端も、穴の輪の端も。照合はごく狭く取ります（1e-9）。
+    //    継ぎ目の隙間は 1.6e-5 以上なので、別の点を巻き込みません。
+    let hit = |point: Point3| -> Option<Point3> {
+        moves
+            .iter()
+            .find(|(from, _)| (point - *from).norm() <= 1e-9)
+            .map(|(_, to)| *to)
+    };
+    let mut moved = 0usize;
+    for piece in pieces.iter_mut() {
+        for wire in std::iter::once(&mut piece.face.outer_wire)
+            .chain(piece.face.inner_wires.iter_mut())
+        {
+            for oriented in wire.edges.iter_mut() {
+                if let Some(to) = hit(oriented.edge.start_vertex.point) {
+                    oriented.edge.start_vertex.point = to;
+                    oriented.edge.curve.control_points[0].point = to;
+                    moved += 1;
+                }
+                if let Some(to) = hit(oriented.edge.end_vertex.point) {
+                    let last = oriented.edge.curve.control_points.len() - 1;
+                    oriented.edge.end_vertex.point = to;
+                    oriented.edge.curve.control_points[last].point = to;
+                    moved += 1;
+                }
+            }
+        }
+    }
+    moved
 }
