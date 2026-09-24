@@ -3347,6 +3347,23 @@ fn collect_batch_splits_for_faces(
                     ),
                 }
             }
+            // **割った直後の巻き方**（4-543。`ZENITH_BATCH_WHY=1`）。
+            //
+            // **4-542 で、割る段が採った符号（＋）と、選ぶ段で読む符号（−）が
+            // 食い違う**ところまで来ました。**あいだに何があるのか**を切るには、
+            // **割った直後**を見るのがいちばん上流です。
+            if why {
+                if let Ok(result) = &outcome {
+                    for (at, piece) in result.faces.iter().enumerate() {
+                        eprintln!(
+                            "BATCHSIDE {side}面{face_index} 片{at}: 巻き {}",
+                            zenith_tess::face_signed_parameter_area(piece)
+                                .map(|a| format!("{a:+.9e}"))
+                                .unwrap_or_else(|| "?".to_string())
+                        );
+                    }
+                }
+            }
             let result = outcome.ok()?;
             // **相手の面が同じ交線で割れたか**を、あとで突き合わせられるよう
             // 稜の中点も出します（4-340）。**片側の面しか言わない診断では、

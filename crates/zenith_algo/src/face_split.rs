@@ -993,6 +993,16 @@ impl FaceSplitter {
         ];
         let mut last_reason = String::from("no pairing was tried");
         let mut best: Option<(f64, Vec<Face>, ParameterAreaCheck)> = None;
+        // **親の巻き方**（4-543。`ZENITH_HOLECUT_SIGN=1` のときだけ使います）。
+        //
+        // **片とその裏返しは、面積の検算では見分けられません**——
+        // `face_parameter_area` は `abs()` を取ります。**残差はどちらもほぼ同じ**で、
+        // 実測（`linkrods` の積、穴切り #2）は
+        // **1.84262249929e-6 と 1.84264006264e-6**——**差は 1.8e-11、10 万分の 1**。
+        // **巻き方という位相の話を、丸め誤差に決めさせていました。**
+        let parent_sign = std::env::var_os("ZENITH_HOLECUT_SIGN")
+            .and_then(|_| zenith_tess::face_signed_parameter_area(face))
+            .map(|area| area >= 0.0);
         // **この穴切りが何番目か**（4-541。`ZENITH_HOLECUT_FLIP` が指すときの番号）。
         let sequence =
             HOLE_CUT_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
@@ -1043,7 +1053,7 @@ impl FaceSplitter {
                                     .unwrap_or('?')
                             };
                             eprintln!(
-                                "HOLECUTSIDE #{sequence} 組{} 反転{flip}: 残差 {residual:.3e}、元 {}、片 {}",
+                                "HOLECUTSIDE #{sequence} 組{} 反転{flip}: 残差 {residual:.17e}、元 {}、片 {}",
                                 if std::ptr::eq(piece_loop, &loops[0].0) { 0 } else { 1 },
                                 sign(face),
                                 sign(&pieces[0])
@@ -1081,7 +1091,31 @@ impl FaceSplitter {
                                 .map(|floor| landing > floor)
                                 .unwrap_or(false),
                         };
-                        let take = if close && chosen {
+                        // **親と同じ巻き方を先に採る口**（4-543。
+                        // `ZENITH_HOLECUT_SIGN=1`。**既定では走りません**）。
+                        //
+                        // **残差が並ぶのは当たり前**（同じ領域の表と裏）なので、
+                        // **並んだときに巻き方で決めます**。**残差では決めません。**
+                        let take = if let Some(parent_positive) = parent_sign {
+                            let here_positive =
+                                zenith_tess::face_signed_parameter_area(&pieces[0])
+                                    .map(|area| area >= 0.0);
+                            let matches = here_positive == Some(parent_positive);
+                            match best.as_ref() {
+                                None => true,
+                                Some((best_residual, best_pieces, _)) => {
+                                    let best_matches =
+                                        zenith_tess::face_signed_parameter_area(&best_pieces[0])
+                                            .map(|area| area >= 0.0)
+                                            == Some(parent_positive);
+                                    match (matches, best_matches) {
+                                        (true, false) => true,
+                                        (false, true) => false,
+                                        _ => residual < *best_residual,
+                                    }
+                                }
+                            }
+                        } else if close && chosen {
                             true
                         } else {
                             best.as_ref().map(|(r, _, _)| residual < *r).unwrap_or(true)
@@ -1097,8 +1131,15 @@ impl FaceSplitter {
         if let Some((residual, pieces, check)) = best {
             if why {
                 eprintln!(
-                    "HOLECUTWHY #{sequence} 穴 {hole_index} から穴へ: 着地 {landing:.3e}、面積 {:.4e} → {:?}、残差 {residual:.3e}",
-                    check.original, check.pieces
+                    "HOLECUTWHY #{sequence} 穴 {hole_index} から穴へ: 着地 {landing:.3e}、面積 {:.4e} → {:?}、残差 {residual:.17e}、**採った片の巻き {}**",
+                    // **採ったのはどれか**を、符号で言います（4-543）。
+                    // **候補を全部出しても、どれが残ったかは書いていません**
+                    // でした——**4-542 で、そこを読み違えました。**
+                    check.original,
+                    check.pieces,
+                    zenith_tess::face_signed_parameter_area(&pieces[0])
+                        .map(|a| format!("{a:+.9e}"))
+                        .unwrap_or_else(|| "?".to_string())
                 );
             }
             return Some(Ok((
