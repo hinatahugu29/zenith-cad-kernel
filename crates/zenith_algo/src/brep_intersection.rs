@@ -4093,6 +4093,20 @@ fn select_operand_faces_after_batch_split(
                     face_index,
                     [round(here.x), round(here.y), round(here.z)],
                 );
+                // **鍵そのものを出します**（4-542。`ZENITH_SELECT_WHY=1`）。
+                // **4-541 で「同じ領域の片が 2 枚」まで来ました**——
+                // **なぜこの鍵で同じにならないのか**は、鍵を見ないと言えません。
+                if std::env::var_os("ZENITH_SELECT_WHY").is_some() {
+                    eprintln!(
+                        "SELECTKEY 面{face_index} 代表点 ({:.9} {:.9} {:.9}) 面積 {}",
+                        here.x,
+                        here.y,
+                        here.z,
+                        zenith_tess::face_signed_parameter_area(face)
+                            .map(|a| format!("{a:+.9e}"))
+                            .unwrap_or_else(|| "?".to_string())
+                    );
+                }
                 if selected_keys.contains(&key) {
                     if std::env::var_os("ZENITH_SELECT_WHY").is_some() {
                         eprintln!(
@@ -7337,10 +7351,18 @@ fn collect_stitch_edge_uses(pieces: &[SelectedBooleanFacePiece]) -> Vec<StitchEd
                 // 言うのに、片の側は座標でしか言っていませんでした**——
                 // **同じ走りの出力どうしが突き合わせられません**。
                 // **突き合わせは番号で**（4-518 の教訓）。
-                "PIECEWHY 面{} {:?} {:?} {kind} 重心 ({:.4} {:.4} {:.4}) 稜 {} 内輪 {} 箱 ({:.3},{:.3},{:.3})〜({:.3},{:.3},{:.3})",
+                // **巻き方と、使う向き**も出します（4-542）。**4-541 で
+                // 「割る段で反転しても縫合の数が動かない」ことだけ分かり、
+                // 理由が言えませんでした**——**反転した片が、ここまで
+                // 生き残っているか**を見るための 2 つです。
+                "PIECEWHY 面{} {:?} {:?} {kind} 巻き {} 反転 {} 重心 ({:.4} {:.4} {:.4}) 稜 {} 内輪 {} 箱 ({:.3},{:.3},{:.3})〜({:.3},{:.3},{:.3})",
                 piece.face.id,
                 piece.operand,
                 piece.location,
+                zenith_tess::face_signed_parameter_area(&piece.face)
+                    .map(|a| format!("{a:+.6e}"))
+                    .unwrap_or_else(|| "?".to_string()),
+                piece.reverse_orientation,
                 centre.x,
                 centre.y,
                 centre.z,
