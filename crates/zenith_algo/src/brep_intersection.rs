@@ -1364,6 +1364,56 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // **1 枚だけ裏返っている片を、縫って見つけて直す口**（4-541。
+        // `ZENITH_PIECE_FLIP_FIX=1`。**既定では走りません**）。
+        //
+        // **蓋は、もうこのやり方です**（`assemble_selected_face_pieces_with_caps`）
+        // ——**向きを決め打ちせず、両方で縫って点の良いほうを採ります**。
+        // **片には、それがありません。**
+        //
+        // 実測（4-541、`linkrods` の積）: **「同じ向き」12 本は、A面818 という
+        // 1 枚が、6 枚の隣（B面845・847・851、A面823・824・825）すべてと
+        // 同じ向きに稜を使っていた**もの。**1 枚の向きの話**です。
+        //
+        // **点は `stitch_report_score` を使います**——**蓋の側で一度、
+        // 「未整合を 2 本減らすために非多様体を 6 本作る」選択を
+        // 「改善」と判定した前科**があるので、同じ関数で揃えます。
+        //
+        // **貪欲に 1 枚ずつ、良くなるときだけ**。**2 巡で打ち切り**ます。
+        if std::env::var_os("ZENITH_PIECE_FLIP_FIX").is_some() {
+            let why = std::env::var_os("ZENITH_STITCH_WHY").is_some();
+            for _pass in 0..2 {
+                let mut improved = false;
+                for index in 0..selected_face_pieces.len() {
+                    let before = stitch_report_score(&diagnose_selected_face_stitching(
+                        &selected_face_pieces,
+                        tol,
+                    ));
+                    selected_face_pieces[index].reverse_orientation =
+                        !selected_face_pieces[index].reverse_orientation;
+                    let after = stitch_report_score(&diagnose_selected_face_stitching(
+                        &selected_face_pieces,
+                        tol,
+                    ));
+                    if after < before {
+                        improved = true;
+                        if why {
+                            eprintln!(
+                                "PIECEFLIP 片 {index}（{:?}）を裏返しました: {before:?} → {after:?}",
+                                selected_face_pieces[index].operand
+                            );
+                        }
+                    } else {
+                        selected_face_pieces[index].reverse_orientation =
+                            !selected_face_pieces[index].reverse_orientation;
+                    }
+                }
+                if !improved {
+                    break;
+                }
+            }
+        }
+
         let stitch_report = diagnose_selected_face_stitching(&selected_face_pieces, tol);
 
         BooleanFaceSelection {
@@ -7117,10 +7167,18 @@ fn diagnose_selected_face_stitching(
                     // 数だけでは、どの面のどの稜なのかが分かりません。
                     if i < mate && std::env::var_os("ZENITH_STITCH_WHY").is_some() {
                         let use_a = &edge_uses[i];
+                        // **両方を名指しします**（4-541）。**片方の座標だけでは
+                        // 「誰と誰が喧嘩しているか」が分かりません**——向きの
+                        // 話は、必ず 2 枚の間の話です。
+                        let use_b = &edge_uses[mate];
                         eprintln!(
-                            "STITCHWHY same-direction ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6}) mid ({:.6} {:.6} {:.6})",
+                            "STITCHWHY same-direction {:?}面{} と {:?}面{}: ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6}) / 相手 ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6}) mid ({:.6} {:.6} {:.6})",
+                            use_a.operand, use_a.face_id,
+                            use_b.operand, use_b.face_id,
                             use_a.start.x, use_a.start.y, use_a.start.z,
                             use_a.end.x, use_a.end.y, use_a.end.z,
+                            use_b.start.x, use_b.start.y, use_b.start.z,
+                            use_b.end.x, use_b.end.y, use_b.end.z,
                             use_a.middle.x, use_a.middle.y, use_a.middle.z
                         );
                     }

@@ -300,6 +300,11 @@ fn residual_confirmed_in_3d(face: &Face, pieces: &[Face], check: &ParameterAreaC
 /// 4-212 のように大きさに比例させるなら、ここも一緒に動かしてください。
 const SNAP_CEILING: f64 = 4e-5;
 
+/// **穴から穴へ渡る切り込みが、何番目か**（4-541）。`ZENITH_HOLECUT_FLIP` が
+/// 「何番目を反転するか」を指すためだけの数です。**診断用**。
+static HOLE_CUT_SEQUENCE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// 面積の残差をここまで許す。**相対**です。
 ///
 /// 呼ぶ側がそれぞれ `1e-6` と書いていたのを1か所にまとめました。
@@ -988,6 +993,9 @@ impl FaceSplitter {
         ];
         let mut last_reason = String::from("no pairing was tried");
         let mut best: Option<(f64, Vec<Face>, ParameterAreaCheck)> = None;
+        // **この穴切りが何番目か**（4-541。`ZENITH_HOLECUT_FLIP` が指すときの番号）。
+        let sequence =
+            HOLE_CUT_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         for (piece_loop, hole_loop) in loops.iter() {
             for flip in [false, true] {
                 let piece_edges = if flip {
@@ -1021,7 +1029,64 @@ impl FaceSplitter {
                 match Self::checked_areas("split_hole_to_hole", face, &pieces) {
                     Ok(check) => {
                         let residual = residual_confirmed_in_3d(face, &pieces, &check);
-                        if best.as_ref().map(|(r, _, _)| residual < *r).unwrap_or(true) {
+                        // **4 通りの残差と、片の巻き方を並べます**（4-541。
+                        // `ZENITH_SPLIT_WHY=1`）。
+                        //
+                        // **面積の検算は `abs()` を取ります**（`face_parameter_area`
+                        // の「巻き方は面ごとに違う」）ので、**裏返しの片は
+                        // 同じ残差**になります。**同点なら先に来たほうが残り**
+                        // ——**巻き方は、輪の並び順で決まっていることになります。**
+                        if why {
+                            let sign = |f: &Face| {
+                                zenith_tess::face_signed_parameter_area(f)
+                                    .map(|a| if a >= 0.0 { '+' } else { '-' })
+                                    .unwrap_or('?')
+                            };
+                            eprintln!(
+                                "HOLECUTSIDE #{sequence} 組{} 反転{flip}: 残差 {residual:.3e}、元 {}、片 {}",
+                                if std::ptr::eq(piece_loop, &loops[0].0) { 0 } else { 1 },
+                                sign(face),
+                                sign(&pieces[0])
+                            );
+                        }
+                        // **同点のときの選び方を変える口**（4-541。
+                        // `ZENITH_HOLECUT_FLIP=1`。**既定では走りません**）。
+                        //
+                        // **実測（4-541）**: 鎖 1 の 4 通りは
+                        // **1.843e-6（片 +）と 1.848e-6（片 −）**——**差は 0.3%**。
+                        // **残差で選ぶというより、丸め誤差で選んでいます。**
+                        // **向きが逆の片が、同じくらい正しい**わけです。
+                        // **この口は、僅差（1%以内）のときだけ、逆の巻き方を採ります**
+                        // ——**「同じ向き」12 本がそれで消えるかを測るため**。
+                        let close = best
+                            .as_ref()
+                            .map(|(r, _, _)| residual <= *r * 1.01 && residual >= *r * 0.99)
+                            .unwrap_or(false);
+                        // **何番目の穴切りを反転するか**を選べます（4-541）。
+                        // `ZENITH_HOLECUT_FLIP=1,3` のように番号で。`all` で全部。
+                        // **番号は 1 から**、`HOLECUTWHY` が出る順です。
+                        // **どの穴切りを反転するか**（4-541）——**番号ではなく着地で選びます**。
+                        // **番号は演算をまたぐと数え上がります**（本番は 1 回の走行で
+                        // 和・差・積を回すので、2 回目の「#2」は別物）。**着地なら
+                        // 場面に紐づきます**: 鎖 0 は 5.810e-6、鎖 1 は 2.377e-5。
+                        //
+                        // `ZENITH_HOLECUT_FLIP=all` で全部、`=above:1e-5` で
+                        // 着地がそれを超えるものだけ。
+                        let chosen = match std::env::var("ZENITH_HOLECUT_FLIP") {
+                            Err(_) => false,
+                            Ok(value) if value == "all" => true,
+                            Ok(value) => value
+                                .strip_prefix("above:")
+                                .and_then(|rest| rest.trim().parse::<f64>().ok())
+                                .map(|floor| landing > floor)
+                                .unwrap_or(false),
+                        };
+                        let take = if close && chosen {
+                            true
+                        } else {
+                            best.as_ref().map(|(r, _, _)| residual < *r).unwrap_or(true)
+                        };
+                        if take {
                             best = Some((residual, pieces, check));
                         }
                     }
@@ -1032,7 +1097,7 @@ impl FaceSplitter {
         if let Some((residual, pieces, check)) = best {
             if why {
                 eprintln!(
-                    "HOLECUTWHY 穴 {hole_index} から穴へ: 着地 {landing:.3e}、面積 {:.4e} → {:?}、残差 {residual:.3e}",
+                    "HOLECUTWHY #{sequence} 穴 {hole_index} から穴へ: 着地 {landing:.3e}、面積 {:.4e} → {:?}、残差 {residual:.3e}",
                     check.original, check.pieces
                 );
             }

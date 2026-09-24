@@ -95,6 +95,42 @@ pub fn face_parameter_area(face: &Face) -> Option<f64> {
     Some(outer - holes)
 }
 
+/// **外周の輪の、符号つきパラメータ面積**（4-541）。
+///
+/// `face_parameter_area` は **`abs()` を取ります**——「巻き方は面ごとに違う」
+/// ので、**大きさだけ**で足し引きするためです。**そのぶん、巻き方は測れません。**
+///
+/// 割った片が**裏返しで出てくる**とき、面積の検算はそれを見ません
+/// （4-540 の「同じ向き」12 本）。**向きを見る所には、符号つきが要ります。**
+pub fn face_signed_parameter_area(face: &Face) -> Option<f64> {
+    let derived_holder;
+    let face = if face.pcurves.is_some() {
+        face
+    } else {
+        let pcurves = match &face.geometry {
+            FaceGeometry::Plane(_) => face.plane_pcurves().ok()?,
+            _ => face.pcurves(&Tolerance::default()).ok()?,
+        };
+        let mut with = face.clone();
+        with.pcurves = Some(pcurves);
+        derived_holder = with;
+        &derived_holder
+    };
+    let pcurves = face.pcurves.as_ref()?;
+    let params = TessellationParams::default();
+    let uvs = sample_pcurve_loop_uv(&pcurves.outer_loop, &params, LoopFidelity::Exact);
+    if uvs.len() < 3 {
+        return None;
+    }
+    let mut twice_area = 0.0;
+    for index in 0..uvs.len() {
+        let here = uvs[index];
+        let next = uvs[(index + 1) % uvs.len()];
+        twice_area += here.x * next.y - next.x * here.y;
+    }
+    Some(twice_area * 0.5)
+}
+
 /// Triangulates a face's trimmed parameter domain.
 ///
 /// Planar faces are triangulated exactly by their trim loops. NURBS faces use
