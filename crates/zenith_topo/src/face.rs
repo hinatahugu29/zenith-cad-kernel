@@ -1499,8 +1499,29 @@ fn project_edge_to_nurbs_pcurve(
             let (t0, t1) = (parameters[index], parameters[index + 1]);
             let middle = (t0 + t1) * 0.5;
             let chord = uv_points[index] + (uv_points[index + 1] - uv_points[index]) * 0.5;
-            let strayed =
-                (surface.evaluate(chord.x, chord.y) - edge.evaluate_normalized(middle)).norm();
+            let at_fraction = |fraction: f64| -> f64 {
+                let uv = uv_points[index]
+                    + (uv_points[index + 1] - uv_points[index]) * fraction;
+                let t = t0 + (t1 - t0) * fraction;
+                (surface.evaluate(uv.x, uv.y) - edge.evaluate_normalized(t)).norm()
+            };
+            // **区間を 1 点ではなく数点で見る口**（4-546。
+            // `ZENITH_SUBDIV_QUARTERS=1`。**既定では走りません**）。
+            //
+            // **中点だけで測る細分は、中点で消える誤差を見つけられません。**
+            // 実測（4-546、`linkrods` の面24 / `pcurve_span_probe`）——
+            // **区間の中で、両端ゼロ・真ん中もゼロ・1/4 と 3/4 で 5.5e-4**。
+            // **山が 2 つあって、節が真ん中にあり**、**中点法はその節を
+            // ちょうど踏んで**「割らなくてよい」と言い続けます。
+            // **9 点のまま終わり**、**検証は 30 点で見るので 5.6e-4 を見つけます。**
+            //
+            // **偶然ではありません**——**対称な配置では、中点は差の零点に
+            // なりがち**です。
+            let strayed = if std::env::var_os("ZENITH_SUBDIV_QUARTERS").is_some() {
+                at_fraction(0.25).max(at_fraction(0.5)).max(at_fraction(0.75))
+            } else {
+                (surface.evaluate(chord.x, chord.y) - edge.evaluate_normalized(middle)).norm()
+            };
 
             // **届かない目標は追いません**（4-273）。
             //
