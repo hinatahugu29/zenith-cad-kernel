@@ -1253,7 +1253,9 @@ impl BrepIntersectionBuilder {
         // `box × box` 45度回転の差で 12、積で 22）。
         //
         // 落としても形は動きません。面積 0 の面は立体の境界に何も足しません。
+        log_stage("選んだ直後", &selected_face_pieces);
         selected_face_pieces.retain(|piece| !face_encloses_no_area(&piece.face, tol));
+        log_stage("面積を囲まない片を落とした後", &selected_face_pieces);
 
         // **長さ 0 の稜は、稜ではありません。**
         //
@@ -1269,10 +1271,12 @@ impl BrepIntersectionBuilder {
             remove_degenerate_wire_edges(&mut piece.face, tol);
         }
         selected_face_pieces.retain(|piece| piece.face.outer_wire.edges.len() >= 2);
+        log_stage("潰れた稜を外した後", &selected_face_pieces);
 
         // 同じ平面に重なって乗る面は、両オペランドから同じ領域が採られる。
         // そのまま縫うと同じ稜を4回使うことになるので、ここで解消する。
         resolve_coincident_face_pieces(&mut selected_face_pieces, tol);
+        log_stage("重なった面を解いた後", &selected_face_pieces);
 
         // **縁の使われ方が揃わない穴を畳む**（4-319）。
         //
@@ -1289,6 +1293,7 @@ impl BrepIntersectionBuilder {
         // 4-306 の直前より減っています。
         if std::env::var_os("ZENITH_KEEP_MIXED_HOLES").is_none() {
             drop_mixed_hole_rims(&mut selected_face_pieces, tol);
+            log_stage("縁の合わない穴を畳んだ後", &selected_face_pieces);
         }
 
         // **親（帯）と子（その半分）が両方選ばれているのを外します**（4-536。
@@ -12717,6 +12722,17 @@ fn other_solid_crosses_here(
 ///
 /// 判定は長さで正規化します（`面積 <= 公差 × 周長`）。「平均して公差より薄い」
 /// という意味で、大きさの単位に依りません。
+
+/// **段ごとに、生き残っている片の id を出す**（4-549。`ZENITH_STAGE_WHY=1`）。
+fn log_stage(label: &str, pieces: &[SelectedBooleanFacePiece]) {
+    if std::env::var_os("ZENITH_STAGE_WHY").is_none() {
+        return;
+    }
+    let mut ids: Vec<u64> = pieces.iter().map(|piece| piece.face.id).collect();
+    ids.sort_unstable();
+    eprintln!("STAGEWHY {label}: {} 枚 {ids:?}", ids.len());
+}
+
 fn face_encloses_no_area(face: &Face, tol: &Tolerance) -> bool {
     let points = face.outer_wire.sample_points(8);
     if points.len() < 3 {
@@ -12741,7 +12757,15 @@ fn face_encloses_no_area(face: &Face, tol: &Tolerance) -> bool {
     }
     let area = vector_area.norm() * 0.5;
 
-    perimeter <= tol.linear || area <= tol.linear * perimeter
+    let mut verdict = perimeter <= tol.linear || area <= tol.linear * perimeter;
+    if verdict && perimeter > tol.linear && std::env::var_os("ZENITH_WRAPPED_AREA").is_some() {
+        let real =
+            crate::MassCalculator::compute_face_integral(face, &TessellationParams::default()).0;
+        if real > tol.linear * perimeter {
+            verdict = false;
+        }
+    }
+    verdict
 }
 
 /// Removes the duplication that arises when both operands contribute the same
