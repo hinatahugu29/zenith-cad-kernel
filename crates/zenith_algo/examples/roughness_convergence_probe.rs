@@ -62,6 +62,30 @@ fn main() {
     }
     println!();
     println!("いちばん動く面: 面{worst_face}（128 点 / 8 点 = {worst_ratio:.3}）");
+
+    // **p-curve の粗さも、同じ問いにかけます**（4-556）。
+    //
+    // 取り込みは `validate_pcurves(tol, 37)` で測ります。**検証も 37 点**
+    // ですが、**検証が見るのは割った片**で、**親の稜は小片に割れて
+    // います**——4-553 と同じ理屈なら、**ここも足りていないはず**です。
+    println!();
+    println!("p-curve の粗さ（面が申告した値と、標本を増やしたとき）:");
+    println!("面   申告        37 点       74 点       148 点      296 点      296/37");
+    for (index, face) in read.outer_shell.faces.iter().enumerate() {
+        let at = |n: usize| {
+            face.validate_pcurves(&tol, n)
+                .map(|report| report.max_distance)
+                .unwrap_or(f64::NAN)
+        };
+        let (a, b, c, d) = (at(37), at(74), at(148), at(296));
+        let ratio = if a > 0.0 { d / a } else { 1.0 };
+        if ratio > 1.001 {
+            println!(
+                "{index:<4} {:.4e}  {a:.4e}  {b:.4e}  {c:.4e}  {d:.4e}  {ratio:.3}",
+                face.pcurve_tolerance
+            );
+        }
+    }
     println!();
     println!("**8 点で測った値を申告しているのに、検証は割った片を 8 点ずつ見ます**");
     println!("**——同じ曲線を、より細かく。ここが 1 を超えるなら、申告値は足りません。**");
