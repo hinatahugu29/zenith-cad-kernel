@@ -1367,6 +1367,10 @@ impl BrepIntersectionBuilder {
             for (piece, face) in selected_face_pieces.iter_mut().zip(imprinted) {
                 piece.face = face;
             }
+            // **刻んだ後も数えます**（4-555）。**潰れた稜の門は、この
+            // 手前で終わっています**——**ここで生まれた短い稜は、
+            // 誰も見ていません。**
+            log_stage("稜を刻んだ後", &selected_face_pieces);
         }
 
         // **1 枚だけ裏返っている片を、縫って見つけて直す口**（4-541。
@@ -7958,6 +7962,23 @@ fn imprint_contained_edges(faces: Vec<Face>, tol: &Tolerance) -> Vec<Face> {
             rest = tail;
         }
         pieces.push(edge_piece(rest, tol)?);
+        // **刻んだ小片に、親の粗さを渡します**（4-555。
+        // `ZENITH_IMPRINT_KEEPS_TOL=1`。**既定では走りません**）。
+        //
+        // `edge_piece` は `Edge::new(..., tol.linear)` なので、**親が
+        // 持っていた粗さは、刻んだ瞬間に消えます**。実測（`STAGETOL`）——
+        // **刻む前 60 本が 1e-6 超、刻んだ後 52 本**。**8 本が、
+        // 刻まれて 1e-6 に戻っていました。**
+        //
+        // **小片は親と同じ道を通ります**（`split_at` はノット挿入で、
+        // 通る点は変わりません）。**なら、同じだけ粗いはず**です。
+        // **4-551 は割る段の 2 か所を直しましたが、ここは見ていません
+        // でした**——**直す場所を、測ってから選べていなかった**わけです。
+        if std::env::var_os("ZENITH_IMPRINT_KEEPS_TOL").is_some() {
+            for piece in pieces.iter_mut() {
+                piece.tolerance = piece.tolerance.max(edge.tolerance);
+            }
+        }
         (pieces.len() > 1).then_some(pieces)
     };
 
@@ -7981,12 +8002,17 @@ fn imprint_contained_edges(faces: Vec<Face>, tol: &Tolerance) -> Vec<Face> {
                             new_pieces += pieces.len();
                             if why {
                                 eprintln!(
-                                    "IMPRINTWHY 面{} の稜（長さ {:.6}）を {} 本に刻みました",
+                                    "IMPRINTWHY 面{} の稜（長さ {:.6}、粗さ {:.6e}）を {} 本に刻みました（小片の粗さ {:?}）",
                                     face_id,
                                     (oriented.edge.end_vertex.point
                                         - oriented.edge.start_vertex.point)
                                         .norm(),
-                                    pieces.len()
+                                    oriented.edge.tolerance,
+                                    pieces.len(),
+                                    pieces
+                                        .iter()
+                                        .map(|piece| format!("{:.2e}", piece.tolerance))
+                                        .collect::<Vec<_>>()
                                 );
                             }
                             // **向きを保ちます。** 逆向きの稜なら、小片も
@@ -12510,9 +12536,27 @@ fn split_edge_at_interior_points(
     let start = edge.start_vertex.point;
     let end = edge.end_vertex.point;
 
+    // **「端と同じ点か」を、その稜の粗さで見ます**（4-555。
+    // `ZENITH_VERTEX_IMPRINT_TOL=1`。**既定では走りません**）。
+    //
+    // **`tol.linear` は 1e-6 のべた書き**でした。**粗い交線の端が、
+    // 端から 5 マイクロのところに落ちると「別の点」と読み**、
+    // **そこで割って長さ 5.145248e-6 の切れ端を残します**（4-554）。
+    // **その稜自身が 5.6e-4 粗い**と分かっているのに、**1e-6 の
+    // 物差しで「別の点」と言っていた**わけです。
+    //
+    // **潰れた稜の門は、この段より手前で終わっています**
+    // ——**ここで生まれた切れ端は、誰も見ません**（4-555 実測:
+    // この段の前 0 本、後 4 本）。**生まれないようにします。**
+    let same_point = if std::env::var_os("ZENITH_VERTEX_IMPRINT_TOL").is_some() {
+        tol.linear.max(edge.tolerance)
+    } else {
+        tol.linear
+    };
+
     let mut interior: Vec<(f64, Point3)> = Vec::new();
     for point in points {
-        if points_same_3d(*point, start, tol.linear) || points_same_3d(*point, end, tol.linear) {
+        if points_same_3d(*point, start, same_point) || points_same_3d(*point, end, same_point) {
             continue;
         }
         let Some(parameter) = curve_parameter_of_point(&edge.curve, *point, tol) else {
@@ -12540,11 +12584,14 @@ fn split_edge_at_interior_points(
         let parameter = curve_parameter_of_point(&remaining_curve, *point, tol)?;
         let (left, right) = remaining_curve.split_bezier_at(parameter)?;
         let cut_vertex = Vertex::new(*point, tol.linear);
+        // **小片は親と同じ道を通ります。なら、同じだけ粗い**（4-555）。
+        // **実測（`STAGETOL`）: この段で 1e-6 超の稜が 60 → 52 本**
+        // ——**8 本が、刻まれて 1e-6 に戻っていました。**
         pieces.push(Edge::new(
             left,
             remaining_start.clone(),
             cut_vertex.clone(),
-            tol.linear,
+            same_point,
         ));
         remaining_curve = right;
         remaining_start = cut_vertex;
@@ -12554,7 +12601,7 @@ fn split_edge_at_interior_points(
         remaining_curve,
         remaining_start,
         edge.end_vertex.clone(),
-        tol.linear,
+        same_point,
     ));
 
     Some(pieces)
@@ -12805,6 +12852,57 @@ fn log_stage(label: &str, pieces: &[SelectedBooleanFacePiece]) {
         .map(|wire| wire.edges.len())
         .sum();
     eprintln!("STAGEWHY {label}: {} 枚 内輪 {holes} 本（稜 {hole_edges} 本）{ids:?}", ids.len());
+    // **短すぎる稜を、段ごとに名指しします**（4-555）。
+    //
+    // 4-554 で残った 1 本は**長さ 5.145248e-6**でした。**どの段で
+    // 生まれたのか**が分からないと、「生まれてから消す」しかできません。
+    // **選んだ直後から在るなら上流（割る段）**、**途中から出るなら
+    // その段**です。
+    // **片の稜が、どれだけの粗さを持っているか**（4-555）。
+    //
+    // **4-550 は交線の候補に粗さを配りました**が、**片の輪に入っている
+    // 稜がその値を持っているか**は、別の話です。**割る段は `Edge::new`
+    // で新しい稜を作ります**（4-551）。**ここで全部 1e-6 なら、
+    // 「粗さを配る」という筋は、選ぶ段より下流には届いていません。**
+    {
+        let mut worst: f64 = 0.0;
+        let mut raised = 0usize;
+        let mut total = 0usize;
+        for piece in pieces.iter() {
+            for wire in std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter())
+            {
+                for oriented in wire.edges.iter() {
+                    total += 1;
+                    worst = worst.max(oriented.edge.tolerance);
+                    if oriented.edge.tolerance > 1e-6 {
+                        raised += 1;
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "STAGETOL   {label}: 稜 {total} 本、粗さが 1e-6 を超えるもの {raised} 本、最大 {worst:.6e}"
+        );
+    }
+    let short_limit = std::env::var("ZENITH_SHORT_EDGE")
+        .ok()
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .unwrap_or(1e-4);
+    for piece in pieces.iter() {
+        for wire in std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter()) {
+            for oriented in wire.edges.iter() {
+                let span = sampled_edge_extent(&oriented.edge);
+                if span >= short_limit {
+                    continue;
+                }
+                let start = oriented.edge.start_vertex.point;
+                eprintln!(
+                    "STAGESHORT   {label}: 面{} に長さ {span:.6e} の稜（({:.6} {:.6} {:.6}) から）",
+                    piece.face.id, start.x, start.y, start.z
+                );
+            }
+        }
+    }
 }
 
 fn face_encloses_no_area(face: &Face, tol: &Tolerance) -> bool {
