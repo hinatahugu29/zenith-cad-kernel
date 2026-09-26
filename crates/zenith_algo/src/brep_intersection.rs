@@ -4027,7 +4027,9 @@ fn select_operand_faces_after_batch_split(
                     }
                 }
                 eprintln!(
-                    "SELECTWHY {:?} 面 {face_index} の片 id {} （{} 枚中）: {:?} → {} 面積 {piece_area:.6} uv[p-curve {from_pcurves:.6} / 三角形 {triangulated:.6}] 代表点 ({:.4} {:.4} {:.4})",
+                    // **外周と内輪の本数も出します**（4-549）。**穴を落としたのか
+                    // どうかは、面積では分かりません**——本数でしか分かりません。
+                    "SELECTWHY {:?} 面 {face_index} の片 id {} （{} 枚中）: {:?} → {} 面積 {piece_area:.6} 外周 {} 本 内輪 {} 本 uv[p-curve {from_pcurves:.6} / 三角形 {triangulated:.6}] 代表点 ({:.4} {:.4} {:.4})",
                     operand,
                     face.id,
                     face_pieces.len(),
@@ -4037,6 +4039,8 @@ fn select_operand_faces_after_batch_split(
                     } else {
                         "落とす"
                     },
+                    face.outer_wire.edges.len(),
+                    face.inner_wires.len(),
                     point.x,
                     point.y,
                     point.z
@@ -6854,7 +6858,29 @@ pub fn hole_rim_use_shapes(
 /// 内側のワイヤを外し、**その輪を外周として持つ相方の片**も一緒に落とします
 /// ——片方だけ外すと、相方が宙に浮きます。
 fn drop_mixed_hole_rims(pieces: &mut Vec<SelectedBooleanFacePiece>, tol: &Tolerance) {
-    let mixed: Vec<(u64, usize)> = hole_rim_use_shapes(pieces, tol)
+    // **畳む前に、畳む相手の姿を出します**（4-549。`ZENITH_HOLE_WHY=1`）。
+    // `HOLEWHY` は縫合を診る段で出るので、**畳まれた穴はそこには出ません**
+    // ——**畳んだものだけ、ここで名指しします**。**何本が既に縫えていたか**が
+    // 分かると、「壊れている穴」と「途中まで直った穴」が切り分けられます。
+    let shapes = hole_rim_use_shapes(pieces, tol);
+    if std::env::var_os("ZENITH_HOLE_WHY").is_some() {
+        for shape in shapes.iter().filter(|shape| shape.is_mixed()) {
+            let spread: Vec<String> = shape
+                .histogram
+                .iter()
+                .map(|((own, other), count)| format!("自分 {own}／相手 {other}: {count} 本"))
+                .collect();
+            eprintln!(
+                "HOLEDROP {:?} 面 {} の内側の輪 {}（{} 本）を畳みます: {}",
+                shape.operand,
+                shape.face_id,
+                shape.loop_index,
+                shape.edge_count,
+                spread.join("、")
+            );
+        }
+    }
+    let mixed: Vec<(u64, usize)> = shapes
         .into_iter()
         .filter(|shape| shape.is_mixed())
         .map(|shape| (shape.face_id, shape.loop_index))
@@ -12730,7 +12756,16 @@ fn log_stage(label: &str, pieces: &[SelectedBooleanFacePiece]) {
     }
     let mut ids: Vec<u64> = pieces.iter().map(|piece| piece.face.id).collect();
     ids.sort_unstable();
-    eprintln!("STAGEWHY {label}: {} 枚 {ids:?}", ids.len());
+    // **穴の数も数えます**（4-549）。**片が生き残っても、穴だけ畳まれる**
+    // ことがあり、枚数だけ見ていると気づけません。**穴の縁は、相手の面と
+    // 縫う稜**なので、畳んだ分だけ「相手のいない稜」に化けます。
+    let holes: usize = pieces.iter().map(|piece| piece.face.inner_wires.len()).sum();
+    let hole_edges: usize = pieces
+        .iter()
+        .flat_map(|piece| piece.face.inner_wires.iter())
+        .map(|wire| wire.edges.len())
+        .sum();
+    eprintln!("STAGEWHY {label}: {} 枚 内輪 {holes} 本（稜 {hole_edges} 本）{ids:?}", ids.len());
 }
 
 fn face_encloses_no_area(face: &Face, tol: &Tolerance) -> bool {
