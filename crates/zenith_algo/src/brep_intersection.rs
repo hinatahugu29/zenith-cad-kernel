@@ -1512,6 +1512,45 @@ impl BrepIntersectionBuilder {
         let face_pair_candidate_count = face_pair_candidates.len();
         let mut edge_candidates =
             Self::intersection_edge_candidates_from_face_pairs(face_pair_candidates, tol);
+
+        // **交線に、それを産んだ 2 枚の粗さを持たせます**（4-550。
+        // `ZENITH_EDGE_TOL_FROM_FACES=1`。**既定では走りません**）。
+        //
+        // **2 枚の曲面の交わりは、粗いほうより正確にはなりません。**
+        // ところが交線の稜は、どの経路でも `tol.linear`（1e-6）で作られます
+        // ——**実測: `linkrods` の検証で落ちた稜は 79 本とも 1.000000e-6**。
+        // **切り手の平面（粗さ 0）に、読んだ NURBS（粗さ 1.9e-4）との交線が
+        // 載ると、平面の物差しで測られて落ちます**（面35 は 13.8 倍）。
+        //
+        // **全体の公差を緩めるのとは違います**（4-534 で断った widening）。
+        // **その稜を産んだ 2 枚が申告した値**を、**その稜にだけ**持たせます。
+        if std::env::var_os("ZENITH_EDGE_TOL_FROM_FACES").is_some() {
+            for candidate in edge_candidates.iter_mut() {
+                let roughness = |faces: &[Face], index: usize| -> f64 {
+                    faces
+                        .get(index)
+                        .map(|face| face.tolerance + face.pcurve_tolerance)
+                        .unwrap_or(0.0)
+                };
+                let from_faces = roughness(&faces_a, candidate.face_a_index)
+                    .max(roughness(&faces_b, candidate.face_b_index));
+                candidate.edge.tolerance = candidate.edge.tolerance.max(from_faces);
+            }
+            if std::env::var_os("ZENITH_EDGE_TOL_WHY").is_some() {
+                let mut raised = 0usize;
+                let mut worst: f64 = 0.0;
+                for candidate in edge_candidates.iter() {
+                    if candidate.edge.tolerance > tol.linear {
+                        raised += 1;
+                        worst = worst.max(candidate.edge.tolerance);
+                    }
+                }
+                eprintln!(
+                    "EDGETOL 交線 {} 本のうち {raised} 本の粗さを上げました（最大 {worst:.6e}）",
+                    edge_candidates.len()
+                );
+            }
+        }
         edge_candidates.extend(collect_edges_already_on_a_plane(&faces_a, &faces_b, tol));
         edge_candidates.extend(
             collect_edges_already_on_a_plane(&faces_b, &faces_a, tol)

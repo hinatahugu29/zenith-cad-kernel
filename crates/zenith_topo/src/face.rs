@@ -577,17 +577,32 @@ impl Face {
             // まで緩みます。ここは**その面が申告した値**を上限に使うだけです。
             // `regularize.rs` が稜で同じことをしています
             // （`tol.linear.max(edge.tolerance)`）。
-            let allowance = tol.linear.max(self.tolerance);
+            let face_allowance = tol.linear.max(self.tolerance);
+            // **稜の粗さも上限に入れます**（4-550。`ZENITH_EDGE_TOL_BOUNDARY=1`。
+            // **既定では走りません**）。
+            //
+            // **面が申告する粗さは、その面自身の話**です。**境界は隣と
+            // 分け合うもの**で、**粗い隣と縫った稜は、こちらの面がいくら
+            // 正確でも、隣の粗さより良くはなりません**。切り手の平面
+            // （粗さ 0）に、読んだ NURBS（粗さ 1.9e-4）との交線が載ると、
+            // **平面の物差しで測られて落ちます**。`regularize.rs` は稜で
+            // 同じことを既にしています（`tol.linear.max(edge.tolerance)`）。
+            let use_edge_tolerance = std::env::var_os("ZENITH_EDGE_TOL_BOUNDARY").is_some();
             let mut seed: Option<Point2> = None;
-            for point in points {
+            for (point, edge_tolerance) in points {
                 report.sampled_point_count += 1;
+                let allowance = if use_edge_tolerance {
+                    face_allowance.max(edge_tolerance)
+                } else {
+                    face_allowance
+                };
                 let (distance, landed) = self.distance_to_surface(point, seed, allowance);
                 seed = landed;
                 report.max_distance = report.max_distance.max(distance);
                 if distance > allowance {
                     report.off_surface_point_count += 1;
                     report.errors.push(format!(
-                        "Face {} boundary point on {loop_name} loop is off surface by {distance:.6e}",
+                        "Face {} boundary point on {loop_name} loop is off surface by {distance:.6e} (allowed {allowance:.6e}, edge {edge_tolerance:.6e})",
                         self.id
                     ));
                 }
@@ -1970,12 +1985,17 @@ fn sampled_surface_distance<S: Surface3>(point: Point3, surface: &S, samples: us
 ///
 /// `Wire::sample_points` shortcuts linear edges to their endpoints, which is
 /// right for display but hides a chord drawn across a curved face.
-fn dense_loop_points(wire: &Wire, samples_per_edge: usize) -> Vec<Point3> {
+fn dense_loop_points(wire: &Wire, samples_per_edge: usize) -> Vec<(Point3, f64)> {
     let steps = samples_per_edge.max(2);
     let mut points = Vec::with_capacity(wire.edges.len() * (steps + 1));
     for edge in &wire.edges {
         for step in 0..=steps {
-            points.push(edge.evaluate_normalized(step as f64 / steps as f64));
+            // **どの稜から来た点か**を、粗さの形で連れて行きます（4-550）。
+            // **点だけ渡すと、その点がどれだけ外れてよいかが分かりません。**
+            points.push((
+                edge.evaluate_normalized(step as f64 / steps as f64),
+                edge.edge.tolerance,
+            ));
         }
     }
     points
