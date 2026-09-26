@@ -86,6 +86,44 @@ fn report(surface: &zenith_geom::NurbsSurface3, start: Point3, end: Point3) {
     println!("稜 ({start:?}) - ({end:?})");
     println!("射影の最悪 {worst_projection:.3e}、点 {}", uvs.len());
     println!();
+    // **曲面自身のノットと、こちらの刻みを並べます**（4-552）。
+    //
+    // **区間の中で、両端ゼロ・真ん中もゼロ・1/4 と 3/4 で山**
+    // ——**どの区間でも同じ形**。**曲面の側に、こちらの刻みの
+    // ちょうど 2 倍の周期があるなら、これは折り返し（エイリアス）**です。
+    // **「細かくする」ではなく「ずらす・合わせる」が効くかどうかが、
+    // ここで決まります。**
+    println!("曲面の v ノット と、こちらの刻み:");
+    let v_knots = &surface.knots_v.knots;
+    let unique: Vec<f64> = {
+        let mut out: Vec<f64> = Vec::new();
+        for knot in v_knots.iter() {
+            if out.last().is_none_or(|last: &f64| (last - knot).abs() > 1e-12) {
+                out.push(*knot);
+            }
+        }
+        out
+    };
+    println!("  曲面の v ノット（重複を畳んで {} 個）: {:?}", unique.len(), unique);
+    let (v_lo, v_hi) = (uvs[0].1, uvs[spans].1);
+    println!("  こちらが載る v の範囲: {v_lo:.9} 〜 {v_hi:.9}");
+    println!("  こちらの刻み幅: {:.9}", (v_hi - v_lo) / spans as f64);
+    let inside: Vec<f64> = unique
+        .iter()
+        .copied()
+        .filter(|knot| *knot > v_lo.min(v_hi) && *knot < v_lo.max(v_hi))
+        .collect();
+    println!("  範囲の中にある曲面のノット: {inside:?}");
+    if inside.len() >= 2 {
+        let gap = (inside[1] - inside[0]).abs();
+        println!(
+            "  曲面のノット間隔 {:.9} / こちらの刻み幅 {:.9} = {:.4}",
+            gap,
+            (v_hi - v_lo).abs() / spans as f64,
+            gap / ((v_hi - v_lo).abs() / spans as f64)
+        );
+    }
+    println!();
     println!("v は等間隔か（等間隔なら、折れ線で厳密）:");
     for i in 0..=spans {
         let t = i as f64 / spans as f64;
