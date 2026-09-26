@@ -343,6 +343,19 @@ impl StepImporter {
     /// **緩めっぱなしにはしません。** 天井は `1e-3` mm です。それを超える
     /// 申告は、もう「不確かさ」ではなく別の問題なので、既定のまま断ります。
     /// 読み込みで受ける粗さの天井。これを超えたら公差の話ではありません。
+    /// **粗さを測るときの、稜あたりの標本数**（4-553）。
+    ///
+    /// 既定は 8（これまでどおり）。`ZENITH_IMPORT_ROUGHNESS_SAMPLES` で
+    /// 増やせます。**増やすと申告値が上がります**——**緩むのではなく、
+    /// 見落としていた点が見えるようになる**ということです。
+    fn roughness_samples() -> usize {
+        std::env::var("ZENITH_IMPORT_ROUGHNESS_SAMPLES")
+            .ok()
+            .and_then(|raw| raw.parse::<usize>().ok())
+            .filter(|n| *n >= 2)
+            .unwrap_or(8)
+    }
+
     fn import_ceiling() -> f64 {
         1e-3
     }
@@ -2295,6 +2308,22 @@ impl StepImporter {
             // **上限は `import_tolerance` の天井（1e-3）です。** それを超える
             // 面は、公差の話ではなく**別の曲面**なので、これまでどおり断ります
             // （4-263 が名指しします）。
+            // **標本の数は、収束するところまで取ります**（4-553。
+            // `ZENITH_IMPORT_ROUGHNESS_SAMPLES=<数>`。**既定は 8 のまま**）。
+            //
+            // **8 点で測った値を申告しているのに、検証は「割った片」を
+            // 稜あたり 8 点で見ます**——**親の稜は小片に割れている**ので、
+            // **同じ曲線をより細かく見る**ことになり、**親が見なかった点で
+            // 親より悪い値が出ます。**
+            //
+            // 実測（`roughness_convergence_probe`、`linkrods.step`）——
+            // **8 点 → 128 点で、面33 は 1.5627e-4 → 2.9450e-4（1.885 倍）**、
+            // 面25 は 1.8296e-4 → 2.3649e-4、面18 は 3.2511e-5 → 4.9831e-5。
+            // **そして和の検証で落ちた 13 本は、どれもその面の 128 点値の
+            // 内側**でした——**申告が足りていなかっただけ**です。
+            //
+            // **緩めているのではありません。** **同じ量を、収束するまで
+            // 測っているだけ**です（上限 `import_ceiling` は変わりません）。
             let measured = {
                 let probe = Face::new(
                     geom.clone(),
@@ -2304,7 +2333,10 @@ impl StepImporter {
                     1e-6,
                 );
                 probe
-                    .validate_boundary_on_surface(&Self::import_tolerance(ctx), 8)
+                    .validate_boundary_on_surface(
+                        &Self::import_tolerance(ctx),
+                        Self::roughness_samples(),
+                    )
                     .max_distance
             };
             let carried = if measured.is_finite() {
