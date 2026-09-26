@@ -588,8 +588,13 @@ impl Face {
             // **平面の物差しで測られて落ちます**。`regularize.rs` は稜で
             // 同じことを既にしています（`tol.linear.max(edge.tolerance)`）。
             let use_edge_tolerance = std::env::var_os("ZENITH_EDGE_TOL_BOUNDARY").is_some();
+            // **落ちた点が、どの稜のどこから来たか**を出します（4-554。
+            // `ZENITH_BOUNDARY_WHY=1`）。**「稜の粗さが 1e-6 のまま」
+            // までは分かっても、どの稜なのかが分からないと、上流の
+            // どこで配り損ねたのかを名指しできません。**
+            let name_the_edge = std::env::var_os("ZENITH_BOUNDARY_WHY").is_some();
             let mut seed: Option<Point2> = None;
-            for (point, edge_tolerance) in points {
+            for (point, edge_tolerance, edge_span) in points {
                 report.sampled_point_count += 1;
                 let allowance = if use_edge_tolerance {
                     face_allowance.max(edge_tolerance)
@@ -605,6 +610,12 @@ impl Face {
                         "Face {} boundary point on {loop_name} loop is off surface by {distance:.6e} (allowed {allowance:.6e}, edge {edge_tolerance:.6e})",
                         self.id
                     ));
+                    if name_the_edge {
+                        eprintln!(
+                            "BOUNDARYWHY 面{} {loop_name} 点 ({:.6} {:.6} {:.6}) 外れ {distance:.6e} 許容 {allowance:.6e} 稜の粗さ {edge_tolerance:.6e} 稜の長さ {edge_span:.6e}",
+                            self.id, point.x, point.y, point.z
+                        );
+                    }
                 }
             }
         }
@@ -1985,7 +1996,7 @@ fn sampled_surface_distance<S: Surface3>(point: Point3, surface: &S, samples: us
 ///
 /// `Wire::sample_points` shortcuts linear edges to their endpoints, which is
 /// right for display but hides a chord drawn across a curved face.
-fn dense_loop_points(wire: &Wire, samples_per_edge: usize) -> Vec<(Point3, f64)> {
+fn dense_loop_points(wire: &Wire, samples_per_edge: usize) -> Vec<(Point3, f64, f64)> {
     let steps = samples_per_edge.max(2);
     let mut points = Vec::with_capacity(wire.edges.len() * (steps + 1));
     for edge in &wire.edges {
@@ -1995,6 +2006,10 @@ fn dense_loop_points(wire: &Wire, samples_per_edge: usize) -> Vec<(Point3, f64)>
             points.push((
                 edge.evaluate_normalized(step as f64 / steps as f64),
                 edge.edge.tolerance,
+                // **その稜の端から端までの距離**（4-554）。**短すぎる稜は
+                // 稜ではありません**——**点が何か所で外れたか**ではなく
+                // **1 本の稜が何回標本されたか**を見分けるのに要ります。
+                (edge.edge.end_vertex.point - edge.edge.start_vertex.point).norm(),
             ));
         }
     }
