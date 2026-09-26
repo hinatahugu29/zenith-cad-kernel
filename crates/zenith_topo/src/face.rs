@@ -1543,8 +1543,21 @@ fn project_edge_to_nurbs_pcurve(
             //
             // **偶然ではありません**——**対称な配置では、中点は差の零点に
             // なりがち**です。
+            // **中点を避けて、1 点だけで測る口**（4-558。
+            // `ZENITH_SUBDIV_THIRD=1`。**既定では走りません**）。
+            //
+            // **`SUBDIV_QUARTERS` は 3 点の最大**を取るので、**いちばん
+            // よく見つけ、いちばんよく割ります**——**割れば p-curve が
+            // 細かくなり、トリムがずれて縫合が壊れます**（4-546、4-551）。
+            //
+            // **見つけたいのは「中点で消える誤差」**（4-552: 区間の中は
+            // 両端ゼロ・中点ゼロ・1/4 と 3/4 で山）。**なら、中点を
+            // 外した 1 点で足ります**——**測る回数は今までと同じ**で、
+            // **節を踏まないぶんだけ、素直な物差し**になります。
             let strayed = if std::env::var_os("ZENITH_SUBDIV_QUARTERS").is_some() {
                 at_fraction(0.25).max(at_fraction(0.5)).max(at_fraction(0.75))
+            } else if std::env::var_os("ZENITH_SUBDIV_THIRD").is_some() {
+                at_fraction(1.0 / 3.0)
             } else {
                 (surface.evaluate(chord.x, chord.y) - edge.evaluate_normalized(middle)).norm()
             };

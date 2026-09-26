@@ -1,4 +1,6 @@
-//! **H8 の差だけを、OCC の数と並べます**（4-557）。
+//! **H8 の 1 演算を、OCC の数と並べます**（4-557、4-558 で 3 演算に）。
+//!
+//! 使い方: `h8_difference_probe [difference|union|intersection]`
 //!
 //! 4-555 で `linkrods` の差が返るようになりました。**体積は合っています**
 //! が、**体積だけでは「合っている」とは言えません**——**面の数**も
@@ -47,19 +49,23 @@ fn main() {
         ),
     );
 
+    let which = std::env::args().nth(1).unwrap_or_else(|| "difference".to_string());
+    // **OCC の数**（4-511）。**合わせる桁は 1e-4。**
+    let (op, occ_volume, occ_faces) = match which.as_str() {
+        "union" => (BooleanOpType::Union, 7.805669, 49usize),
+        "intersection" => (BooleanOpType::Intersection, 2.295916, 37),
+        _ => (BooleanOpType::Difference, 1.551124, 37),
+    };
     let tol = Tolerance::default();
     let started = Instant::now();
-    let result =
-        BooleanEngine::boolean_solids_exact_result(&read, &cutter, BooleanOpType::Difference, &tol);
+    let result = BooleanEngine::boolean_solids_exact_result(&read, &cutter, op, &tol);
     let seconds = started.elapsed().as_secs_f64();
 
     match result {
         Ok(result) => {
             let solids = result.solids;
-            println!("差: 返りました（{seconds:.1} 秒）、立体 {} 個", solids.len());
-            // **OCC の数**（4-511）: 体積 1.551124、面 37 枚。
-            const OCC_VOLUME: f64 = 1.551124;
-            const OCC_FACES: usize = 37;
+            println!("{which}: 返りました（{seconds:.1} 秒）、立体 {} 個", solids.len());
+            let (occ_volume, occ_faces) = (occ_volume, occ_faces);
             const BAND: f64 = 1e-4;
             for (index, solid) in solids.iter().enumerate() {
                 let volume = MassCalculator::compute_volume_from_brep(solid, &params);
@@ -93,20 +99,20 @@ fn main() {
                 let overlaps = uses.values().filter(|count| **count > 2).count();
                 println!("  立体{index}: 体積 {volume:.6}、面 {faces} 枚、三角形 {}", mesh.indices.len());
                 println!(
-                    "    OCC 1.551124 との差 {:.3e}（合わせる桁 {BAND:.0e}）→ {}",
-                    (volume - OCC_VOLUME).abs(),
-                    if (volume - OCC_VOLUME).abs() <= BAND {
+                    "    OCC {occ_volume:.6} との差 {:.3e}（合わせる桁 {BAND:.0e}）→ {}",
+                    (volume - occ_volume).abs(),
+                    if (volume - occ_volume).abs() <= BAND {
                         "**合っています**"
                     } else {
                         "**合っていません**"
                     }
                 );
                 println!(
-                    "    OCC の面 {OCC_FACES} 枚との差 {}、メッシュの穴 {holes} 本、重なり {overlaps} 本",
-                    faces as i64 - OCC_FACES as i64
+                    "    OCC の面 {occ_faces} 枚との差 {}、メッシュの穴 {holes} 本、重なり {overlaps} 本",
+                    faces as i64 - occ_faces as i64
                 );
             }
         }
-        Err(message) => println!("差: 断られました（{seconds:.1} 秒）: {message}"),
+        Err(message) => println!("{which}: 断られました（{seconds:.1} 秒）: {message}"),
     }
 }
