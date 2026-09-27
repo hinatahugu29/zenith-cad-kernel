@@ -22,7 +22,7 @@
 //! cargo run --release -p zenith_algo --example pcurve_span_probe
 //! ```
 
-use zenith_geom::{ExtremumEngine, NurbsCurve3, Surface3};
+use zenith_geom::{ExtremumEngine, NurbsCurve3};
 #[allow(unused_imports)]
 use zenith_geom::NurbsSurface3;
 use zenith_io::StepImporter;

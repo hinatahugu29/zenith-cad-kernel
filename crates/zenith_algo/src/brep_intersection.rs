@@ -1437,6 +1437,19 @@ impl BrepIntersectionBuilder {
         cap_faces: &[Face],
         tol: &Tolerance,
     ) -> BooleanFaceAssembly {
+        Self::assemble_selected_face_pieces_with_caps_for(pieces, cap_faces, None, tol)
+    }
+
+    /// **答えの材料がどちら側かを知っている版**（4-567）。
+    /// `operands` があり `ZENITH_CAP_ORIENT_BY_GEOMETRY=1` のときだけ、
+    /// **蓋の向きを幾何で決めます**（`cap_should_be_reversed`）。
+    pub fn assemble_selected_face_pieces_with_caps_for(
+        pieces: &[SelectedBooleanFacePiece],
+        cap_faces: &[Face],
+        operands: Option<(&Solid, &Solid, crate::BooleanOpType)>,
+        tol: &Tolerance,
+    ) -> BooleanFaceAssembly {
+        let by_geometry = std::env::var_os("ZENITH_CAP_ORIENT_BY_GEOMETRY").is_some();
         let mut selected_face_pieces = pieces.to_vec();
         for face in cap_faces {
             let forward_piece = SelectedBooleanFacePiece {
@@ -1464,10 +1477,30 @@ impl BrepIntersectionBuilder {
                 &selected_face_pieces,
                 tol,
             ));
-            let (best_score, best_piece) = if reversed_score < forward_score {
-                (reversed_score, reversed_piece)
+            // **幾何で決まるなら、そちらを採ります**（4-567）。**縫合の点は、
+            // 決まらなかったときの決め手**にします。
+            let geometric = if by_geometry {
+                operands.and_then(|(solid_a, solid_b, op)| {
+                    cap_should_be_reversed(face, solid_a, solid_b, op, tol)
+                })
             } else {
-                (forward_score, forward_piece)
+                None
+            };
+            let (best_score, best_piece) = match geometric {
+                Some(true) => {
+                    if std::env::var_os("ZENITH_STITCH_WHY").is_some() {
+                        eprintln!("CAPORIENT 蓋を裏返します（材料が法線の側にあります）");
+                    }
+                    (reversed_score, reversed_piece)
+                }
+                Some(false) => {
+                    if std::env::var_os("ZENITH_STITCH_WHY").is_some() {
+                        eprintln!("CAPORIENT 蓋はそのままです（材料は法線の反対側）");
+                    }
+                    (forward_score, forward_piece)
+                }
+                None if reversed_score < forward_score => (reversed_score, reversed_piece),
+                None => (forward_score, forward_piece),
             };
             // **蓋は塞ぐことはあっても壊してはいけない。**
             //
@@ -1587,9 +1620,10 @@ impl BrepIntersectionBuilder {
             &faces_b,
             tol,
         );
-        let assembly = Self::assemble_selected_face_pieces_with_caps(
+        let assembly = Self::assemble_selected_face_pieces_with_caps_for(
             &selection.selected_face_pieces,
             &cap_generation.cap_faces,
+            Some((solid_a, solid_b, op)),
             tol,
         );
 
@@ -14951,4 +14985,76 @@ fn drop_pieces_that_contain_others(
         keep
     });
     before - pieces.len()
+}
+
+/// **蓋の向きを、材料がどちら側にあるかで決めます**（4-567。
+/// `ZENITH_CAP_ORIENT_BY_GEOMETRY=1`。**既定では走りません**）。
+///
+/// 4-566 で測った形です——**`assemble_selected_face_pieces_with_caps` は、
+/// 蓋を順向きと逆向きの両方で縫い、`stitch_report_score` の良いほうを採ります**。
+/// **あの点は「内か外か」を判定できません**——**蓋はどちら向きでも同じだけ
+/// 閉じる**ので、**同点なら `forward`**。**上の蓋は当たり、下の蓋は外れ**ます。
+/// **実測（`linkrods` の和）: z = 0.47 の蓋 2 枚が上向きで、体積が 0.311 多い。**
+///
+/// **代表点を法線の両側へわずかに出し、答えの材料がどちら側かを見ます。**
+/// **材料が `+n` 側なら、外向きは `-n`**——**裏返します**。
+/// **どちらとも言えなければ `None`** を返し、**呼び手は縫合の点に戻ります**。
+fn cap_should_be_reversed(
+    face: &Face,
+    solid_a: &Solid,
+    solid_b: &Solid,
+    op: crate::BooleanOpType,
+    tol: &Tolerance,
+) -> Option<bool> {
+    let point = representative_face_point(face);
+    // **法線は、向きを掛けたもの**を使います。
+    let normal = match &face.geometry {
+        FaceGeometry::Plane(plane) => {
+            let raw = plane.u_axis.cross(&plane.v_axis);
+            let length = raw.norm();
+            if length <= f64::EPSILON {
+                return None;
+            }
+            let unit = raw / length;
+            if face.orientation.is_forward() {
+                unit
+            } else {
+                -unit
+            }
+        }
+        // **曲がった蓋は、ここでは決めません。**
+        _ => return None,
+    };
+
+    let params = TessellationParams::default();
+    let mesh_a = tessellate_solid(solid_a, &params);
+    let mesh_b = tessellate_solid(solid_b, &params);
+    // **踏み出す幅**。**メッシュの弦誤差より大きく、部品より小さく。**
+    let step = (boolean_span(solid_a).max(boolean_span(solid_b)) * 1e-3).max(tol.linear * 100.0);
+    let material_at = |probe: Point3| -> bool {
+        let in_a = crate::BooleanEngine::is_point_inside_mesh(probe, &mesh_a);
+        let in_b = crate::BooleanEngine::is_point_inside_mesh(probe, &mesh_b);
+        match op {
+            crate::BooleanOpType::Union => in_a || in_b,
+            crate::BooleanOpType::Intersection => in_a && in_b,
+            crate::BooleanOpType::Difference => in_a && !in_b,
+        }
+    };
+    let plus = material_at(point + normal * step);
+    let minus = material_at(point - normal * step);
+    // **片側だけが材料**のときに決めます。**両側とも、またはどちらも違えば、
+    // 決めません**——**蓋が材料の中にある**か、**踏み出す幅が合っていない**
+    // かのどちらかです。
+    match (plus, minus) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    }
+}
+
+/// 立体の差し渡し（いちばん長い辺）。
+fn boolean_span(solid: &Solid) -> f64 {
+    let bbox = solid.bounding_box();
+    let span = bbox.max - bbox.min;
+    span.x.max(span.y).max(span.z)
 }
