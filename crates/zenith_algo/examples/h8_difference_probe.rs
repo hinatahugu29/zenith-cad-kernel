@@ -13,7 +13,7 @@ use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
 };
 use zenith_io::StepImporter;
-use zenith_math::{Tolerance, Vec3};
+use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams};
 
 fn main() {
@@ -142,6 +142,122 @@ fn main() {
                     "    OCC の面 {occ_faces} 枚との差 {}、メッシュの穴 {holes} 本、重なり {overlaps} 本",
                     faces as i64 - occ_faces as i64
                 );
+                // **面ごとの体積への寄与**（4-566。`ZENITH_H8_FACE_VOLUMES=1`）。
+                //
+                // **和は 0.311（4%）大きい**のに、**面は 49 枚ちょうどで
+                // メッシュも閉じています**（4-564）。**余っているのは、どの面か。**
+                // **`compute_face_integral` は (面積, 体積) を返す**ので、
+                // **寄与を 1 枚ずつ並べれば、0.311 を出している面が見えます。**
+                if std::env::var_os("ZENITH_H8_FACE_VOLUMES").is_some() {
+                    println!("    面ごとの寄与（大きい順）:");
+                    // **重心も出します**（4-566）。**OCC 側は面積と重心で並びます**
+                    // （`tools/occ_h8_reference.py` の `ZENITH_OCC_FACES`）ので、
+                    // **同じ物差しでなければ 1 対 1 に並べられません**。
+                    // **面積の大きい順**——**OCC 側と同じ並び**にします。
+                    let mut rows: Vec<(usize, f64, f64, Point3, usize, usize)> = solid
+                        .outer_shell
+                        .faces
+                        .iter()
+                        .enumerate()
+                        .map(|(at, face)| {
+                            let (area, contribution) =
+                                MassCalculator::compute_face_integral(face, &params);
+                            let mesh = zenith_tess::tessellate_face(face, &params);
+                            let mut centre = zenith_math::Vec3::zeros();
+                            for point in &mesh.positions {
+                                centre += point.coords;
+                            }
+                            if !mesh.positions.is_empty() {
+                                centre /= mesh.positions.len() as f64;
+                            }
+                            (
+                                at,
+                                contribution,
+                                area,
+                                Point3::from(centre),
+                                face.outer_wire.edges.len(),
+                                face.inner_wires.len(),
+                            )
+                        })
+                        .collect();
+                    let sum: f64 = rows.iter().map(|row| row.1).sum();
+                    rows.sort_by(|left, right| right.2.partial_cmp(&left.2).unwrap());
+                    for (at, contribution, area, centre, edges, inner) in rows.iter() {
+                        println!(
+                            "      面{at:<3} 面積 {area:.6}  重心 ({:.4} {:.4} {:.4})  稜 {edges} 内輪 {inner}  寄与 {contribution:+.6}",
+                            centre.x, centre.y, centre.z
+                        );
+                    }
+                    println!("    寄与の合計 {sum:.6}");
+                    // **巻き方が食い違っている面を数えます**（4-566）。
+                    //
+                    // **面積の合計は OCC と 3e-5 で一致するのに、体積が 4%
+                    // 多い**（4-564）——**面は正しく、向きが裏返っている**
+                    // という形です。**メッシュの穴・重なりは 0** ですが、
+                    // **あの数え方は稜が何回使われたかだけ**で、
+                    // **向きを見ていません**。
+                    //
+                    // **閉じて向きの揃った殻では、向き付きの稜は 1 回ずつ**
+                    // です（逆向きが 1 回、必ず相手にいる）。**同じ向きで
+                    // 2 回出てくる稜**は、そこで巻き方が食い違っています。
+                    {
+                        let counts = zenith_tess::face_triangle_counts(solid, &params);
+                        let cell = |point: zenith_math::Point3| {
+                            (
+                                (point.x / 1e-6).round() as i64,
+                                (point.y / 1e-6).round() as i64,
+                                (point.z / 1e-6).round() as i64,
+                            )
+                        };
+                        let mut directed: std::collections::BTreeMap<
+                            ((i64, i64, i64), (i64, i64, i64)),
+                            usize,
+                        > = std::collections::BTreeMap::new();
+                        for triangle in &mesh.indices {
+                            for pair in [
+                                (triangle[0] as usize, triangle[1] as usize),
+                                (triangle[1] as usize, triangle[2] as usize),
+                                (triangle[2] as usize, triangle[0] as usize),
+                            ] {
+                                *directed
+                                    .entry((cell(mesh.positions[pair.0]), cell(mesh.positions[pair.1])))
+                                    .or_insert(0) += 1;
+                            }
+                        }
+                        // **どの面の三角形か**を、面ごとの三角形数から引きます。
+                        let mut at = 0usize;
+                        let mut bad_by_face: Vec<(u64, usize)> = Vec::new();
+                        for (face_id, triangle_count) in &counts {
+                            let mut bad = 0usize;
+                            for index in at..(at + triangle_count) {
+                                let triangle = mesh.indices[index];
+                                for pair in [
+                                    (triangle[0] as usize, triangle[1] as usize),
+                                    (triangle[1] as usize, triangle[2] as usize),
+                                    (triangle[2] as usize, triangle[0] as usize),
+                                ] {
+                                    let key = (
+                                        cell(mesh.positions[pair.0]),
+                                        cell(mesh.positions[pair.1]),
+                                    );
+                                    if directed.get(&key).copied().unwrap_or(0) > 1 {
+                                        bad += 1;
+                                    }
+                                }
+                            }
+                            if bad > 0 {
+                                bad_by_face.push((*face_id, bad));
+                            }
+                            at += triangle_count;
+                        }
+                        let same: usize = directed.values().filter(|count| **count > 1).count();
+                        println!("    同じ向きで 2 回以上使われた稜 {same} 本");
+                        bad_by_face.sort_by_key(|row| std::cmp::Reverse(row.1));
+                        for (face_id, bad) in bad_by_face.iter().take(12) {
+                            println!("      面(id {face_id}) の三角形の辺 {bad} 本が食い違い");
+                        }
+                    }
+                }
             }
         }
         Err(message) => println!("{which}: 断られました（{seconds:.1} 秒）: {message}"),

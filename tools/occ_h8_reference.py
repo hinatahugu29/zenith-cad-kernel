@@ -98,6 +98,25 @@ def main():
             f"  {label}           {result.Volume:.6f}   面 {len(result.Faces)} 枚、"
             f"立体 {len(result.Solids)} 個、妥当 {result.isValid()}"
         )
+        # **面ごとの内訳**（4-566。`ZENITH_OCC_FACES=<A u B>` などで 1 演算だけ）。
+        #
+        # **こちらの和は 0.311（4%）大きいのに、面は 49 枚ちょうど**です（4-564）。
+        # **どの面が余っているか**を言うには、**OCC 側の 1 枚ずつ**が要ります。
+        # **面積と重心を出せば、49 枚どうしを突き合わせられます。**
+        if os.environ.get("ZENITH_OCC_FACES") == label:
+            rows = []
+            for at, face in enumerate(result.Faces):
+                centre = face.CenterOfMass
+                rows.append(
+                    (at, face.Area, centre.x, centre.y, centre.z, len(face.Edges))
+                )
+            rows.sort(key=lambda row: -row[1])
+            print("    面ごとの面積（大きい順）:")
+            for at, area, x, y, z, edges in rows:
+                print(
+                    f"      面{at:<3} 面積 {area:.6f}  重心 ({x:.4f} {y:.4f} {z:.4f})  稜 {edges}"
+                )
+            print(f"    面積の合計 {sum(row[1] for row in rows):.6f}")
     print()
     print("**こちらが切れたときに、この数と突き合わせてください。**")
     print("**OCC 自身の恒等式も 1e-5 の桁で閉じます**（有理・スプライン面）。")
