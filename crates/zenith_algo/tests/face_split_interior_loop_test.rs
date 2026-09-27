@@ -149,8 +149,13 @@ fn a_loop_off_the_face_is_refused() {
     let floating = rectangle(3.0, 5.0);
     let error = FaceSplitter::split_by_interior_loop(&face, &floating, &tol)
         .expect_err("a loop that is not on the face must be refused");
+    // **断り文は 2 通りあります**（4-565）。**`ZENITH_HOLE_BOX_GUARD`（4-537）を
+    // 立てると、そちらが先に捕まえて自分の文言で断ります**——
+    // **どちらも「この輪は面の上にない」と言っています**。**振る舞いは同じで、
+    // 文言だけが違う**ので、両方を通します（4-563 で、この 1 件だけが赤でした）。
     assert!(
-        error.contains("leaves the face"),
+        error.contains("leaves the face")
+            || error.contains("outside the outer boundary box"),
         "the reason should say the loop is off the face, got: {error}"
     );
 }
