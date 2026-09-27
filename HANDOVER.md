@@ -2023,9 +2023,10 @@ A面13: 領域 u[-1.5708,1.5708]、**トリムは u[-0.785,0.785] だけ**
 **自作の立体は 0 本**で、**ブーリアンは 2 本しか足していません**。
 **体積にも縫合にも出ません**が、**他のカーネルへ渡すときに効きます**。
 
+**確かめ方**: `h8_difference_probe <difference|union|intersection>`
 （**1 演算 3.5 分**）。**立てる口は、下の表の「既定では走りません」を全部**
 ＋ `ZENITH_IMPORT_ROUGHNESS_SAMPLES=64`（積は ＋ `ZENITH_SUBDIV_THIRD=1`）。
-（**和を測るときは `ZENITH_SKIP_SOLID_VALIDATION=1` と `ZENITH_H8_UNVERIFIED=1` も**）。
+**検証を飛ばす口は要りません。**
 
 ---
 
