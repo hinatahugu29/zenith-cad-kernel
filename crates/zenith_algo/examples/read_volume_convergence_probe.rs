@@ -45,4 +45,24 @@ fn main() {
     }
     println!();
     println!("**増え続けるなら、ずれているのは立体ではなく測り方です。**");
+
+    // **面ごとの面積**（4-560）。**OCC の面積**は
+    // `py tools/occ_face_area_reference.py` が出します。**並べれば、
+    // どの面の形が違うのかが分かります**——**体積は全部の和**なので、
+    // **和だけ見ていても、どこがずれているかは出てきません。**
+    if std::env::var_os("ZENITH_FACE_AREAS").is_some() {
+        println!();
+        println!("面ごとの面積（こちら）:");
+        let fine = TessellationParams {
+            u_divisions: 64,
+            v_divisions: 64,
+        };
+        let mut total = 0.0;
+        for (index, face) in read.outer_shell.faces.iter().enumerate() {
+            let area = zenith_algo::MassCalculator::compute_face_integral(face, &fine).0;
+            total += area;
+            println!("  面{index:<3} 面積 {area:.9}");
+        }
+        println!("  合計 {total:.9}");
+    }
 }
