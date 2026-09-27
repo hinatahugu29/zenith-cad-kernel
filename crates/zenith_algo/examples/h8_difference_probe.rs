@@ -57,8 +57,26 @@ fn main() {
         _ => (BooleanOpType::Difference, 1.551124, 37),
     };
     let tol = Tolerance::default();
+    if std::env::var_os("ZENITH_H8_OPERANDS").is_some() {
+        println!(
+            "|A| = {:.6}、|B| = {:.6}",
+            MassCalculator::compute_volume_from_brep(&read, &params),
+            MassCalculator::compute_volume_from_brep(&cutter, &params)
+        );
+    }
     let started = Instant::now();
-    let result = BooleanEngine::boolean_solids_exact_result(&read, &cutter, op, &tol);
+    // **検証を通さずに中身を見る口**（4-559。`ZENITH_H8_UNVERIFIED=1`）。
+    //
+    // **断られた演算でも、体積は出ます。** **こちらの 3 つが互いに
+    // 辻褄が合っているか**（|A∪B| + |A∩B| = |A| + |B|）は、
+    // **OCC が無くても確かめられます**——**合っていなければ、
+    // ずれているのはこちらの内側**です。
+    let unverified = std::env::var_os("ZENITH_H8_UNVERIFIED").is_some();
+    let result = if unverified {
+        BooleanEngine::boolean_solids_exact_result_unverified(&read, &cutter, op, &tol)
+    } else {
+        BooleanEngine::boolean_solids_exact_result(&read, &cutter, op, &tol)
+    };
     let seconds = started.elapsed().as_secs_f64();
 
     match result {
@@ -98,14 +116,27 @@ fn main() {
                 let holes = uses.values().filter(|count| **count == 1).count();
                 let overlaps = uses.values().filter(|count| **count > 2).count();
                 println!("  立体{index}: 体積 {volume:.6}、面 {faces} 枚、三角形 {}", mesh.indices.len());
-                println!(
-                    "    OCC {occ_volume:.6} との差 {:.3e}（合わせる桁 {BAND:.0e}）→ {}",
-                    (volume - occ_volume).abs(),
-                    if (volume - occ_volume).abs() <= BAND {
-                        "**合っています**"
+                // **絶対と相対を、両方出します**（4-559）。
+                //
+                // **「合わせる桁は 1e-4」の単位が、どこにも書いてありません。**
+                // 4-511 の `V(A)` の行は **3.2e-5 で一致**と書いていますが、
+                // **それは相対**です（**絶対は 1.234e-4**）。**こちらの
+                // `h8_difference_probe`（4-557）は絶対で比べていました。**
+                // **積は、絶対なら外れ、相対なら内側**——**都合のよい
+                // ほうを選ばないために、両方出します。**
+                let absolute = (volume - occ_volume).abs();
+                let relative = absolute / occ_volume;
+                let verdict = |value: f64| {
+                    if value <= BAND {
+                        "内側"
                     } else {
-                        "**合っていません**"
+                        "外"
                     }
+                };
+                println!(
+                    "    OCC {occ_volume:.6} との差: 絶対 {absolute:.3e}（{}）／相対 {relative:.3e}（{}）　※桁 {BAND:.0e}",
+                    verdict(absolute),
+                    verdict(relative)
                 );
                 println!(
                     "    OCC の面 {occ_faces} 枚との差 {}、メッシュの穴 {holes} 本、重なり {overlaps} 本",
