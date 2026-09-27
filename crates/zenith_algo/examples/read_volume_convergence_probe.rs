@@ -57,12 +57,45 @@ fn main() {
             u_divisions: 64,
             v_divisions: 64,
         };
-        let mut total = 0.0;
+        // **体積への寄与**も出します（4-561）。`compute_face_integral` は
+        // **(面積, 体積) を返します**——**体積の内訳は、こちら**です。
+        // **面積が合っていても、面が内側に在れば寄与は減ります**（4-560）。
+        let mut total_area = 0.0;
+        let mut total_volume = 0.0;
         for (index, face) in read.outer_shell.faces.iter().enumerate() {
-            let area = zenith_algo::MassCalculator::compute_face_integral(face, &fine).0;
-            total += area;
-            println!("  面{index:<3} 面積 {area:.9}");
+            let (area, volume) = zenith_algo::MassCalculator::compute_face_integral(face, &fine);
+            total_area += area;
+            total_volume += volume;
+            println!("  面{index:<3} 面積 {area:.9}  寄与 {volume:+.9}");
         }
-        println!("  合計 {total:.9}");
+        println!("  面積の合計 {total_area:.9}、寄与の合計 {total_volume:.9}");
+    }
+
+    // **こちらの面の上の点を書き出します**（4-561。`ZENITH_FACE_POINTS=<先>`）。
+    //
+    // **OCC に「内か外か」を聞くため**です（`tools/occ_face_area_reference.py`）。
+    // **面積は合っていて体積だけ小さいなら、面の位置**——**一様に内側なら、
+    // こちらの面は OCC の面より内を通っています。**
+    if let Ok(target) = std::env::var("ZENITH_FACE_POINTS") {
+        use std::io::Write;
+        let mut out = String::new();
+        let grid = TessellationParams {
+            u_divisions: 12,
+            v_divisions: 12,
+        };
+        for (index, face) in read.outer_shell.faces.iter().enumerate() {
+            let mesh = zenith_tess::tessellate_face(face, &grid);
+            for point in &mesh.positions {
+                out.push_str(&format!(
+                    "{index} {:.9} {:.9} {:.9}
+",
+                    point.x, point.y, point.z
+                ));
+            }
+        }
+        match std::fs::File::create(&target).and_then(|mut f| f.write_all(out.as_bytes())) {
+            Ok(()) => println!("面の上の点を {target} に書きました（{} 行）", out.lines().count()),
+            Err(error) => println!("{target} に書けません: {error}"),
+        }
     }
 }
