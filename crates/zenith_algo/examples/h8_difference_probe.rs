@@ -258,9 +258,53 @@ fn main() {
                             .iter()
                             .filter(|(key, count)| **count > 1 && key.0 == key.1)
                             .count();
+                        // **2 つに割って数えます**（4-569）。
+                        // **(a) 1 枚の中で同じ向きの辺を 2 度たどる**（分割の折り返し）と
+                        // **(b) 別の 2 枚が同じ向きに使う**（向き）は、別の話です。
+                        // **(b) が 0 なら、殻の向きは揃っています。**
+                        let mut folded = 0usize;
+                        let mut crossed = 0usize;
+                        {
+                            let mut owner: std::collections::BTreeMap<
+                                ((i64, i64, i64), (i64, i64, i64)),
+                                Vec<u64>,
+                            > = std::collections::BTreeMap::new();
+                            let mut at = 0usize;
+                            for (face_id, triangle_count) in &counts {
+                                for index in at..(at + triangle_count) {
+                                    let triangle = mesh.indices[index];
+                                    for pair in [
+                                        (triangle[0] as usize, triangle[1] as usize),
+                                        (triangle[1] as usize, triangle[2] as usize),
+                                        (triangle[2] as usize, triangle[0] as usize),
+                                    ] {
+                                        let key = (
+                                            cell(mesh.positions[pair.0]),
+                                            cell(mesh.positions[pair.1]),
+                                        );
+                                        if directed.get(&key).copied().unwrap_or(0) > 1 {
+                                            owner.entry(key).or_default().push(*face_id);
+                                        }
+                                    }
+                                }
+                                at += triangle_count;
+                            }
+                            for users in owner.values() {
+                                let mut unique = users.clone();
+                                unique.sort_unstable();
+                                unique.dedup();
+                                if unique.len() <= 1 {
+                                    folded += 1;
+                                } else {
+                                    crossed += 1;
+                                }
+                            }
+                        }
                         println!(
-                            "    同じ向きで 2 回以上使われた稜 {same} 本（うち長さ 0 が {degenerate} 本、本物は {} 本）",
-                            same - degenerate
+                            "    同じ向きで 2 回以上使われた稜 {same} 本（うち長さ 0 が {degenerate} 本）"
+                        );
+                        println!(
+                            "      うち **1 枚の中での折り返し {folded} 本**、**別の 2 枚が同じ向き {crossed} 本**"
                         );
                         // **具体例を 3 つ名指しします**（4-568）。**どの 2 枚が、どの辺を
                         // 同じ向きに使っているか**——**それが分からないと、
