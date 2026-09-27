@@ -12,6 +12,7 @@ use std::time::Instant;
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, MassCalculator, PrimitiveBuilder,
 };
+use zenith_topo::FaceGeometry;
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Vec3};
 use zenith_tess::{tessellate_solid, TessellationParams};
@@ -184,11 +185,51 @@ fn main() {
                     rows.sort_by(|left, right| right.2.partial_cmp(&left.2).unwrap());
                     for (at, contribution, area, centre, edges, inner) in rows.iter() {
                         println!(
-                            "      面{at:<3} 面積 {area:.6}  重心 ({:.4} {:.4} {:.4})  稜 {edges} 内輪 {inner}  寄与 {contribution:+.6}",
-                            centre.x, centre.y, centre.z
+                            "      面{at:<3}（id {}）面積 {area:.6}  重心 ({:.4} {:.4} {:.4})  稜 {edges} 内輪 {inner}  寄与 {contribution:+.6}  粗さ {:.6e}＋{:.6e}＝{:.6e}",
+                            solid.outer_shell.faces[*at].id,
+                            centre.x, centre.y, centre.z,
+                            solid.outer_shell.faces[*at].tolerance,
+                            solid.outer_shell.faces[*at].pcurve_tolerance,
+                            solid.outer_shell.faces[*at].tolerance
+                                + solid.outer_shell.faces[*at].pcurve_tolerance
                         );
                     }
                     println!("    寄与の合計 {sum:.6}");
+                    // **平面の面の稜が、その平面からどれだけ浮いているか**（4-570）。
+                    // **平面の p-curve は「その点を平面へ落としたもの」**なので、
+                    // **検証が測る距離は、これそのもの**です。
+                    if std::env::var_os("ZENITH_H8_PLANE_GAP").is_some() {
+                        for (at, face) in solid.outer_shell.faces.iter().enumerate() {
+                            let FaceGeometry::Plane(plane) = &face.geometry else {
+                                continue;
+                            };
+                            let raw = plane.u_axis.cross(&plane.v_axis);
+                            if raw.norm() <= f64::EPSILON {
+                                continue;
+                            }
+                            let normal = raw / raw.norm();
+                            for (edge_at, oriented) in face.outer_wire.edges.iter().enumerate() {
+                                let mut worst = 0.0f64;
+                                for step in 0..=37 {
+                                    let (t0, t1) = oriented.edge.curve.param_range();
+                                    let point = oriented.edge.curve.evaluate(
+                                        t0 + (t1 - t0) * (step as f64 / 37.0),
+                                    );
+                                    worst = worst.max(((point - plane.origin).dot(&normal)).abs());
+                                }
+                                if worst > 1e-6 {
+                                    let start = oriented.edge.start_vertex.point;
+                                    let end = oriented.edge.end_vertex.point;
+                                    println!(
+                                        "      面{at} 稜{edge_at}: 平面から {worst:.6e} 浮いています（({:.6} {:.6} {:.6})->({:.6} {:.6} {:.6})、制御点 {}、次数 {}）",
+                                        start.x, start.y, start.z, end.x, end.y, end.z,
+                                        oriented.edge.curve.control_points.len(),
+                                        oriented.edge.curve.degree
+                                    );
+                                }
+                            }
+                        }
+                    }
                     // **巻き方が食い違っている面を数えます**（4-566）。
                     //
                     // **面積の合計は OCC と 3e-5 で一致するのに、体積が 4%

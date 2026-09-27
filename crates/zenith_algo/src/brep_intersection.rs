@@ -1600,6 +1600,15 @@ impl BrepIntersectionBuilder {
                     analytic: candidate.analytic,
                 }),
         );
+        // **交線を、相手が平面ならその平面へ落とします**（4-570。
+        // `ZENITH_SNAP_CURVE_TO_PLANE=1`。**既定では走りません**）。
+        if let Ok(value) = std::env::var("ZENITH_SNAP_CURVE_TO_PLANE") {
+            let cap = value.parse::<f64>().ok().filter(|v| *v > 0.0).unwrap_or(1e-3);
+            let cap = if cap == 1.0 { 1e-3 } else { cap };
+            let moved =
+                snap_candidate_curves_to_planes(&mut edge_candidates, &faces_a, &faces_b, cap);
+            eprintln!("PLANESNAP 上限 {cap:.3e} で制御点を {moved} 個落としました");
+        }
         // **公差の下で離れている端を、1 つに寄せます**（4-448。
         // `ZENITH_WELD_ENDS=1` で入ります。**既定では走りません**）。
         let welded = weld_intersection_edge_ends(&mut edge_candidates, tol);
@@ -14820,7 +14829,52 @@ fn weld_piece_ends_by_edge_id(pieces: &mut [SelectedBooleanFacePiece], cap: f64)
             for point in &group {
                 sum += point.coords;
             }
-            let centre = Point3::from(sum / group.len() as f64);
+            let mut centre = Point3::from(sum / group.len() as f64);
+            // **重心を、乗るべき平面へ戻します**（4-571。
+            // `ZENITH_ID_WELD_PLANES=1`。**既定では走りません**）。
+            //
+            // **重心は、平面の上に居るべき点を平面の外へ出します。**
+            // 実測（`linkrods` の和。4-570）: **切り手の天面 `z = 1.41` の上の
+            // 頂点が `z = 1.410046`**——**平面から 4.561765e-5**。
+            // **検証の許容は「輪の差し渡し × 1e-5」= 3.901828e-5** なので、
+            // **そこだけで和が断られます。**
+            //
+            // **群の点が全部乗っている平面**にだけ戻します（**乗っていない
+            // 平面へ引き寄せません**）。**平面が 2 枚以上なら、順に落として
+            // 数回まわします**（箱の稜のように、交わりの線の上へ戻ります）。
+            if std::env::var_os("ZENITH_ID_WELD_PLANES").is_some() {
+                let mut planes: Vec<(Point3, Vec3)> = Vec::new();
+                for piece in pieces.iter() {
+                    let FaceGeometry::Plane(plane) = &piece.face.geometry else {
+                        continue;
+                    };
+                    let raw = plane.u_axis.cross(&plane.v_axis);
+                    if raw.norm() <= f64::EPSILON {
+                        continue;
+                    }
+                    let normal = raw / raw.norm();
+                    // **群の点が全部この平面の上にあるか。**
+                    let seated = group.iter().all(|point| {
+                        ((point - plane.origin).dot(&normal)).abs() <= cap
+                    });
+                    if !seated {
+                        continue;
+                    }
+                    let already = planes.iter().any(|(origin, other)| {
+                        (other - normal).norm() <= 1e-9
+                            && ((plane.origin - origin).dot(&normal)).abs() <= 1e-9
+                    });
+                    if !already {
+                        planes.push((plane.origin, normal));
+                    }
+                }
+                for _round in 0..5 {
+                    for (origin, normal) in &planes {
+                        centre -= normal * (centre - origin).dot(normal);
+                    }
+                }
+            }
+            let centre = centre;
             // **離れすぎているものは触りません。** 同じ id でも、群の分け方を
             // 間違えていれば大きく動かしてしまいます。
             if group
@@ -15057,4 +15111,84 @@ fn boolean_span(solid: &Solid) -> f64 {
     let bbox = solid.bounding_box();
     let span = bbox.max - bbox.min;
     span.x.max(span.y).max(span.z)
+}
+
+/// **交線を、相手が平面ならその平面へ落とします**（4-570。
+/// `ZENITH_SNAP_CURVE_TO_PLANE=1`。**既定では走りません**）。
+///
+/// 4-567 のあと、和に残る断りは **2 本だけ**です——
+/// **`Face 36: outer loop edge 4/5 p-curve differs from 3D edge by 4.561765e-5
+/// (allowed 3.901828e-5)`**。
+///
+/// **面36 は切り手の平面**（自作の箱。粗さ 1e-6、面積 1.512725、z = 1.41）で、
+/// **許容は `1e-5 × 輪の差し渡し`**（`validate_face_pcurve_loop`）。
+/// **平面の p-curve は「その点を平面へ落としたもの」**なので、
+/// **測っている距離は、交線が平面からどれだけ浮いているか**そのものです。
+///
+/// > **平面との交線は、その平面の上に在るはずです。**
+/// > **辿って当てはめた曲線は、両方の曲面に対して 1e-6 で合わせてありますが、
+/// > 制御点は平面の上には乗っていません。**
+///
+/// **制御点を平面へ落とせば、厳密に乗ります**（浮いていた分だけ動くので、
+/// 相手の曲面からの外れは、その分しか増えません）。
+///
+/// **両方が平面の組は触りません**——**交線は直線で、解析的に出ています。**
+///
+/// 動かした制御点の数を返します。
+fn snap_candidate_curves_to_planes(
+    candidates: &mut [IntersectionEdgeCandidate],
+    faces_a: &[Face],
+    faces_b: &[Face],
+    cap: f64,
+) -> usize {
+    let plane_of = |face: Option<&Face>| -> Option<(Point3, Vec3)> {
+        match face.map(|face| &face.geometry) {
+            Some(FaceGeometry::Plane(plane)) => {
+                let raw = plane.u_axis.cross(&plane.v_axis);
+                let length = raw.norm();
+                if length <= f64::EPSILON {
+                    None
+                } else {
+                    Some((plane.origin, raw / length))
+                }
+            }
+            _ => None,
+        }
+    };
+    let mut moved = 0usize;
+    for candidate in candidates.iter_mut() {
+        let on_a = plane_of(faces_a.get(candidate.face_a_index));
+        let on_b = plane_of(faces_b.get(candidate.face_b_index));
+        // **両方が平面なら、交線は直線です。触りません。**
+        let plane = match (on_a, on_b) {
+            (Some(_), Some(_)) => continue,
+            (Some(plane), None) | (None, Some(plane)) => plane,
+            (None, None) => continue,
+        };
+        let (origin, normal) = plane;
+        let drop = |point: Point3| -> Point3 { point - normal * (point - origin).dot(&normal) };
+        let mut touched = false;
+        for control in candidate.edge.curve.control_points.iter_mut() {
+            let landed = drop(control.point);
+            let shift = (landed - control.point).norm();
+            // **離れすぎているものは触りません**——**その交線は、その平面の
+            // ものではありません。**
+            if shift > cap {
+                touched = false;
+                break;
+            }
+            if shift > f64::EPSILON {
+                control.point = landed;
+                touched = true;
+                moved += 1;
+            }
+        }
+        if touched {
+            let points = &candidate.edge.curve.control_points;
+            let (first, last) = (points[0].point, points[points.len() - 1].point);
+            candidate.edge.start_vertex.point = first;
+            candidate.edge.end_vertex.point = last;
+        }
+    }
+    moved
 }

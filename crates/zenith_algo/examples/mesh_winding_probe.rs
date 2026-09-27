@@ -149,6 +149,44 @@ fn main() {
     );
     count("linkrods", &solid);
     println!();
+    println!();
+    report_boundary_on_surface(&solid);
+    println!();
     println!("**自作の立体は 0 本、読んだ立体だけが持ちます。**");
     println!("**ブーリアンの答えは 45 本**（4-568）——**足しているのは 2 本だけ**です。");
+}
+
+/// **読んだ面の境界が、自分の曲面の上に在るか**（4-570）。
+///
+/// 4-562 は「**和の最後の 2 本は、3D の稜が曲面から 4.000839e-5 浮いている**」
+/// **面36 が申告する粗さ 3.901828e-5 を 2.5% 超える**と測りました。
+///
+/// **同じ問いを、入口で立てます**——**ブーリアンの前から浮いているのか。**
+/// **浮いているなら、原因は刻む段ではなく、読む段**です
+/// （**OCC は円柱とトーラスのまま持ち、こちらは 13 枚を NURBS に直しています**。4-560）。
+fn report_boundary_on_surface(solid: &zenith_topo::Solid) {
+    let tol = zenith_math::Tolerance::default();
+    println!("読んだ面の境界が、自分の曲面の上に在るか（**37 点で測ります**）:");
+    let mut rows: Vec<(usize, u64, f64, f64, usize)> = Vec::new();
+    for (at, face) in solid.outer_shell.faces.iter().enumerate() {
+        let report = face.validate_boundary_on_surface(&tol, 37);
+        let allowed = face.tolerance + face.pcurve_tolerance;
+        rows.push((
+            at,
+            face.id,
+            report.max_distance,
+            allowed,
+            report.off_surface_point_count,
+        ));
+    }
+    rows.sort_by(|left, right| right.2.partial_cmp(&left.2).unwrap());
+    for (at, id, distance, allowed, off) in rows.iter() {
+        println!(
+            "  面{at:<3}（id {id}）外れ {distance:.6e}  申告 {allowed:.6e}  比 {:.3}  外れた点 {off}",
+            if *allowed > 0.0 { distance / allowed } else { f64::INFINITY }
+        );
+    }
+    let worst = rows.first().map(|row| row.2).unwrap_or(0.0);
+    let over = rows.iter().filter(|row| row.2 > row.3).count();
+    println!("  いちばん外れた面 {worst:.6e}、**申告を超えている面 {over} 枚**");
 }
