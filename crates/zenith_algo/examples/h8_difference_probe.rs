@@ -251,10 +251,85 @@ fn main() {
                             at += triangle_count;
                         }
                         let same: usize = directed.values().filter(|count| **count > 1).count();
-                        println!("    同じ向きで 2 回以上使われた稜 {same} 本");
+                        // **長さ 0 の辺を分けて数えます**（4-568）。**両端が同じ枡に
+                        // 落ちる辺は、辺ではありません**——**それを「向きが食い違う」と
+                        // 数えていたら、この口は嘘をつきます。
+                        let degenerate: usize = directed
+                            .iter()
+                            .filter(|(key, count)| **count > 1 && key.0 == key.1)
+                            .count();
+                        println!(
+                            "    同じ向きで 2 回以上使われた稜 {same} 本（うち長さ 0 が {degenerate} 本、本物は {} 本）",
+                            same - degenerate
+                        );
+                        // **具体例を 3 つ名指しします**（4-568）。**どの 2 枚が、どの辺を
+                        // 同じ向きに使っているか**——**それが分からないと、
+                        // 数え方の嘘か、本物の欠陥かが決まりません。**
+                        {
+                            let mut shown = 0usize;
+                            let mut at = 0usize;
+                            let mut owner: std::collections::BTreeMap<
+                                ((i64, i64, i64), (i64, i64, i64)),
+                                Vec<u64>,
+                            > = std::collections::BTreeMap::new();
+                            for (face_id, triangle_count) in &counts {
+                                for index in at..(at + triangle_count) {
+                                    let triangle = mesh.indices[index];
+                                    for pair in [
+                                        (triangle[0] as usize, triangle[1] as usize),
+                                        (triangle[1] as usize, triangle[2] as usize),
+                                        (triangle[2] as usize, triangle[0] as usize),
+                                    ] {
+                                        let key = (
+                                            cell(mesh.positions[pair.0]),
+                                            cell(mesh.positions[pair.1]),
+                                        );
+                                        if directed.get(&key).copied().unwrap_or(0) > 1 {
+                                            owner.entry(key).or_default().push(*face_id);
+                                        }
+                                    }
+                                }
+                                at += triangle_count;
+                            }
+                            for (key, faces) in owner.iter() {
+                                if shown >= 3 {
+                                    break;
+                                }
+                                println!(
+                                    "      例: ({:.6} {:.6} {:.6}) -> ({:.6} {:.6} {:.6}) を面 {:?} が同じ向きに使っています",
+                                    key.0 .0 as f64 * 1e-6,
+                                    key.0 .1 as f64 * 1e-6,
+                                    key.0 .2 as f64 * 1e-6,
+                                    key.1 .0 as f64 * 1e-6,
+                                    key.1 .1 as f64 * 1e-6,
+                                    key.1 .2 as f64 * 1e-6,
+                                    faces
+                                );
+                                shown += 1;
+                            }
+                        }
                         bad_by_face.sort_by_key(|row| std::cmp::Reverse(row.1));
+                        // **面積と寄与も出します**（4-568）。**巻き方の食い違いが
+                        // 体積に効いているかは、その面の寄与の大きさで決まります**
+                        // ——**寄与が 1e-5 より小さければ、体積には出ません**。
                         for (face_id, bad) in bad_by_face.iter().take(12) {
-                            println!("      面(id {face_id}) の三角形の辺 {bad} 本が食い違い");
+                            let found = solid
+                                .outer_shell
+                                .faces
+                                .iter()
+                                .find(|face| face.id == *face_id);
+                            match found {
+                                Some(face) => {
+                                    let (area, contribution) =
+                                        MassCalculator::compute_face_integral(face, &params);
+                                    println!(
+                                        "      面(id {face_id}) の三角形の辺 {bad} 本が食い違い——面積 {area:.6}、寄与 {contribution:+.6}、稜 {} 内輪 {}",
+                                        face.outer_wire.edges.len(),
+                                        face.inner_wires.len()
+                                    );
+                                }
+                                None => println!("      面(id {face_id}) の三角形の辺 {bad} 本が食い違い"),
+                            }
                         }
                     }
                 }
