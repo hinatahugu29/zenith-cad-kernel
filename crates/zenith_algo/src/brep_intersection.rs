@@ -1671,6 +1671,24 @@ impl BrepIntersectionBuilder {
         // なく Shell として読む）。ここで実体を一本化する。
         let faces = unify_coincident_edges(faces, tol);
 
+        // **検証を飛ばして組む口**（4-564。`ZENITH_SKIP_SOLID_VALIDATION=1`。
+        // **既定では走りません**）。
+        //
+        // **`boolean_solids_exact_result_unverified` は「検証しない」と
+        // 名乗っていますが、検証されます**——**`Solid::try_simple` が
+        // 組む時に検証する**からです。**断られた演算の中身（体積・面の数）を
+        // 見る手が、どこにもありませんでした。**
+        //
+        // **要るのは、恒等式を自分の数で確かめるため**です（4-559）——
+        // **`|A∪B| + |A∩B| = |A| + |B|` の和が取れないと、こちらの 3 つが
+        // 互いに合っているかを言えません。**
+        //
+        // **これは検証を緩める口ではありません。** **測るための口**で、
+        // **本番（`boolean_solids_exact_result`）は縫合も検証もそのまま**
+        // 通ります。
+        if std::env::var_os("ZENITH_SKIP_SOLID_VALIDATION").is_some() {
+            return Ok(Solid::new(Shell::closed(faces), Vec::new()));
+        }
         Solid::try_simple(Shell::closed(faces), tol).map_err(|err| err.to_string())
     }
 
