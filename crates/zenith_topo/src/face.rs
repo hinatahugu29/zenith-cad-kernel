@@ -1834,6 +1834,17 @@ fn validate_plane_pcurve_loop(
 
             if distance > allowance {
                 report.mismatch_count += 1;
+                // **その p-curve が何点の折れ線か**も出します（4-562。
+                // `ZENITH_PCURVE_POINTS=1`）。**初期の刻みのままなら細分が
+                // 走っていません**、**上限 4096 なら張り付いています**。
+                // **どちらなのかで、直す場所が変わります。**
+                if std::env::var_os("ZENITH_PCURVE_POINTS").is_some() {
+                    eprintln!(
+                        "PCURVEPOINTS {loop_name} 稜{edge_index}: 外れ {distance:.6e} 許容 {allowance:.6e} 制御点 {} 次数 {}",
+                        pcurve.curve.control_points.len(),
+                        pcurve.curve.degree
+                    );
+                }
                 report.errors.push(format!(
                     "{loop_name} loop edge {edge_index} p-curve differs from 3D edge by {distance:.6e} (allowed {allowance:.6e})"
                 ));
@@ -1925,6 +1936,17 @@ fn validate_face_pcurve_loop(
 
             if distance > allowance {
                 report.mismatch_count += 1;
+                // **その p-curve が何点の折れ線か**も出します（4-562。
+                // `ZENITH_PCURVE_POINTS=1`）。**初期の刻みのままなら細分が
+                // 走っていません**、**上限 4096 なら張り付いています**。
+                // **どちらなのかで、直す場所が変わります。**
+                if std::env::var_os("ZENITH_PCURVE_POINTS").is_some() {
+                    eprintln!(
+                        "PCURVEPOINTS {loop_name} 稜{edge_index}: 外れ {distance:.6e} 許容 {allowance:.6e} 制御点 {} 次数 {}",
+                        pcurve.curve.control_points.len(),
+                        pcurve.curve.degree
+                    );
+                }
                 report.errors.push(format!(
                     "{loop_name} loop edge {edge_index} p-curve differs from 3D edge by {distance:.6e} (allowed {allowance:.6e})"
                 ));
