@@ -106,6 +106,9 @@ fn count(
         }
     }
     if name.contains("linkrods") && !name.contains("正規化") {
+        for (pair, point) in &crossed_examples {
+            println!("    組 {:?} の実例座標: {:?}", pair, point);
+        }
         println!(
             "    面の組（{} 組）: {:?}",
             crossed_examples.len(),

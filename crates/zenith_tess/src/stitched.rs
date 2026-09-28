@@ -1539,10 +1539,37 @@ fn push_with_uv_winding(
     }
 
     let counter_clockwise = signed > 0.0;
+    // **どの三角形がどう決まったかを見る診断**（4-573。
+    // `ZENITH_UV_WINDING_WHY=<x>,<y>,<z>`。**既定では走りません**）。
+    if let Some(target) = uv_winding_why_target() {
+        if [p0, p1, p2].iter().any(|p| (p - target).norm() <= 1e-3) {
+            eprintln!(
+                "UVWINDINGWHY 三角形 ({:.6} {:.6} {:.6})-({:.6} {:.6} {:.6})-({:.6} {:.6} {:.6}) uv=({:.6},{:.6})-({:.6},{:.6})-({:.6},{:.6}) signed={:.3e} forward={forward} ccw={counter_clockwise}",
+                p0.x, p0.y, p0.z, p1.x, p1.y, p1.z, p2.x, p2.y, p2.z,
+                a.x, a.y, b.x, b.y, c.x, c.y,
+                signed
+            );
+        }
+    }
     if counter_clockwise == forward {
         mesh.indices.push(triangle);
     } else {
         mesh.indices.push([triangle[0], triangle[2], triangle[1]]);
+    }
+}
+
+/// `ZENITH_UV_WINDING_WHY=<x>,<y>,<z>` を解いて、狙う 3D 点を返す
+/// （4-573。診断だけに使います）。
+fn uv_winding_why_target() -> Option<Point3> {
+    let raw = std::env::var("ZENITH_UV_WINDING_WHY").ok()?;
+    let parts: Vec<f64> = raw
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    if parts.len() == 3 {
+        Some(Point3::new(parts[0], parts[1], parts[2]))
+    } else {
+        None
     }
 }
 
