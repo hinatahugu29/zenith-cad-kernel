@@ -1489,7 +1489,26 @@ fn push_with_uv_winding(
     let b = uvs[triangle[1] as usize];
     let c = uvs[triangle[2] as usize];
     let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
-    if signed == 0.0 {
+    // **ちょうど 0 だけでなく、ほぼ 0 も同じ扱いにします**（4-573。
+    // `ZENITH_TRIM_DEGENERATE_GUARD=1`。**既定では走りません**）。
+    //
+    // 実測: `linkrods.step` の球パッチ（面84）が、自由曲面（面78）と
+    // 接する境界のすぐそばに、**uv 面積がちょうど 0 ではないが極めて
+    // 小さい三角形**を持っていました（3 頂点がほぼ一直線）。**`signed`
+    // の符号は、そこでは浮動小数の丸めでどちらにも転びうる**ため、
+    // `counter_clockwise` の判定が実質コイン投げになり、隣の面（面78）の
+    // 向きとたまたま一致して「同じ向きに 2 回使われた稜」に見えていました。
+    //
+    // **`uv-zero` の受け皿（3D の法線で決め直す、下のブロック）はすでに
+    // あります**——**ちょうど 0 のときしか使っていませんでした。**
+    // **三角形の uv での広がりに対して極めて小さいときも、同じ受け皿へ
+    // 回します。**
+    let degenerate_guard = std::env::var_os("ZENITH_TRIM_DEGENERATE_GUARD").is_some();
+    let nearly_zero = degenerate_guard && {
+        let scale = (b - a).norm().max((c - a).norm()).max((c - b).norm());
+        scale > 0.0 && signed.abs() <= scale * scale * 1e-9
+    };
+    if signed == 0.0 || nearly_zero {
         // **uv で潰れていても、3D では面積を持つ三角形があります**（4-286）。
         //
         // 実測（OCCT の `screw.step`）: uv の面積が 0 の三角形が 41 枚あり、

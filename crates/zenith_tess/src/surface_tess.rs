@@ -1546,7 +1546,54 @@ fn build_trimmed_mesh(
             expected = -expected;
         }
 
-        if facet.dot(&expected) >= 0.0 {
+        // **向きの判定が数値的に信用できない三角形を捨てます**（4-573。
+        // `ZENITH_TRIM_DEGENERATE_GUARD=1`。**既定では走りません**）。
+        //
+        // **⚠ `linkrods` の 43 本を実際に直したのは、この関数ではなく
+        // 兄弟にあたる `stitched.rs` の `push_with_uv_winding`**でした
+        // （`tessellate_solid` はそちらを通ります。4-573）。**ここは、
+        // 診断で見つけた形（facet が期待する法線とほぼ直交する、退化
+        // しかけた三角形）に対する、同じ発想の備え**です——**この関数
+        // （`build_trimmed_mesh`、p-curve が使えないときの受け皿）にも
+        // 同じ穴があり得るので、揃えておきます。**
+        //
+        // 実測（`stitched.rs` 側）: 巻き方が別の面と食い違っていた三角形は、
+        // `facet` の長さが 2.3e-7 で（`facet.norm() <= 1e-18` の閾値には
+        // 掛からないのに）、期待する法線との内積はその 18 桁下
+        // （6.578e-18）——**facet が期待する法線とほぼ直交して**いました。
+        // **3 頂点がほぼ一直線に並ぶ、細長い（退化しかけた）三角形**で、
+        // `>= 0.0` の判定が実質コイン投げになっていました。**絶対の長さ
+        // ではなく、期待する法線との揃い具合（正規化した内積）で見ます。**
+        if std::env::var_os("ZENITH_TRIM_DEGENERATE_GUARD").is_some() {
+            let expected_len = expected.norm();
+            if expected_len > 1e-18 {
+                let alignment = facet.dot(&expected) / (facet.norm() * expected_len);
+                if alignment.abs() < 1e-6 {
+                    continue;
+                }
+            }
+        }
+
+        let flipped = facet.dot(&expected) < 0.0;
+        // **この関数が、実際に頂点を入れ替えているかを見る診断**（4-573。
+        // `ZENITH_TRIM_WINDING_WHY=<x>,<y>,<z>`。**既定では走りません**）。
+        //
+        // 巻き方が食い違う面の組で、局所法線は揃っている（測定済み）のに
+        // 食い違う理由を探しています——**ここで実際に入れ替えが起きて
+        // いるか**を、境界のすぐそばの三角形について出します。
+        if let Some(target) = trim_winding_why_target() {
+            let near = [a, b, c].iter().any(|p| (p - target).norm() <= 1e-3);
+            if near {
+                eprintln!(
+                    "TRIMWINDINGWHY 面id{} 三角形 ({:.6} {:.6} {:.6})-({:.6} {:.6} {:.6})-({:.6} {:.6} {:.6}) facet.dot(expected)={:.3e} facet長さ={:.3e} 入れ替え={flipped}",
+                    face.id,
+                    a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z,
+                    facet.dot(&expected),
+                    facet.norm(),
+                );
+            }
+        }
+        if !flipped {
             mesh.indices
                 .push([triangle[0] as u32, triangle[1] as u32, triangle[2] as u32]);
         } else {
@@ -1556,6 +1603,21 @@ fn build_trimmed_mesh(
     }
 
     mesh
+}
+
+/// `ZENITH_TRIM_WINDING_WHY=<x>,<y>,<z>` を解いて、狙う 3D 点を返す
+/// （4-573。診断だけに使います）。
+fn trim_winding_why_target() -> Option<Point3> {
+    let raw = std::env::var("ZENITH_TRIM_WINDING_WHY").ok()?;
+    let parts: Vec<f64> = raw
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+    if parts.len() == 3 {
+        Some(Point3::new(parts[0], parts[1], parts[2]))
+    } else {
+        None
+    }
 }
 
 /// トリムループを UV 上の折れ線にするときの細かさ。
