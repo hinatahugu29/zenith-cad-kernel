@@ -24,7 +24,7 @@
 use zenith_io::StepImporter;
 use zenith_tess::{face_triangle_counts, tessellate_solid, TessellationParams};
 
-type CrossedExample = std::collections::BTreeMap<(u64, u64), zenith_math::Point3>;
+type CrossedExample = std::collections::BTreeMap<(u64, u64), (zenith_math::Point3, zenith_math::Point3)>;
 
 fn count(
     name: &str,
@@ -93,21 +93,28 @@ fn count(
         } else {
             crossed += 1;
             crossed_face_ids.extend(&unique);
-            let point = zenith_math::Point3::new(
+            let point0 = zenith_math::Point3::new(
                 key.0 .0 as f64 * 1e-6,
                 key.0 .1 as f64 * 1e-6,
                 key.0 .2 as f64 * 1e-6,
             );
+            let point1 = zenith_math::Point3::new(
+                key.1 .0 as f64 * 1e-6,
+                key.1 .1 as f64 * 1e-6,
+                key.1 .2 as f64 * 1e-6,
+            );
             for i in 0..unique.len() {
                 for j in (i + 1)..unique.len() {
-                    crossed_examples.entry((unique[i], unique[j])).or_insert(point);
+                    crossed_examples
+                        .entry((unique[i], unique[j]))
+                        .or_insert((point0, point1));
                 }
             }
         }
     }
     if name.contains("linkrods") && !name.contains("正規化") {
-        for (pair, point) in &crossed_examples {
-            println!("    組 {:?} の実例座標: {:?}", pair, point);
+        for (pair, points) in &crossed_examples {
+            println!("    組 {:?} の実例座標: {:?}", pair, points);
         }
         println!(
             "    面の組（{} 組）: {:?}",
@@ -328,7 +335,7 @@ fn main() {
     // ここから来ています。**
     println!("境界の点で、両方の面の向きが揃っているか（4-573）:");
     let tol = zenith_math::Tolerance::default();
-    for (&(id_a, id_b), &boundary_point) in &crossed_examples {
+    for (&(id_a, id_b), &(boundary_point, _)) in &crossed_examples {
         for id in [id_a, id_b] {
             let Some(face) = solid.outer_shell.faces.iter().find(|f| f.id == id) else {
                 continue;
@@ -360,6 +367,87 @@ fn main() {
                     );
                 }
                 Err(reason) => println!("    組 ({id_a},{id_b}) の id {id}: 射影できません: {reason}"),
+            }
+        }
+    }
+
+    // **辺の両端で絞り込んで、両面それぞれの三角形を名指しします**（4-573）。
+    // **`tessellate_solid`（縫い合わせる版。実際に使われるほう）の頂点で
+    // 探します**——**`tessellate_face` とは別の頂点位置を持つ**ので、
+    // 単独では刻み直しません。
+    println!("辺の両端で名指しした三角形（4-573）:");
+    let stitched_mesh = tessellate_solid(&solid, &params);
+    let stitched_counts = face_triangle_counts(&solid, &params);
+    for (&(id_a, id_b), &(end0, end1)) in &crossed_examples {
+        for id in [id_a, id_b] {
+            let mut at = 0usize;
+            let mut found = false;
+            for (face_id, triangle_count) in &stitched_counts {
+                if *face_id != id {
+                    at += triangle_count;
+                    continue;
+                }
+                for index in at..(at + triangle_count).min(stitched_mesh.indices.len()) {
+                    let tri = stitched_mesh.indices[index];
+                    let pts = [
+                        stitched_mesh.positions[tri[0] as usize],
+                        stitched_mesh.positions[tri[1] as usize],
+                        stitched_mesh.positions[tri[2] as usize],
+                    ];
+                    let has_end0 = pts.iter().any(|p| (p - end0).norm() <= 1e-6);
+                    let has_end1 = pts.iter().any(|p| (p - end1).norm() <= 1e-6);
+                    if has_end0 && has_end1 {
+                        let facet = (pts[1] - pts[0]).cross(&(pts[2] - pts[0]));
+                        // **この面の、この三角形の重心での「正しい」外向き
+                        // 法線**——`surface.normal()` に `orientation` を
+                        // 掛けたもの。facet との内積が正なら、この三角形は
+                        // 正しく外向きです。
+                        let verdict = 'verdict: {
+                            let Some(face) = solid.outer_shell.faces.iter().find(|f| f.id == id)
+                            else {
+                                break 'verdict "面が見つかりません".to_string();
+                            };
+                            let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry else {
+                                break 'verdict "NURBS ではありません".to_string();
+                            };
+                            let centroid = zenith_math::Point3::from(
+                                (pts[0].coords + pts[1].coords + pts[2].coords) / 3.0,
+                            );
+                            match zenith_geom::ExtremumEngine::point_to_surface(
+                                centroid, surface, 64, tol.parametric,
+                            ) {
+                                Ok(projection) => {
+                                    let Some(mut normal) =
+                                        surface.normal(projection.u, projection.v)
+                                    else {
+                                        break 'verdict "法線が取れません".to_string();
+                                    };
+                                    if !face.orientation.is_forward() {
+                                        normal = -normal;
+                                    }
+                                    let dot = facet.dot(&normal);
+                                    format!(
+                                        "facet長さ={:.3e}  facet・正しい法線 = {dot:+.3e}（{}）",
+                                        facet.norm(),
+                                        if dot >= 0.0 { "正しく外向き" } else { "**内向き（誤り）**" }
+                                    )
+                                }
+                                Err(reason) => format!("射影できません: {reason}"),
+                            }
+                        };
+                        println!(
+                            "    組 ({id_a},{id_b}) の id {id}: ({:.6} {:.6} {:.6})-({:.6} {:.6} {:.6})-({:.6} {:.6} {:.6})  {verdict}",
+                            pts[0].x, pts[0].y, pts[0].z,
+                            pts[1].x, pts[1].y, pts[1].z,
+                            pts[2].x, pts[2].y, pts[2].z
+                        );
+                        found = true;
+                    }
+                }
+                break;
+            }
+            if !found {
+                println!("    組 ({id_a},{id_b}) の id {id}: 両端を持つ三角形が見つかりません");
             }
         }
     }

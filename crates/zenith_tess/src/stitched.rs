@@ -1523,14 +1523,39 @@ fn push_with_uv_winding(
             + mesh.normals[triangle[1] as usize]
             + mesh.normals[triangle[2] as usize];
         let facet = (p1 - p0).cross(&(p2 - p0));
+        let dot = facet.dot(&reference);
         if why {
             eprintln!(
                 "TESSWHY   EMITKEEP uv-zero（3D 面積 {:.3e}、法線との向き {:.3e}）",
                 facet.norm() * 0.5,
-                facet.dot(&reference)
+                dot
             );
         }
-        if facet.dot(&reference) >= 0.0 {
+        // **`>= 0.0` は、ノイズレベルの値も「陽」と数えます**（4-573）。
+        // **この受け皿こそ、実際に食い違っていた三角形が回ってきていた
+        // 場所**でした——`nearly_zero` が uv の面積で捕まえて、ここへ
+        // 落としたのに、**ここでも揃い具合ではなく符号だけ**を見ていた
+        // ので、`+7.786e-18`（実質ノイズ）が「陽」と判定され、そのまま
+        // 押し出されていました。
+        //
+        // **捨てる手は試して、外しました**（4-573）。**曖昧なら落とす**
+        // ようにしたら、**巻き方の食い違いは 43 → 0 になりましたが、
+        // メッシュの穴が 0 → 68 に増えました**——**この関数の上のコメントが
+        // 警告していたとおり**（「捨てるとその辺が相手を失い、そのまま
+        // メッシュの穴になる」）。**水密性のほうが大事な不変量**なので、
+        // **この手は採用しません。** **診断だけ残します**——**揃い具合が
+        // 効いた比率を出す口**（`ZENITH_TRIM_DEGENERATE_GUARD=1`。
+        // 振る舞いは変えません）。
+        if degenerate_guard && why {
+            let reference_len = reference.norm();
+            if reference_len > 1e-18 {
+                let alignment = dot / (facet.norm() * reference_len);
+                if alignment.abs() < 1e-6 {
+                    eprintln!("TESSWHY   uv-zero-ambiguous（揃い具合 {alignment:.3e}。捨てずに符号どおり押し出します）");
+                }
+            }
+        }
+        if dot >= 0.0 {
             mesh.indices.push(triangle);
         } else {
             mesh.indices.push([triangle[0], triangle[2], triangle[1]]);
@@ -1549,6 +1574,38 @@ fn push_with_uv_winding(
                 a.x, a.y, b.x, b.y, c.x, c.y,
                 signed
             );
+        }
+    }
+    // **uv の面積があっても、3D では法線とほぼ直交している三角形を
+    // 落とします**（4-573。`ZENITH_TRIM_DEGENERATE_GUARD=1`）。
+    //
+    // 実測: `ZENITH_TRIM_DEGENERATE_GUARD` を入れても消えなかった 3 組で、
+    // **片方の三角形は uv の面積が普通（退化していない）のに、3D の facet
+    // が「正しい法線」とほぼ直交して**いました——**facet の長さは 3.2e-6
+    // 〜1.4e-4 とまちまち（小さいとは限らない）**のに、**揃い具合（facet
+    // を正規化した内積）はどれも 1e-12 未満**。**uv では健全でも、3D では
+    // 退化している三角形**があるということです。
+    //
+    // **絶対の長さではなく、比率（cos 類似度）で見ます**——**どちらの
+    // 巻き方でも `|比率|` は変わらない**ので、これは「向きを間違えた」
+    // のではなく「どちらの向きにも決められない」三角形です。**落とすしか
+    // ありません**（4-286 の「uv-zero」と同じ扱い）。
+    if degenerate_guard {
+        let reference = mesh.normals[triangle[0] as usize]
+            + mesh.normals[triangle[1] as usize]
+            + mesh.normals[triangle[2] as usize];
+        let facet = (p1 - p0).cross(&(p2 - p0));
+        let reference_len = reference.norm();
+        if reference_len > 1e-18 {
+            let alignment = facet.dot(&reference) / (facet.norm() * reference_len);
+            if alignment.abs() < 1e-6 {
+                if why {
+                    eprintln!(
+                        "TESSWHY   EMITDROP 3d-ambiguous（揃い具合 {alignment:.3e}）"
+                    );
+                }
+                return;
+            }
         }
     }
     if counter_clockwise == forward {
