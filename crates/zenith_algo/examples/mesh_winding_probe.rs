@@ -24,7 +24,12 @@
 use zenith_io::StepImporter;
 use zenith_tess::{face_triangle_counts, tessellate_solid, TessellationParams};
 
-fn count(name: &str, solid: &zenith_topo::Solid) -> std::collections::BTreeSet<u64> {
+type CrossedExample = std::collections::BTreeMap<(u64, u64), zenith_math::Point3>;
+
+fn count(
+    name: &str,
+    solid: &zenith_topo::Solid,
+) -> (std::collections::BTreeSet<u64>, CrossedExample) {
     let params = TessellationParams::default();
     let mesh = tessellate_solid(solid, &params);
     let counts = face_triangle_counts(solid, &params);
@@ -74,8 +79,12 @@ fn count(name: &str, solid: &zenith_topo::Solid) -> std::collections::BTreeSet<u
     }
     let (mut folded, mut crossed) = (0usize, 0usize);
     let mut crossed_face_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
-    let mut crossed_pairs: std::collections::BTreeSet<(u64, u64)> = std::collections::BTreeSet::new();
-    for users in owner.values() {
+    // **組ごとに、実例の座標を 1 つ持っておきます**（4-573）。**面 id は
+    // 走行ごとに変わり得る**ので、番号を決め打ちせず、この組から
+    // その場で座標を引けるようにします——**次に見る人が、同じ手で
+    // 別の組を確かめられる**ようにするためです。
+    let mut crossed_examples: CrossedExample = std::collections::BTreeMap::new();
+    for (key, users) in &owner {
         let mut unique = users.clone();
         unique.sort_unstable();
         unique.dedup();
@@ -84,15 +93,24 @@ fn count(name: &str, solid: &zenith_topo::Solid) -> std::collections::BTreeSet<u
         } else {
             crossed += 1;
             crossed_face_ids.extend(&unique);
+            let point = zenith_math::Point3::new(
+                key.0 .0 as f64 * 1e-6,
+                key.0 .1 as f64 * 1e-6,
+                key.0 .2 as f64 * 1e-6,
+            );
             for i in 0..unique.len() {
                 for j in (i + 1)..unique.len() {
-                    crossed_pairs.insert((unique[i], unique[j]));
+                    crossed_examples.entry((unique[i], unique[j])).or_insert(point);
                 }
             }
         }
     }
     if name.contains("linkrods") && !name.contains("正規化") {
-        println!("    面の組（{} 組）: {:?}", crossed_pairs.len(), crossed_pairs);
+        println!(
+            "    面の組（{} 組）: {:?}",
+            crossed_examples.len(),
+            crossed_examples.keys().collect::<Vec<_>>()
+        );
     }
     println!(
         "  {name:<28} 面 {:<3} 三角形 {:<6} 折り返し {folded:<4} 別の 2 枚が同じ向き {crossed}{}",
@@ -104,7 +122,7 @@ fn count(name: &str, solid: &zenith_topo::Solid) -> std::collections::BTreeSet<u
             "  **面への割り当ては当てになりません**（合計が合いません）"
         }
     );
-    crossed_face_ids
+    (crossed_face_ids, crossed_examples)
 }
 
 fn main() {
@@ -167,7 +185,7 @@ fn main() {
         undirected.values().filter(|count| **count == 1).count(),
         undirected.values().filter(|count| **count > 2).count()
     );
-    let crossed_ids = count("linkrods", &solid);
+    let (crossed_ids, crossed_examples) = count("linkrods", &solid);
 
     // **巻き付いた面（全周を1つで持つ NURBS 面）の id を集めます**（4-573）。
     let tol0 = zenith_math::Tolerance::default();
@@ -251,7 +269,98 @@ fn main() {
     }
     count("linkrods（正規化後）", &regularized);
     println!();
+
+    // **`surface.normal() × orientation` が、本当に外を向いているか**
+    // （4-573）。**食い違う 7 枚（球パッチ 3・自由曲面 4）と、対照に
+    // 円柱面 1 枚を、答えの材料の外へ出るかで直に確かめます**——
+    // **4-567 で蓋の向きを決めたのと同じやり方**です。
+    println!("法線が、本当に外を向いているか（4-573）:");
+    let mesh = tessellate_solid(&solid, &params);
+    let step = {
+        let bbox = solid.bounding_box();
+        (bbox.max - bbox.min).norm() * 1e-4
+    };
+    let check_ids: Vec<u64> = crossed_ids
+        .iter()
+        .copied()
+        .chain(std::iter::once(147)) // 面36。対照用（申告のある円柱っぽい平面ではなく、
+        // 巻いていない普通の面）。
+        .collect();
+    for face in &solid.outer_shell.faces {
+        if !check_ids.contains(&face.id) {
+            continue;
+        }
+        let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry else {
+            continue;
+        };
+        let ((u0, u1), (v0, v1)) = surface.param_range();
+        let (um, vm) = ((u0 + u1) * 0.5, (v0 + v1) * 0.5);
+        let Some(mut normal) = surface.normal(um, vm) else {
+            println!("    id {}: 中央で法線が取れません", face.id);
+            continue;
+        };
+        if !face.orientation.is_forward() {
+            normal = -normal;
+        }
+        let point = surface.evaluate(um, vm);
+        let probe = point + normal * step;
+        let inside = zenith_algo::BooleanEngine::is_point_inside_mesh(probe, &mesh);
+        println!(
+            "    id {}: 中央から外向きへ踏み出した点は{}",
+            face.id,
+            if inside { "**中**（向きが逆！）" } else { "外（正しい）" }
+        );
+    }
     println!();
+
+    // **境界そのものの点で、両方の面の法線を突き合わせます**（4-573）。
+    // **中央では両方とも「正しい」でした**——**問題は境界の近くにあるかも
+    // しれません。** `crossed_examples` は、食い違う組ごとに実際の
+    // 境界の座標を持っています——**id を決め打ちしません**。
+    //
+    // 実測（2026/09/28。この検体）: **面 78 と 84 の境界で、両方の法線は
+    // 桁まで一致**（(-0.5565 0.0263 -0.8304)）。**法線は揃っており、
+    // どちらも正しく外を向きます**——**4-573 の結論（`build_trimmed_mesh`
+    // の巻き方補正が、接する面どうしで境界稜の向きを取り違える）は、
+    // ここから来ています。**
+    println!("境界の点で、両方の面の向きが揃っているか（4-573）:");
+    let tol = zenith_math::Tolerance::default();
+    for (&(id_a, id_b), &boundary_point) in &crossed_examples {
+        for id in [id_a, id_b] {
+            let Some(face) = solid.outer_shell.faces.iter().find(|f| f.id == id) else {
+                continue;
+            };
+            let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry else {
+                continue;
+            };
+            match zenith_geom::ExtremumEngine::point_to_surface(
+                boundary_point,
+                surface,
+                64,
+                tol.parametric,
+            ) {
+                Ok(projection) => {
+                    let Some(mut normal) = surface.normal(projection.u, projection.v) else {
+                        println!("    組 ({id_a},{id_b}) の id {id}: 境界で法線が取れません");
+                        continue;
+                    };
+                    if !face.orientation.is_forward() {
+                        normal = -normal;
+                    }
+                    let probe = boundary_point + normal * step;
+                    let inside = zenith_algo::BooleanEngine::is_point_inside_mesh(probe, &mesh);
+                    println!(
+                        "    組 ({id_a},{id_b}) の id {id}: 距離 {:.3e}  法線 ({:.4} {:.4} {:.4})  踏み出した点は{}",
+                        projection.distance,
+                        normal.x, normal.y, normal.z,
+                        if inside { "**中**（向きが逆！）" } else { "外（正しい）" }
+                    );
+                }
+                Err(reason) => println!("    組 ({id_a},{id_b}) の id {id}: 射影できません: {reason}"),
+            }
+        }
+    }
+
     report_boundary_on_surface(&solid);
     println!();
     println!("**自作の立体は 0 本、読んだ立体だけが持ちます。**");
