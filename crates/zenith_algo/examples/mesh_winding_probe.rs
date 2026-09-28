@@ -12,11 +12,19 @@
 //! **読んだ立体そのものを、同じ物差しで数えます。**
 //! **入口で既に 45 本あれば、これは刻み方の性質**で、
 //! **ブーリアンの欠陥ではありません。**
+//!
+//! # 4-573 で足したもの
+//!
+//! **「巻き付いた面（全周を1つで持つ面）が怪しい」という仮説を測って
+//! 外しました**——巻き付いた面と、巻き方が食い違う面は重なりがゼロです。
+//! **代わりに見えたのは、次数 2×2 の球パッチ（`sphere_patch_for_boundary`
+//! の署名）が、読んだファイルの自由曲面と接する所に集中している**という形
+//! です。**まだ数値で法線を突き合わせるところまでは進んでいません。**
 
 use zenith_io::StepImporter;
 use zenith_tess::{face_triangle_counts, tessellate_solid, TessellationParams};
 
-fn count(name: &str, solid: &zenith_topo::Solid) {
+fn count(name: &str, solid: &zenith_topo::Solid) -> std::collections::BTreeSet<u64> {
     let params = TessellationParams::default();
     let mesh = tessellate_solid(solid, &params);
     let counts = face_triangle_counts(solid, &params);
@@ -65,6 +73,8 @@ fn count(name: &str, solid: &zenith_topo::Solid) {
         at += triangle_count;
     }
     let (mut folded, mut crossed) = (0usize, 0usize);
+    let mut crossed_face_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    let mut crossed_pairs: std::collections::BTreeSet<(u64, u64)> = std::collections::BTreeSet::new();
     for users in owner.values() {
         let mut unique = users.clone();
         unique.sort_unstable();
@@ -73,7 +83,16 @@ fn count(name: &str, solid: &zenith_topo::Solid) {
             folded += 1;
         } else {
             crossed += 1;
+            crossed_face_ids.extend(&unique);
+            for i in 0..unique.len() {
+                for j in (i + 1)..unique.len() {
+                    crossed_pairs.insert((unique[i], unique[j]));
+                }
+            }
         }
+    }
+    if name.contains("linkrods") && !name.contains("正規化") {
+        println!("    面の組（{} 組）: {:?}", crossed_pairs.len(), crossed_pairs);
     }
     println!(
         "  {name:<28} 面 {:<3} 三角形 {:<6} 折り返し {folded:<4} 別の 2 枚が同じ向き {crossed}{}",
@@ -85,6 +104,7 @@ fn count(name: &str, solid: &zenith_topo::Solid) {
             "  **面への割り当ては当てになりません**（合計が合いません）"
         }
     );
+    crossed_face_ids
 }
 
 fn main() {
@@ -147,7 +167,89 @@ fn main() {
         undirected.values().filter(|count| **count == 1).count(),
         undirected.values().filter(|count| **count > 2).count()
     );
-    count("linkrods", &solid);
+    let crossed_ids = count("linkrods", &solid);
+
+    // **巻き付いた面（全周を1つで持つ NURBS 面）の id を集めます**（4-573）。
+    let tol0 = zenith_math::Tolerance::default();
+    let wrapped_ids: std::collections::BTreeSet<u64> = solid
+        .outer_shell
+        .faces
+        .iter()
+        .filter(|face| match &face.geometry {
+            zenith_topo::FaceGeometry::Nurbs(surface) => {
+                zenith_algo::Regularizer::grid_closes_in_u(surface, &tol0)
+                    || zenith_algo::Regularizer::grid_closes_in_v(surface, &tol0)
+            }
+            _ => false,
+        })
+        .map(|face| face.id)
+        .collect();
+    println!(
+        "  巻き付いた面 {} 枚: {:?}",
+        wrapped_ids.len(),
+        wrapped_ids
+    );
+    println!(
+        "  巻き方が食い違う面 {} 枚: {:?}",
+        crossed_ids.len(),
+        crossed_ids
+    );
+    let overlap: std::collections::BTreeSet<u64> =
+        wrapped_ids.intersection(&crossed_ids).copied().collect();
+    println!(
+        "  **重なり {} 枚**（巻き付いていて、かつ食い違う）: {:?}",
+        overlap.len(),
+        overlap
+    );
+    println!("  食い違う面の中身:");
+    for face in &solid.outer_shell.faces {
+        if !crossed_ids.contains(&face.id) {
+            continue;
+        }
+        let kind = match &face.geometry {
+            zenith_topo::FaceGeometry::Plane(_) => "平面".to_string(),
+            zenith_topo::FaceGeometry::Nurbs(s) => {
+                format!("NURBS 次数{}x{} 制御点{}x{}", s.degree_u, s.degree_v, s.control_points.len(), s.control_points[0].len())
+            }
+            _ => "その他".to_string(),
+        };
+        println!(
+            "    id {}: {kind}  向き {:?}  稜 {} 内輪 {}",
+            face.id,
+            face.orientation,
+            face.outer_wire.edges.len(),
+            face.inner_wires.len()
+        );
+        // **退化した行（同じ点が並ぶ）が無いか**——円錐の頂点・球の極では
+        // 制御点の1行が1点に潰れ、そこで法線が定義できません（4-573）。
+        if let zenith_topo::FaceGeometry::Nurbs(s) = &face.geometry {
+            for (row_index, row) in s.control_points.iter().enumerate() {
+                let first = row[0].point;
+                if row.iter().all(|cp| (cp.point - first).norm() <= 1e-9) {
+                    println!("      行 {row_index} が 1 点に潰れています（退化）: {first:?}");
+                }
+            }
+        }
+    }
+
+    // **正規化（巻き付いた面を割る）を通すと減るか**（4-573）。
+    //
+    // `Regularizer::split_wrapped_face` は、全周を1つで持つ面（円柱・
+    // トーラスなど、制御格子の最初と最後の行／列が重なる面）を、
+    // ノットの位置で割ります。**ブーリアンの入口
+    // （`hold_like_our_own`）だけがこれを通し**、この掃き出しの素の
+    // 読み込みは通していません。**巻き付いた面の周りで巻き方が
+    // 崩れているなら、通すと 43 本が減るはず**です。
+    let tol = zenith_math::Tolerance::default();
+    let (regularized, report) = zenith_algo::Regularizer::regularize_solid(&solid, &tol);
+    println!(
+        "  正規化: 割った巻き付き面 {} 枚、割らずに残した巻き付き面 {} 枚",
+        report.wrapped_faces_split, report.wrapped_faces_left_alone
+    );
+    for reason in &report.left_alone_reasons {
+        println!("    残した理由: {reason}");
+    }
+    count("linkrods（正規化後）", &regularized);
     println!();
     println!();
     report_boundary_on_surface(&solid);
