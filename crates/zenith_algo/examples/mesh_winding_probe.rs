@@ -26,6 +26,67 @@ use zenith_tess::{face_triangle_counts, tessellate_solid, TessellationParams};
 
 type CrossedExample = std::collections::BTreeMap<(u64, u64), (zenith_math::Point3, zenith_math::Point3)>;
 
+/// **`count()` と同じ物差しで、折り返し・別の2枚の数だけを返します**（4-574）。
+/// **三角形を裏返す実験のために、頂点順を差し替えた `indices` を渡せる**
+/// よう、`count()` から折り返し／数え方の芯だけを取り出したものです。
+fn count_mismatches(
+    positions: &[zenith_math::Point3],
+    indices: &[[u32; 3]],
+    counts: &[(u64, usize)],
+) -> (usize, usize) {
+    let cell = |point: zenith_math::Point3| {
+        (
+            (point.x / 1e-6).round() as i64,
+            (point.y / 1e-6).round() as i64,
+            (point.z / 1e-6).round() as i64,
+        )
+    };
+    let mut directed: std::collections::BTreeMap<((i64, i64, i64), (i64, i64, i64)), usize> =
+        std::collections::BTreeMap::new();
+    for triangle in indices {
+        for pair in [
+            (triangle[0] as usize, triangle[1] as usize),
+            (triangle[1] as usize, triangle[2] as usize),
+            (triangle[2] as usize, triangle[0] as usize),
+        ] {
+            *directed
+                .entry((cell(positions[pair.0]), cell(positions[pair.1])))
+                .or_insert(0) += 1;
+        }
+    }
+    let mut owner: std::collections::BTreeMap<((i64, i64, i64), (i64, i64, i64)), Vec<u64>> =
+        std::collections::BTreeMap::new();
+    let mut at = 0usize;
+    for (face_id, triangle_count) in counts {
+        for index in at..(at + triangle_count).min(indices.len()) {
+            let triangle = indices[index];
+            for pair in [
+                (triangle[0] as usize, triangle[1] as usize),
+                (triangle[1] as usize, triangle[2] as usize),
+                (triangle[2] as usize, triangle[0] as usize),
+            ] {
+                let key = (cell(positions[pair.0]), cell(positions[pair.1]));
+                if directed.get(&key).copied().unwrap_or(0) > 1 {
+                    owner.entry(key).or_default().push(*face_id);
+                }
+            }
+        }
+        at += triangle_count;
+    }
+    let (mut folded, mut crossed) = (0usize, 0usize);
+    for users in owner.values() {
+        let mut unique = users.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        if unique.len() <= 1 {
+            folded += 1;
+        } else {
+            crossed += 1;
+        }
+    }
+    (folded, crossed)
+}
+
 fn count(
     name: &str,
     solid: &zenith_topo::Solid,
@@ -376,8 +437,15 @@ fn main() {
     // 探します**——**`tessellate_face` とは別の頂点位置を持つ**ので、
     // 単独では刻み直しません。
     println!("辺の両端で名指しした三角形（4-573）:");
-    let stitched_mesh = tessellate_solid(&solid, &params);
+    let mut stitched_mesh = tessellate_solid(&solid, &params);
     let stitched_counts = face_triangle_counts(&solid, &params);
+    // **捨てずに、曖昧な方だけ巻き方を裏返す（4-574 の続き）**。
+    // **捨てる手は穴を増やしました**（4-574）。**ここでは、組ごとに
+    // 「揃い具合が桁違いに小さい方」だけを見つけ、その 1 枚の頂点順を
+    // 裏返して**（三角形自体は残したまま）、食い違いが本当に消えるかを
+    // その場でシミュレートします。**まだ `stitched.rs` は直していません**
+    // ——ここは診断だけです。
+    let mut flip_candidates: Vec<usize> = Vec::new();
     for (&(id_a, id_b), &(end0, end1)) in &crossed_examples {
         for id in [id_a, id_b] {
             let mut at = 0usize;
@@ -426,8 +494,17 @@ fn main() {
                                         normal = -normal;
                                     }
                                     let dot = facet.dot(&normal);
+                                    let normal_len = normal.norm();
+                                    let ratio = if normal_len > 1e-18 && facet.norm() > 1e-18 {
+                                        (dot / (facet.norm() * normal_len)).abs()
+                                    } else {
+                                        1.0
+                                    };
+                                    if ratio < 1e-6 {
+                                        flip_candidates.push(index);
+                                    }
                                     format!(
-                                        "facet長さ={:.3e}  facet・正しい法線 = {dot:+.3e}（{}）",
+                                        "facet長さ={:.3e}  facet・正しい法線 = {dot:+.3e}（{}、揃い具合 {ratio:.3e}）",
                                         facet.norm(),
                                         if dot >= 0.0 { "正しく外向き" } else { "**内向き（誤り）**" }
                                     )
@@ -451,6 +528,28 @@ fn main() {
             }
         }
     }
+    println!(
+        "揃い具合が桁違いに小さい三角形（裏返す候補）: {} 枚 {:?}",
+        flip_candidates.len(),
+        flip_candidates
+    );
+    let before_total = stitched_mesh.indices.len();
+    for &index in &flip_candidates {
+        stitched_mesh.indices[index] = [
+            stitched_mesh.indices[index][0],
+            stitched_mesh.indices[index][2],
+            stitched_mesh.indices[index][1],
+        ];
+    }
+    let (flipped_folded, flipped_crossed) =
+        count_mismatches(&stitched_mesh.positions, &stitched_mesh.indices, &stitched_counts);
+    println!(
+        "裏返した後（捨てていない。三角形数 {}→{}）: 折り返し {}  別の 2 枚が同じ向き {}",
+        before_total,
+        stitched_mesh.indices.len(),
+        flipped_folded,
+        flipped_crossed
+    );
 
     report_boundary_on_surface(&solid);
     println!();
