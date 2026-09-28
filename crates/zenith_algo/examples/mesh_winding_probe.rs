@@ -154,6 +154,49 @@ fn main() {
     println!();
     println!("**自作の立体は 0 本、読んだ立体だけが持ちます。**");
     println!("**ブーリアンの答えは 45 本**（4-568）——**足しているのは 2 本だけ**です。");
+    println!();
+    report_face_areas(&solid);
+}
+
+/// **A（読んだ立体そのもの）の面ごとの面積と体積への寄与**（4-572）。
+///
+/// 4-559 は「**積の 1.68e-4 のうち 1.234e-4 は入口に在る**——**ブーリアンを
+/// 1 回もかけていない段階で、`V(A)` が OCC より小さい**」と測りました。
+/// **どの面が、その差を持っているか**を見ます。**OCC 側は
+/// `ZENITH_OCC_FACES=A`**（`tools/occ_h8_reference.py`）で、
+/// **同じ並び（面積の大きい順）**にしてあります。
+fn report_face_areas(solid: &zenith_topo::Solid) {
+    let params = TessellationParams::default();
+    println!("A の面ごとの面積（大きい順）:");
+    let mut rows: Vec<(f64, f64, zenith_math::Point3, usize)> = Vec::new();
+    for face in &solid.outer_shell.faces {
+        let (area, volume) =
+            zenith_algo::MassCalculator::compute_face_integral(face, &params);
+        let mesh = zenith_tess::tessellate_face(face, &params);
+        let mut centre = zenith_math::Vec3::zeros();
+        for point in &mesh.positions {
+            centre += point.coords;
+        }
+        if !mesh.positions.is_empty() {
+            centre /= mesh.positions.len() as f64;
+        }
+        rows.push((
+            area,
+            volume,
+            zenith_math::Point3::from(centre),
+            face.outer_wire.edges.len(),
+        ));
+    }
+    let total_area: f64 = rows.iter().map(|row| row.0).sum();
+    let total_volume: f64 = rows.iter().map(|row| row.1).sum();
+    rows.sort_by(|left, right| right.0.partial_cmp(&left.0).unwrap());
+    for (area, volume, centre, edges) in &rows {
+        println!(
+            "  面積 {area:.6}  重心 ({:.4} {:.4} {:.4})  稜 {edges}  寄与 {volume:+.6}",
+            centre.x, centre.y, centre.z
+        );
+    }
+    println!("  面積の合計 {total_area:.6}、体積（寄与の合計） {total_volume:.6}");
 }
 
 /// **読んだ面の境界が、自分の曲面の上に在るか**（4-570）。

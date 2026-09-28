@@ -84,6 +84,21 @@ def main():
     print(f"subject {SAMPLE}  面 {len(subject.Faces)} 枚")
     print(f"  V(A)            {subject.Volume:.6f}")
     print(f"  V(B)            {cutter.Volume:.6f}")
+    # **A そのものの面ごとの内訳**（4-572。`ZENITH_OCC_FACES=A`）。
+    #
+    # **積の 1.68e-4 のうち 1.234e-4 は入口に在ります**（4-559〜4-561）——
+    # **ブーリアンを 1 回もかけていない段階で、`V(A)` が OCC より小さい**。
+    # **どの面が、その差を持っているか**を見ます。
+    if os.environ.get("ZENITH_OCC_FACES") == "A":
+        rows = []
+        for at, face in enumerate(subject.Faces):
+            centre = face.CenterOfMass
+            rows.append((at, face.Area, centre.x, centre.y, centre.z, len(face.Edges)))
+        rows.sort(key=lambda row: -row[1])
+        print("    A の面ごとの面積（大きい順）:")
+        for at, area, x, y, z, edges in rows:
+            print(f"      面{at:<3} 面積 {area:.6f}  重心 ({x:.4f} {y:.4f} {z:.4f})  稜 {edges}")
+        print(f"    面積の合計 {sum(row[1] for row in rows):.6f}")
     for label, operation in (
         ("A - B", subject.cut),
         ("A ^ B", subject.common),
