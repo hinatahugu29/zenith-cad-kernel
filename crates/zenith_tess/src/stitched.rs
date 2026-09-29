@@ -1425,15 +1425,7 @@ fn patch_mesh(
 
     let forward = orientation.is_forward();
     let why = std::env::var_os("ZENITH_TESS_WHY").is_some();
-    for triangle in triangles {
-        push_with_uv_winding(
-            &mut mesh,
-            [triangle[0] as u32, triangle[1] as u32, triangle[2] as u32],
-            &uvs,
-            forward,
-            why,
-        );
-    }
+    push_triangles_with_uv_winding(&mut mesh, &triangles, &uvs, forward, why);
     if std::env::var_os("ZENITH_TESS_WHY").is_some() {
         let mut emitted_edges: std::collections::HashSet<(usize, usize)> = Default::default();
         for triangle in &mesh.indices {
@@ -1466,15 +1458,149 @@ fn patch_mesh(
     mesh
 }
 
-fn push_with_uv_winding(
+/// **1 枚の三角形を、どう出すか**（4-576）。
+///
+/// **`Deferred` は「いまは決められない」**です——**2 周目で、隣の辺の
+/// 向きから決めます**（`push_triangles_with_uv_winding`）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum WindingDecision {
+    /// 3D で面積を持たない——出しません。
+    Drop,
+    /// 渡された頂点順のまま出します。
+    AsIs,
+    /// 頂点順を裏返して出します。
+    Flipped,
+    /// **どちらの向きにも決められません**——2 周目へ回します。
+    /// **中身は幾何が言っていた方**（`true` ならそのまま）で、**2 周目でも
+    /// 辺の手掛かりが釣り合ったときだけ、これに従います**。
+    Deferred(bool),
+}
+
+/// **面 1 枚ぶんの三角形を、2 周に分けて出します**（4-576）。
+///
+/// # なぜ 2 周なのか
+///
+/// **uv でも 3D でも向きが決まらない三角形**があります（4-573、4-574）。
+/// これまでの手は 2 つとも外れました:
+///
+/// - **捨てる**（4-574）: **食い違いは 43→0 になりましたが、メッシュの穴が
+///   0→68 本**。**捨てるとその辺が相手を失います。**
+/// - **無条件に裏返す**（4-575。診断だけ）: **食い違い 32→28、穴は増えない
+///   ものの、折り返しが 6→7**。**向きを 1 枚だけ見て決めても足りません。**
+///
+/// **3 つめの手がこれ**です——**曖昧な 1 枚は 1 周目で保留し、周りの
+/// 三角形が出し終わってから、「既に出た有向辺と衝突しない側」を選びます。**
+/// **閉じた多様体では、共有する辺は必ず互い違いの向きで使われる**という
+/// 不変量そのものを使うので、**法線の揃い具合がノイズに埋もれていても
+/// 決められます**。**捨てないので、穴は増えません。**
+///
+/// **既定では走りません**（`ZENITH_TRIM_WINDING_BY_NEIGHBOR=1`）。
+fn push_triangles_with_uv_winding(
     mesh: &mut TriangleMesh,
+    triangles: &[[usize; 3]],
+    uvs: &[Point2],
+    forward: bool,
+    why: bool,
+) {
+    let by_neighbor = std::env::var_os("ZENITH_TRIM_WINDING_BY_NEIGHBOR").is_some();
+    let mut deferred: Vec<([u32; 3], bool)> = Vec::new();
+    for triangle in triangles {
+        let triangle = [triangle[0] as u32, triangle[1] as u32, triangle[2] as u32];
+        match decide_uv_winding(mesh, triangle, uvs, forward, why, by_neighbor) {
+            WindingDecision::Drop => {}
+            WindingDecision::AsIs => mesh.indices.push(triangle),
+            WindingDecision::Flipped => {
+                mesh.indices.push([triangle[0], triangle[2], triangle[1]])
+            }
+            WindingDecision::Deferred(prefer_as_is) => deferred.push((triangle, prefer_as_is)),
+        }
+    }
+    if deferred.is_empty() {
+        return;
+    }
+
+    // **1 周目で出した有向辺を数えます**（同じ向きに何回使われたか）。
+    let mut used: std::collections::HashMap<(u32, u32), usize> = Default::default();
+    for triangle in &mesh.indices {
+        for corner in 0..3 {
+            *used
+                .entry((triangle[corner], triangle[(corner + 1) % 3]))
+                .or_insert(0) += 1;
+        }
+    }
+    // **候補の巻き方を、辺の向きで採点します**——**逆向きで既に使われて
+    // いる辺は「合っている」（＋1）**、**同じ向きで既に使われている辺は
+    // 「ぶつかっている」（−1）**。**閉じた多様体なら、正しい巻き方の方が
+    // 必ず高くなります。**
+    let score = |used: &std::collections::HashMap<(u32, u32), usize>, triangle: [u32; 3]| -> i32 {
+        let mut score = 0i32;
+        for corner in 0..3 {
+            let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+            if used.get(&(b, a)).copied().unwrap_or(0) > 0 {
+                score += 1;
+            }
+            if used.get(&(a, b)).copied().unwrap_or(0) > 0 {
+                score -= 1;
+            }
+        }
+        score
+    };
+    // **手掛かりの強い順に決めます**——**決めた 1 枚が次の 1 枚の手掛かりに
+    // なる**ので、差が大きいものから確定させます。**差が 0 のものしか
+    // 残らなくなったら、そこは幾何の符号どおりに出します**（これまでと
+    // 同じ扱い。**決められないまま捨てはしません**）。
+    while !deferred.is_empty() {
+        let mut best: Option<(usize, i32, bool)> = None;
+        for (at, &(triangle, prefer_as_is)) in deferred.iter().enumerate() {
+            let flipped = [triangle[0], triangle[2], triangle[1]];
+            let (as_is, flip) = (score(&used, triangle), score(&used, flipped));
+            let gap = (as_is - flip).abs();
+            // **辺の手掛かりが釣り合ったら、幾何が言っていた方**に従います
+            // （**そこは、これまでと同じ振る舞い**です）。
+            let keep_as_is = if as_is == flip {
+                prefer_as_is
+            } else {
+                as_is > flip
+            };
+            if best.map_or(true, |(_, best_gap, _)| gap > best_gap) {
+                best = Some((at, gap, keep_as_is));
+            }
+        }
+        let (at, gap, keep_as_is) = best.expect("deferred は空ではありません");
+        let (triangle, _) = deferred.swap_remove(at);
+        let emitted = if keep_as_is {
+            triangle
+        } else {
+            [triangle[0], triangle[2], triangle[1]]
+        };
+        if why {
+            eprintln!(
+                "TESSWHY   EMIT 2周目（辺の向きで決めました。差 {gap}、{}）",
+                if keep_as_is { "そのまま" } else { "裏返し" }
+            );
+        }
+        for corner in 0..3 {
+            *used
+                .entry((emitted[corner], emitted[(corner + 1) % 3]))
+                .or_insert(0) += 1;
+        }
+        mesh.indices.push(emitted);
+    }
+}
+
+fn decide_uv_winding(
+    mesh: &TriangleMesh,
     triangle: [u32; 3],
     uvs: &[Point2],
     forward: bool,
     // **診断を出すかどうかは、呼ぶ側が1回だけ調べて渡します。**
     // ここは三角形1枚ごとに呼ばれるので、環境変数を引く場所ではありません。
     why: bool,
-) {
+    // **向きが決まらない三角形を、2 周目へ回すか**（4-576。
+    // `ZENITH_TRIM_WINDING_BY_NEIGHBOR=1`）。**既定では回しません**
+    // ——**これまでどおり、符号どおりに出すか、落とすか**です。
+    defer_ambiguous: bool,
+) -> WindingDecision {
     let p0 = mesh.positions[triangle[0] as usize];
     let p1 = mesh.positions[triangle[1] as usize];
     let p2 = mesh.positions[triangle[2] as usize];
@@ -1482,7 +1608,7 @@ fn push_with_uv_winding(
         if why {
             eprintln!("TESSWHY   EMITDROP 3d-zero");
         }
-        return;
+        return WindingDecision::Drop;
     }
 
     let a = uvs[triangle[0] as usize];
@@ -1543,24 +1669,35 @@ fn push_with_uv_winding(
         // メッシュの穴が 0 → 68 に増えました**——**この関数の上のコメントが
         // 警告していたとおり**（「捨てるとその辺が相手を失い、そのまま
         // メッシュの穴になる」）。**水密性のほうが大事な不変量**なので、
-        // **この手は採用しません。** **診断だけ残します**——**揃い具合が
-        // 効いた比率を出す口**（`ZENITH_TRIM_DEGENERATE_GUARD=1`。
-        // 振る舞いは変えません）。
-        if degenerate_guard && why {
-            let reference_len = reference.norm();
-            if reference_len > 1e-18 {
-                let alignment = dot / (facet.norm() * reference_len);
-                if alignment.abs() < 1e-6 {
-                    eprintln!("TESSWHY   uv-zero-ambiguous（揃い具合 {alignment:.3e}。捨てずに符号どおり押し出します）");
+        // **捨てません。**
+        //
+        // **代わりに、2 周目へ回します**（4-576。
+        // `ZENITH_TRIM_WINDING_BY_NEIGHBOR=1`）——**周りの三角形が出揃って
+        // から、辺の向きで決めます**。**既定では、これまでどおり符号どおりに
+        // 出します**（揃い具合を診断に出すだけ）。
+        let reference_len = reference.norm();
+        let ambiguous = reference_len > 1e-18
+            && facet.norm() > 1e-18
+            && (dot / (facet.norm() * reference_len)).abs() < 1e-6;
+        if ambiguous && why {
+            eprintln!(
+                "TESSWHY   uv-zero-ambiguous（揃い具合 {:.3e}、{}）",
+                dot / (facet.norm() * reference_len),
+                if defer_ambiguous {
+                    "2周目へ回します"
+                } else {
+                    "捨てずに符号どおり押し出します"
                 }
-            }
+            );
         }
-        if dot >= 0.0 {
-            mesh.indices.push(triangle);
+        if ambiguous && defer_ambiguous {
+            return WindingDecision::Deferred(dot >= 0.0);
+        }
+        return if dot >= 0.0 {
+            WindingDecision::AsIs
         } else {
-            mesh.indices.push([triangle[0], triangle[2], triangle[1]]);
-        }
-        return;
+            WindingDecision::Flipped
+        };
     }
 
     let counter_clockwise = signed > 0.0;
@@ -1588,9 +1725,11 @@ fn push_with_uv_winding(
     //
     // **絶対の長さではなく、比率（cos 類似度）で見ます**——**どちらの
     // 巻き方でも `|比率|` は変わらない**ので、これは「向きを間違えた」
-    // のではなく「どちらの向きにも決められない」三角形です。**落とすしか
-    // ありません**（4-286 の「uv-zero」と同じ扱い）。
-    if degenerate_guard {
+    // のではなく「どちらの向きにも決められない」三角形です。
+    //
+    // **`ZENITH_TRIM_WINDING_BY_NEIGHBOR=1` なら、落とさずに 2 周目へ
+    // 回します**（4-576）——**落とすと穴になる**ので、そちらが本筋です。
+    if degenerate_guard || defer_ambiguous {
         let reference = mesh.normals[triangle[0] as usize]
             + mesh.normals[triangle[1] as usize]
             + mesh.normals[triangle[2] as usize];
@@ -1601,17 +1740,26 @@ fn push_with_uv_winding(
             if alignment.abs() < 1e-6 {
                 if why {
                     eprintln!(
-                        "TESSWHY   EMITDROP 3d-ambiguous（揃い具合 {alignment:.3e}）"
+                        "TESSWHY   {} 3d-ambiguous（揃い具合 {alignment:.3e}）",
+                        if defer_ambiguous {
+                            "EMITDEFER"
+                        } else {
+                            "EMITDROP"
+                        }
                     );
                 }
-                return;
+                return if defer_ambiguous {
+                    WindingDecision::Deferred(counter_clockwise == forward)
+                } else {
+                    WindingDecision::Drop
+                };
             }
         }
     }
     if counter_clockwise == forward {
-        mesh.indices.push(triangle);
+        WindingDecision::AsIs
     } else {
-        mesh.indices.push([triangle[0], triangle[2], triangle[1]]);
+        WindingDecision::Flipped
     }
 }
 
@@ -3869,15 +4017,7 @@ fn build_grid_mesh(
     }
     let forward = orientation.is_forward();
     let why = std::env::var_os("ZENITH_TESS_WHY").is_some();
-    for triangle in triangles {
-        push_with_uv_winding(
-            &mut mesh,
-            [triangle[0] as u32, triangle[1] as u32, triangle[2] as u32],
-            &uvs,
-            forward,
-            why,
-        );
-    }
+    push_triangles_with_uv_winding(&mut mesh, &triangles, &uvs, forward, why);
     mesh
 }
 
