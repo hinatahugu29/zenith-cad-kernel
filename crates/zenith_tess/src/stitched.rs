@@ -1545,46 +1545,74 @@ fn push_triangles_with_uv_winding(
         }
         score
     };
-    // **手掛かりの強い順に決めます**——**決めた 1 枚が次の 1 枚の手掛かりに
-    // なる**ので、差が大きいものから確定させます。**差が 0 のものしか
-    // 残らなくなったら、そこは幾何の符号どおりに出します**（これまでと
-    // 同じ扱い。**決められないまま捨てはしません**）。
-    while !deferred.is_empty() {
-        let mut best: Option<(usize, i32, bool)> = None;
-        for (at, &(triangle, prefer_as_is)) in deferred.iter().enumerate() {
-            let flipped = [triangle[0], triangle[2], triangle[1]];
-            let (as_is, flip) = (score(&used, triangle), score(&used, flipped));
-            let gap = (as_is - flip).abs();
-            // **辺の手掛かりが釣り合ったら、幾何が言っていた方**に従います
-            // （**そこは、これまでと同じ振る舞い**です）。
-            let keep_as_is = if as_is == flip {
-                prefer_as_is
-            } else {
-                as_is > flip
-            };
-            if best.map_or(true, |(_, best_gap, _)| gap > best_gap) {
-                best = Some((at, gap, keep_as_is));
-            }
-        }
-        let (at, gap, keep_as_is) = best.expect("deferred は空ではありません");
-        let (triangle, _) = deferred.swap_remove(at);
-        let emitted = if keep_as_is {
-            triangle
-        } else {
-            [triangle[0], triangle[2], triangle[1]]
-        };
-        if why {
-            eprintln!(
-                "TESSWHY   EMIT 2周目（辺の向きで決めました。差 {gap}、{}）",
-                if keep_as_is { "そのまま" } else { "裏返し" }
-            );
-        }
+    let emit = |mesh: &mut TriangleMesh,
+                    used: &mut std::collections::HashMap<(u32, u32), usize>,
+                    triangle: [u32; 3]| {
         for corner in 0..3 {
             *used
-                .entry((emitted[corner], emitted[(corner + 1) % 3]))
+                .entry((triangle[corner], triangle[(corner + 1) % 3]))
                 .or_insert(0) += 1;
         }
-        mesh.indices.push(emitted);
+        mesh.indices.push(triangle);
+    };
+
+    // **手掛かりの強い順に、掃きながら決めます**——**決めた 1 枚が次の
+    // 1 枚の手掛かりになる**ので、**差の大きいものから**確定させます。
+    //
+    // **1 枚ごとに全体を見直す書き方は、やめました**（4-578）。**保留が
+    // n 枚ある面で n² になり**、**素のテッセレーションでは 3 枚なので
+    // 速いまま**でしたが、**ブーリアンが割った後の面片には保留が大量に
+    // 出る**ため、**`linkrods` の差が 7.3 分から 20 分超へ伸びました**。
+    // **代わりに「しきい値を下げながら掃く」**——**1 回の掃きで、その
+    // しきい値以上の差を持つものを全部決める**ので、**掃く回数は
+    // `THRESHOLDS × SWEEP_CAP` に収まります**（差の最大は 6。辺 3 本 × ±1）。
+    const THRESHOLDS: [i32; 4] = [6, 4, 2, 1];
+    const SWEEP_CAP: usize = 8;
+    for threshold in THRESHOLDS {
+        for _ in 0..SWEEP_CAP {
+            if deferred.is_empty() {
+                break;
+            }
+            let mut progressed = false;
+            let mut still: Vec<([u32; 3], bool)> = Vec::with_capacity(deferred.len());
+            for (triangle, prefer_as_is) in deferred.drain(..) {
+                let flipped = [triangle[0], triangle[2], triangle[1]];
+                let (as_is, flip) = (score(&used, triangle), score(&used, flipped));
+                if (as_is - flip).abs() < threshold {
+                    still.push((triangle, prefer_as_is));
+                    continue;
+                }
+                emit(
+                    mesh,
+                    &mut used,
+                    if as_is > flip { triangle } else { flipped },
+                );
+                progressed = true;
+            }
+            deferred = still;
+            if !progressed {
+                break;
+            }
+        }
+    }
+    // **辺の手掛かりが釣り合ったまま残った分は、幾何の符号どおりに
+    // 出します**（**これまでと同じ扱い**。**決められないまま捨てはしません**）。
+    if why && !deferred.is_empty() {
+        eprintln!(
+            "TESSWHY   2周目で決まらなかった三角形 {} 枚（幾何の符号どおりに出します）",
+            deferred.len()
+        );
+    }
+    for (triangle, prefer_as_is) in deferred.drain(..) {
+        emit(
+            mesh,
+            &mut used,
+            if prefer_as_is {
+                triangle
+            } else {
+                [triangle[0], triangle[2], triangle[1]]
+            },
+        );
     }
 }
 
