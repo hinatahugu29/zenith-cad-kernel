@@ -347,15 +347,36 @@ else
 fi
 
 echo
+# **判定そのものも、出力の隣に残します**（4-579）。**1 本ずつの詳しい出力は
+# `$OUT` に残るのに、「緑だったのか赤だったのか」は画面にしか出ていません**
+# でした——**画面を失うと、80 分回した結果が分からなくなります**（実際に
+# 失いました。`/tmp/*.log` が消える機械でした）。**`verdict.txt` を読めば
+# 分かるように**しておきます。
+verdict="$OUT/verdict.txt"
+{
+  echo "回した時刻: $(date '+%Y-%m-%d %H:%M:%S')"
+  echo "rc: $fail"
+  if [ "$fail" = "0" ]; then
+    echo "判定: 緑（全部）"
+  else
+    echo "判定: 赤"
+    echo "赤いもの:$red"
+  fi
+  # **どの口を立てて回したか**——**これが分からないと、数字が再現できません**
+  # （4-577）。
+  echo "立っていた ZENITH_ の口:"
+  env | grep -E '^ZENITH_' | sort | sed 's/^/  /' || echo "  （なし)"
+} > "$verdict" 2>&1
+
 if [ "$fail" = "0" ]; then
   echo "**門は全部緑です。**"
-  echo "出力: $OUT"
+  echo "出力: $OUT（判定は $verdict）"
   echo
   echo "**ただし、これだけでは足りません。** 本当の物差しは OpenCASCADE との"
   echo "突き合わせです——\`tools/freecad_cross_validate.py\`（FreeCAD 1.1 が要ります）。"
 else
   echo "**赤:$red**"
-  echo "出力: $OUT"
+  echo "出力: $OUT（判定は $verdict）"
   echo
   echo "**どれか 1 つでも赤なら、\`main\` に持っていくものではありません。**"
 fi
