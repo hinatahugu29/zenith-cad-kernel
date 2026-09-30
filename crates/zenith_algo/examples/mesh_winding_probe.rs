@@ -202,10 +202,23 @@ fn row_gaps(solid: &zenith_topo::Solid, face_id: u64, params: &TessellationParam
     for pair in us.windows(2) {
         min_gap = min_gap.min(pair[1] - pair[0]);
     }
+    // **格子線から来た点と、そうでない点を分けます**（4-592）。
+    // **計画は一直線なのに行の数が逆転する**（4-591）ので、
+    // **どちら側が逆転しているか**を見ます。
+    let step = 1.0 / params.u_divisions as f64;
+    let on_grid = us
+        .iter()
+        .filter(|u| {
+            let k = (*u / step).round();
+            (*u - k * step).abs() <= 1e-9
+        })
+        .count();
     println!(
-        "    刻み {:>2}  v = {row_v} の行: u が {} 個、いちばん近い隙間 {:.3e}",
+        "    刻み {:>2}  v = {row_v} の行: u が {} 個（格子線の上 {}、それ以外 {}）、いちばん近い隙間 {:.3e}",
         params.u_divisions,
         us.len(),
+        on_grid,
+        us.len() - on_grid,
         min_gap
     );
 }
