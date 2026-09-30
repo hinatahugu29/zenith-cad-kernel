@@ -26,6 +26,72 @@ use zenith_tess::{face_triangle_counts, tessellate_solid, TessellationParams};
 
 type CrossedExample = std::collections::BTreeMap<(u64, u64), (zenith_math::Point3, zenith_math::Point3)>;
 
+/// **読んだファイルを、刻みを振って数えます**（4-581）。
+///
+/// # なぜ要るのか
+///
+/// 4-576 の巻き方の直しは、**`linkrods.step` の 24 分割だけで測っていました**。
+/// **`uv-zero` の受け皿は、そもそも `screw.step` のために在ります**
+/// （4-286。**uv で潰れた三角形 41 枚。捨てたら穴が 14 本**）——
+/// **直しが触るのは、まさにその受け皿**です。**測っていない所で
+/// 壊していないか、確かめます。**
+///
+/// **1 つの刻みだけ見るのは測り方の穴**です（4-296。**`screw.step` は
+/// 24 が緑でも 16・20・32・48 で壊れていたことがあります**）。
+fn sweep_foreign(name: &str, path: &str) {
+    let solids = match StepImporter::import_solids_from_file(path) {
+        Ok(solids) => solids,
+        Err(reason) => {
+            println!("  {name}: **読めません**（{reason}）");
+            return;
+        }
+    };
+    let Some(solid) = solids
+        .into_iter()
+        .max_by_key(|solid| solid.outer_shell.faces.len())
+    else {
+        println!("  {name}: **立体が 0 個**");
+        return;
+    };
+    let cell = |point: zenith_math::Point3| {
+        (
+            (point.x / 1e-6).round() as i64,
+            (point.y / 1e-6).round() as i64,
+            (point.z / 1e-6).round() as i64,
+        )
+    };
+    for divisions in [8usize, 12, 16, 20, 24, 32, 48] {
+        let params = TessellationParams {
+            u_divisions: divisions,
+            v_divisions: divisions,
+        };
+        let mesh = tessellate_solid(&solid, &params);
+        let counts = face_triangle_counts(&solid, &params);
+        let mut undirected: std::collections::BTreeMap<
+            ((i64, i64, i64), (i64, i64, i64)),
+            usize,
+        > = std::collections::BTreeMap::new();
+        for triangle in &mesh.indices {
+            for pair in [
+                (triangle[0] as usize, triangle[1] as usize),
+                (triangle[1] as usize, triangle[2] as usize),
+                (triangle[2] as usize, triangle[0] as usize),
+            ] {
+                let (a, b) = (cell(mesh.positions[pair.0]), cell(mesh.positions[pair.1]));
+                let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+                *undirected.entry((lo, hi)).or_insert(0) += 1;
+            }
+        }
+        let holes = undirected.values().filter(|count| **count == 1).count();
+        let overlaps = undirected.values().filter(|count| **count > 2).count();
+        let (folded, crossed) = count_mismatches(&mesh.positions, &mesh.indices, &counts);
+        println!(
+            "  {name:<10} 刻み {divisions:>2}  三角形 {:>7}  穴 {holes:>3}  重なり {overlaps:>3}  折り返し {folded:>3}  別の 2 枚が同じ向き {crossed:>3}",
+            mesh.indices.len()
+        );
+    }
+}
+
 /// **`count()` と同じ物差しで、折り返し・別の2枚の数だけを返します**（4-574）。
 /// **三角形を裏返す実験のために、頂点順を差し替えた `indices` を渡せる**
 /// よう、`count()` から折り返し／数え方の芯だけを取り出したものです。
@@ -550,6 +616,14 @@ fn main() {
         flipped_folded,
         flipped_crossed
     );
+
+    // **読んだファイル 2 つを、刻みを振って数えます**（4-581）。
+    // **`screw.step` は `uv-zero` の受け皿が在る理由そのもの**なので、
+    // **巻き方の直しを入れたら、必ずここも見てください。**
+    println!();
+    println!("読んだファイルを、刻みを振って（4-581）:");
+    sweep_foreign("screw", "reference/OCCT/data/step/screw.step");
+    sweep_foreign("linkrods", "reference/OCCT/data/step/linkrods.step");
 
     report_boundary_on_surface(&solid);
     println!();
