@@ -98,6 +98,7 @@ fn sweep_foreign(name: &str, path: &str) {
             folds_in_uv(&solid, &mesh, &counts);
             for id in &ids {
                 folds_in_uv_before_weld(&solid, *id, &params);
+                describe_pcurves(&solid, *id);
             }
         }
     }
@@ -172,6 +173,63 @@ fn count_mismatches(
         println!("      折り返しを持つ面: {folded_faces:?}");
     }
     (folded, crossed)
+}
+
+/// **面の p-curve を 1 本ずつ、uv で書き出します**（4-588）。
+///
+/// 4-587 で「**`v = 0.5` の上に、ほとんど重なった鎖が 4 本ずつ**」と
+/// 見えました。**どの稜の p-curve がそれなのか**を見ます。
+fn describe_pcurves(solid: &zenith_topo::Solid, face_id: u64) {
+    let Some(face) = solid
+        .outer_shell
+        .faces
+        .iter()
+        .find(|f| f.id == face_id)
+    else {
+        return;
+    };
+    let Some(pcurves) = &face.pcurves else {
+        println!("      面 {face_id}: p-curve を持っていません");
+        return;
+    };
+    println!(
+        "      面 {face_id} の p-curve（外輪 {} 本、内輪 {} 組）:",
+        pcurves.outer_loop.segments.len(),
+        pcurves.inner_loops.len()
+    );
+    for segment in &pcurves.outer_loop.segments {
+        let curve = &segment.curve;
+        let (lo, hi) = curve.param_range();
+        // **両端と中点、そして v がどれだけ 0.5 に張り付いているか**を見ます。
+        let mut min_v = f64::INFINITY;
+        let mut max_v = f64::NEG_INFINITY;
+        let (mut u_lo, mut u_hi) = (f64::INFINITY, f64::NEG_INFINITY);
+        for step in 0..=32 {
+            let t = lo + (hi - lo) * (step as f64) / 32.0;
+            let p = curve.evaluate(t);
+            min_v = min_v.min(p.y);
+            max_v = max_v.max(p.y);
+            u_lo = u_lo.min(p.x);
+            u_hi = u_hi.max(p.x);
+        }
+        let flat = (max_v - min_v).abs() < 1e-6;
+        println!(
+            "        稜 {:>4}（向き {:?}）u {:.6}〜{:.6}  v {:.6}〜{:.6}{}",
+            segment.edge_id,
+            segment.orientation,
+            u_lo,
+            u_hi,
+            min_v,
+            max_v,
+            if flat && (min_v - 0.5).abs() < 1e-6 {
+                "  ← **v = 0.5 の上を走っています**"
+            } else if flat {
+                "  ← v 一定"
+            } else {
+                ""
+            }
+        );
+    }
 }
 
 /// **溶接前のパッチメッシュで、同じ面の折り返しを uv で見ます**（4-587）。
