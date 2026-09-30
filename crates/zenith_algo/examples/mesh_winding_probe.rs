@@ -268,13 +268,32 @@ fn row_gaps(solid: &zenith_topo::Solid, face_id: u64, params: &TessellationParam
             (*u - k * step).abs() <= 1e-9
         })
         .count();
+    // **3D でいちばん近い 2 点の距離**（4-596）。**細分の歯止め
+    // （`REFINEMENT_CLEARANCE` ＝ 溶接距離 × 8 ≒ 8e-7）に掛かる桁なのか**を
+    // 見ます。**掛からない桁なら、「近すぎる点」の話ではありません。**
+    let mut row_points: Vec<zenith_math::Point3> = Vec::new();
+    for (uv, position) in patch.uvs.iter().zip(patch.positions.iter()) {
+        if (uv.y - row_v).abs() < 1e-9 {
+            row_points.push(*position);
+        }
+    }
+    let mut min_3d = f64::INFINITY;
+    for i in 0..row_points.len() {
+        for j in (i + 1)..row_points.len() {
+            let gap = (row_points[j] - row_points[i]).norm();
+            if gap > 0.0 {
+                min_3d = min_3d.min(gap);
+            }
+        }
+    }
     println!(
-        "    刻み {:>2}  v = {row_v} の行: u が {} 個（格子線の上 {}、それ以外 {}）、いちばん近い隙間 {:.3e}",
+        "    刻み {:>2}  v = {row_v} の行: u が {} 個（格子線の上 {}、それ以外 {}）、u の最小隙間 {:.3e}、**3D の最小距離 {:.3e}**",
         params.u_divisions,
         us.len(),
         on_grid,
         us.len() - on_grid,
-        min_gap
+        min_gap,
+        min_3d
     );
 }
 
