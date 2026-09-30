@@ -99,6 +99,7 @@ fn sweep_foreign(name: &str, path: &str) {
             for id in &ids {
                 folds_in_uv_before_weld(&solid, *id, &params);
                 describe_pcurves(&solid, *id);
+                rows_of_patch(&solid, *id, &params);
             }
         }
     }
@@ -173,6 +174,36 @@ fn count_mismatches(
         println!("      折り返しを持つ面: {folded_faces:?}");
     }
     (folded, crossed)
+}
+
+/// **パッチメッシュの標本が、v の行ごとに何個あるかを数えます**（4-589）。
+///
+/// **`v = 0.5` の行だけ、ほかの行より桁違いに多ければ、標本がそこで
+/// 二重（四重）に入っている**ということです。**4-587 の「4 個ずつの塊」が
+/// 標本の重複から来ているのかを、ここで決めます。**
+fn rows_of_patch(solid: &zenith_topo::Solid, face_id: u64, params: &TessellationParams) {
+    let Some(patch) = zenith_tess::face_patch_mesh(solid, face_id, params) else {
+        return;
+    };
+    let mut rows: std::collections::BTreeMap<i64, usize> = Default::default();
+    for uv in &patch.uvs {
+        *rows.entry((uv.y * 1e6).round() as i64).or_insert(0) += 1;
+    }
+    println!(
+        "      面 {face_id}（溶接前）の標本 {} 個を、v の行ごとに:",
+        patch.uvs.len()
+    );
+    for (v, count) in &rows {
+        let v = *v as f64 * 1e-6;
+        println!(
+            "        v = {v:.6}  標本 {count}{}",
+            if (v - 0.5).abs() < 1e-9 {
+                "  ← 折り返しが出ている行"
+            } else {
+                ""
+            }
+        );
+    }
 }
 
 /// **面の p-curve を 1 本ずつ、uv で書き出します**（4-588）。
