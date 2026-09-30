@@ -210,6 +210,38 @@ pub fn face_triangle_counts(solid: &Solid, params: &TessellationParams) -> Vec<(
     out
 }
 
+/// **溶接前の、面 1 枚ぶんのメッシュを返します**（4-587。**診断のため**）。
+///
+/// # なぜ要るのか
+///
+/// **溶接の前と後は、別のメッシュ**です。**同じ根の罠を 3 回踏みました**——
+///
+/// * **`tessellate_face` と `tessellate_solid` の頂点は別物**（4-573。
+///   刻みの計画が立体の大きさから決まるので、1 面だけ刻むと位置が変わる）
+/// * **面の三角形を名指しするには `face_triangle_counts` で切る**（4-574）
+/// * **溶接後の `uv` は、面ごとには読めない**（4-586。`weld` は 3D の位置で
+///   頂点を束ね、**最初に来た頂点の `uv` しか残さない**ので、
+///   **共有する頂点では隣の面の `uv` が入っています**）
+///
+/// **この関数は、本番と同じ刻みの計画で、溶接せずに 1 面だけ返します。**
+/// **`uv` は必ずその面のもの**です。**面ごとの `uv` が要る診断は、
+/// これを使ってください。**
+///
+/// **返すのは表示用ではありません**——**溶接していないので、隣の面とは
+/// 頂点を共有していません。**
+pub fn face_patch_mesh(
+    solid: &Solid,
+    face_id: u64,
+    params: &TessellationParams,
+) -> Option<TriangleMesh> {
+    let plan = SamplePlan::for_solid(solid, params);
+    std::iter::once(&solid.outer_shell)
+        .chain(solid.inner_shells.iter())
+        .flat_map(|shell| shell.faces.iter())
+        .find(|face| face.id == face_id)
+        .map(|face| tessellate_face_stitched(face, params, &plan))
+}
+
 /// 溶接前の三角形添字の範囲を面ごとに控えながら、殻をメッシュにする。
 fn tessellate_shell_stitched_owned(
     shell: &Shell,

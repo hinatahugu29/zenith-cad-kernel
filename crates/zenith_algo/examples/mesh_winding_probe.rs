@@ -96,6 +96,9 @@ fn sweep_foreign(name: &str, path: &str) {
             let folds = folded_edges(&mesh.positions, &mesh.indices, &counts);
             where_are_folds(&solid, &folds);
             folds_in_uv(&solid, &mesh, &counts);
+            for id in &ids {
+                folds_in_uv_before_weld(&solid, *id, &params);
+            }
         }
     }
 }
@@ -169,6 +172,72 @@ fn count_mismatches(
         println!("      折り返しを持つ面: {folded_faces:?}");
     }
     (folded, crossed)
+}
+
+/// **溶接前のパッチメッシュで、同じ面の折り返しを uv で見ます**（4-587）。
+///
+/// **溶接後の `uv` は共有頂点では隣の面のものが入っています**（4-586）。
+/// **`face_patch_mesh` は本番と同じ刻みで、溶接せずに 1 面だけ返す**ので、
+/// **`uv` は必ずその面のもの**です。
+fn folds_in_uv_before_weld(
+    solid: &zenith_topo::Solid,
+    face_id: u64,
+    params: &TessellationParams,
+) {
+    let Some(patch) = zenith_tess::face_patch_mesh(solid, face_id, params) else {
+        println!("      面 {face_id}: パッチメッシュが取れません");
+        return;
+    };
+    let mut seen: std::collections::HashMap<(u32, u32), usize> = Default::default();
+    for triangle in &patch.indices {
+        for corner in 0..3 {
+            *seen
+                .entry((triangle[corner], triangle[(corner + 1) % 3]))
+                .or_insert(0) += 1;
+        }
+    }
+    let mut folds: Vec<(u32, u32)> = seen
+        .iter()
+        .filter(|(_, count)| **count > 1)
+        .map(|(edge, _)| *edge)
+        .collect();
+    folds.sort_unstable();
+    println!(
+        "      面 {face_id}（**溶接前**、三角形 {}）の折り返し {} 本:",
+        patch.indices.len(),
+        folds.len()
+    );
+    let mut on_line: std::collections::BTreeSet<i64> = Default::default();
+    for (a, b) in &folds {
+        let (ua, ub) = (patch.uvs[*a as usize], patch.uvs[*b as usize]);
+        let (pa, pb) = (patch.positions[*a as usize], patch.positions[*b as usize]);
+        println!(
+            "        uv ({:.6}, {:.6}) → ({:.6}, {:.6})   長さ {:.3e}",
+            ua.x,
+            ua.y,
+            ub.x,
+            ub.y,
+            (pb - pa).norm()
+        );
+        for uv in [ua, ub] {
+            if (uv.y - 0.5).abs() < 1e-9 {
+                on_line.insert((uv.x * 1e6).round() as i64);
+            }
+        }
+    }
+    // **`v = 0.5` の上に並んだ u を、順に並べて隣との差も出します**（4-587）。
+    // **ほとんど同じ u が何本も並んでいれば、境界がそこで折り返している
+    // （細い切れ込み）**ということです。
+    if !on_line.is_empty() {
+        let values: Vec<f64> = on_line.iter().map(|u| *u as f64 * 1e-6).collect();
+        println!("        v = 0.5 の上の u（{} 個）と隣との差:", values.len());
+        for pair in values.windows(2) {
+            println!("          {:.6}  （次との差 {:.6}）", pair[0], pair[1] - pair[0]);
+        }
+        if let Some(last) = values.last() {
+            println!("          {last:.6}");
+        }
+    }
 }
 
 /// **折り返した辺を、その面の uv で書き出します**（4-586）。
