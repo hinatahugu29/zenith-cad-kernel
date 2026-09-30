@@ -1149,14 +1149,18 @@ fn main() {
                 {
                     println!("面 {id} の v = {v} の行の詰まり具合（4-590）:");
                     for divisions in [8usize, 12, 16, 20, 24, 32, 48] {
-                        row_gaps(
-                            &screw,
-                            id,
-                            &TessellationParams {
-                                u_divisions: divisions,
-                                v_divisions: divisions,
-                            },
-                            v,
+                        let params = TessellationParams {
+                            u_divisions: divisions,
+                            v_divisions: divisions,
+                        };
+                        row_gaps(&screw, id, &params, v);
+                        // **計画が稜ごとに割り当てた分割数**（4-591）。
+                        // **逆転が計画から来ているのかを、ここで見ます。**
+                        let counts = zenith_tess::face_edge_segment_counts(&screw, id, &params);
+                        let total: usize = counts.iter().map(|(_, n)| *n).sum();
+                        println!(
+                            "              稜ごとの分割数（合計 {total}）: {:?}",
+                            counts
                         );
                     }
                 }

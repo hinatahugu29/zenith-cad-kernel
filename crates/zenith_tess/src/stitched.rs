@@ -210,6 +210,37 @@ pub fn face_triangle_counts(solid: &Solid, params: &TessellationParams) -> Vec<(
     out
 }
 
+/// **刻みの計画が、その面の稜ごとに何分割を割り当てたかを返します**（4-591。
+/// **診断のため**）。
+///
+/// **4-590 で「12・24 分割だけ、細かくしたのに標本が増える逆転がある」**
+/// と測れました。**計画そのものを覗けないと、その先へ行けません。**
+///
+/// **返すのは `(稜の番号, 分割数)`**（**外輪→内輪の順**）。
+/// **`segments_for_edge` は稜自身のたわみで決め、そのあと
+/// `balance_opposite_edges` が対辺に合わせて上げます**——
+/// **上げる向きにしか動かないので、どの稜が引き上げられたかが見えます。**
+pub fn face_edge_segment_counts(
+    solid: &Solid,
+    face_id: u64,
+    params: &TessellationParams,
+) -> Vec<(u64, usize)> {
+    let plan = SamplePlan::for_solid(solid, params);
+    let mut out = Vec::new();
+    if let Some(face) = std::iter::once(&solid.outer_shell)
+        .chain(solid.inner_shells.iter())
+        .flat_map(|shell| shell.faces.iter())
+        .find(|face| face.id == face_id)
+    {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                out.push((oriented.edge.id, plan.segments_for(oriented.edge.id)));
+            }
+        }
+    }
+    out
+}
+
 /// **溶接前の、面 1 枚ぶんのメッシュを返します**（4-587。**診断のため**）。
 ///
 /// # なぜ要るのか
