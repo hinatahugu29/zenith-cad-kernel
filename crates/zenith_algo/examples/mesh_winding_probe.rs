@@ -89,6 +89,11 @@ fn sweep_foreign(name: &str, path: &str) {
             "  {name:<10} 刻み {divisions:>2}  三角形 {:>7}  穴 {holes:>3}  重なり {overlaps:>3}  折り返し {folded:>3}  別の 2 枚が同じ向き {crossed:>3}",
             mesh.indices.len()
         );
+        // **折り返しが出た刻みでは、持っている面の姿も書きます**（4-584）。
+        if folded > 0 && std::env::var_os("ZENITH_FOLDED_FACES").is_some() {
+            let ids = folded_face_ids(&mesh.positions, &mesh.indices, &counts);
+            describe_faces(&solid, &ids);
+        }
     }
 }
 
@@ -140,17 +145,123 @@ fn count_mismatches(
         at += triangle_count;
     }
     let (mut folded, mut crossed) = (0usize, 0usize);
+    // **折り返しを持っている面の番号も控えます**（4-584）。**折り返しは
+    // 「同じ面が、同じ辺を同じ向きに 2 回使う」**——**裏返しでは直せない**
+    // （4-582）ので、**どの面なのかを名指しできないと次へ進めません。**
+    let mut folded_faces: std::collections::BTreeMap<u64, usize> = Default::default();
     for users in owner.values() {
         let mut unique = users.clone();
         unique.sort_unstable();
         unique.dedup();
         if unique.len() <= 1 {
             folded += 1;
+            if let Some(id) = unique.first() {
+                *folded_faces.entry(*id).or_insert(0) += 1;
+            }
         } else {
             crossed += 1;
         }
     }
+    if folded > 0 && std::env::var_os("ZENITH_FOLDED_FACES").is_some() {
+        println!("      折り返しを持つ面: {folded_faces:?}");
+    }
     (folded, crossed)
+}
+
+/// **折り返しを持っている面の番号を返します**（4-584）。
+fn folded_face_ids(
+    positions: &[zenith_math::Point3],
+    indices: &[[u32; 3]],
+    counts: &[(u64, usize)],
+) -> Vec<u64> {
+    let cell = |point: zenith_math::Point3| {
+        (
+            (point.x / 1e-6).round() as i64,
+            (point.y / 1e-6).round() as i64,
+            (point.z / 1e-6).round() as i64,
+        )
+    };
+    let mut directed: std::collections::BTreeMap<((i64, i64, i64), (i64, i64, i64)), usize> =
+        std::collections::BTreeMap::new();
+    for triangle in indices {
+        for pair in [
+            (triangle[0] as usize, triangle[1] as usize),
+            (triangle[1] as usize, triangle[2] as usize),
+            (triangle[2] as usize, triangle[0] as usize),
+        ] {
+            *directed
+                .entry((cell(positions[pair.0]), cell(positions[pair.1])))
+                .or_insert(0) += 1;
+        }
+    }
+    let mut owner: std::collections::BTreeMap<((i64, i64, i64), (i64, i64, i64)), Vec<u64>> =
+        std::collections::BTreeMap::new();
+    let mut at = 0usize;
+    for (face_id, triangle_count) in counts {
+        for index in at..(at + triangle_count).min(indices.len()) {
+            let triangle = indices[index];
+            for pair in [
+                (triangle[0] as usize, triangle[1] as usize),
+                (triangle[1] as usize, triangle[2] as usize),
+                (triangle[2] as usize, triangle[0] as usize),
+            ] {
+                let key = (cell(positions[pair.0]), cell(positions[pair.1]));
+                if directed.get(&key).copied().unwrap_or(0) > 1 {
+                    owner.entry(key).or_default().push(*face_id);
+                }
+            }
+        }
+        at += triangle_count;
+    }
+    let mut ids: Vec<u64> = Vec::new();
+    for users in owner.values() {
+        let mut unique = users.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        if unique.len() <= 1 {
+            if let Some(id) = unique.first() {
+                ids.push(*id);
+            }
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// **折り返しを持っていた面の姿を書き出します**（4-584）。
+fn describe_faces(solid: &zenith_topo::Solid, ids: &[u64]) {
+    for id in ids {
+        let Some(face) = solid.outer_shell.faces.iter().find(|f| f.id == *id) else {
+            println!("        面 {id}: 外殻に見つかりません");
+            continue;
+        };
+        let shape = match &face.geometry {
+            zenith_topo::FaceGeometry::Nurbs(surface) => format!(
+                "NURBS 次数 {}×{}、制御点 {}×{}",
+                surface.degree_u,
+                surface.degree_v,
+                surface.control_points.len(),
+                surface.control_points.first().map_or(0, |row| row.len())
+            ),
+            zenith_topo::FaceGeometry::Plane(_) => "平面".to_string(),
+            zenith_topo::FaceGeometry::Coons(_) => "Coons".to_string(),
+            zenith_topo::FaceGeometry::Gordon(_) => "Gordon".to_string(),
+            zenith_topo::FaceGeometry::Triangular(_) => "三角パッチ".to_string(),
+        };
+        println!(
+            "        面 {id}: {shape}、向き {:?}、外輪の稜 {}、内輪 {}（稜 {}）、申告する粗さ {:.3e}、p-curve {}",
+            face.orientation,
+            face.outer_wire.edges.len(),
+            face.inner_wires.len(),
+            face.inner_wires
+                .iter()
+                .map(|wire| wire.edges.len())
+                .sum::<usize>(),
+            face.tolerance,
+            face.pcurves.is_some()
+        );
+    }
 }
 
 fn count(
