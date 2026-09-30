@@ -75,7 +75,120 @@ pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> 
     if attribute {
         explain_face_owners(&mesh, &owners, &survivors);
     }
+    settle_winding_after_weld(&mut mesh);
     mesh
+}
+
+/// **縫い合わせたあとで、向きの食い違いだけを直します**（4-582。
+/// `ZENITH_TRIM_WINDING_AFTER_WELD=1`。**既定では走りません**）。
+///
+/// # なぜ、ここなのか
+///
+/// 4-576 は**面 1 枚ずつのテッセレーションの中で**直そうとしました。
+/// **2 つ、行き詰まりました**——
+///
+/// 1. **隣の面の辺が見えません。** 食い違いは**面と面のあいだ**で起きる
+///    のに、面の中しか見えないので、**手掛かりが足りないまま当てる**
+///    ことになります。**実測（4-581）: 24 分割では 0 になりましたが、
+///    20・32・48 分割では 2 / 6 / 9 本残りました。**
+/// 2. **`weld` の重複判定を壊します。** **同じ3頂点・同じ向きの重複は
+///    両方落とす**（4-338）、**逆向きなら両方残す**（`box × cone`）
+///    ——**向きが判定そのものに使われている**ので、**その前に向きを
+///    変えると、落ちるはずの薄片が残ります**。**実測（4-581）:
+///    `linkrods` の 8 分割で三角形 ＋12 枚、重なり 6 本＝非多様体**
+///    （`DUPWHY` が 11 → 5 と、ちょうど 6 組ぶん減ります）。
+///
+/// **溶接のあとなら、両方とも解けます**——**重複はもう処理済み**で、
+/// **面をまたぐ辺も 1 つのメッシュの上に揃っています。**
+///
+/// # なぜ、穴を増やさないと言えるのか
+///
+/// **裏返しても、その三角形が使う「辺の組」は変わりません**——
+/// **向きだけが変わります。** **穴と重なりは向きを見ずに数える**
+/// （同じ辺が 1 回だけ／3 回以上）ので、**裏返しだけで構成される操作は、
+/// 穴と重なりを 1 本も動かせません。** **三角形も捨てないので、枚数も
+/// 変わりません。** **動くのは「同じ向きで 2 回使われた辺」の数だけ**です。
+fn settle_winding_after_weld(mesh: &mut TriangleMesh) {
+    if std::env::var_os("ZENITH_TRIM_WINDING_AFTER_WELD").is_none() {
+        return;
+    }
+    let why = std::env::var_os("ZENITH_TESS_WHY").is_some();
+    let directed = |triangle: &[u32; 3]| {
+        [
+            (triangle[0], triangle[1]),
+            (triangle[1], triangle[2]),
+            (triangle[2], triangle[0]),
+        ]
+    };
+    let mut used: std::collections::HashMap<(u32, u32), usize> = Default::default();
+    for triangle in &mesh.indices {
+        for edge in directed(triangle) {
+            *used.entry(edge).or_insert(0) += 1;
+        }
+    }
+    // **咎（とが）は「同じ有向辺を 2 枚以上が使っている」こと**です。
+    // **1 本の辺について、余分に使われている回数**を数えます。
+    let blame = |count: usize| -> i64 {
+        if count > 1 {
+            (count - 1) as i64
+        } else {
+            0
+        }
+    };
+    let before: i64 = used.values().map(|count| blame(*count)).sum();
+    // **裏返すと咎がいくつ減るか**を数え、**減るものだけ裏返します**。
+    // **決めた 1 枚が次の 1 枚の勘定を変える**ので、**変わらなくなるまで
+    // 掃きます**（上限つき）。
+    const SWEEP_CAP: usize = 16;
+    let mut flipped_total = 0usize;
+    for _ in 0..SWEEP_CAP {
+        let mut flipped_here = 0usize;
+        for at in 0..mesh.indices.len() {
+            let triangle = mesh.indices[at];
+            let forward_edges = directed(&triangle);
+            let flipped = [triangle[0], triangle[2], triangle[1]];
+            let flipped_edges = directed(&flipped);
+            // **同じ辺が表と裏の両方に出る三角形**（頂点が重なっている）
+            // **は触りません**——勘定が合わなくなります。
+            if forward_edges
+                .iter()
+                .any(|edge| flipped_edges.contains(edge))
+            {
+                continue;
+            }
+            let mut delta = 0i64;
+            for edge in forward_edges {
+                let count = used.get(&edge).copied().unwrap_or(0);
+                delta += blame(count - 1) - blame(count);
+            }
+            for edge in flipped_edges {
+                let count = used.get(&edge).copied().unwrap_or(0);
+                delta += blame(count + 1) - blame(count);
+            }
+            if delta < 0 {
+                for edge in forward_edges {
+                    if let Some(count) = used.get_mut(&edge) {
+                        *count -= 1;
+                    }
+                }
+                for edge in flipped_edges {
+                    *used.entry(edge).or_insert(0) += 1;
+                }
+                mesh.indices[at] = flipped;
+                flipped_here += 1;
+            }
+        }
+        flipped_total += flipped_here;
+        if flipped_here == 0 {
+            break;
+        }
+    }
+    if why {
+        let after: i64 = used.values().map(|count| blame(*count)).sum();
+        eprintln!(
+            "TESSWHY   溶接のあとの向き直し: 裏返した三角形 {flipped_total} 枚、同じ向きの重なり {before} → {after}"
+        );
+    }
 }
 
 /// **面ごとの枚数を、本番と同じ道で数える。**
@@ -1503,7 +1616,31 @@ fn push_triangles_with_uv_winding(
     why: bool,
 ) {
     let by_neighbor = std::env::var_os("ZENITH_TRIM_WINDING_BY_NEIGHBOR").is_some();
-    let mut deferred: Vec<([u32; 3], bool)> = Vec::new();
+    // **面積で線を引く手は、測って外しました**（4-582）。
+    //
+    // **`weld` は「同じ3頂点・同じ向き」の重複を両方落とし**（4-338）、
+    // **「同じ3頂点・逆向き」は両方残します**（`box × cone`。下の
+    // `sorted_triangle` のコメント）——**つまり、向きが重複の判定に
+    // 使われています**。**巻き方を直すと、同じ向きだった重複 6 組が
+    // 逆向きになり、判定を外れて両方残りました**（`linkrods` の 8 分割で
+    // 三角形 ＋12、重なり 6 本＝非多様体。`DUPWHY` は 11 → 5）。
+    //
+    // **「落ちる予定の薄片なら、向きを直す意味は無い」と考えて、面積で
+    // 除こうとしました**——**外れました**。**実測: しきい値 1e-6 でも
+    // 8 分割は直らず、逆に 24 分割が壊れます**（食い違い 0 → 29）。
+    // **8 分割の問題の三角形のほうが、24 分割で直している三角形より
+    // 大きい**——**面積の順が逆**なので、**この軸では分けられません。**
+    // **保留する 1 枚も、1 周目でその場所に置きます**（4-582）。
+    //
+    // **後ろへ回して最後に足す書き方は、やめました**——**下流の
+    // `remove_redundant_flap_triangles` が `position()` で「最初に
+    // 見つかった 1 枚」を落とす**ので、**並び順を変えると、落ちる三角形が
+    // 変わります**。**実測（4-581）: `linkrods` の 8 分割で、三角形が
+    // 6548→6560 と 12 枚増え、重なりが 0→6 本（非多様体）出ました。**
+    //
+    // **場所は変えず、中身（巻き方）だけを 2 周目で書き換えます。**
+    // **こうすると、並びは既定と 1 枚もずれません。**
+    let mut deferred: Vec<(usize, [u32; 3], bool)> = Vec::new();
     for triangle in triangles {
         let triangle = [triangle[0] as u32, triangle[1] as u32, triangle[2] as u32];
         match decide_uv_winding(mesh, triangle, uvs, forward, why, by_neighbor) {
@@ -1512,16 +1649,33 @@ fn push_triangles_with_uv_winding(
             WindingDecision::Flipped => {
                 mesh.indices.push([triangle[0], triangle[2], triangle[1]])
             }
-            WindingDecision::Deferred(prefer_as_is) => deferred.push((triangle, prefer_as_is)),
+            WindingDecision::Deferred(prefer_as_is) => {
+                // **幾何が言っていた方を、仮に置いておきます**（**2 周目で
+                // 上書きします**）。**場所を取ることが目的**です。
+                let slot = mesh.indices.len();
+                mesh.indices.push(if prefer_as_is {
+                    triangle
+                } else {
+                    [triangle[0], triangle[2], triangle[1]]
+                });
+                deferred.push((slot, triangle, prefer_as_is));
+            }
         }
     }
     if deferred.is_empty() {
         return;
     }
 
-    // **1 周目で出した有向辺を数えます**（同じ向きに何回使われたか）。
+    // **1 周目で決まった三角形の有向辺だけを数えます**（同じ向きに何回
+    // 使われたか）。**仮に置いた保留の分は、数に入れません**——
+    // **まだ向きが決まっていないので、手掛かりにしてはいけません。**
+    let pending: std::collections::HashSet<usize> =
+        deferred.iter().map(|(slot, _, _)| *slot).collect();
     let mut used: std::collections::HashMap<(u32, u32), usize> = Default::default();
-    for triangle in &mesh.indices {
+    for (at, triangle) in mesh.indices.iter().enumerate() {
+        if pending.contains(&at) {
+            continue;
+        }
         for corner in 0..3 {
             *used
                 .entry((triangle[corner], triangle[(corner + 1) % 3]))
@@ -1545,15 +1699,18 @@ fn push_triangles_with_uv_winding(
         }
         score
     };
-    let emit = |mesh: &mut TriangleMesh,
-                    used: &mut std::collections::HashMap<(u32, u32), usize>,
-                    triangle: [u32; 3]| {
+    // **仮に置いた場所へ、決まった巻き方を書き込みます**（4-582。
+    // **押し足しません**——**並び順を変えないため**）。
+    let settle = |mesh: &mut TriangleMesh,
+                  used: &mut std::collections::HashMap<(u32, u32), usize>,
+                  slot: usize,
+                  triangle: [u32; 3]| {
         for corner in 0..3 {
             *used
                 .entry((triangle[corner], triangle[(corner + 1) % 3]))
                 .or_insert(0) += 1;
         }
-        mesh.indices.push(triangle);
+        mesh.indices[slot] = triangle;
     };
 
     // **手掛かりの強い順に、掃きながら決めます**——**決めた 1 枚が次の
@@ -1574,17 +1731,18 @@ fn push_triangles_with_uv_winding(
                 break;
             }
             let mut progressed = false;
-            let mut still: Vec<([u32; 3], bool)> = Vec::with_capacity(deferred.len());
-            for (triangle, prefer_as_is) in deferred.drain(..) {
+            let mut still: Vec<(usize, [u32; 3], bool)> = Vec::with_capacity(deferred.len());
+            for (slot, triangle, prefer_as_is) in deferred.drain(..) {
                 let flipped = [triangle[0], triangle[2], triangle[1]];
                 let (as_is, flip) = (score(&used, triangle), score(&used, flipped));
                 if (as_is - flip).abs() < threshold {
-                    still.push((triangle, prefer_as_is));
+                    still.push((slot, triangle, prefer_as_is));
                     continue;
                 }
-                emit(
+                settle(
                     mesh,
                     &mut used,
+                    slot,
                     if as_is > flip { triangle } else { flipped },
                 );
                 progressed = true;
@@ -1603,16 +1761,17 @@ fn push_triangles_with_uv_winding(
             deferred.len()
         );
     }
-    for (triangle, prefer_as_is) in deferred.drain(..) {
-        emit(
-            mesh,
-            &mut used,
-            if prefer_as_is {
-                triangle
-            } else {
-                [triangle[0], triangle[2], triangle[1]]
-            },
-        );
+    // **釣り合ったまま残った分は、1 周目で仮に置いたもの（幾何の符号
+    // どおり）がそのまま残ります**——**書き換える必要がありません。**
+    // **`used` にだけ入れておきます**（**残りどうしが手掛かりにならない
+    // よう、最後にまとめて**）。
+    for (slot, _, _) in deferred.drain(..) {
+        let triangle = mesh.indices[slot];
+        for corner in 0..3 {
+            *used
+                .entry((triangle[corner], triangle[(corner + 1) % 3]))
+                .or_insert(0) += 1;
+        }
     }
 }
 
