@@ -914,6 +914,21 @@ pub(crate) fn refine_uv_triangulation_protected(
     // 17〜23 倍になります（4-150）。
     enforce_parametric_cells: bool,
 ) {
+    // **細分そのものを止める口**（4-595。`ZENITH_NO_REFINE_PROTECTED=1`。
+    // **既定では走ります**——止めるとメッシュが粗くなり、答えも動きます）。
+    //
+    // # なぜ要るのか
+    //
+    // **`ZENITH_NO_TRIM_REFINE` は、この関数には掛かりません**（4-594）。
+    // あの口は `trimmed_uv_triangulation_with` の中だけを守っていて、
+    // **`tessellate_solid`（縫い合わせる道）が呼ぶのはこちら**です。
+    // **「細分を止めて測った」つもりで何も止まっていなかった**ので、
+    // **止められる口をここに立てます。**
+    //
+    // **診断専用**です。**既定にする話ではありません。**
+    if std::env::var_os("ZENITH_NO_REFINE_PROTECTED").is_some() {
+        return;
+    }
     // **通しごとに入れ替えるか。** 止めるときは `ZENITH_NO_FLIP_BETWEEN=1`
     // （効きを測り直すための口です）。
     let flip_between_passes = std::env::var_os("ZENITH_NO_FLIP_BETWEEN").is_none();
