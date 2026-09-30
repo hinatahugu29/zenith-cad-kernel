@@ -95,6 +95,7 @@ fn sweep_foreign(name: &str, path: &str) {
             describe_faces(&solid, &ids);
             let folds = folded_edges(&mesh.positions, &mesh.indices, &counts);
             where_are_folds(&solid, &folds);
+            folds_in_uv(&solid, &mesh, &counts);
         }
     }
 }
@@ -168,6 +169,60 @@ fn count_mismatches(
         println!("      折り返しを持つ面: {folded_faces:?}");
     }
     (folded, crossed)
+}
+
+/// **折り返した辺を、その面の uv で書き出します**（4-586）。
+///
+/// **12 と 24 分割でだけ起きて、8・16・20・32・48 では起きない**（4-584）
+/// ので、**uv の刻み方と絡んでいるはず**です。**どの u・どの v に来るか**
+/// を見ます。**節（knot）も並べて書きます**——**節の上に来ていれば、
+/// 刻みが節と噛み合っていない話**になります。
+fn folds_in_uv(solid: &zenith_topo::Solid, mesh: &zenith_tess::TriangleMesh, counts: &[(u64, usize)]) {
+    let mut at = 0usize;
+    for (face_id, triangle_count) in counts {
+        let end = (at + triangle_count).min(mesh.indices.len());
+        // **この面の中だけで、同じ向きに 2 回使われた有向辺**を探します。
+        let mut seen: std::collections::HashMap<(u32, u32), usize> = Default::default();
+        for index in at..end {
+            let triangle = mesh.indices[index];
+            for corner in 0..3 {
+                *seen
+                    .entry((triangle[corner], triangle[(corner + 1) % 3]))
+                    .or_insert(0) += 1;
+            }
+        }
+        let mut folds: Vec<(u32, u32)> = seen
+            .iter()
+            .filter(|(_, count)| **count > 1)
+            .map(|(edge, _)| *edge)
+            .collect();
+        if folds.is_empty() {
+            at = end;
+            continue;
+        }
+        folds.sort_unstable();
+        println!("      面 {face_id} の折り返し（同じ面が同じ向きに 2 回使った辺）{} 本:", folds.len());
+        if let Some(face) = solid.outer_shell.faces.iter().find(|f| f.id == *face_id) {
+            if let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry {
+                println!(
+                    "        u の節: {:?}",
+                    surface.knots_u.knots.iter().map(|k| (k * 1e4).round() / 1e4).collect::<Vec<_>>()
+                );
+                println!(
+                    "        v の節: {:?}",
+                    surface.knots_v.knots.iter().map(|k| (k * 1e4).round() / 1e4).collect::<Vec<_>>()
+                );
+            }
+        }
+        for (a, b) in folds {
+            let (ua, ub) = (mesh.uvs[a as usize], mesh.uvs[b as usize]);
+            println!(
+                "        uv ({:.6}, {:.6}) → ({:.6}, {:.6})",
+                ua.x, ua.y, ub.x, ub.y
+            );
+        }
+        at = end;
+    }
 }
 
 /// **折り返しが、面の境界の上にあるのか内側にあるのかを測ります**（4-585）。
