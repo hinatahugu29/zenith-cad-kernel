@@ -277,6 +277,34 @@ fn main() {
     if let Ok(solid) = zenith_algo::PrimitiveBuilder::make_torus(10.0, 3.0) {
         count("トーラス", &solid);
     }
+    // **ブーリアンの答えも見ます**（4-583）。**4-568 は「和と差の答えに
+    // 同じ向きの稜が 55 本（折り返し 10・別の 2 枚 45）」と測りました**
+    // ——**素形状は継ぎ目が素直でも、割った面はそうではありません。**
+    // **溶接のあとで直す口（4-582）が、ここにも効くかを見ます。**
+    println!();
+    println!("ブーリアンの答え（4-583）:");
+    let tol = zenith_math::Tolerance::default();
+    let torus = zenith_algo::PrimitiveBuilder::make_torus(12.0, 4.0);
+    let cylinder = zenith_algo::PrimitiveBuilder::make_cylinder(9.0, 40.0);
+    if let (Ok(torus), Ok(cylinder)) = (&torus, &cylinder) {
+        let rod = zenith_algo::BrepTransform::translate_solid(
+            cylinder,
+            zenith_math::Vec3::new(0.0, 0.0, -20.0),
+        );
+        for (label, op) in [
+            ("トーラス − 棒", zenith_algo::BooleanOpType::Difference),
+            ("トーラス ＋ 棒", zenith_algo::BooleanOpType::Union),
+        ] {
+            match zenith_algo::BooleanEngine::boolean_solids_exact_result(torus, &rod, op, &tol) {
+                Ok(result) => {
+                    for solid in &result.solids {
+                        count(label, solid);
+                    }
+                }
+                Err(reason) => println!("  {label}: **断られました**（{reason}）"),
+            }
+        }
+    }
     println!();
 
     let path = "reference/OCCT/data/step/linkrods.step";
