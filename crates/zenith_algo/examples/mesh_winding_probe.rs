@@ -176,6 +176,40 @@ fn count_mismatches(
     (folded, crossed)
 }
 
+/// **ある行の u が、いちばん近いところでどれだけ詰まっているかを測ります**（4-590）。
+///
+/// **4-589 で「`v = 0.5` の行は混み合っている」と分かりました**が、
+/// **混み合っているだけでは 12・24 分割だけが壊れる理由になりません**
+/// （**`v = 0.5` は 8・16・20・32・48 でも格子線**）。
+///
+/// **もう 1 段あるはず**です——**「詰まっている」ではなく「どれだけ
+/// 詰まっているか」**。**潰されるほど近くはないが、まともな三角形には
+/// ならないほど近い**標本があれば、そこが折り返しになります。
+/// **刻みごとに、その行の最小の隙間を測ります。**
+fn row_gaps(solid: &zenith_topo::Solid, face_id: u64, params: &TessellationParams, row_v: f64) {
+    let Some(patch) = zenith_tess::face_patch_mesh(solid, face_id, params) else {
+        return;
+    };
+    let mut us: Vec<f64> = patch
+        .uvs
+        .iter()
+        .filter(|uv| (uv.y - row_v).abs() < 1e-9)
+        .map(|uv| uv.x)
+        .collect();
+    us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    us.dedup();
+    let mut min_gap = f64::INFINITY;
+    for pair in us.windows(2) {
+        min_gap = min_gap.min(pair[1] - pair[0]);
+    }
+    println!(
+        "    刻み {:>2}  v = {row_v} の行: u が {} 個、いちばん近い隙間 {:.3e}",
+        params.u_divisions,
+        us.len(),
+        min_gap
+    );
+}
+
 /// **パッチメッシュの標本が、v の行ごとに何個あるかを数えます**（4-589）。
 ///
 /// **`v = 0.5` の行だけ、ほかの行より桁違いに多ければ、標本がそこで
@@ -1097,6 +1131,38 @@ fn main() {
     // **`screw.step` は `uv-zero` の受け皿が在る理由そのもの**なので、
     // **巻き方の直しを入れたら、必ずここも見てください。**
     println!();
+    // **1 枚の面の、1 本の行の詰まり具合を刻みごとに測ります**（4-590。
+    // `ZENITH_ROW_GAPS=<面の番号>,<v>`）。**折り返しが 12・24 分割でだけ
+    // 出る理由**を探すための口です。
+    if let Ok(raw) = std::env::var("ZENITH_ROW_GAPS") {
+        let parts: Vec<&str> = raw.split(',').collect();
+        if let (Some(id), Some(v)) = (
+            parts.first().and_then(|s| s.trim().parse::<u64>().ok()),
+            parts.get(1).and_then(|s| s.trim().parse::<f64>().ok()),
+        ) {
+            if let Ok(solids) =
+                StepImporter::import_solids_from_file("reference/OCCT/data/step/screw.step")
+            {
+                if let Some(screw) = solids
+                    .into_iter()
+                    .max_by_key(|solid| solid.outer_shell.faces.len())
+                {
+                    println!("面 {id} の v = {v} の行の詰まり具合（4-590）:");
+                    for divisions in [8usize, 12, 16, 20, 24, 32, 48] {
+                        row_gaps(
+                            &screw,
+                            id,
+                            &TessellationParams {
+                                u_divisions: divisions,
+                                v_divisions: divisions,
+                            },
+                            v,
+                        );
+                    }
+                }
+            }
+        }
+    }
     println!("読んだファイルを、刻みを振って（4-581）:");
     sweep_foreign("screw", "reference/OCCT/data/step/screw.step");
     sweep_foreign("linkrods", "reference/OCCT/data/step/linkrods.step");
