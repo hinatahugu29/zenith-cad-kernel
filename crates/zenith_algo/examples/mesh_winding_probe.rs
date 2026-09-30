@@ -93,6 +93,8 @@ fn sweep_foreign(name: &str, path: &str) {
         if folded > 0 && std::env::var_os("ZENITH_FOLDED_FACES").is_some() {
             let ids = folded_face_ids(&mesh.positions, &mesh.indices, &counts);
             describe_faces(&solid, &ids);
+            let folds = folded_edges(&mesh.positions, &mesh.indices, &counts);
+            where_are_folds(&solid, &folds);
         }
     }
 }
@@ -166,6 +168,128 @@ fn count_mismatches(
         println!("      折り返しを持つ面: {folded_faces:?}");
     }
     (folded, crossed)
+}
+
+/// **折り返しが、面の境界の上にあるのか内側にあるのかを測ります**（4-585）。
+///
+/// **これが次の分かれ道**です（4-584）——**境界の上なら耳の橋渡しの話、
+/// 内側なら三角形分割そのものが自分と重なっている話**です。
+///
+/// **面の外輪を細かく折れ線にして、折り返した辺の中点からの距離**を見ます。
+fn where_are_folds(solid: &zenith_topo::Solid, folds: &[(u64, zenith_math::Point3, zenith_math::Point3)]) {
+    for (id, p0, p1) in folds {
+        let Some(face) = solid.outer_shell.faces.iter().find(|f| f.id == *id) else {
+            continue;
+        };
+        // **外輪を折れ線にします**（稜ごとに 64 点）。
+        let mut wire: Vec<zenith_math::Point3> = Vec::new();
+        for oriented in &face.outer_wire.edges {
+            let curve = &oriented.edge.curve;
+            let (lo, hi) = curve.param_range();
+            for step in 0..=64 {
+                let t = lo + (hi - lo) * (step as f64) / 64.0;
+                wire.push(curve.evaluate(t));
+            }
+        }
+        let middle = zenith_math::Point3::from((p0.coords + p1.coords) * 0.5);
+        let nearest = wire
+            .iter()
+            .map(|point| (point - middle).norm())
+            .fold(f64::INFINITY, f64::min);
+        // **「近い」は、面の大きさに対して言わないと意味がありません**
+        // （4-585。**最初は辺の長さと比べて書いてしまい、長い辺が
+        // どれも「境界の上」に見えていました**——**直しました**）。
+        let mut low = wire[0];
+        let mut high = wire[0];
+        for point in &wire {
+            low = zenith_math::Point3::new(low.x.min(point.x), low.y.min(point.y), low.z.min(point.z));
+            high =
+                zenith_math::Point3::new(high.x.max(point.x), high.y.max(point.y), high.z.max(point.z));
+        }
+        let span = (high - low).norm();
+        let ratio = if span > 0.0 { nearest / span } else { 0.0 };
+        let length = (p1 - p0).norm();
+        println!(
+            "        面 {id} 折り返した辺（長さ {length:.3e}）の中点から外輪まで {nearest:.3e}（面の差し渡し {span:.3e} の {:.1}%）  → {}",
+            ratio * 100.0,
+            if ratio <= 0.01 {
+                "**境界の上**"
+            } else {
+                "**面の内側**"
+            }
+        );
+    }
+}
+
+/// **折り返した辺そのもの（面の番号と両端）を返します**（4-585）。
+fn folded_edges(
+    positions: &[zenith_math::Point3],
+    indices: &[[u32; 3]],
+    counts: &[(u64, usize)],
+) -> Vec<(u64, zenith_math::Point3, zenith_math::Point3)> {
+    let cell = |point: zenith_math::Point3| {
+        (
+            (point.x / 1e-6).round() as i64,
+            (point.y / 1e-6).round() as i64,
+            (point.z / 1e-6).round() as i64,
+        )
+    };
+    let mut directed: std::collections::BTreeMap<((i64, i64, i64), (i64, i64, i64)), usize> =
+        std::collections::BTreeMap::new();
+    for triangle in indices {
+        for pair in [
+            (triangle[0] as usize, triangle[1] as usize),
+            (triangle[1] as usize, triangle[2] as usize),
+            (triangle[2] as usize, triangle[0] as usize),
+        ] {
+            *directed
+                .entry((cell(positions[pair.0]), cell(positions[pair.1])))
+                .or_insert(0) += 1;
+        }
+    }
+    let mut owner: std::collections::BTreeMap<((i64, i64, i64), (i64, i64, i64)), Vec<u64>> =
+        std::collections::BTreeMap::new();
+    let mut at = 0usize;
+    for (face_id, triangle_count) in counts {
+        for index in at..(at + triangle_count).min(indices.len()) {
+            let triangle = indices[index];
+            for pair in [
+                (triangle[0] as usize, triangle[1] as usize),
+                (triangle[1] as usize, triangle[2] as usize),
+                (triangle[2] as usize, triangle[0] as usize),
+            ] {
+                let key = (cell(positions[pair.0]), cell(positions[pair.1]));
+                if directed.get(&key).copied().unwrap_or(0) > 1 {
+                    owner.entry(key).or_default().push(*face_id);
+                }
+            }
+        }
+        at += triangle_count;
+    }
+    let mut out = Vec::new();
+    for (key, users) in &owner {
+        let mut unique = users.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        if unique.len() <= 1 {
+            if let Some(id) = unique.first() {
+                out.push((
+                    *id,
+                    zenith_math::Point3::new(
+                        key.0 .0 as f64 * 1e-6,
+                        key.0 .1 as f64 * 1e-6,
+                        key.0 .2 as f64 * 1e-6,
+                    ),
+                    zenith_math::Point3::new(
+                        key.1 .0 as f64 * 1e-6,
+                        key.1 .1 as f64 * 1e-6,
+                        key.1 .2 as f64 * 1e-6,
+                    ),
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// **折り返しを持っている面の番号を返します**（4-584）。
