@@ -176,6 +176,61 @@ fn count_mismatches(
     (folded, crossed)
 }
 
+/// **行に落ちる点を、稜ごとに割り振ります**（4-593）。
+///
+/// **4-592 で「境界由来の点が、壊れる刻みだけ 2 倍」**と分かりました。
+/// **どの稜が何個出しているか**を数えれば、**「2 倍」がどの稜のものか**
+/// 名指しできます。
+///
+/// **各稜の p-curve を、計画が割り当てた分割数で刻み、その行に乗る点を
+/// 数えます。**
+fn row_points_per_edge(
+    solid: &zenith_topo::Solid,
+    face_id: u64,
+    params: &TessellationParams,
+    row_v: f64,
+) {
+    let Some(face) = solid.outer_shell.faces.iter().find(|f| f.id == face_id) else {
+        return;
+    };
+    let Some(pcurves) = &face.pcurves else {
+        return;
+    };
+    let plan = zenith_tess::face_edge_segment_counts(solid, face_id, params);
+    let mut total = 0usize;
+    let mut lines: Vec<String> = Vec::new();
+    for segment in &pcurves.outer_loop.segments {
+        let segments = plan
+            .iter()
+            .find(|(id, _)| *id == segment.edge_id)
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
+        if segments == 0 {
+            continue;
+        }
+        let (lo, hi) = segment.curve.param_range();
+        let mut on_row = 0usize;
+        for step in 0..=segments {
+            let t = lo + (hi - lo) * (step as f64) / segments as f64;
+            let p = segment.curve.evaluate(t);
+            if (p.y - row_v).abs() < 1e-9 {
+                on_row += 1;
+            }
+        }
+        if on_row > 0 {
+            total += on_row;
+            lines.push(format!(
+                "稜 {}（{:?}、分割 {segments}）が {on_row} 個",
+                segment.edge_id, segment.orientation
+            ));
+        }
+    }
+    println!(
+        "              行に乗る点を稜ごとに（合計 {total}）: {}",
+        lines.join("、")
+    );
+}
+
 /// **ある行の u が、いちばん近いところでどれだけ詰まっているかを測ります**（4-590）。
 ///
 /// **4-589 で「`v = 0.5` の行は混み合っている」と分かりました**が、
@@ -1169,12 +1224,7 @@ fn main() {
                         row_gaps(&screw, id, &params, v);
                         // **計画が稜ごとに割り当てた分割数**（4-591）。
                         // **逆転が計画から来ているのかを、ここで見ます。**
-                        let counts = zenith_tess::face_edge_segment_counts(&screw, id, &params);
-                        let total: usize = counts.iter().map(|(_, n)| *n).sum();
-                        println!(
-                            "              稜ごとの分割数（合計 {total}）: {:?}",
-                            counts
-                        );
+                        row_points_per_edge(&screw, id, &params, v);
                     }
                 }
             }
