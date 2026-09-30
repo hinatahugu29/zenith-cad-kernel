@@ -176,6 +176,65 @@ fn count_mismatches(
     (folded, crossed)
 }
 
+/// **折り返した辺を使っている三角形を、uv で並べます**（4-597）。
+///
+/// **点はちゃんと離れています**（4-596）。**なのに重なるなら、つなぎ方**
+/// **の話**です。**同じ辺を同じ向きに使っている 2 枚を uv で書き出し、
+/// 互いにまたいでいるか**を見ます。
+fn folded_triangles_in_uv(
+    solid: &zenith_topo::Solid,
+    face_id: u64,
+    params: &TessellationParams,
+) {
+    let Some(patch) = zenith_tess::face_patch_mesh(solid, face_id, params) else {
+        return;
+    };
+    let mut owners: std::collections::HashMap<(u32, u32), Vec<usize>> = Default::default();
+    for (at, triangle) in patch.indices.iter().enumerate() {
+        for corner in 0..3 {
+            owners
+                .entry((triangle[corner], triangle[(corner + 1) % 3]))
+                .or_default()
+                .push(at);
+        }
+    }
+    let mut shown = 0usize;
+    for (edge, users) in &owners {
+        if users.len() < 2 || shown >= 3 {
+            continue;
+        }
+        println!(
+            "      刻み {} の折り返し 辺 ({}→{}) を {} 枚が同じ向きに使っています:",
+            params.u_divisions,
+            edge.0,
+            edge.1,
+            users.len()
+        );
+        for at in users {
+            let triangle = patch.indices[*at];
+            let uv: Vec<String> = triangle
+                .iter()
+                .map(|index| {
+                    let p = patch.uvs[*index as usize];
+                    format!("({:.6},{:.6})", p.x, p.y)
+                })
+                .collect();
+            // **uv での符号つき面積**——**符号が同じなら、2 枚は同じ側を
+            // 向いています**（重なっている証拠のひとつ）。
+            let a = patch.uvs[triangle[0] as usize];
+            let b = patch.uvs[triangle[1] as usize];
+            let c = patch.uvs[triangle[2] as usize];
+            let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+            println!(
+                "        三角形 {at}: {}  uv 面積 {:.3e}",
+                uv.join("-"),
+                signed * 0.5
+            );
+        }
+        shown += 1;
+    }
+}
+
 /// **行に落ちる点を、稜ごとに割り振ります**（4-593）。
 ///
 /// **4-592 で「境界由来の点が、壊れる刻みだけ 2 倍」**と分かりました。
@@ -1244,6 +1303,9 @@ fn main() {
                         // **計画が稜ごとに割り当てた分割数**（4-591）。
                         // **逆転が計画から来ているのかを、ここで見ます。**
                         row_points_per_edge(&screw, id, &params, v);
+                        if divisions == 12 || divisions == 24 {
+                            folded_triangles_in_uv(&screw, id, &params);
+                        }
                     }
                 }
             }
