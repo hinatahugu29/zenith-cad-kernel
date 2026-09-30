@@ -176,6 +176,67 @@ fn count_mismatches(
     (folded, crossed)
 }
 
+/// **「uv では潰れているが 3D では生きている」三角形を、立体ごとに数えます**（4-598）。
+///
+/// **4-597 で、折り返しの正体が「uv で一直線・面積ゼロの薄片」**だと
+/// 分かりました。**これは面 442 だけの話なのか、どこにでもあるのか。**
+/// **直す前に、どれだけあるかを知る必要があります。**
+///
+/// **溶接前のパッチメッシュで数えます**（面ごとの uv が要るので。4-586）。
+/// **uv の面積が相対でほぼ 0**（三角形自身の広がりで正規化）**なのに
+/// 3D で面積を持つ**ものを数えます。
+fn count_uv_flat_but_alive(name: &str, solid: &zenith_topo::Solid, params: &TessellationParams) {
+    let mut total = 0usize;
+    let mut alive = 0usize;
+    let mut worst: Vec<(u64, usize)> = Vec::new();
+    for face in &solid.outer_shell.faces {
+        let Some(patch) = zenith_tess::face_patch_mesh(solid, face.id, params) else {
+            continue;
+        };
+        let mut here = 0usize;
+        for triangle in &patch.indices {
+            let (a, b, c) = (
+                patch.uvs[triangle[0] as usize],
+                patch.uvs[triangle[1] as usize],
+                patch.uvs[triangle[2] as usize],
+            );
+            let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+            // **三角形自身の uv での広がりで正規化**します（絶対値では
+            // 面の大きさに引っ張られます。4-573 で同じ形の判定をしています）。
+            let scale = (b - a)
+                .norm()
+                .max((c - a).norm())
+                .max((c - b).norm());
+            if scale <= 0.0 || signed.abs() > scale * scale * 1e-9 {
+                continue;
+            }
+            total += 1;
+            let (p0, p1, p2) = (
+                patch.positions[triangle[0] as usize],
+                patch.positions[triangle[1] as usize],
+                patch.positions[triangle[2] as usize],
+            );
+            if (p1 - p0).cross(&(p2 - p0)).norm() * 0.5 > 1e-18 {
+                alive += 1;
+                here += 1;
+            }
+        }
+        if here > 0 {
+            worst.push((face.id, here));
+        }
+    }
+    worst.sort_by(|a, b| b.1.cmp(&a.1));
+    worst.truncate(12);
+    println!(
+        "  {name:<28} uv で潰れた三角形 {total} 枚、うち 3D で生きている {alive} 枚{}",
+        if worst.is_empty() {
+            String::new()
+        } else {
+            format!("　多い面: {worst:?}")
+        }
+    );
+}
+
 /// **折り返した辺を使っている三角形を、uv で並べます**（4-597）。
 ///
 /// **点はちゃんと離れています**（4-596）。**なのに重なるなら、つなぎ方**
@@ -1311,6 +1372,52 @@ fn main() {
             }
         }
     }
+    // **「uv で潰れているが 3D では生きている」三角形の数**（4-598）。
+    // **折り返しの正体（4-597）が、どこにどれだけあるか**を数えます。
+    println!();
+    println!("uv で潰れた三角形（折り返しの種。4-598）:");
+    // **読み込みは 1 回だけ**にします（4-598）。**面の番号は読み込みごとに
+    // 進む数え上げから付く**ので、**刻みごとに読み直すと同じ面が別の番号に
+    // なります**——実際に、同じ面が 478 と 655 に見えて取り違えかけました。
+    let screw_once = StepImporter::import_solids_from_file("reference/OCCT/data/step/screw.step")
+        .ok()
+        .and_then(|solids| {
+            solids
+                .into_iter()
+                .max_by_key(|solid| solid.outer_shell.faces.len())
+        });
+    let links_once =
+        StepImporter::import_solids_from_file("reference/OCCT/data/step/linkrods.step")
+            .ok()
+            .and_then(|solids| {
+                solids
+                    .into_iter()
+                    .max_by_key(|solid| solid.outer_shell.faces.len())
+            });
+    for divisions in [12usize, 24] {
+        println!("  --- 刻み {divisions} ---");
+        let params = TessellationParams {
+            u_divisions: divisions,
+            v_divisions: divisions,
+        };
+        for (label, built) in [
+            ("箱", zenith_algo::PrimitiveBuilder::make_box(20.0, 10.0, 6.0)),
+            ("円柱", zenith_algo::PrimitiveBuilder::make_cylinder(5.0, 12.0)),
+            ("球", zenith_algo::PrimitiveBuilder::make_sphere(6.0)),
+            ("トーラス", zenith_algo::PrimitiveBuilder::make_torus(10.0, 3.0)),
+        ] {
+            if let Ok(solid) = built {
+                count_uv_flat_but_alive(label, &solid, &params);
+            }
+        }
+        for (label, solid) in [("screw.step", &screw_once), ("linkrods.step", &links_once)] {
+            if let Some(solid) = solid {
+                count_uv_flat_but_alive(label, solid, &params);
+            }
+        }
+    }
+    println!();
+
     println!("読んだファイルを、刻みを振って（4-581）:");
     sweep_foreign("screw", "reference/OCCT/data/step/screw.step");
     sweep_foreign("linkrods", "reference/OCCT/data/step/linkrods.step");
