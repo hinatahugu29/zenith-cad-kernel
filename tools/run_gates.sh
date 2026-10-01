@@ -141,6 +141,36 @@ for probe in $GATES; do
   fi
 done
 
+# **口を立てて回す門**（4-610）。
+#
+# **上の門は、呼ばれたときの環境のまま回します。** **既定では巻き方は
+# 揃っていない**（4-582、4-602）ので、**巻き方の門をあの一覧に入れると、
+# 既定の回が赤になります**——**それは退行ではなく、既定の姿**です。
+#
+# **なので、ここで口を立てて回します。** **掃き出しの側も、口が立って
+# いなければ測らずに赤**にします（**立て忘れて緑が、いちばん悪い**）。
+echo
+echo "== 口を立てて回す門 =="
+for probe in winding_contract_probe; do
+  exe="./target/release/examples/$probe"
+  if [ ! -x "$exe" ] && [ ! -f "$exe.exe" ]; then
+    printf "  %-30s **ありません**\n" "$probe"
+    continue
+  fi
+  started=$(date +%s)
+  ZENITH_TRIM_WINDING_AFTER_WELD=1 ZENITH_NO_SPLIT_FLAT=1 \
+    "$exe" > "$OUT/$probe.txt" 2>&1
+  code=$?
+  elapsed=$(( $(date +%s) - started ))
+  if [ "$code" != "0" ]; then
+    fail=1
+    red="$red $probe"
+    printf "  %-30s **赤**  exit=%s  (%ss)\n" "$probe" "$code" "$elapsed"
+  else
+    printf "  %-30s 緑    (%ss)\n" "$probe" "$elapsed"
+  fi
+done
+
 # **Python の口も回します**（4-419）。
 #
 # **`cargo test` は、Python から使えることの証明になりません**（4-402）
