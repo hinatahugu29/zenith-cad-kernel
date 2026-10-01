@@ -1090,6 +1090,35 @@ pub(crate) fn refine_uv_triangulation_protected(
             if settled[index] {
                 continue;
             }
+            // **uv で潰れている三角形は、割りません**（4-602。
+            // `ZENITH_NO_SPLIT_FLAT=1`。**既定では走りません**）。
+            //
+            // # なぜ
+            //
+            // **割っても、子は全部潰れたまま**です——**3 頂点が uv で
+            // 一直線なら、どの分割の型（1辺・2辺・3辺）でも、できる
+            // 三角形の頂点はその直線の上**にあります。**弦の誤差で割る
+            // 意味もありません**（uv で面積ゼロの三角形に、刻みを細かく
+            // する余地はない）。**増えるだけ**です。
+            //
+            // **実測（4-599、4-602。`screw.step` の面 442）**:
+            // **earcut が作った潰れた三角形は、耳の修理が
+            // 51 枚 → 3 枚（24 分割）、21 枚 → 1 枚（12 分割）まで
+            // 掃除しています。** **そのあと細分が 3 → 149、1 → 59 に
+            // 増やしていました**（**4 分割を重ねるので 4ⁿ 倍**）。
+            // **折り返し 12 本の素は、この増殖**です。
+            //
+            // **割らないのは、既にある安全な動き**です（溶接に当たる中点を
+            // 作らない道と同じ。**三角形を捨てないので、穴は増えません**）。
+            if std::env::var_os("ZENITH_NO_SPLIT_FLAT").is_some() {
+                let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+                let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+                let scale = (b - a).norm().max((c - a).norm()).max((c - b).norm());
+                if scale > 0.0 && signed.abs() <= scale * scale * 1e-9 {
+                    settled[index] = true;
+                    continue;
+                }
+            }
             if !triangle_needs_refinement(
                 surface,
                 uvs,
