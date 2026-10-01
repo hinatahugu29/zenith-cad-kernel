@@ -207,3 +207,115 @@ impl TriangleMesh {
         colors
     }
 }
+
+/// **その 3 点が、uv で一直線に潰れているか**（4-605）。
+///
+/// # なぜ 1 か所に集めるのか
+///
+/// **同じ式が 5 か所に散っていました**（細分の歯止め・2 つの診断・
+/// 掃き出し 2 か所）。**この判定は、折り返しの正体そのもの**
+/// （4-597）なので、**1 つの名前にして、試験を書いておきます。**
+///
+/// # 測り方
+///
+/// **符号つき面積を、三角形自身の広がり（いちばん長い辺）の 2 乗で
+/// 正規化**して比べます。**絶対値で比べてはいけません**——
+/// **面の大きさに引っ張られます**（`screw.step` の面 442 は差し渡し
+/// 28.6、`linkrods` の小さい面は 0.1 の桁。同じ閾値は使えません）。
+///
+/// `limit` は比率です。**4-604 で 1e-11 〜 1e-4 の 4 桁を振って、
+/// 答えが変わらないことを確かめてあります**（既定は 1e-9）。
+///
+/// **3 点が重なっている（広がりが 0）ときは `false`**を返します——
+/// **それは「一直線」ではなく「点」**で、別の段
+/// （`3d-zero`、`collapsed`）が落とします。
+pub fn uv_triangle_is_flat(a: Vec2, b: Vec2, c: Vec2, limit: f64) -> bool {
+    let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+    let scale = (b - a)
+        .norm()
+        .max((c - a).norm())
+        .max((c - b).norm());
+    scale > 0.0 && signed.abs() <= scale * scale * limit
+}
+
+#[cfg(test)]
+mod flat_tests {
+    use super::uv_triangle_is_flat;
+    use zenith_math::Vec2;
+
+    /// **一直線の 3 点は、潰れていると言えます。**
+    #[test]
+    fn three_points_on_one_line_are_flat() {
+        let (a, b, c) = (
+            Vec2::new(0.428035, 0.5),
+            Vec2::new(0.432239, 0.5),
+            Vec2::new(0.485418, 0.5),
+        );
+        assert!(uv_triangle_is_flat(a, b, c, 1e-9));
+        // **4-604 で振った 4 桁すべてで同じ答え**になること。
+        for limit in [1e-11, 1e-9, 1e-7, 1e-5] {
+            assert!(
+                uv_triangle_is_flat(a, b, c, limit),
+                "limit {limit} で取りこぼしました"
+            );
+        }
+    }
+
+    /// **まともな三角形は、潰れていません。**
+    #[test]
+    fn a_healthy_triangle_is_not_flat() {
+        let (a, b, c) = (
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            Vec2::new(0.0, 1.0),
+        );
+        assert!(!uv_triangle_is_flat(a, b, c, 1e-9));
+    }
+
+    /// **細いが本物の三角形は、潰れていません。**
+    ///
+    /// **ここが効きます**——**絶対値で見ると「小さいから潰れている」に
+    /// 見える**三角形が、**比率で見ると健全**だと分かります。
+    #[test]
+    fn a_thin_but_real_triangle_is_not_flat() {
+        let (a, b, c) = (
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1e-3, 0.0),
+            Vec2::new(0.0, 1e-9),
+        );
+        // 面積は 5e-13 しかありませんが、広がり 1e-3 に対しては健全です。
+        assert!(!uv_triangle_is_flat(a, b, c, 1e-9));
+    }
+
+    /// **3 点が重なっているときは「一直線」とは言いません。**
+    #[test]
+    fn a_single_point_is_not_called_flat() {
+        let p = Vec2::new(0.25, 0.5);
+        assert!(!uv_triangle_is_flat(p, p, p, 1e-9));
+    }
+
+    /// **大きい面でも小さい面でも、同じ閾値で使えます**（正規化の効き）。
+    #[test]
+    fn the_same_limit_works_on_large_and_small_faces() {
+        for span in [1e-2, 1.0, 28.6] {
+            let flat = (
+                Vec2::new(0.0, 0.0),
+                Vec2::new(span * 0.5, 0.0),
+                Vec2::new(span, 0.0),
+            );
+            assert!(
+                uv_triangle_is_flat(flat.0, flat.1, flat.2, 1e-9),
+                "差し渡し {span} の一直線を取りこぼしました"
+            );
+            let healthy = (
+                Vec2::new(0.0, 0.0),
+                Vec2::new(span, 0.0),
+                Vec2::new(0.0, span),
+            );
+            assert!(
+                !uv_triangle_is_flat(healthy.0, healthy.1, healthy.2, 1e-9),
+                "差し渡し {span} の健全な三角形を潰れていると言いました"
+            );
+        }
+    }
+}

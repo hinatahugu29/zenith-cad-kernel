@@ -196,9 +196,8 @@ fn overlapping_flat_slivers(solid: &zenith_topo::Solid, face_id: u64, params: &T
             patch.uvs[triangle[1] as usize],
             patch.uvs[triangle[2] as usize],
         );
-        let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
-        let scale = (b - a).norm().max((c - a).norm()).max((c - b).norm());
-        if scale <= 0.0 || signed.abs() > scale * scale * 1e-9 {
+        // **判定は `zenith_tess::uv_triangle_is_flat` に集めました**（4-605）。
+        if !zenith_tess::uv_triangle_is_flat(a, b, c, 1e-9) {
             continue;
         }
         let u_lo = a.x.min(b.x).min(c.x);
@@ -257,14 +256,10 @@ fn count_uv_flat_but_alive(name: &str, solid: &zenith_topo::Solid, params: &Tess
                 patch.uvs[triangle[1] as usize],
                 patch.uvs[triangle[2] as usize],
             );
-            let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
-            // **三角形自身の uv での広がりで正規化**します（絶対値では
-            // 面の大きさに引っ張られます。4-573 で同じ形の判定をしています）。
-            let scale = (b - a)
-                .norm()
-                .max((c - a).norm())
-                .max((c - b).norm());
-            if scale <= 0.0 || signed.abs() > scale * scale * 1e-9 {
+            // **判定は `zenith_tess::uv_triangle_is_flat` に集めました**
+            // （4-605。**三角形自身の広がりで正規化します**——絶対値では
+            // 面の大きさに引っ張られます）。
+            if !zenith_tess::uv_triangle_is_flat(a, b, c, 1e-9) {
                 continue;
             }
             total += 1;

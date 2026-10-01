@@ -1132,9 +1132,7 @@ pub(crate) fn refine_uv_triangulation_protected(
             // **振って確かめるための口**です。
             if let Some(limit) = flat_split_limit() {
                 let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
-                let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
-                let scale = (b - a).norm().max((c - a).norm()).max((c - b).norm());
-                if scale > 0.0 && signed.abs() <= scale * scale * limit {
+                if crate::mesh::uv_triangle_is_flat(a.coords, b.coords, c.coords, limit) {
                     settled[index] = true;
                     continue;
                 }

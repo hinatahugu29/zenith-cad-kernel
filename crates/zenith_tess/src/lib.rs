@@ -4,7 +4,7 @@ pub mod mesh;
 pub mod stitched;
 pub mod surface_tess;
 
-pub use mesh::TriangleMesh;
+pub use mesh::{uv_triangle_is_flat, TriangleMesh};
 pub use stitched::{
     face_edge_segment_counts, face_patch_mesh, face_triangle_counts, tessellate_solid_stitched,
 };

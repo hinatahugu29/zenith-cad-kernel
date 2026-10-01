@@ -1518,9 +1518,7 @@ fn patch_mesh(
         if std::env::var_os("ZENITH_FLAT_SLIVER_WHY").is_some() {
             let flat = |triangle: &[usize; 3]| {
                 let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
-                let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
-                let scale = (b - a).norm().max((c - a).norm()).max((c - b).norm());
-                scale > 0.0 && signed.abs() <= scale * scale * 1e-9
+                crate::mesh::uv_triangle_is_flat(a.coords, b.coords, c.coords, 1e-9)
             };
             let mut boundary: std::collections::HashSet<(usize, usize)> = Default::default();
             for range in &ring_ranges {
@@ -1957,10 +1955,9 @@ fn decide_uv_winding(
     // **三角形の uv での広がりに対して極めて小さいときも、同じ受け皿へ
     // 回します。**
     let degenerate_guard = std::env::var_os("ZENITH_TRIM_DEGENERATE_GUARD").is_some();
-    let nearly_zero = degenerate_guard && {
-        let scale = (b - a).norm().max((c - a).norm()).max((c - b).norm());
-        scale > 0.0 && signed.abs() <= scale * scale * 1e-9
-    };
+    // **判定は `uv_triangle_is_flat` に集めました**（4-605。試験つき）。
+    let nearly_zero =
+        degenerate_guard && crate::mesh::uv_triangle_is_flat(a.coords, b.coords, c.coords, 1e-9);
     if signed == 0.0 || nearly_zero {
         // **uv で潰れていても、3D では面積を持つ三角形があります**（4-286）。
         //
