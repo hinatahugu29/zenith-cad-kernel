@@ -143,6 +143,62 @@ fn main() {
                     "    OCC の面 {occ_faces} 枚との差 {}、メッシュの穴 {holes} 本、重なり {overlaps} 本",
                     faces as i64 - occ_faces as i64
                 );
+                // **uv で潰れた三角形が、答えの中に残っているか**（4-609。
+                // `ZENITH_H8_FLAT=1`）。
+                //
+                // **4-608 で「ブーリアンの答えには巻き方の食い違いが出ない」**
+                // **と測れました**が、**なぜ出ないのかは推測のまま**でした
+                // （**面を割ってトリムを張り替えるので、問題だった配置が
+                // 残らないのだろう**）。**推測を数にします**——
+                // **読んだ立体には潰れた三角形が 149 枚ある**（4-598）。
+                // **答えの中に何枚あるか。**
+                if std::env::var_os("ZENITH_H8_FLAT").is_some() {
+                    let params = zenith_tess::TessellationParams::default();
+                    let mut flat = 0usize;
+                    let mut alive = 0usize;
+                    let mut worst: Vec<(u64, usize)> = Vec::new();
+                    for face in &solid.outer_shell.faces {
+                        let Some(patch) =
+                            zenith_tess::face_patch_mesh(solid, face.id, &params)
+                        else {
+                            continue;
+                        };
+                        let mut here = 0usize;
+                        for triangle in &patch.indices {
+                            let (a, b, c) = (
+                                patch.uvs[triangle[0] as usize],
+                                patch.uvs[triangle[1] as usize],
+                                patch.uvs[triangle[2] as usize],
+                            );
+                            if !zenith_tess::uv_triangle_is_flat(a, b, c, 1e-9) {
+                                continue;
+                            }
+                            flat += 1;
+                            let (p0, p1, p2) = (
+                                patch.positions[triangle[0] as usize],
+                                patch.positions[triangle[1] as usize],
+                                patch.positions[triangle[2] as usize],
+                            );
+                            if (p1 - p0).cross(&(p2 - p0)).norm() * 0.5 > 1e-18 {
+                                alive += 1;
+                                here += 1;
+                            }
+                        }
+                        if here > 0 {
+                            worst.push((face.id, here));
+                        }
+                    }
+                    worst.sort_by(|left, right| right.1.cmp(&left.1));
+                    worst.truncate(4);
+                    println!(
+                        "    uv で潰れた三角形 {flat} 枚（うち 3D で生きている {alive} 枚）{}",
+                        if worst.is_empty() {
+                            "——**答えの中には在りません**".to_string()
+                        } else {
+                            format!("　多い面: {worst:?}")
+                        }
+                    );
+                }
                 // **面ごとの体積への寄与**（4-566。`ZENITH_H8_FACE_VOLUMES=1`）。
                 //
                 // **和は 0.311（4%）大きい**のに、**面は 49 枚ちょうどで
