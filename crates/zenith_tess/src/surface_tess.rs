@@ -894,6 +894,22 @@ pub(crate) const WELD_TOLERANCE: f64 = 1e-7;
 /// この桁でずれます。**そのずれより広く取る**のが要ります。
 pub(crate) const REFINEMENT_CLEARANCE: f64 = WELD_TOLERANCE * 8.0;
 
+/// **潰れた三角形を割らない歯止めの比率**（4-602、4-604）。
+///
+/// `ZENITH_NO_SPLIT_FLAT` が立っていなければ `None`（**既定では走りません**）。
+/// **値が比率として読めればそれを、読めなければ 1e-9**を返します
+/// （`=1` のような「立てるだけ」の使い方を壊さないため）。
+fn flat_split_limit() -> Option<f64> {
+    let raw = std::env::var("ZENITH_NO_SPLIT_FLAT").ok()?;
+    let parsed = raw.trim().parse::<f64>().ok();
+    // **`1` は「立てるだけ」の意味**です。**比率として 1 を使うと、
+    // どんな三角形も潰れている扱いになり、細分が全部止まります。**
+    match parsed {
+        Some(value) if value > 0.0 && value < 1e-3 => Some(value),
+        _ => Some(1e-9),
+    }
+}
+
 const MAX_REFINED_TRIANGLES: usize = 200_000;
 const MAX_REFINEMENT_PASSES: usize = 24;
 
@@ -1110,11 +1126,15 @@ pub(crate) fn refine_uv_triangulation_protected(
             //
             // **割らないのは、既にある安全な動き**です（溶接に当たる中点を
             // 作らない道と同じ。**三角形を捨てないので、穴は増えません**）。
-            if std::env::var_os("ZENITH_NO_SPLIT_FLAT").is_some() {
+            // **歯止めの値は振れます**（4-604。`ZENITH_NO_SPLIT_FLAT=<比率>`。
+            // **`1` のような比率でない値、または値なしなら既定の 1e-9**）。
+            // **自分の直しが、ある 1 つの値でしか効かないなら脆い**ので、
+            // **振って確かめるための口**です。
+            if let Some(limit) = flat_split_limit() {
                 let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
                 let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
                 let scale = (b - a).norm().max((c - a).norm()).max((c - b).norm());
-                if scale > 0.0 && signed.abs() <= scale * scale * 1e-9 {
+                if scale > 0.0 && signed.abs() <= scale * scale * limit {
                     settled[index] = true;
                     continue;
                 }
