@@ -1508,6 +1508,83 @@ fn patch_mesh(
         // **0 本**なのに、細分のあとに **14 本**できていました。細分は
         // 三角形ごとに割るので、隣が割らなければそこが T 字になります。
         repair_interior_t_junctions(&uvs, &ring_ranges, &mut triangles);
+        // **掃除できなかった薄片を、理由つきで並べます**（4-601。
+        // `ZENITH_FLAT_SLIVER_WHY=1`。**既定では走りません**）。
+        //
+        // **入れ替え（flip）は一直線の薄片を潰します**が、**潰せない残りが
+        // あります**（4-600。既定で 59 枚・149 枚）。**入れ替えが見送るのは
+        // 3 つの場合**——**辺を持つ三角形が 2 枚でない**、**境界の辺**、
+        // **守られている辺（`protected`）**。**どれで見送られたのかを出します。**
+        if std::env::var_os("ZENITH_FLAT_SLIVER_WHY").is_some() {
+            let flat = |triangle: &[usize; 3]| {
+                let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+                let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+                let scale = (b - a).norm().max((c - a).norm()).max((c - b).norm());
+                scale > 0.0 && signed.abs() <= scale * scale * 1e-9
+            };
+            let mut boundary: std::collections::HashSet<(usize, usize)> = Default::default();
+            for range in &ring_ranges {
+                let n = range.len();
+                for offset in 0..n {
+                    let a = range.start + offset;
+                    let b = range.start + (offset + 1) % n;
+                    boundary.insert(if a < b { (a, b) } else { (b, a) });
+                }
+            }
+            let mut holders: std::collections::HashMap<(usize, usize), Vec<usize>> =
+                Default::default();
+            for (at, triangle) in triangles.iter().enumerate() {
+                for corner in 0..3 {
+                    let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                    holders
+                        .entry(if a < b { (a, b) } else { (b, a) })
+                        .or_default()
+                        .push(at);
+                }
+            }
+            // **同じ有向辺を 2 回使っている組**（＝折り返しの素）を探します。
+            let mut directed: std::collections::HashMap<(usize, usize), Vec<usize>> =
+                Default::default();
+            for (at, triangle) in triangles.iter().enumerate() {
+                for corner in 0..3 {
+                    directed
+                        .entry((triangle[corner], triangle[(corner + 1) % 3]))
+                        .or_default()
+                        .push(at);
+                }
+            }
+            let (mut folds, mut by_holders, mut by_boundary, mut by_protected, mut free) =
+                (0usize, 0usize, 0usize, 0usize, 0usize);
+            for (edge, users) in &directed {
+                if users.len() < 2 {
+                    continue;
+                }
+                if !users.iter().all(|at| flat(&triangles[*at])) {
+                    continue;
+                }
+                folds += 1;
+                let key = if edge.0 < edge.1 {
+                    (edge.0, edge.1)
+                } else {
+                    (edge.1, edge.0)
+                };
+                let held = holders.get(&key).map_or(0, |v| v.len());
+                if held != 2 {
+                    by_holders += 1;
+                } else if boundary.contains(&key) {
+                    by_boundary += 1;
+                } else if protected.contains(&key) {
+                    by_protected += 1;
+                } else {
+                    free += 1;
+                }
+            }
+            if folds > 0 {
+                eprintln!(
+                    "FLATSLIVER 掃除できなかった折り返しの素 {folds} 本: 持ち手が2枚でない {by_holders}、境界の辺 {by_boundary}、守られた辺 {by_protected}、**入れ替えられたはずなのに残った {free}**"
+                );
+            }
+        }
         if std::env::var_os("ZENITH_PATCH_WHY").is_some() {
             eprintln!(
                 "PATCHWHY   境界 {boundary_vertex_count} 点、earcut {before_refinement} 枚 -> 細分後 {} 枚（{:.1}倍）",
