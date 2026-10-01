@@ -176,6 +176,63 @@ fn count_mismatches(
     (folded, crossed)
 }
 
+/// **潰れた薄片のうち、どれが互いに重なっているかを数えます**（4-599）。
+///
+/// **面 442 は 149 枚持つのに、折り返しは 12 本**（4-598）。
+/// **uv で潰れているだけでは足りず、同じ線の上で「区間が重なった」組だけ**
+/// **が折り返しになる**——という読みを測ります。
+///
+/// **薄片は 1 本の線の上にある**ので、**u の区間 [最小, 最大] が重なるか**
+/// で判定できます。
+fn overlapping_flat_slivers(solid: &zenith_topo::Solid, face_id: u64, params: &TessellationParams) {
+    let Some(patch) = zenith_tess::face_patch_mesh(solid, face_id, params) else {
+        return;
+    };
+    // **潰れた薄片だけを集めます**（v はほぼ一定なので、その v と u の区間）。
+    let mut flats: Vec<(f64, f64, f64, usize)> = Vec::new();
+    for (at, triangle) in patch.indices.iter().enumerate() {
+        let (a, b, c) = (
+            patch.uvs[triangle[0] as usize],
+            patch.uvs[triangle[1] as usize],
+            patch.uvs[triangle[2] as usize],
+        );
+        let signed = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+        let scale = (b - a).norm().max((c - a).norm()).max((c - b).norm());
+        if scale <= 0.0 || signed.abs() > scale * scale * 1e-9 {
+            continue;
+        }
+        let u_lo = a.x.min(b.x).min(c.x);
+        let u_hi = a.x.max(b.x).max(c.x);
+        let v = (a.y + b.y + c.y) / 3.0;
+        flats.push((v, u_lo, u_hi, at));
+    }
+    // **同じ線（v がほぼ同じ）で、u の区間が重なる組**を数えます。
+    let mut overlapping_pairs = 0usize;
+    let mut involved: std::collections::BTreeSet<usize> = Default::default();
+    for i in 0..flats.len() {
+        for j in (i + 1)..flats.len() {
+            let (vi, lo_i, hi_i, ai) = flats[i];
+            let (vj, lo_j, hi_j, aj) = flats[j];
+            if (vi - vj).abs() > 1e-9 {
+                continue;
+            }
+            // **端で触るだけは数えません**（隣り合う薄片は正常）。
+            let overlap = hi_i.min(hi_j) - lo_i.max(lo_j);
+            if overlap > 1e-12 {
+                overlapping_pairs += 1;
+                involved.insert(ai);
+                involved.insert(aj);
+            }
+        }
+    }
+    println!(
+        "    刻み {:>2}  面 {face_id}: 潰れた薄片 {} 枚、**区間が重なる組 {overlapping_pairs}**、関わる薄片 {} 枚",
+        params.u_divisions,
+        flats.len(),
+        involved.len()
+    );
+}
+
 /// **「uv では潰れているが 3D では生きている」三角形を、立体ごとに数えます**（4-598）。
 ///
 /// **4-597 で、折り返しの正体が「uv で一直線・面積ゼロの薄片」**だと
@@ -1364,6 +1421,7 @@ fn main() {
                         // **計画が稜ごとに割り当てた分割数**（4-591）。
                         // **逆転が計画から来ているのかを、ここで見ます。**
                         row_points_per_edge(&screw, id, &params, v);
+                        overlapping_flat_slivers(&screw, id, &params);
                         if divisions == 12 || divisions == 24 {
                             folded_triangles_in_uv(&screw, id, &params);
                         }
