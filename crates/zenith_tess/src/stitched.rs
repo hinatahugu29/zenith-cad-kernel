@@ -45,6 +45,46 @@ use crate::surface_tess::TessellationParams;
 
 /// 稜を共有したまま閉じたメッシュを作る
 pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> TriangleMesh {
+    stitch_solid(solid, params, false).0
+}
+
+/// **溶接後の三角形ごとに「どの面から来たか」を添えて返します**（4-618）。
+///
+/// # なぜ要るのか
+///
+/// **面ごとの内訳を測る掃き出しは、溶接前の面ごとの枚数を、
+/// 溶接後の三角形の並びに当てていました**（`winding_contract_probe`）。
+/// **溶接は三角形を落とす**ので（4-333）、**落ちた面から先は全部ずれます。**
+///
+/// **実測（4-612）: 常設の検体 22 個のうち 4 つが落としています**——
+/// **`screw` 2 枚、`occ:cone_full` 95 枚、`occ:filleted_box` 153 枚、
+/// `occ:sphere` 48 枚。**
+///
+/// **合計は無事でした**——**折り返しと食い違いの合計は、向きつきの辺が
+/// 2 回以上使われた数で、面の割り当てを使いません。合計が 0 なら内訳も 0。**
+/// **ずれが効くのは 0 でなくなったとき**——**つまり、退行を診断している
+/// とき**です。**いちばん要るときに嘘をつく**ので、直しました。
+///
+/// **`None` は「外側の殻から来ていない」**という意味です
+/// （**内側の殻の三角形**。**溶接の前に混ぜるので、範囲の外に出ます**）。
+pub fn tessellate_solid_stitched_with_faces(
+    solid: &Solid,
+    params: &TessellationParams,
+) -> (TriangleMesh, Vec<Option<u64>>) {
+    let (mesh, faces) = stitch_solid(solid, params, true);
+    (mesh, faces.unwrap_or_default())
+}
+
+/// 縫い合わせの本体。**`want_faces` のときだけ、面の割り当ても返します。**
+///
+/// **2 つに分けて書くと、片方だけ直して食い違います**——`tessellate_solid`
+/// と `tessellate_face` で 3 回踏んだ罠（4-573、4-574、4-586）と同じ形
+/// なので、**本体は 1 つ**にしています。
+fn stitch_solid(
+    solid: &Solid,
+    params: &TessellationParams,
+    want_faces: bool,
+) -> (TriangleMesh, Option<Vec<Option<u64>>>) {
     let plan = SamplePlan::for_solid(solid, params);
 
     // `ZENITH_FACE_OWNER_WHY=1` のときだけ、三角形がどの面から来たかを覚えて
@@ -53,12 +93,13 @@ pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> 
     // 揃っているかを疑うには、その2枚を名指しできる必要があります。
     let mut owners: Vec<(u64, std::ops::Range<usize>)> = Vec::new();
     let attribute = std::env::var_os("ZENITH_FACE_OWNER_WHY").is_some();
+    let keep = attribute || want_faces;
 
     let mut mesh = tessellate_shell_stitched_owned(
         &solid.outer_shell,
         params,
         &plan,
-        attribute.then_some(&mut owners),
+        keep.then_some(&mut owners),
     );
     for inner in &solid.inner_shells {
         let mut inner_mesh = tessellate_shell_stitched(inner, params, &plan);
@@ -75,8 +116,21 @@ pub fn tessellate_solid_stitched(solid: &Solid, params: &TessellationParams) -> 
     if attribute {
         explain_face_owners(&mesh, &owners, &survivors);
     }
+    // **向き直しは三角形を落としません**（裏返すだけ）。**並びも枚数も
+    // 変わらない**ので、割り当ては溶接の直後に作って構いません。
+    let faces = want_faces.then(|| {
+        (0..mesh.indices.len())
+            .map(|triangle| {
+                let original = *survivors.get(triangle)?;
+                owners
+                    .iter()
+                    .find(|(_, range)| range.contains(&original))
+                    .map(|(id, _)| *id)
+            })
+            .collect::<Vec<Option<u64>>>()
+    });
     settle_winding_after_weld(&mut mesh);
-    mesh
+    (mesh, faces)
 }
 
 /// **縫い合わせたあとで、向きの食い違いだけを直します**（4-582。

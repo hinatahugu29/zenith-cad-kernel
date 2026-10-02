@@ -31,13 +31,18 @@
 //! * **穴・重なり**: **向きを見ない数え方**（同じ辺が 1 回だけ／3 回以上）
 
 use zenith_io::StepImporter;
-use zenith_tess::{face_triangle_counts, tessellate_solid, TessellationParams};
+use zenith_tess::{tessellate_solid_stitched_with_faces, TessellationParams};
 
 /// **折り返しと「別の 2 枚が同じ向き」を分けて数えます**（4-569、4-574）。
+///
+/// **面の割り当ては、溶接後の三角形ごとに受け取ります**（4-618）。
+/// **以前は溶接前の面ごとの枚数を、溶接後の並びに当てていました**——
+/// **溶接は三角形を落とす**ので（4-333）、**落ちた面から先が全部ずれます**。
+/// **実測で 22 検体のうち 4 つが落としています**（4-612）。
 fn count(
     positions: &[zenith_math::Point3],
     indices: &[[u32; 3]],
-    counts: &[(u64, usize)],
+    face_of: &[Option<u64>],
 ) -> (usize, usize) {
     let cell = |point: zenith_math::Point3| {
         (
@@ -59,24 +64,22 @@ fn count(
                 .or_insert(0) += 1;
         }
     }
-    let mut owner: std::collections::BTreeMap<((i64, i64, i64), (i64, i64, i64)), Vec<u64>> =
-        std::collections::BTreeMap::new();
-    let mut at = 0usize;
-    for (face_id, triangle_count) in counts {
-        for index in at..(at + triangle_count).min(indices.len()) {
-            let triangle = indices[index];
-            for pair in [
-                (triangle[0] as usize, triangle[1] as usize),
-                (triangle[1] as usize, triangle[2] as usize),
-                (triangle[2] as usize, triangle[0] as usize),
-            ] {
-                let key = (cell(positions[pair.0]), cell(positions[pair.1]));
-                if directed.get(&key).copied().unwrap_or(0) > 1 {
-                    owner.entry(key).or_default().push(*face_id);
-                }
+    let mut owner: std::collections::BTreeMap<
+        ((i64, i64, i64), (i64, i64, i64)),
+        Vec<Option<u64>>,
+    > = std::collections::BTreeMap::new();
+    for (index, triangle) in indices.iter().enumerate() {
+        let who = face_of.get(index).copied().flatten();
+        for pair in [
+            (triangle[0] as usize, triangle[1] as usize),
+            (triangle[1] as usize, triangle[2] as usize),
+            (triangle[2] as usize, triangle[0] as usize),
+        ] {
+            let key = (cell(positions[pair.0]), cell(positions[pair.1]));
+            if directed.get(&key).copied().unwrap_or(0) > 1 {
+                owner.entry(key).or_default().push(who);
             }
         }
-        at += triangle_count;
     }
     let (mut folded, mut crossed) = (0usize, 0usize);
     for users in owner.values() {
@@ -180,8 +183,8 @@ fn main() {
                 u_divisions: divisions,
                 v_divisions: divisions,
             };
-            let mesh = tessellate_solid(&solid, &params);
-            let counts = face_triangle_counts(&solid, &params);
+            // **溶接後の面の割り当てを、そのまま受け取ります**（4-618）。
+            let (mesh, face_of) = tessellate_solid_stitched_with_faces(&solid, &params);
             let cell = |point: zenith_math::Point3| {
                 (
                     (point.x / 1e-6).round() as i64,
@@ -206,7 +209,7 @@ fn main() {
             }
             let holes = undirected.values().filter(|count| **count == 1).count();
             let overlaps = undirected.values().filter(|count| **count > 2).count();
-            let (folded, crossed) = count(&mesh.positions, &mesh.indices, &counts);
+            let (folded, crossed) = count(&mesh.positions, &mesh.indices, &face_of);
             let worst = holes + overlaps + folded + crossed;
             rows += 1;
             // **既知の赤は、赤のまま見せますが rc には数えません**（4-611）。

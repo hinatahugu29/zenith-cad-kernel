@@ -7,6 +7,7 @@ pub mod surface_tess;
 pub use mesh::{uv_triangle_is_flat, TriangleMesh};
 pub use stitched::{
     face_edge_segment_counts, face_patch_mesh, face_triangle_counts, tessellate_solid_stitched,
+    tessellate_solid_stitched_with_faces,
 };
 pub use surface_tess::{
     face_parameter_area, face_signed_parameter_area, face_uv_triangulation,
