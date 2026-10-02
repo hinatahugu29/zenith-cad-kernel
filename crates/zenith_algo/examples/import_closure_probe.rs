@@ -171,6 +171,46 @@ fn main() {
                 );
             }
         }
+        // **面と面の点が、同じ所に落ちているか**（4-616。
+        // `ZENITH_CLOSURE_SHARED=1`）。
+        //
+        // **刻みの数を揃えるだけで継ぎ目が閉じるのか**を決めるのに要ります。
+        // **数が揃っても、点の位置が違えば溶接できません。**
+        if std::env::var_os("ZENITH_CLOSURE_SHARED").is_some() {
+            let ids: Vec<u64> = std::iter::once(&solid.outer_shell)
+                .chain(solid.inner_shells.iter())
+                .flat_map(|shell| shell.faces.iter())
+                .map(|face| face.id)
+                .collect();
+            let cell6 = |point: zenith_math::Point3| {
+                (
+                    (point.x / 1e-6).round() as i64,
+                    (point.y / 1e-6).round() as i64,
+                    (point.z / 1e-6).round() as i64,
+                )
+            };
+            let patches: Vec<(u64, std::collections::BTreeSet<(i64, i64, i64)>)> = ids
+                .iter()
+                .filter_map(|id| {
+                    zenith_tess::face_patch_mesh(&solid, *id, &params).map(|mesh| {
+                        (
+                            *id,
+                            mesh.positions.iter().map(|point| cell6(*point)).collect(),
+                        )
+                    })
+                })
+                .collect();
+            for (index, (left, left_set)) in patches.iter().enumerate() {
+                for (right, right_set) in patches.iter().skip(index + 1) {
+                    let shared = left_set.intersection(right_set).count();
+                    println!(
+                        "    面 {left}（点 {}）と 面 {right}（点 {}）で、同じ所に落ちている点 {shared} 個",
+                        left_set.len(),
+                        right_set.len()
+                    );
+                }
+            }
+        }
         // **稜ごとの分割数を、面ごとに並べます**（4-612。
         // **共有する稜で数が違えば、溶接できず両側に穴が開きます**）。
         if std::env::var_os("ZENITH_CLOSURE_SEGMENTS").is_some() {

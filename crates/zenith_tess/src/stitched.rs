@@ -540,6 +540,55 @@ struct BoundaryRing {
     segments: Vec<usize>,
 }
 
+/// **共有しない経路へ落ちるとき、刻みの計画に合わせた刻み数を返します**
+/// （4-616。`ZENITH_FALLBACK_PLAN_DIVISIONS=1`。**既定では走りません**）。
+///
+/// # なぜ要るのか
+///
+/// **p-curve が作れない面は、`params` の刻みで素のグリッドを張ります**——
+/// **刻みの計画を見ません。** **隣の面は計画に従う**ので、
+/// **同じ稜を別の数に切り**、**溶接できず両側に穴が開きます。**
+///
+/// **実測（`occ:pipe_bend`、4-612）**: **計画は両端の円に `4 × 刻み` を
+/// 割り、蓋はそれに従い、壁は `params` のまま**。**穴 = 2·(4d) + 2·d = 10d。**
+///
+/// **点の位置は、もう合っています**（4-616 の実測: **壁の 24 点は、
+/// 蓋の 96 点のうち 24 点とぴったり同じ所**に落ちている）。
+/// **違うのは数だけ**なので、**数を計画に合わせれば閉じるはず**です。
+///
+/// **向きを見分けられません。** **どの稜がどちらの径数方向かは
+/// p-curve で決まる**のに、**その p-curve が作れなかったから
+/// ここに居ます**。**なので両方向に、境界の稜の最大値を使います**——
+/// **u を要る数より細かく刻むことはありますが、粗くはしません。**
+fn fallback_divisions(
+    face: &Face,
+    params: &TessellationParams,
+    plan: &SamplePlan,
+) -> TessellationParams {
+    let mut most = 0usize;
+    for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+        for oriented in &wire.edges {
+            most = most.max(plan.segments_for(oriented.edge.id));
+        }
+    }
+    TessellationParams {
+        u_divisions: params.u_divisions.max(most),
+        v_divisions: params.v_divisions.max(most),
+    }
+}
+
+fn fallback_params(
+    face: &Face,
+    params: &TessellationParams,
+    plan: &SamplePlan,
+) -> TessellationParams {
+    if std::env::var_os("ZENITH_FALLBACK_PLAN_DIVISIONS").is_some() {
+        fallback_divisions(face, params, plan)
+    } else {
+        *params
+    }
+}
+
 fn tessellate_face_stitched(
     face: &Face,
     params: &TessellationParams,
@@ -570,7 +619,7 @@ fn tessellate_face_stitched(
                         face.id
                     );
                 }
-                return crate::surface_tess::tessellate_face(face, params);
+                return crate::surface_tess::tessellate_face(face, &fallback_params(face, params, plan));
             }
         }
     };
@@ -583,7 +632,7 @@ fn tessellate_face_stitched(
                 face.id
             );
         }
-        return crate::surface_tess::tessellate_face(face, params);
+        return crate::surface_tess::tessellate_face(face, &fallback_params(face, params, plan));
     };
     if rings.is_empty() || rings[0].uv.len() < 3 {
         if explain {
@@ -592,7 +641,7 @@ fn tessellate_face_stitched(
                 face.id
             );
         }
-        return crate::surface_tess::tessellate_face(face, params);
+        return crate::surface_tess::tessellate_face(face, &fallback_params(face, params, plan));
     }
     if std::env::var_os("ZENITH_FACE_EDGES_WHY").is_some() {
         for (index, wire) in std::iter::once(&face.outer_wire)
