@@ -282,7 +282,7 @@ else
       want=$(cat "$STAMP" 2>/dev/null | tr -d '[:space:]')
       have=$("$DOC_PYTHON" tools/source_fingerprint.py 2>/dev/null | tr -d '[:space:]')
       if [ -n "$have" ] && [ "$want" != "$have" ]; then
-        newest="ソースの指紋が違います（包みを作ったときと中身が別です）"
+        newest="指紋ちがい"
       fi
     else
       newest=$(find crates -name '*.rs' -newer "$PACKAGE"                  -not -path '*/examples/*' -not -path '*/tests/*'                  -print -quit 2>/dev/null)
@@ -290,7 +290,14 @@ else
         newest=$(find crates -name 'Cargo.toml' -newer "$PACKAGE" -print -quit 2>/dev/null)
       fi
     fi
-    if [ -n "$newest" ]; then
+    if [ "$newest" = "指紋ちがい" ]; then
+      # **指紋がちがうときは「古い」とは言いません**（4-625）。
+      # **時刻ではなく中身を見ている**ので、**どちらが新しいかは分かりません。**
+      printf "  %-30s **赤**  ソースの指紋がちがいます（包みを作り直してください: py tools/build_pyd.py）
+" "配る包み"
+      fail=1
+      red="$red addon_package"
+    elif [ -n "$newest" ]; then
       printf "  %-30s **赤**  %s より古い（py tools/build_pyd.py）
 " "配る包み" "$newest"
       fail=1

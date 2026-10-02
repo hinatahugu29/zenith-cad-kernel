@@ -850,6 +850,76 @@ fn tessellate_face_stitched(
                 "TESSWHY   ring {index}: signed area {signed_area:.9}, bbox ({u_min:.9},{v_min:.9})-({u_max:.9},{v_max:.9}), segments {:?}",
                 ring.segments
             );
+            // **巻き戻しを解いたら、面積が戻るのか**（4-624。**測るだけ**）。
+            //
+            // **4-623 で、`pipe_bend` の輪は形は正しいのに面積が 0**
+            // （`torus_segment` は同じ形で 1.0）と分かりました。
+            // **根は「曲面の径数の継ぎ目が、面の継ぎ目の稜と半周ずれている」**
+            // ——**閉じた稜の p-curve が域を巻き戻すしかない**のです。
+            //
+            // **直し方の見当は 2 つあり**（4-623）、**うち 1 つは
+            // 「ずれを織り込んで、巻き戻しを解いた空間で輪を張る」**です。
+            // **それが効くなら、解いた面積は 1.0 に戻るはず**。
+            // **効かないなら、投資する前に分かる。** **ここで測ります。**
+            //
+            // **解き方**: **隣との差が域の半分を超えたら、域の分だけ足し引き**
+            // して**連続につなぎます**（v だけ。u は閉じていません）。
+            // **v で閉じている NURBS の面だけ**を測ります。
+            //
+            // **最初は域の幅を 1.0 と決め打ちしていました。** **壁では
+            // 合っていますが、蓋（平面）の uv は −4..4 なので、
+            // 出てくる数が無意味**でした（**面積 17.75 という、何でもない数**）。
+            // **測る相手を選ばない診断は、嘘を出します。**
+            let periodic_v = match &face.geometry {
+                FaceGeometry::Nurbs(surface) => {
+                    let ((su_min, su_max), (sv_min, sv_max)) = surface.param_range();
+                    let middle = (su_min + su_max) * 0.5;
+                    let closed = (surface.evaluate(middle, sv_min)
+                        - surface.evaluate(middle, sv_max))
+                    .norm()
+                        <= crate::surface_tess::WELD_TOLERANCE;
+                    closed.then_some(sv_max - sv_min)
+                }
+                _ => None,
+            };
+            if let (true, Some(span)) = (
+                std::env::var_os("ZENITH_RING_UNWRAP").is_some() && ring.uv.len() >= 3,
+                periodic_v,
+            ) {
+                let mut unwrapped: Vec<(f64, f64)> = Vec::with_capacity(ring.uv.len());
+                let mut shift = 0.0f64;
+                for (at, uv) in ring.uv.iter().enumerate() {
+                    if at > 0 {
+                        let previous = ring.uv[at - 1].y + shift;
+                        let mut here = uv.y + shift;
+                        while here - previous > span * 0.5 {
+                            shift -= span;
+                            here -= span;
+                        }
+                        while previous - here > span * 0.5 {
+                            shift += span;
+                            here += span;
+                        }
+                    }
+                    unwrapped.push((uv.x, uv.y + shift));
+                }
+                let undone = (0..unwrapped.len())
+                    .map(|offset| {
+                        let (ax, ay) = unwrapped[offset];
+                        let (bx, by) = unwrapped[(offset + 1) % unwrapped.len()];
+                        ax * by - ay * bx
+                    })
+                    .sum::<f64>()
+                    * 0.5;
+                let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+                for (_, y) in &unwrapped {
+                    low = low.min(*y);
+                    high = high.max(*y);
+                }
+                eprintln!(
+                    "TESSWHY   ring {index}: 巻き戻しを解くと 面積 {undone:.9}、v は {low:.6}..{high:.6}"
+                );
+            }
         }
     }
 
