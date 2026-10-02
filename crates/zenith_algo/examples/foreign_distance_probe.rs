@@ -354,5 +354,28 @@ fn main() {
     if failures > 0 {
         std::process::exit(1);
     }
+    // **数が減ったら赤にします**（4-619）。
+    //
+    // **4-410 で、ここは「36 checks, 0 miss」と記録されているのに
+    // 実際は「29 checks, 3 miss」**でした（**読んだ円錐の囲み箱が
+    // 高さ 0 になり、丸ごと飛ばされていた**）。**2 週間気づかれません
+    // でした**——**件数が減っても緑のまま**だからです。
+    //
+    // **記録と実測が合っているかを、門に数えさせます。**
+    // **検体を増やしたときは、この数を上げてください。**
+    const EXPECTED_CHECKS: usize = 36;
+    if checks != EXPECTED_CHECKS {
+        println!();
+        if checks < EXPECTED_CHECKS {
+            println!(
+                "**件数が減っています**: {checks} 件（記録は {EXPECTED_CHECKS} 件）——**黙って飛ばされた検体があります**（4-619）。"
+            );
+        } else {
+            println!(
+                "**件数が増えています**: {checks} 件（記録は {EXPECTED_CHECKS} 件）——**記録を上げてください**（4-619）。"
+            );
+        }
+        std::process::exit(1);
+    }
     println!("every distance and every side lands on the closed form");
 }

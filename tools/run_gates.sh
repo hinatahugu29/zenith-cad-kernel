@@ -237,7 +237,8 @@ elif ! PYO3_PYTHON="$("$PYTHON" -c 'import sys; print(sys.executable)')"        
   fail=1
   red="$red zenith_py"
 else
-  # **配る包みが、いまのソースより新しいか**（4-426、4-431）。
+  # **配る包みが、いまのソースから作られたか**（4-426、4-431、4-620）。
+  # **4-620 から、更新時刻ではなく中身の指紋で見ます。**
   #
   # **2026/09/08 に「18 日古いまま」と分かりました**（4-405）。
   # **記録しただけで門を置かず**、**2026/09/12 に見たらまた 4 日古く**、
@@ -267,9 +268,27 @@ else
     # **`examples/` と `tests/` は、拡張に入りません**——**そこを
     # 触っただけで赤になるのは、嘘**です。**実際に 1 度なりました**
     # （`seam_torus_wall_probe.rs` を直したら「包みが古い」と言われた）。
-    newest=$(find crates -name '*.rs' -newer "$PACKAGE"                -not -path '*/examples/*' -not -path '*/tests/*'                -print -quit 2>/dev/null)
-    if [ -z "$newest" ]; then
-      newest=$(find crates -name 'Cargo.toml' -newer "$PACKAGE" -print -quit 2>/dev/null)
+    # **まず中身の指紋で見ます**（4-620）。
+    #
+    # **更新時刻だけで見ていたので、`git checkout` が中身の同じファイルを
+    # 書き直すだけで赤**になりました（**1 日に 2 度**。4-615、4-619）。
+    # **嘘の赤は「赤を無視する癖」をつけるので、本当の赤より害がある**
+    # ことがあります。
+    #
+    # **指紋が無い（まだ作り直していない）ときだけ、更新時刻に戻ります。**
+    STAMP="blender_addon/H-CAD_V_1_0_0/zenith_cad.sources.sha256"
+    newest=""
+    if [ -n "$DOC_PYTHON" ] && [ -f "$STAMP" ]; then
+      want=$(cat "$STAMP" 2>/dev/null | tr -d '[:space:]')
+      have=$("$DOC_PYTHON" tools/source_fingerprint.py 2>/dev/null | tr -d '[:space:]')
+      if [ -n "$have" ] && [ "$want" != "$have" ]; then
+        newest="ソースの指紋が違います（包みを作ったときと中身が別です）"
+      fi
+    else
+      newest=$(find crates -name '*.rs' -newer "$PACKAGE"                  -not -path '*/examples/*' -not -path '*/tests/*'                  -print -quit 2>/dev/null)
+      if [ -z "$newest" ]; then
+        newest=$(find crates -name 'Cargo.toml' -newer "$PACKAGE" -print -quit 2>/dev/null)
+      fi
     fi
     if [ -n "$newest" ]; then
       printf "  %-30s **赤**  %s より古い（py tools/build_pyd.py）
@@ -277,7 +296,7 @@ else
       fail=1
       red="$red addon_package"
     else
-      printf "  %-30s 緑    (ソースより新しい)
+      printf "  %-30s 緑    (ソースの指紋と一致)
 " "配る包み"
     fi
   fi

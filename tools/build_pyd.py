@@ -54,6 +54,23 @@ def main():
     shutil.copy2(dll_path, dest_pyd)
     print(f"[OK] Copied {dll_path.name} -> {dest_pyd} ({dest_pyd.stat().st_size / 1024:.1f} KB)")
 
+    # **元になったソースの指紋を控えます**（4-620）。
+    #
+    # **門は更新時刻で鮮度を見ていたので、`git checkout` が中身の同じ
+    # ファイルを書き直すだけで赤になりました**（1 日に 2 度。4-615、4-619）。
+    # **中身で見れば動きません。**
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from source_fingerprint import fingerprint
+
+        stamp = addon_pkg_dir / "zenith_cad.sources.sha256"
+        stamp.write_text(fingerprint() + chr(10), encoding="utf-8")
+        print(f"[OK] Wrote source fingerprint -> {stamp.name}")
+    except Exception as error:
+        # **指紋が書けなくても、包み自体は出来ています。**
+        # **門は指紋が無ければ更新時刻に戻ります**ので、止めません。
+        print(f"[WARN] Could not write source fingerprint: {error}")
+
     # 3. Create / Update Addon ZIP Archive
     print(f"[ZIP] Generating ZIP archive: {zip_path.name} ...")
     if zip_path.exists():

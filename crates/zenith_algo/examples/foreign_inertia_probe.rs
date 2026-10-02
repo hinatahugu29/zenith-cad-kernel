@@ -348,5 +348,16 @@ fn main() {
     if failures > 0 {
         std::process::exit(1);
     }
+    // **数が減ったら赤にします**（4-619。4-410 で「32 checks, 0 miss」の
+    // 記録に対して **24 checks, 1 miss** が隠れていました）。
+    // **検体を増やしたときは、この数を上げてください。**
+    const EXPECTED_CHECKS: usize = 32;
+    if checks != EXPECTED_CHECKS {
+        println!();
+        println!(
+            "**件数が記録と違います**: {checks} 件（記録は {EXPECTED_CHECKS} 件）（4-619）。"
+        );
+        std::process::exit(1);
+    }
     println!("every mass property lands on the closed form");
 }
