@@ -765,7 +765,7 @@ fn tessellate_face_stitched(
     };
 
     let explain = std::env::var_os("ZENITH_TESS_WHY").is_some();
-    let Some(rings) = boundary_rings(face, plan) else {
+    let Some(mut rings) = boundary_rings(face, plan) else {
         if explain {
             eprintln!(
                 "TESSWHY face {}: boundary_rings が None → 共有しない経路",
@@ -923,6 +923,82 @@ fn tessellate_face_stitched(
         }
     }
 
+    // **継ぎ目のずれを、巻き戻しを解いて張ります**（4-626。
+    // `ZENITH_RING_UNWRAP_TRIM=1`。**既定では走りません**）。
+    //
+    // **4-623 の根**: **曲面の径数の継ぎ目が、面の継ぎ目の稜と半周ずれて
+    // いる**面があり（`occ:pipe_bend` の壁）、**その輪は域を巻き戻すしか
+    // なく、符号つき面積が 0 に潰れます**（`torus_segment` は同じ形で 1.0）。
+    //
+    // **4-624 の実測**: **解いた空間で測ると面積はぴったり 1.0**（v は
+    // 0.5..1.5）。**継ぎ目が合っている面では、解いても何も動きません。**
+    //
+    // **だから、潰れている輪だけを解きます。** **曲面に渡すときは
+    // `wrapped_v` で巻き戻す**ので、**曲面には触りません。**
+    let mut wrap_v: Option<(f64, f64)> = None;
+    if std::env::var_os("ZENITH_RING_UNWRAP_TRIM").is_some() {
+        if let FaceGeometry::Nurbs(surface) = &face.geometry {
+            let ((su_min, su_max), (sv_min, sv_max)) = surface.param_range();
+            let middle = (su_min + su_max) * 0.5;
+            let span = sv_max - sv_min;
+            let closed = span > 0.0
+                && (surface.evaluate(middle, sv_min) - surface.evaluate(middle, sv_max)).norm()
+                    <= crate::surface_tess::WELD_TOLERANCE;
+            if closed {
+                let area_of = |uv: &[Point2]| -> f64 {
+                    (0..uv.len())
+                        .map(|at| {
+                            let a = uv[at];
+                            let b = uv[(at + 1) % uv.len()];
+                            a.x * b.y - a.y * b.x
+                        })
+                        .sum::<f64>()
+                        * 0.5
+                };
+                let undo = |uv: &[Point2]| -> Vec<Point2> {
+                    let mut out: Vec<Point2> = Vec::with_capacity(uv.len());
+                    let mut shift = 0.0f64;
+                    for (at, here) in uv.iter().enumerate() {
+                        if at > 0 {
+                            let before = uv[at - 1].y + shift;
+                            let mut now = here.y + shift;
+                            while now - before > span * 0.5 {
+                                shift -= span;
+                                now -= span;
+                            }
+                            while before - now > span * 0.5 {
+                                shift += span;
+                                now += span;
+                            }
+                        }
+                        out.push(Point2::new(here.x, here.y + shift));
+                    }
+                    out
+                };
+                // **外周の輪が潰れているときだけ**手を付けます。
+                if let Some(outer) = rings.first() {
+                    let flat = area_of(&outer.uv).abs();
+                    let undone = undo(&outer.uv);
+                    let opened = area_of(&undone).abs();
+                    // **潰れていて、解いたら開く**——**その 2 つが揃った
+                    // ときだけ**です。**揃っていない面は 1 文字も動きません。**
+                    if flat <= 1e-9 && opened > 1e-6 {
+                        if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+                            eprintln!(
+                                "TESSWHY face {}: 輪の巻き戻しを解きました（面積 {flat:.3e} → {opened:.9}）",
+                                face.id
+                            );
+                        }
+                        for ring in rings.iter_mut() {
+                            ring.uv = undo(&ring.uv);
+                        }
+                        wrap_v = Some((sv_min, sv_max));
+                    }
+                }
+            }
+        }
+    }
+
     let mesh = match &face.geometry {
         // **平面の法線を渡します**（4-425）。
         //
@@ -941,9 +1017,10 @@ fn tessellate_face_stitched(
             Some(plane.normal),
             face.orientation,
             params,
+            None,
         ),
         FaceGeometry::Nurbs(surface) => {
-            patch_mesh(&rings, Some(surface), None, face.orientation, params)
+            patch_mesh(&rings, Some(surface), None, face.orientation, params, wrap_v)
         }
         _ => crate::surface_tess::tessellate_face(face, params),
     };
@@ -1137,13 +1214,14 @@ fn patch_mesh(
     plane_normal: Option<Vec3>,
     orientation: Orientation,
     params: &TessellationParams,
+    wrap_v: Option<(f64, f64)>,
 ) -> TriangleMesh {
     // 境界がパラメータ矩形の縁を1周しているパッチは、構造格子で張る。
     // 境界の多角形から earcut で始めて細分に任せると、細長い三角形を大量に
     // 割ることになり、円柱1本で 2172 -> 16828 三角形に膨らむ。
     if let Some(surface) = surface {
         if rings.len() == 1 {
-            if let Some(mesh) = grid_patch(rings, surface, orientation, params) {
+            if let Some(mesh) = grid_patch(rings, surface, orientation, params, wrap_v) {
                 zenith_geom::work_counter::count_grid_patch();
                 // **格子の道でも重複を数えます**（4-336）。段ごとの数えは
                 // earcut の道にしか入っていません——**面 21 はこちらを
@@ -4369,13 +4447,54 @@ fn repair_boundary_ears(
 ///
 /// 共有点がその格子の縁にちょうど乗ることを確かめてから使い、乗った点の
 /// **位置は稜から取った 3D 点で上書き**する。乗っていなければ使わない。
+/// **周期方向のパラメータを、域の中へ巻き戻します**（4-626）。
+///
+/// # なぜ要るのか
+///
+/// **`evaluate` は域の外を外挿します**——**巻き戻しません**（4-614 の実測:
+/// **曲面は v でぴったり閉じている（9.797e-16）のに、`evaluate(v=1.0625)` は
+/// `evaluate(v=0.0625)` と 0.2018 違う**）。
+///
+/// **4-623 で分かった根**: **曲面の径数の継ぎ目が、面の継ぎ目の稜と半周
+/// ずれている**面がある（`occ:pipe_bend` の壁）。**その面の輪は、域を
+/// 巻き戻すしかなく、面積が 0 に潰れます。**
+///
+/// **4-624 の実測**: **巻き戻しを解いた空間で測ると、面積はぴったり 1.0**
+/// （v は 0.5..1.5）。**`occ:torus_segment` では解いても何も動きません。**
+///
+/// **だから、輪は解いた空間で張り、曲面に渡すときだけ巻き戻します。**
+/// **曲面には触りません。**
+fn wrapped_v(v: f64, domain: Option<(f64, f64)>) -> f64 {
+    let Some((low, high)) = domain else {
+        return v;
+    };
+    let span = high - low;
+    if !(span > 0.0) {
+        return v;
+    }
+    let mut here = v;
+    // **域の縁はそのまま通します**（**縁で 1 周ぶん跳ばすと、
+    // 継ぎ目の点が反対側へ行きます**）。
+    while here > high {
+        here -= span;
+    }
+    while here < low {
+        here += span;
+    }
+    here
+}
+
 fn grid_patch(
     rings: &[BoundaryRing],
     surface: &zenith_geom::NurbsSurface3,
     orientation: Orientation,
     params: &TessellationParams,
+    wrap_v: Option<(f64, f64)>,
 ) -> Option<TriangleMesh> {
     let ring = &rings[0];
+    // **巻き戻してから曲面に渡します**（4-626）。`wrap_v` が `None` の
+    // ときは、今までと 1 文字も変わりません。
+    let at = |u: f64, v: f64| surface.evaluate(u, wrapped_v(v, wrap_v));
     let ((domain_u_min, domain_u_max), (domain_v_min, domain_v_max)) = surface.param_range();
     if !(domain_u_max > domain_u_min && domain_v_max > domain_v_min) {
         return None;
@@ -4508,13 +4627,13 @@ fn grid_patch(
                     continue;
                 }
                 let uv = uvs[index];
-                let here = surface.evaluate(uv.x, uv.y);
+                let here = at(uv.x, uv.y);
                 let degenerate = (0..columns).all(|other| {
                     let probe = uvs[row * columns + other];
-                    (surface.evaluate(probe.x, probe.y) - here).norm() <= 1e-9
+                    (at(probe.x, probe.y) - here).norm() <= 1e-9
                 }) || (0..rows).all(|other| {
                     let probe = uvs[other * columns + column];
-                    (surface.evaluate(probe.x, probe.y) - here).norm() <= 1e-9
+                    (at(probe.x, probe.y) - here).norm() <= 1e-9
                 });
                 if !degenerate {
                     border_ok = false;
@@ -4529,7 +4648,7 @@ fn grid_patch(
             continue;
         }
 
-        return Some(build_grid_mesh(
+        return Some(build_grid_mesh_wrapped(
             surface,
             orientation,
             params,
@@ -4537,6 +4656,7 @@ fn grid_patch(
             fixed,
             rows,
             columns,
+            wrap_v,
         ));
     }
     if std::env::var("ZENITH_GRID_WHY").is_ok() {
@@ -4546,7 +4666,25 @@ fn grid_patch(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_grid_mesh(
+/// **巻き戻しを添えて格子を張ります**（4-626）。
+///
+/// **`wrap_v` が `None` なら、今までと同じ**です。
+fn build_grid_mesh_wrapped(
+    surface: &zenith_geom::NurbsSurface3,
+    orientation: Orientation,
+    params: &TessellationParams,
+    uvs: Vec<Point2>,
+    fixed: Vec<Option<Point3>>,
+    rows: usize,
+    columns: usize,
+    wrap_v: Option<(f64, f64)>,
+) -> TriangleMesh {
+    build_grid_mesh_inner(
+        surface, orientation, params, uvs, fixed, rows, columns, wrap_v,
+    )
+}
+
+fn build_grid_mesh_inner(
     surface: &zenith_geom::NurbsSurface3,
     orientation: Orientation,
     _params: &TessellationParams,
@@ -4554,6 +4692,7 @@ fn build_grid_mesh(
     fixed: Vec<Option<Point3>>,
     rows: usize,
     columns: usize,
+    wrap_v: Option<(f64, f64)>,
 ) -> TriangleMesh {
     let mut triangles = Vec::with_capacity((rows - 1) * (columns - 1) * 2);
     let mut protected: std::collections::HashSet<(usize, usize)> = Default::default();
@@ -4592,7 +4731,7 @@ fn build_grid_mesh(
         mesh.positions
             .push(match fixed.get(index).copied().flatten() {
                 Some(point) => point,
-                None => surface.evaluate(uv.x, uv.y),
+                None => surface.evaluate(uv.x, wrapped_v(uv.y, wrap_v)),
             });
         mesh.normals
             .push(oriented_normal(surface, *uv, orientation));

@@ -89,9 +89,12 @@ fn main() {
                 continue;
             }
         }
-        let Ok(solids) = StepImporter::import_solids_from_file(path) else {
-            println!("  {name:<12} **読めません**");
-            continue;
+        let solids = match StepImporter::import_solids_from_file(path) {
+            Ok(solids) => solids,
+            Err(why) => {
+                println!("  {name:<12} **読めません**: {why}");
+                continue;
+            }
         };
         let Some(solid) = solids
             .into_iter()
