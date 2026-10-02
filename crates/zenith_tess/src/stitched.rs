@@ -577,11 +577,97 @@ fn fallback_divisions(
     }
 }
 
+/// **閉じた稜と開いた稜を分けて、方向ごとに刻み数を割ります**（4-617。
+/// `ZENITH_FALLBACK_PLAN_AXES=1`。**既定では走りません**）。
+///
+/// # なぜ、これで方向が分かるのか
+///
+/// 4-616 は**両方向に最大値**を使いました——**向きが分からない**ので。
+/// **そのぶん余計に刻みます**（`pipe_bend` の壁は**継ぎ目 48・円 96 で足りる
+/// のに 96×96**。**三角形が 14 倍**）。
+///
+/// **p-curve は使えません**（**作れなかったからここに居る**）。
+/// **けれど、使える印が 1 つあります**——**稜が閉じているかどうか**です。
+///
+/// **実測（`pipe_bend`、`ZENITH_FACE_EDGES_WHY=1`）**——
+/// ```text
+/// FACEEDGE face 6 wire 0 edge 3 seg 96 (0,0,4)-(0,0,4) 長さ 0.000000
+/// FACEEDGE   その中点 (0,0,-4)
+/// ```
+/// **両端の点が同じ**で、**中点は裏側**。**円は閉じた輪**です。
+/// **継ぎ目は開いています。**
+///
+/// **閉じた輪は、曲面が閉じている方向に回ります**——**開いた方向に
+/// 1 周はできません**。**なので、閉じた稜の数は閉じている方向へ、
+/// 開いた稜の数はもう一方へ**割ります。
+///
+/// **分からないときは 4-616 のまま**（**両方向に最大値**）にします——
+/// **粗くするよりは、細かいほうが安全**です。
+fn fallback_axis_divisions(
+    face: &Face,
+    params: &TessellationParams,
+    plan: &SamplePlan,
+) -> Option<TessellationParams> {
+    let FaceGeometry::Nurbs(surface) = &face.geometry else {
+        return None;
+    };
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let (u_mid, v_mid) = ((u_min + u_max) * 0.5, (v_min + v_max) * 0.5);
+    // **どちらの方向で閉じているか**を測ります。
+    let gap = crate::surface_tess::WELD_TOLERANCE;
+    let closed_u = (surface.evaluate(u_min, v_mid) - surface.evaluate(u_max, v_mid)).norm() <= gap;
+    let closed_v = (surface.evaluate(u_mid, v_min) - surface.evaluate(u_mid, v_max)).norm() <= gap;
+    // **片方だけで閉じている面**しか扱いません。**両方・どちらでもないは、
+    // 見分けがつかない**ので 4-616 に委ねます。
+    if closed_u == closed_v {
+        return None;
+    }
+    let (mut most_loop, mut most_open) = (0usize, 0usize);
+    for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+        for oriented in &wire.edges {
+            let segments = plan.segments_for(oriented.edge.id);
+            let ends = (oriented.edge.start_vertex.point - oriented.edge.end_vertex.point).norm();
+            if ends <= gap {
+                most_loop = most_loop.max(segments);
+            } else {
+                most_open = most_open.max(segments);
+            }
+        }
+    }
+    // **どちらかが見つからなければ、分けられません。**
+    if most_loop == 0 || most_open == 0 {
+        return None;
+    }
+    let (along_closed, along_open) = (most_loop, most_open);
+    Some(if closed_v {
+        TessellationParams {
+            u_divisions: params.u_divisions.max(along_open),
+            v_divisions: params.v_divisions.max(along_closed),
+        }
+    } else {
+        TessellationParams {
+            u_divisions: params.u_divisions.max(along_closed),
+            v_divisions: params.v_divisions.max(along_open),
+        }
+    })
+}
+
 fn fallback_params(
     face: &Face,
     params: &TessellationParams,
     plan: &SamplePlan,
 ) -> TessellationParams {
+    if std::env::var_os("ZENITH_FALLBACK_PLAN_AXES").is_some() {
+        if let Some(split) = fallback_axis_divisions(face, params, plan) {
+            if std::env::var_os("ZENITH_TESS_WHY").is_some() {
+                eprintln!(
+                    "TESSWHY face {}: 落ちた先の刻みを方向ごとに割りました u {} v {}",
+                    face.id, split.u_divisions, split.v_divisions
+                );
+            }
+            return split;
+        }
+    }
     if std::env::var_os("ZENITH_FALLBACK_PLAN_DIVISIONS").is_some() {
         fallback_divisions(face, params, plan)
     } else {
