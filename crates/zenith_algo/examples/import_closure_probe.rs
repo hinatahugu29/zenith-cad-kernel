@@ -60,15 +60,23 @@ fn main() {
         }
     }
 
-    let divisions: usize = std::env::var("ZENITH_CLOSURE_DENSITY")
+    // **刻みは 7 通り回します**（4-621）。
+    //
+    // **1 通りでは取り逃がします**——**4-602 の折り返しは刻み 12 と 24 で
+    // だけ出ました**。**`winding_contract_probe` も同じ理由で 7 通り**です
+    // （**154 通りで 24 秒**。4-618）。**ここは 1 通り 5 秒**なので、
+    // **7 通りでも足ります。**
+    //
+    // **`ZENITH_CLOSURE_DENSITY` を立てると、その 1 通りだけ**にします
+    // （**診断のため**）。
+    let densities: Vec<usize> = match std::env::var("ZENITH_CLOSURE_DENSITY")
         .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(24);
-    let params = TessellationParams {
-        u_divisions: divisions,
-        v_divisions: divisions,
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        Some(one) => vec![one],
+        None => vec![8, 12, 16, 20, 24, 32, 48],
     };
-    println!("  刻み {divisions}。**落ちた**は溶接で消えた三角形の枚数です。");
+    println!("  刻み {densities:?}。**落ちた**は溶接で消えた三角形の枚数です。");
     println!();
     let mut open = 0usize;
     let mut dropped_any = 0usize;
@@ -97,6 +105,13 @@ fn main() {
             .iter()
             .map(|shell| shell.faces.len())
             .sum::<usize>();
+        // **読み込みは 1 回だけ**です（**面の番号は読み込みごとに進むので、
+        // 刻みごとに読み直すと同じ面が別の番号になります**。4-547、4-598）。
+        for divisions in densities.iter().copied() {
+        let params = TessellationParams {
+            u_divisions: divisions,
+            v_divisions: divisions,
+        };
         let mesh = tessellate_solid(&solid, &params);
         let before: usize = face_triangle_counts(&solid, &params)
             .iter()
@@ -223,7 +238,7 @@ fn main() {
             }
         }
         println!(
-            "  {name:<12} 面 {faces:>3}  三角形 {:>7}  落ちた {dropped:>4}  穴 {holes:>4}  重なり {overlaps:>3}  {}",
+            "  {name:<12} 刻み {divisions:>2}  面 {faces:>3}  三角形 {:>7}  落ちた {dropped:>4}  穴 {holes:>4}  重なり {overlaps:>3}  {}",
             mesh.indices.len(),
             if holes + overlaps == 0 {
                 "閉じている"
@@ -233,9 +248,10 @@ fn main() {
                 "**開いている**"
             }
         );
+        }
     }
     println!();
-    println!("**開いている検体 {open} 個**（既知の赤を除く）、**溶接で三角形が落ちた検体 {dropped_any} 個**。");
+    println!("**開いている通り {open} 通り**（既知の赤を除く）、**溶接で三角形が落ちた通り {dropped_any} 通り**。");
     // **1 つだけ見ているときは、判定しません**（検体が揃っていないので）。
     if only.is_some() {
         return;
