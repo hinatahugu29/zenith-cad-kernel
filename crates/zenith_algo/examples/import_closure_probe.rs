@@ -141,6 +141,36 @@ fn main() {
         if dropped > 0 {
             dropped_any += 1;
         }
+        // **域の外のパラメータが、巻き戻るのか外挿するのか**（4-614。
+        // `ZENITH_CLOSURE_WRAP=1`）。
+        //
+        // **閉じた輪の p-curve を「域の外へ伸ばす」直し方が成り立つか**を
+        // 決めるのに要ります（4-614 の道 2）。**成り立つなら
+        // `evaluate(v_max + d)` は `evaluate(v_min + d)` と同じ点**を返します。
+        if std::env::var_os("ZENITH_CLOSURE_WRAP").is_some() {
+            for face in std::iter::once(&solid.outer_shell)
+                .chain(solid.inner_shells.iter())
+                .flat_map(|shell| shell.faces.iter())
+            {
+                let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry else {
+                    continue;
+                };
+                let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+                let (u_mid, v_span) = ((u_min + u_max) * 0.5, v_max - v_min);
+                // **まず、本当に v で閉じているか**を測ります。
+                let seam = (surface.evaluate(u_mid, v_min) - surface.evaluate(u_mid, v_max)).norm();
+                let delta = v_span * 0.0625;
+                let outside = surface.evaluate(u_mid, v_max + delta);
+                let wrapped = surface.evaluate(u_mid, v_min + delta);
+                println!(
+                    "    面 {} v で閉じている隔たり {seam:.3e}、域外 v={:.6} と 巻き戻し v={:.6} の隔たり {:.6}",
+                    face.id,
+                    v_max + delta,
+                    v_min + delta,
+                    (outside - wrapped).norm()
+                );
+            }
+        }
         // **稜ごとの分割数を、面ごとに並べます**（4-612。
         // **共有する稜で数が違えば、溶接できず両側に穴が開きます**）。
         if std::env::var_os("ZENITH_CLOSURE_SEGMENTS").is_some() {
