@@ -174,6 +174,19 @@ fn main() {
                 let (u_mid, v_span) = ((u_min + u_max) * 0.5, v_max - v_min);
                 // **まず、本当に v で閉じているか**を測ります。
                 let seam = (surface.evaluate(u_mid, v_min) - surface.evaluate(u_mid, v_max)).norm();
+                // **曲面の径数の継ぎ目が、面の継ぎ目の稜とどこで出会うか**
+                // （4-623）。**合っていないと、閉じた稜の p-curve が
+                // 域を巻き戻すしかなくなります。**
+                for end in [u_min, u_max] {
+                    let at_zero = surface.evaluate(end, v_min);
+                    let at_half = surface.evaluate(end, (v_min + v_max) * 0.5);
+                    println!(
+                        "    面 {} u={end:.3}: 径数の継ぎ目 v=0 は ({:.3},{:.3},{:.3})、v=0.5 は ({:.3},{:.3},{:.3})",
+                        face.id,
+                        at_zero.x, at_zero.y, at_zero.z,
+                        at_half.x, at_half.y, at_half.z
+                    );
+                }
                 let delta = v_span * 0.0625;
                 let outside = surface.evaluate(u_mid, v_max + delta);
                 let wrapped = surface.evaluate(u_mid, v_min + delta);
