@@ -1586,6 +1586,30 @@ fn project_edge_to_nurbs_pcurve(
             // ①は `linkrods` の表示メッシュを穴 0 → 480 本にしました。
             // **どちらに倒すかを、組み合わせで測るために要ります。**
             let uv = project(middle, Some(chord), subdiv_guard())?;
+            // **受け入れ幅を超えた区間を名指しする口**（4-612。
+            // `ZENITH_PCURVE_STRAY=1`。**既定では走りません**）。
+            //
+            // **`PCURVEWHY` は「最悪 8.000e0」とだけ言います**——
+            // **どの区間で、どんな種で、そうなったのかを言いません。**
+            // **`pipe_bend` の壁（面 3）は、これで p-curve を作れず、
+            // 共有しない経路へ落ちて穴 240 本になっていました**（4-611）。
+            if std::env::var_os("ZENITH_PCURVE_STRAY").is_some() {
+                let strayed_now =
+                    (surface.evaluate(uv.x, uv.y) - edge.evaluate_normalized(middle)).norm();
+                if strayed_now > on_surface_limit {
+                    eprintln!(
+                        "PCURVESTRAY 稜 {} 区間 {index} t {t0:.6}..{t1:.6} 種 uv ({:.6},{:.6}) → uv ({:.6},{:.6}) 隔たり {strayed_now:.6e}",
+                        edge.edge.id, chord.x, chord.y, uv.x, uv.y
+                    );
+                    eprintln!(
+                        "PCURVESTRAY   両端の uv ({:.6},{:.6}) / ({:.6},{:.6})",
+                        uv_points[index].x,
+                        uv_points[index].y,
+                        uv_points[index + 1].x,
+                        uv_points[index + 1].y
+                    );
+                }
+            }
             // 継ぎ目をまたぐ区間は、割っても弦が縮まない。無限に割らないよう抜ける。
             // パラメータ空間で湾曲する曲線（有理パッチ上の直線など）の膨らみを
             // 誤認してスキップしないよう、区間長に応じたマージンを設ける。

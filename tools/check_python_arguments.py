@@ -627,7 +627,17 @@ for name, why in skipped:
     print("  %-40s %s" % (name, why))
 print()
 print("効かない引数 %d 個" % len(inert))
-sys.exit(1 if inert else 0)
+# **飛ばしたものがあれば、赤にします**（4-613）。
+#
+# **ずっと「測っていません——緑ではありません」と書きながら、
+# rc は緑**でした。**`import_step_file` は、相対の道を一時の作業場で
+# 開こうとして、毎回飛ばされていました**（4-613 で直しました）。
+# **正直な 1 行は、誰も読まないところに置いても意味がありません。**
+if skipped:
+    print()
+    print("**飛ばした口があるので、赤にします**（4-613）——")
+    print("**「測っていません」は「緑」ではありません。**")
+sys.exit(1 if inert or skipped else 0)
 '''
 
 
@@ -651,6 +661,17 @@ def main():
 
         environment = dict(os.environ)
         environment["PYTHONPATH"] = workspace
+        # **検体の道を、絶対に直します**（4-613）。
+        #
+        # **子は `cwd=workspace`（一時の作業場）で走ります。**
+        # **`run_gates.sh` が渡す道は repo からの相対**なので、
+        # **子から見ると存在しません**——**`import_step_file` は
+        # ずっと「測っていません」で飛ばされていました。**
+        # **掃き出しは正直に「緑ではありません」と書いていました**が、
+        # **門のまとめは緑**なので、**誰も気づきませんでした。**
+        fixture = environment.get("ZENITH_ARGS_STEP")
+        if fixture and not os.path.isabs(fixture):
+            environment["ZENITH_ARGS_STEP"] = os.path.join(ROOT, fixture)
         environment["PYTHONIOENCODING"] = "utf-8"
         return subprocess.run([args.python, "-X", "utf8", probe],
                               env=environment, cwd=workspace).returncode

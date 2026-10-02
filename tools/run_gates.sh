@@ -88,7 +88,7 @@ cp crates/zenith_algo/tests/fixtures/*.step target/validation/ 2>/dev/null || tr
 echo
 
 GATES="builder_audit planar_face_audit boolean_topology_probe
-mesh_watertight_probe slice_probe slice_robustness_probe
+mesh_watertight_probe import_closure_probe slice_probe slice_robustness_probe
 sketch_solver_probe pcurve_fidelity_probe inertia_probe
 distance_probe interference_depth_probe regularize_probe
 countersink_range_probe face_split_probe ssi_probe
