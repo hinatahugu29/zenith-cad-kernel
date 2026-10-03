@@ -1560,6 +1560,7 @@ impl StepImporter {
         ctx: &mut ImportContext,
         id: u64,
         boundary_points: &[Point3],
+        seam_hint: Option<Point3>,
     ) -> Result<FaceGeometry, String> {
         let raw = ctx
             .raw_entities
@@ -1621,7 +1622,15 @@ impl StepImporter {
                     sphere_patch_for_boundary(origin, z_dir, x_dir, radius, boundary_points)
                 }),
                 "TOROIDAL_SURFACE" => length(2).zip(length(3)).and_then(|(major, minor)| {
-                    torus_patch_for_boundary(origin, z_dir, x_dir, major, minor, boundary_points)
+                    torus_patch_for_boundary(
+                        origin,
+                        z_dir,
+                        x_dir,
+                        major,
+                        minor,
+                        boundary_points,
+                        seam_hint,
+                    )
                 }),
                 _ => None,
             };
@@ -2230,7 +2239,15 @@ impl StepImporter {
                 boundary_points.extend(wire.sample_points(12));
             }
             boundary_points.extend(vertex_loop_points);
-            let geom = Self::get_surface_for_boundary(ctx, surface_id, &boundary_points)?;
+            // **継ぎ目の稜を、曲面を組む前に見つけておきます**（4-631）。
+            // **1 周の面では、継ぎ目の置き場所がこれで決まります。**
+            let seam_hint = if torus_seam_align() {
+                seam_edge_midpoint(&outer)
+            } else {
+                None
+            };
+            let geom =
+                Self::get_surface_for_boundary(ctx, surface_id, &boundary_points, seam_hint)?;
 
             let orientation = if same_sense {
                 Orientation::Forward
@@ -3164,6 +3181,7 @@ mod tests {
             major,
             minor,
             &boundary,
+            None,
         )
         .expect("torus patch");
 
@@ -3752,6 +3770,47 @@ fn sphere_patch_for_boundary(
 ///
 /// Both directions are closed, so both are read the same way as a cylinder's
 /// angle: the range in use is what lies outside the widest gap.
+/// **トーラスの継ぎ目を、面の継ぎ目の稜に合わせる切替**（4-631。
+/// `ZENITH_TORUS_SEAM_ALIGN=1`。**既定では走りません**）。
+fn torus_seam_align() -> bool {
+    static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FLAG.get_or_init(|| std::env::var_os("ZENITH_TORUS_SEAM_ALIGN").is_some())
+}
+
+/// **輪の中で 2 度通る稜（＝継ぎ目）の中点を返します**（4-631）。
+///
+/// # なぜ、これで継ぎ目が分かるのか
+///
+/// **閉じた曲面の上の面は、継ぎ目の稜を 2 度通ります**（行きと帰り）。
+/// **3 次元では同じ 1 本の曲線**で、**uv では域の両端の 2 本**になります。
+/// **だから「id が 2 度現れる稜」が継ぎ目**です。
+///
+/// **標本の重複で見ることもできます**（`Wire::sample_points` は
+/// **連続する重複しか除かない**ので、継ぎ目の点は 2 度入ります）。
+/// **けれど id を数えるほうが、浮動小数に頼らないぶん確かです。**
+///
+/// **2 度通る稜が 1 本だけのときに限って**返します——**0 本なら継ぎ目が
+/// 無い面、2 本以上なら形を読み切れていない**ので、**当てずっぽうを
+/// しません**。
+fn seam_edge_midpoint(wire: &Wire) -> Option<Point3> {
+    let mut seen: std::collections::BTreeMap<u64, usize> = Default::default();
+    for oriented in &wire.edges {
+        *seen.entry(oriented.edge.id).or_insert(0) += 1;
+    }
+    let twice: Vec<u64> = seen
+        .iter()
+        .filter(|(_, count)| **count == 2)
+        .map(|(id, _)| *id)
+        .collect();
+    if twice.len() != 1 {
+        return None;
+    }
+    wire.edges
+        .iter()
+        .find(|oriented| oriented.edge.id == twice[0])
+        .map(|oriented| oriented.evaluate_normalized(0.5))
+}
+
 fn torus_patch_for_boundary(
     origin: Point3,
     z_dir: Vec3,
@@ -3759,6 +3818,7 @@ fn torus_patch_for_boundary(
     major_radius: f64,
     minor_radius: f64,
     boundary_points: &[Point3],
+    seam_hint: Option<Point3>,
 ) -> Option<NurbsSurface3> {
     let (axis, x_axis, y_axis) = revolution_frame(z_dir, x_dir)?;
     let scale = minor_radius.abs().max(1.0);
@@ -3832,7 +3892,40 @@ fn torus_patch_for_boundary(
     }
 
     let (start_major, major_sweep) = angular_span(&mut major_angles);
-    let (start_minor, minor_sweep) = angular_span(&mut minor_angles);
+    let (mut start_minor, minor_sweep) = angular_span(&mut minor_angles);
+
+    // **1 周のときだけ、継ぎ目を面の継ぎ目の稜に合わせます**（4-631。
+    // `ZENITH_TORUS_SEAM_ALIGN=1`。**既定では走りません**）。
+    //
+    // # なぜ要るのか
+    //
+    // **`angular_span` は 1 周を覆う角度に対して `(0.0, 2π)` を返します**
+    // ——**継ぎ目はいつも「トーラス自身の枠の角度 0」**で、
+    // **面の継ぎ目の稜がどこにあるかを見ていません**（4-629）。
+    //
+    // **実測（`occ_reference_pipe_bend.step`）**: **枠の角度 0 は (0,0,−4)**、
+    // **面の継ぎ目の稜の端は (0,0,+4)** ——**小円の真裏（π）**。
+    // **FreeCAD/OCC に直接聞いても同じ**でした（4-629）。
+    //
+    // **ずれたままだと、閉じた稜の p-curve は域を巻き戻すしかなく**、
+    // **却下されて面が「共有しない経路」へ落ち**、
+    // **蓋と刻みが 4 倍違って穴が 10×刻み開きます**（4-612）。
+    //
+    // **部分周には触りません**——**そこは `angular_span` が
+    // 境界から正しく決めています。**
+    let full_turn = std::f64::consts::PI * 2.0;
+    if torus_seam_align() && (minor_sweep - full_turn).abs() <= 1e-9 {
+        if let Some(hint) = seam_hint {
+            let (axial, radial) = axis_frame_coords(hint, origin, axis);
+            let wanted = axial.atan2(radial.norm() - major_radius);
+            if std::env::var_os("ZENITH_STEP_WHY").is_some() {
+                eprintln!(
+                    "STEPWHY   トーラスの継ぎ目を合わせます: {start_minor:.6} → {wanted:.6}（面の継ぎ目の稜から）"
+                );
+            }
+            start_minor = wanted;
+        }
+    }
 
     // **裏返した面では、法線の側も裏返ります**（4-284）。
     //
