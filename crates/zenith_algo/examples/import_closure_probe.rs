@@ -30,6 +30,19 @@
 use zenith_io::StepImporter;
 use zenith_tess::{face_triangle_counts, tessellate_solid, TessellationParams};
 
+/// **両方の向きの閉じ具合を返します**（4-628。`(u で閉じる隔たり, v で閉じる隔たり)`）。
+///
+/// **4-627 の census は `v` だけを見て外しました**——**閉じている向きは
+/// 検体ごとに違います**。
+fn closed_gap(surface: &zenith_geom::NurbsSurface3) -> (f64, f64) {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let (u_mid, v_mid) = ((u_min + u_max) * 0.5, (v_min + v_max) * 0.5);
+    (
+        (surface.evaluate(u_min, v_mid) - surface.evaluate(u_max, v_mid)).norm(),
+        (surface.evaluate(u_mid, v_min) - surface.evaluate(u_mid, v_max)).norm(),
+    )
+}
+
 fn main() {
     println!("読んだ立体の表示メッシュが閉じているか（4-612）");
     println!();
@@ -176,6 +189,55 @@ fn main() {
                 let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
                 let (u_mid, v_span) = ((u_min + u_max) * 0.5, v_max - v_min);
                 // **まず、本当に v で閉じているか**を測ります。
+                // **どちらの向きで閉じているかを、両方測ります**（4-628）。
+                //
+                // **4-627 の census は `v` だけを見ていました**——**外れです**。
+                // **閉じている向きは検体ごとに違います**（`occ:cylinder_nurbs`
+                // は **`u` が 0..2π** で、そちらが周期方向）。
+                // **向きを決め打つと、関係ない距離を「ずれ」と呼びます。**
+                if std::env::var_os("ZENITH_SEAM_CENSUS").is_some() {
+                    let gap = closed_gap(surface);
+                    for (axis, closed, lo, hi) in [
+                        ("u", gap.0, u_min, u_max),
+                        ("v", gap.1, v_min, v_max),
+                    ] {
+                        if closed > 1e-7 {
+                            continue;
+                        }
+                        // **周期方向の継ぎ目（その軸の下端）の点**と、
+                        // **輪の頂点の最短距離**。
+                        let mut nearest = f64::INFINITY;
+                        let other_ends = if axis == "u" {
+                            [v_min, v_max]
+                        } else {
+                            [u_min, u_max]
+                        };
+                        for other in other_ends {
+                            let seam_point = if axis == "u" {
+                                surface.evaluate(lo, other)
+                            } else {
+                                surface.evaluate(other, lo)
+                            };
+                            for wire in std::iter::once(&face.outer_wire)
+                                .chain(face.inner_wires.iter())
+                            {
+                                for oriented in &wire.edges {
+                                    for vertex in [
+                                        oriented.edge.start_vertex.point,
+                                        oriented.edge.end_vertex.point,
+                                    ] {
+                                        nearest =
+                                            nearest.min((vertex - seam_point).norm());
+                                    }
+                                }
+                            }
+                        }
+                        println!(
+                            "    SEAM 面 {} {axis} で閉じている（隔たり {closed:.3e}、域 {lo:.4}..{hi:.4}）、継ぎ目から輪の頂点まで {nearest:.6}",
+                            face.id
+                        );
+                    }
+                }
                 let seam = (surface.evaluate(u_mid, v_min) - surface.evaluate(u_mid, v_max)).norm();
                 // **曲面の径数の継ぎ目が、面の継ぎ目の稜とどこで出会うか**
                 // （4-623）。**合っていないと、閉じた稜の p-curve が
