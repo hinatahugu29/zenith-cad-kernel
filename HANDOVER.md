@@ -29564,6 +29564,24 @@ for height in [10.0_f64, 50.0, 200.0, 1000.0] {
 > **床を置く仕事は、置く本人がいちばん当てずっぽうを言いやすい**
 > ——**だから、赤を実演してから入れる**ことにしました。**12 本とも実演済み。**
 
+#### 今夜の最後に、**HEAD で全数を確かめました**
+
+**床を 12 本入れたあと、門 53 本すべてと通しテストを回しました**——
+
+| 見たもの | 結果 |
+| :--- | :--- |
+| 門（`--quick --no-tests`） | **45 本が回り、赤 0**（**30 分で切られた**） |
+| 残り 8 本（重い掃引。**今夜触っていません**） | **単独で rc=0・赤語なし**（`sphere_tangency` 75s／`sphere_cap` 50s／`cone_apex` 8s／`torus_plane` 35s／`cross_cylinder` 237s／`aspect_sweep` 75s／`curved_pair_placement` 172s／`curved_pair_identity` 480s） |
+| **合計** | **53 / 53、赤 0** |
+| 通しテスト（**workspace 全体**） | **rc=0、154 本 / 751 件通過 / 0 件失敗** |
+
+**床を入れた 12 本は、全部 harness の中で緑**でした——
+`shape_variety` 3s／`slice` 1s／`ssi` 0s／`builder_audit` 22s／
+`face_split` 0s／`regularize` 1s／`intersection_edge` 0s／`march_stop` 1s／
+`cone_slab` 2s／`sketch_solver` 0s／`helix_volume` 102s／`step_import_audit` 56s。
+
+**単独で緑でも、輪の中で緑とは限りません**——**別々に確かめました。**
+
 #### 門の回し方（この機械）
 
 **`cargo test --release --workspace --exclude zenith_py`（16 分 20 秒）**と
