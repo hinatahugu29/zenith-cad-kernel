@@ -123,12 +123,19 @@ fn main() {
     }
 
     println!("\nthrough the verified API:");
-    verified_report(&cone, &slab, &tol);
+    let refused = verified_report(&cone, &slab, &tol);
     for index in [1usize, 2] {
         println!("\nA{index} against B5:");
         if let FaceGeometry::Nurbs(surface) = &faces_a[index].geometry {
             march_report(surface, &tol);
         }
+    }
+
+    // **床**（4-650）。**検証つきの口が断ったら赤。**
+    if refused != 0 {
+        println!();
+        println!("**検証つきの口が {refused} 演算で断りました**（4-650）。");
+        std::process::exit(1);
     }
 }
 
@@ -198,10 +205,19 @@ fn march_report(surface: &zenith_geom::NurbsSurface3, tol: &Tolerance) {
     }
 }
 
-/// 検証つきの公開 API が何と言うか。恒等式は通っているのに、ここが
-/// 断るなら、直すべきはゲートか結果かのどちらかです。
-fn verified_report(cone: &Solid, slab: &Solid, tol: &Tolerance) {
+/// **断られた演算の数**を返します（4-650）。
+///
+/// **これまでは印字するだけ**でした——**検証つきの口が断っても、
+/// `exit` が無く、門の 4 語にも当たらないので緑**です。
+/// **この探りは、この配置が通ることを見るためにある**ので、
+/// **断りは欠陥**——**閾値の判断は要りません。**
+///
+/// **立体の数は床にしません。** **いまは 3 演算とも 1 枚**ですが、
+/// **「1 枚でなければ誤り」とは、この探りのどこにも書いてありません**
+/// ——**決めずに床を置くと偽の赤**になります。
+fn verified_report(cone: &Solid, slab: &Solid, tol: &Tolerance) -> usize {
     use zenith_algo::{BooleanEngine, BooleanOpType};
+    let mut refused = 0usize;
     for op in [
         BooleanOpType::Difference,
         BooleanOpType::Intersection,
@@ -209,7 +225,11 @@ fn verified_report(cone: &Solid, slab: &Solid, tol: &Tolerance) {
     ] {
         match BooleanEngine::boolean_solids_exact_result(cone, slab, op, tol) {
             Ok(result) => println!("  {op:?}: ok, {} solid(s)", result.solids.len()),
-            Err(err) => println!("  {op:?}: {err}"),
+            Err(err) => {
+                println!("  {op:?}: {err}");
+                refused += 1;
+            }
         }
     }
+    refused
 }
