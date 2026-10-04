@@ -28,7 +28,16 @@ fn volume(solid: &Solid) -> f64 {
     .volume
 }
 
-fn round_trip(name: &str, solid: &Solid, analytic: Option<f64>) {
+/// **問題の数**を返します（4-653）。
+///
+/// **これまでは印字するだけ**でした——**`IMPORT FAILED` も `INVALID` も、
+/// 面の数が変わったことも、門には届きません**（`exit` が無く、
+/// 門の 4 語にも当たらない）。**どれも探り自身が失敗と名付けているもの**
+/// なので、**閾値の判断は要りません。**
+///
+/// **体積の相対差は床にしません**（いまは 1e-13 台）——**それは
+/// 「いくつ以下なら合格」を決める話**で、ここでは決めていません。
+fn round_trip(name: &str, solid: &Solid, analytic: Option<f64>) -> usize {
     let tol = Tolerance::default();
     let original_volume = volume(solid);
     let original_faces = solid.outer_shell.faces.len();
@@ -56,18 +65,30 @@ fn round_trip(name: &str, solid: &Solid, analytic: Option<f64>) {
                 imported.outer_shell.faces.len(),
                 if shell_ok { "valid" } else { "INVALID" }
             );
+            let mut problems = 0usize;
+            if !shell_ok {
+                problems += 1;
+            }
+            if imported.outer_shell.faces.len() != original_faces {
+                problems += 1;
+            }
+            problems
         }
-        Err(err) => println!("{name:<28} IMPORT FAILED: {err}"),
+        Err(err) => {
+            println!("{name:<28} IMPORT FAILED: {err}");
+            1
+        }
     }
 }
 
-fn read_foreign(path: &Path) {
+/// **問題の数**を返します（4-653。`round_trip` と同じ理屈）。
+fn read_foreign(path: &Path) -> usize {
     let name = path.file_name().unwrap().to_string_lossy().to_string();
     match StepImporter::import_solids_from_file(path) {
         Ok(solids) => {
             if solids.is_empty() {
                 println!("{name:<44} read 0 solids");
-                return;
+                return 1;
             }
             let total: f64 = solids.iter().map(volume).sum();
             let faces: usize = solids
@@ -78,6 +99,8 @@ fn read_foreign(path: &Path) {
                 "{name:<44} {} solid(s), {faces} face(s), volume {total:.4}",
                 solids.len()
             );
+            let mut problems = 0usize;
+            let mut shares = 0.0f64;
             for solid in &solids {
                 let tol = Tolerance::default();
                 let report = solid.outer_shell.validate_closed(&tol);
@@ -86,6 +109,7 @@ fn read_foreign(path: &Path) {
                         "        shell invalid: {}",
                         report.errors.first().cloned().unwrap_or_default()
                     );
+                    problems += 1;
                 }
                 for (index, face) in solid.outer_shell.faces.iter().enumerate() {
                     let (area, contribution) = MassCalculator::compute_face_integral(
@@ -98,39 +122,78 @@ fn read_foreign(path: &Path) {
                     println!(
                         "        face {index}: area {area:.4}, volume share {contribution:.4}"
                     );
+                    shares += contribution;
                 }
+                // **面ごとの寄与の和は、その立体の体積**（4-653）。
+                // **探りは両辺を印字していました**が、**比べてはいません**
+                // でした。**恒等式なので、閾値の判断は要りません**
+                // （**相対 1e-9**——**和の丸め分だけ見ます**）。
+                //
+                // **外殻だけ足してはいけません。** **最初そうして、
+                // `occ_reference_hollow_box.step` で 8400 対 4240 と
+                // 出ました**——**空洞のぶん**です。**内側の殻の面も
+                // 足します**（**向きで符号が付く**ので、引き算は要りません）。
+                // **内側の殻は、引きます。** **足したら 12560 になりました**
+                // （8400 ＋ 4160）——**内殻の面も外向きに持たれている**ので、
+                // **向きでは符号が付きません。** **8400 − 4160 = 4240** が
+                // 立体の体積です。**2 度間違えてから、ここに辿り着きました。**
+                for shell in &solid.inner_shells {
+                    for face in &shell.faces {
+                        shares -= MassCalculator::compute_face_integral(
+                            face,
+                            &TessellationParams {
+                                u_divisions: 64,
+                                v_divisions: 64,
+                            },
+                        )
+                        .1;
+                    }
+                }
+                let whole = volume(solid);
+                if (shares - whole).abs() > whole.abs().max(1e-12) * 1e-9 {
+                    println!(
+                        "        **寄与の和 {shares:.6} が体積 {whole:.6} と合いません**（4-653）。"
+                    );
+                    problems += 1;
+                }
+                shares = 0.0;
             }
+            problems
         }
-        Err(err) => println!(
-            "{name:<44} FAILED: {}",
-            err.chars().take(400).collect::<String>()
-        ),
+        Err(err) => {
+            println!(
+                "{name:<44} FAILED: {}",
+                err.chars().take(400).collect::<String>()
+            );
+            1
+        }
     }
 }
 
 fn main() {
+    let mut problems = 0usize;
     println!("=== round trip through our own writer and reader");
-    round_trip(
+    problems += round_trip(
         "box",
         &PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap(),
         Some(24000.0),
     );
-    round_trip(
+    problems += round_trip(
         "cylinder",
         &PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap(),
         Some(PI * 100.0 * 40.0),
     );
-    round_trip(
+    problems += round_trip(
         "sphere",
         &PrimitiveBuilder::make_sphere(10.0).unwrap(),
         Some(4.0 / 3.0 * PI * 1000.0),
     );
-    round_trip(
+    problems += round_trip(
         "cone",
         &PrimitiveBuilder::make_cone(10.0, 4.0, 20.0).unwrap(),
         Some(PI * 20.0 / 3.0 * (100.0 + 40.0 + 16.0)),
     );
-    round_trip(
+    problems += round_trip(
         "torus",
         &PrimitiveBuilder::make_torus(12.0, 4.0).unwrap(),
         Some(2.0 * PI * PI * 12.0 * 16.0),
@@ -148,7 +211,7 @@ fn main() {
             .collect();
         names.sort();
         for path in names {
-            read_foreign(&path);
+            problems += read_foreign(&path);
         }
     } else {
         println!("    target/showcase is missing; run the export_showcase example first");
@@ -173,7 +236,17 @@ fn main() {
             println!("    no OpenCASCADE reference files; run tools/occ_reference_export.py");
         }
         for path in names {
-            read_foreign(&path);
+            problems += read_foreign(&path);
         }
     }
+
+    // **床**（4-653）。**探り自身が失敗と名付けたものだけ**を数えています
+    // ——`IMPORT FAILED` / `INVALID` / `FAILED` / 読めた立体 0 /
+    // 面の数が変わった / 寄与の和が体積と合わない。
+    if problems != 0 {
+        println!();
+        println!("**{problems} 件の問題があります**（4-653）。");
+        std::process::exit(1);
+    }
+
 }
