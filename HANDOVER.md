@@ -29521,6 +29521,23 @@ regularized into something a boolean cannot take: 0
 | 戻す | **rc=0** |
 | `bash tools/audit_gate_redness.sh` | **10 本 → 9 本** |
 
+#### 6 本まとめて、**本物の門の輪でも緑**でした
+
+**これまでの確かめは、探りを単独で回したもの**でした。
+**門の輪の中（`run_gates.sh`）でも回しました**——
+**`--quick --no-tests`**（4-633。**通しテストは別に回してあります**）。
+
+```text
+builder_audit        緑 (28s)    slice_probe          緑 (1s)
+regularize_probe     緑 (1s)     face_split_probe     緑 (0s)
+ssi_probe            緑 (0s)     shape_variety_probe  緑 (3s)
+```
+
+**30 分で切られるまでに 36 本が回り、赤は 0 本。**
+**今夜直した 6 本は、全部その中に入っています。**
+
+**回り切ってはいません**（4-633 の上限）——**36 本までです。**
+
 ---
 
 ### 4-645. **`face_split_probe` は、2 つ数えて 2 つとも捨てていました**——**床が、私の当てずっぽうを即座に捕まえました**（2026年10月4日）
