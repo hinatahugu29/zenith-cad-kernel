@@ -497,4 +497,28 @@ fn main() {
         "{passed} of {} builder cases clean, {failed} with problems",
         cases.len()
     );
+
+    // **数の床**（4-644。4-639／4-640／4-643 と同じ型）。
+    //
+    // **この探りは、もう数えています**——`{passed} of {} ... {failed} with
+    // problems`。**ところが `exit` が無く、`with problems` は門の 4 語の
+    // どれでもない**ので、**`23 of 24 ... 1 with problems` でも緑**でした。
+    //
+    // **数えているのに、受け取っていなかった**わけです（4-643 の `ssi_probe`
+    // と同じ形）。**場面は固定**（`cases`）なので、**欠けても増えても赤**。
+    const EXPECTED_CASES: usize = 24;
+    if cases.len() != EXPECTED_CASES {
+        println!(
+            "**場面の数が変わりました**: {} 件（記録は {EXPECTED_CASES} 件）——**床を直してください**（4-644）。",
+            cases.len()
+        );
+        std::process::exit(1);
+    }
+    if failed != 0 || passed != cases.len() {
+        println!(
+            "**問題のある場面があります**: 通ったのは {passed} / {} 件、問題 {failed} 件（4-644）。",
+            cases.len()
+        );
+        std::process::exit(1);
+    }
 }
