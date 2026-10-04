@@ -97,10 +97,19 @@ fn main() {
     println!("are the same curves measured anywhere else.");
     println!();
 
+    // **測る相手が居ないのは、緑ではありません**（4-656）。
+    //
+    // **この探りは、入力が無いことに気づいて、そう印字していました**
+    // ——**そして `return` して 0 で終わっていました。** **検体 0 件で
+    // 緑**です。**`export_validation_suite` は `run_gates.sh` の中で
+    // `|| true` 付きで呼ばれる**（4-642）ので、**書き出しが黙って
+    // 失敗したら、この門は何も測らずに通ります。**
+    //
+    // **閾値の判断は要りません**——**0 件は 0 件**です。
     let validation = Path::new("target/validation");
     if !validation.is_dir() {
         println!("target/validation is missing; run the export_validation_suite example first");
-        return;
+        std::process::exit(1);
     }
 
     let mut paths: Vec<_> = fs::read_dir(validation)
@@ -115,6 +124,10 @@ fn main() {
         })
         .collect();
     paths.sort();
+    if paths.is_empty() {
+        println!("**target/validation に occ_reference の検体が 1 つもありません**（4-656）。");
+        std::process::exit(1);
+    }
 
     for path in paths {
         let name = path.file_name().unwrap().to_string_lossy().to_string();

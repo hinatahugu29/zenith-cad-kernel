@@ -106,12 +106,14 @@ fn main() {
     let mut moved_worst: f64 = 0.0;
     let mut left_alone_total = 0usize;
     let mut broken_total = 0usize;
+    let mut unreadable = 0usize;
 
     for (label, path, _truth) in subjects {
         let solids = match zenith_io::StepImporter::import_solids_from_file(path) {
             Ok(solids) if !solids.is_empty() => solids,
             _ => {
                 println!("{label:<22} could not be read");
+                unreadable += 1;
                 continue;
             }
         };
@@ -217,6 +219,17 @@ fn main() {
     // あります**——そこは決めていません）。
     const VOLUME_MOVE_GUARD: f64 = 1e-6;
     let mut bad = Vec::new();
+    // **読めなかった検体は、緑ではありません**（4-656）。
+    //
+    // **4-646 でここに床を入れたとき、この穴を残していました**——
+    // **`broken_total` も体積の動きも、検体が 0 件なら trivially 合格**
+    // です。**実測: `target/validation` を退避して回したら、全検体が
+    // 「could not be read」になっても rc=0** でした。
+    // **`export_validation_suite` は `|| true` 付きで呼ばれる**（4-642）
+    // ので、**書き出しが黙って失敗すると、この門は何も測らずに通ります。**
+    if unreadable != 0 {
+        bad.push(format!("読めなかった検体が {unreadable} 件"));
+    }
     if broken_total != 0 {
         bad.push(format!(
             "ブーリアンが受け取れない形になったものが {broken_total} 件"
