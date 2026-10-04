@@ -35,16 +35,26 @@ import Part  # noqa: E402
 ROOT = "crates/zenith_algo/tests/fixtures"
 TURNING = ("Cylinder", "Sphere", "Toroid", "Cone", "SurfaceOfRevolution")
 SUBJECTS = ["pipe_bend", "plate_with_holes", "sphere"]
+# **検体は足せます**（4-634）——`ZENITH_SEAM_FILES` に step ファイルの
+# 道を `;` 区切りで渡すと、そちらを見ます。**4-630 の census は
+# `occ_reference_*` だけが対象**で、**`linkrods.step` は入っていません**
+# でした。**`TORUS_SEAM_ALIGN` が H8 の数に触れるかは、
+# linkrods に全周するトーラス面が在るかで決まります。**
+import os as _os
+_extra = _os.environ.get("ZENITH_SEAM_FILES")
+EXTRA = [x for x in (_extra.split(";") if _extra else []) if x]
 
 print("%-18s %-8s %-6s %9s %8s %10s %9s %12s" % (
     "検体", "曲面", "全周", "距離", "半径", "巻く向き", "弦/半径", "巻かない向き"))
 print("-" * 92)
 
-for stem in SUBJECTS:
-    path = os.path.join(ROOT, "occ_reference_%s.step" % stem)
+targets = [(s, os.path.join(ROOT, "occ_reference_%s.step" % s)) for s in SUBJECTS]
+targets += [(os.path.basename(x), x) for x in EXTRA]
+for stem, path in targets:
     if not os.path.exists(path):
         print("%-18s 見つかりません" % stem)
         continue
+    stem = stem[:18]
     shape = Part.Shape()
     shape.read(path)
     best_row = None
