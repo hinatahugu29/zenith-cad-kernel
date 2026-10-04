@@ -29426,6 +29426,87 @@ py tools/tally_split_reasons.py out.txt
 
 ---
 
+### 4-641. **門 53 本のうち 15 本は、答えが間違っても赤になりません**（2026年10月4日）
+
+4-639／4-640 で 1 本ずつ直しているうちに、**これは個別の穴ではなく、
+数えられる形**だと分かったので、**全部数えました。**
+
+#### 数え方
+
+**門が赤になる道は、2 つだけ**です（`run_gates.sh`）——
+
+```bash
+# ① 終了コード
+# ② 出力に出る語
+grep -Eo "WRONG [1-9][0-9]*|PANIC [1-9][0-9]*|[1-9][0-9]* miss\(es\)|[1-9][0-9]* over the allowance"
+```
+
+**だから、探りごとに `exit(1)`／`exit(2)` と、その 4 語を数えれば、
+「赤になれるか」が決まります。** **`assert!` と `unwrap()` も数えました**
+——**panic も終了コードを立てる**からです。
+
+#### 結果——**15 本**
+
+| 門 | `exit` | 赤の語 | `assert` | `unwrap` |
+| :--- | ---: | ---: | ---: | ---: |
+| `builder_audit` | 0 | 0 | 0 | 6 |
+| `cone_slab_probe` | 0 | 0 | 0 | 4 |
+| **`cutter_placement_probe`** | **0** | **0** | **0** | **0** |
+| `export_validation_suite` | 0 | 0 | 1 | 32 |
+| `face_split_probe` | 0 | 0 | 0 | 11 |
+| `helix_volume_probe` | 0 | 0 | 0 | 2 |
+| `intersection_edge_probe` | 0 | 0 | 0 | 3 |
+| `march_stop_probe` | 0 | 0 | 0 | 3 |
+| `pcurve_fidelity_probe` | 0 | 0 | 0 | 2 |
+| **`regularize_probe`** | **0** | **0** | **0** | **0** |
+| `seam_torus_wall_probe` | 0 | 0 | 0 | 3 |
+| `sketch_solver_probe` | 0 | 0 | 0 | 2 |
+| `ssi_probe` | 0 | 0 | 0 | 2 |
+| `step_import_audit` | 0 | 0 | 0 | 8 |
+| `tess_density_probe` | 0 | 0 | 0 | 7 |
+
+**`unwrap` があるものは、panic では落ちます**——**ただしそれは
+「そもそも組めない／読めない」とき**です。**答えが間違っていても、
+数を印字して緑で終わります。**
+
+**`cutter_placement_probe` と `regularize_probe` は、`unwrap` すら
+ありません**——**落ちる道が 1 本もない**。**読めなければ
+「unreadable」と印字して進みます。**
+
+#### 1 本は、**それでよい**と自分で書いてあります
+
+```text
+This probe measures; nothing here is fixed yet. It is wired to report
+rather than to fail, so that the numbers stay visible without turning a
+known weight problem into a red gate.
+```
+
+**`tess_density_probe`。** **これは穴ではありません**——**読んで初めて
+分かりました**。**残り 14 本には、こういう断りがありません。**
+
+#### これが意味すること
+
+> **`== 門 ==` の一覧には、「測る人」と「見張る人」が混ざっています。**
+> **見張らない門が緑なのは、「正しかった」ではなく「走った」**です。
+> **4-410 が 12 日隠れたのも、4-622 が「断るのは赤にしません」の裏側を
+> 書いたのも、同じ場所から来ています。**
+
+#### 直したのは 2 本だけです
+
+**`shape_variety_probe`**（4-639。**検体が 1 つ消えても緑だった**）と
+**`slice_probe`**（4-640。**面積が閉じた式から外れても緑だった**）。
+**どちらも赤を実演してから入れました。**
+
+**残り 13 本には手を出していません。** **何を「正しい」とするかを
+決めないと床は置けず**、**決めずに置くと偽の赤**になります
+（記憶の戒め）。**たとえば `ssi_probe` の「3/3」は何に対する 3 なのか、
+`pcurve_fidelity_probe` の 1e-14 はどこまで許すのか**——
+**1 本ずつ、持ち主と相談しながら決めるほう**が筋です。
+
+**数え直す口**は、この項の冒頭に書いた 2 つの `grep` だけです。
+
+---
+
 ### 4-640. **`slice_probe` は、どの場面でも赤くなれませんでした**（2026年10月4日）
 
 4-639 の続き。**床の無い門を 1 本ずつ**——**今回は `slice_probe`。**
