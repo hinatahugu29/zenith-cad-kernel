@@ -55,7 +55,16 @@ fn worst_pcurve_distance(face: &Face, samples: usize) -> Option<f64> {
     Some(worst)
 }
 
-fn report(name: &str, solids: &[Solid]) {
+/// **閾値は持ち込みません**（4-663）。見張るのは**入れ子の形**だけです——
+/// **8 ⊂ 16 ⊂ 64** は、同じ曲線を「前に見た所ぜんぶ＋もっと」で測った
+/// ものなので、**最悪値は決して下がれません**。下がったら、測り方か
+/// p-curve の評価が壊れています。
+///
+/// **9 と 37 は入れ子ではありません**（37 は 9 の倍数ではない）ので、
+/// **ここでは見ません**——実測でも 128 行中 19 行で下がります。
+/// **どの列をどの値で縛るかは、まだ決めていません**（持ち主の判断）。
+/// **この床は、その決定を待たずに置けます。**
+fn report(name: &str, solids: &[Solid], broken: &mut Vec<String>, rows: &mut usize) {
     let counts = [8usize, 9, 16, 37, 64];
     for solid in solids {
         for (index, face) in solid.outer_shell.faces.iter().enumerate() {
@@ -64,9 +73,25 @@ fn report(name: &str, solids: &[Solid]) {
                 FaceGeometry::Nurbs(_) => "nurbs",
                 _ => continue,
             };
-            let measured: Vec<String> = counts
+            let raw: Vec<Option<f64>> = counts
                 .iter()
-                .map(|count| match worst_pcurve_distance(face, *count) {
+                .map(|count| worst_pcurve_distance(face, *count))
+                .collect();
+            *rows += 1;
+            // **入れ子の列だけ**（8 / 16 / 64 → 添字 0 / 2 / 4）。
+            for (lo, hi) in [(0usize, 2usize), (2, 4)] {
+                if let (Some(a), Some(b)) = (raw[lo], raw[hi]) {
+                    if b < a * (1.0 - 1e-9) {
+                        broken.push(format!(
+                            "{name} face {index} {kind}: {} 点で {a:.3e}、{} 点で {b:.3e}（入れ子なのに下がりました）",
+                            counts[lo], counts[hi]
+                        ));
+                    }
+                }
+            }
+            let measured: Vec<String> = raw
+                .iter()
+                .map(|value| match value {
                     Some(distance) => format!("{distance:>10.3e}"),
                     None => "         -".to_string(),
                 })
@@ -129,14 +154,32 @@ fn main() {
         std::process::exit(1);
     }
 
+    let mut broken: Vec<String> = Vec::new();
+    let mut rows = 0usize;
+
     for path in paths {
         let name = path.file_name().unwrap().to_string_lossy().to_string();
         match StepImporter::import_solids_from_file(&path) {
-            Ok(solids) => report(&name, &solids),
+            Ok(solids) => report(&name, &solids, &mut broken, &mut rows),
             Err(err) => println!(
                 "{name:<38} refused: {}",
                 err.chars().take(90).collect::<String>()
             ),
         }
+    }
+
+    println!();
+    if rows == 0 {
+        println!("**面を 1 枚も測っていません。**");
+        std::process::exit(1);
+    }
+    if broken.is_empty() {
+        println!("**{rows} 行すべてで 8 ≦ 16 ≦ 64 が成り立ちます**（入れ子の単調性。4-663）。");
+    } else {
+        for line in &broken {
+            println!("WRONG 1 {line}");
+        }
+        println!("**{} miss(es)**", broken.len());
+        std::process::exit(1);
     }
 }
