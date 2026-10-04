@@ -29518,6 +29518,12 @@ Python も Blender も無い機械で回した run が「全部緑」に見え�
 **4-658・4-659 で変えた所は両方とも緑**——
 `cutter_placement_probe 緑 (3s)`、`export_validation_suite: 29 件書きました`。
 
+**未達だった 3 本は、単独で回しました**——**3 本とも rc=0・赤語 0**
+（`curved_pair_identity_probe` 479 秒、`aspect_sweep_probe` 74 秒、
+`curved_pair_placement_probe` 168 秒）。**これで HEAD の門 53/53 を
+今夜のうちに通しました**——**ただし 1 回の run ではなく、
+harness 50 本 ＋ 単独 3 本の足し算**です。
+
 
 ### 4-659. **門の輪の外で、終了コードを捨てていた最後の一箇所**（2026年10月5日）
 
