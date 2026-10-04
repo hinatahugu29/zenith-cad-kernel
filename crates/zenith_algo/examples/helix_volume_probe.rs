@@ -40,6 +40,7 @@ fn square_profile(cx: f64, half: f64) -> Wire {
 }
 
 fn main() {
+    let mut complaints: Vec<String> = Vec::new();
     let tol = Tolerance::default();
     let radius = 10.0;
     let pitch = 6.0;
@@ -74,6 +75,22 @@ fn main() {
             "  {:>6}  {:>18}  {:>18}  {:>12}",
             "div", "brep integral", "mesh integral", "brep - mesh"
         );
+        // **床**（4-652）。**閾値は決めません**——**この探りが見せたい
+        // 形そのもの**を見ます。
+        //
+        // **① `brep` は刻みに依りません。** **厳密な積分**なので、
+        // **5 行とも同じ値**です（実測: 504.941343596 と 770.039017238）。
+        // **刻みで動いたら、依ってはいけないものが依っています。**
+        //
+        // **② `mesh` の差は、刻みを倍にするたびに縮みます**
+        // （実測: 3.98e-4 → 9.95e-5 → 2.49e-5 → 6.22e-6 → 1.55e-6。
+        // **倍ごとに約 4 分の 1** ＝ 2 次収束）。**縮まなくなったら、
+        // 収束していません。**
+        //
+        // **どちらも「いくつ以下なら合格」ではありません。**
+        // **絶対値の床は、ここでは決めずに済みます**（4-646 の②を避ける）。
+        let mut first_brep: Option<f64> = None;
+        let mut last_error: Option<f64> = None;
         for divisions in [16usize, 32, 64, 128, 256] {
             let params = TessellationParams {
                 u_divisions: divisions,
@@ -81,11 +98,37 @@ fn main() {
             };
             let brep = MassCalculator::compute_from_brep(&solid, &params).volume;
             let mesh = MassCalculator::compute_from_mesh(&tessellate_solid(&solid, &params)).volume;
+            let error = ((brep - mesh) / brep).abs();
             println!(
                 "  {divisions:>6}  {brep:>18.9}  {mesh:>18.9}  {:>12.2e}",
                 (brep - mesh) / brep
             );
+            match first_brep {
+                None => first_brep = Some(brep),
+                Some(reference) => {
+                    if (brep - reference).abs() > reference.abs() * 1e-12 {
+                        complaints.push(format!(
+                            "{label}: 刻み {divisions} で厳密積分が動きました（{brep:.9} 対 {reference:.9}）"
+                        ));
+                    }
+                }
+            }
+            if let Some(previous) = last_error {
+                if error >= previous {
+                    complaints.push(format!(
+                        "{label}: 刻み {divisions} で差が縮みませんでした（{error:.2e} 対 直前 {previous:.2e}）"
+                    ));
+                }
+            }
+            last_error = Some(error);
         }
         println!();
+    }
+
+    if !complaints.is_empty() {
+        for line in &complaints {
+            println!("**{line}**（4-652）。");
+        }
+        std::process::exit(1);
     }
 }
