@@ -13,9 +13,27 @@
 # **4-641 は散文で 15 本と数えました。** **散文は腐ります**ので、
 # **数え直せる形**にしておきます（4-577 で `h8_ports.sh` を置いたのと同じ理屈）。
 #
-# 使い方: bash tools/audit_gate_redness.sh
+# 使い方: bash tools/audit_gate_redness.sh [--gate]
+#
+# **`--gate` を付けると、門になります**（4-661）——**床の無い門が
+# 新しく増えたら赤**。**断りを出している探りだけは許します**が、
+# **その断りは下の `ALLOWED` に名指しで書かないと通りません**。
+# **「数えるだけ」の監査は、次に誰かが床無しの探りを足したとき、
+# 何も言いません**——**それは今夜 13 本ためた作り方そのものです。**
 set -uo pipefail
 cd "$(dirname "$0")/.."
+
+GATE_MODE=0
+for arg in "$@"; do
+  case "$arg" in
+    --gate) GATE_MODE=1 ;;
+    *) echo "知らない引数です: $arg（--gate だけ受けます）"; exit 2 ;;
+  esac
+done
+
+# **床が無くてよい門**——**理由を自分の出力に書いているものだけ**。
+# **ここに足すのは「床を置けない」と確かめたときだけ**にしてください。
+ALLOWED="tess_density_probe"
 
 # **門の一覧は `run_gates.sh` から取ります**——**こちらで書き写すと、
 # 片方だけ古くなります。**
@@ -32,6 +50,7 @@ printf "%-32s %5s %5s %7s %7s  %s\n" "門" "exit" "赤語" "assert" "unwrap" "�
 printf -- "----------------------------------------------------------------------------------\n"
 
 blind=0
+blind_list=""
 total=0
 extra_total=0
 extra_blind=0
@@ -45,15 +64,23 @@ for g in $gates; do
   else
     total=$((total + 1))
   fi
-  e=$(grep -cE 'exit\([12]\)' "$f")
-  w=$(grep -cE '"WRONG|PANIC|miss\(es\)|over the allowance' "$f")
-  a=$(grep -cE 'assert!|assert_eq!|panic!' "$f")
-  u=$(grep -cE '\.unwrap\(\)|\.expect\(' "$f")
+  # **コメント行は数えません**（4-661）——**`//exit(1);` を「床がある」と
+  # 読むと、床を外したことに気づけません**（実演で引っかかりました）。
+  body=$(grep -vE '^[[:space:]]*(//|/\*|\*)' "$f")
+  e=$(printf '%s
+' "$body" | grep -cE 'exit\([12]\)')
+  w=$(printf '%s
+' "$body" | grep -cE '"WRONG|PANIC|miss\(es\)|over the allowance')
+  a=$(printf '%s
+' "$body" | grep -cE 'assert!|assert_eq!|panic!')
+  u=$(printf '%s
+' "$body" | grep -cE '\.unwrap\(\)|\.expect\(')
   if [ "$e" = "0" ] && [ "$w" = "0" ]; then
     if [ "$is_extra" = "1" ]; then
       extra_blind=$((extra_blind + 1))
     else
       blind=$((blind + 1))
+      blind_list="$blind_list $g"
     fi
     if [ "$a" = "0" ] && [ "$u" = "0" ]; then
       verdict="**落ちる道が無い**"
@@ -73,6 +100,24 @@ echo '**この数は「悪い」とは限りません**——tess_density_probe 
 echo '「報告専用」と自分の出力に書いてあります。**断りの無いものだけが宿題**です。'
 echo '**床の足し方と、赤の実演のしかたは 4-639／4-640 に**。'
 echo
+if [ "$GATE_MODE" = "1" ]; then
+  unexplained=""
+  for g in $blind_list; do
+    ok=0
+    for a in $ALLOWED; do [ "$a" = "$g" ] && ok=1; done
+    [ "$ok" = "0" ] && unexplained="$unexplained $g"
+  done
+  if [ -n "$unexplained" ]; then
+    echo
+    echo "WRONG 1 床の無い門があります（断りも出ていません）:$unexplained"
+    echo "**$(echo $unexplained | wc -w) miss(es)**"
+    exit 1
+  fi
+  echo
+  echo "**断りの無い「床の無い門」は 0 本です。**"
+  exit 0
+fi
+
 echo "**門の輪の外**で呼ばれるものは、ここに出ません——export_validation_suite は"
 echo "run_gates.sh が門の前に呼びます。**4-659 で || true を外しました**——"
 echo "落ちたときと**0 件しか書けなかったとき**は、そこで赤で止まります。"
