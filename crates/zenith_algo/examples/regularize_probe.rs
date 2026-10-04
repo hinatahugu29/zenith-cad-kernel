@@ -198,4 +198,40 @@ fn main() {
     println!("usable = the solid also passes the check the exact boolean runs on");
     println!("         its inputs. The second is stricter, and a solid can be");
     println!("         closed and still fail it.");
+
+    // **数の床**（4-646。4-644／4-645 と同じ型②）。
+    //
+    // **この探りは、失敗の数そのものを印字しています**——
+    // `regularized into something a boolean cannot take: {broken_total}`。
+    // **ところが `exit` が無く**、**門の 4 語にも当たりません**ので、
+    // **そこが 1 以上になっても緑**でした。
+    //
+    // **`broken_total` は、探り自身が「ブーリアンが受け取れない」と
+    // 呼んでいるもの**です。**0 でなければ赤**——**閾値を決める必要が
+    // ありません。**
+    //
+    // **体積の動きのほうは、ゆるい見張り**です。**いまの最悪は
+    // 8.696e-10**で、**1e-6 はその 1000 倍**——**細かい回帰は捕まえません。**
+    // **「整えたら体積が目に見えて動いた」を捕まえるだけ**の床です
+    // （**きつい床にするなら、何が許される動きなのかを先に決める必要が
+    // あります**——そこは決めていません）。
+    const VOLUME_MOVE_GUARD: f64 = 1e-6;
+    let mut bad = Vec::new();
+    if broken_total != 0 {
+        bad.push(format!(
+            "ブーリアンが受け取れない形になったものが {broken_total} 件"
+        ));
+    }
+    if moved_worst > VOLUME_MOVE_GUARD {
+        bad.push(format!(
+            "体積の動きが {moved_worst:.3e}（見張りは {VOLUME_MOVE_GUARD:.0e}）"
+        ));
+    }
+    if !bad.is_empty() {
+        println!();
+        for line in &bad {
+            println!("**{line}**（4-646）。");
+        }
+        std::process::exit(1);
+    }
 }
