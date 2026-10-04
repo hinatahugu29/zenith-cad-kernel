@@ -1,4 +1,4 @@
-use zenith_algo::{Constraint, SketchSolver};
+use zenith_algo::{Constraint, SketchConstraintStatus, SketchSolver};
 
 fn main() {
     println!("=== Zenith CAD Kernel: SketchSolver 拘束・自由度解析プローブ ===");
@@ -70,5 +70,44 @@ fn main() {
     );
 
     println!("--------------------------------------------------------------------------------");
+    // **床**（4-651）。**この 1 行は、ずっと無条件でした**——
+    // **4 つの場面が何を返そうと「exact degrees of freedom」と
+    // 印字していた**わけです。**判定の無い門より悪い**——
+    // **「確かめた」と書いてある**からです。
+    //
+    // **あるべき姿は、場面の名前が述べています**——
+    // 4自由点 → 自由度 8 が残る／完全拘束正方形 → 残り 0／
+    // 直線-円接線 → 残り 1（接線 1 本で 2 のうち 1 を取る）／
+    // 冗長拘束 → 過剰拘束で、冗長 1 本。
+    // **閾値ではなく、探り自身が名前で宣言している値**です。
+    // **期待値は 1 か所に置きます**——**判定と文面を別々に書くと、
+    // 片方だけ直して食い違います**（実際、実演のときに文面が追随
+    // しませんでした）。
+    let mut bad = Vec::new();
+    for (name, got, want) in [
+        ("Case 1（4自由点）", rem1, 8usize),
+        ("Case 2（完全拘束正方形）", rem2, 0),
+        ("Case 3（直線-円接線）", rem3, 1),
+        ("Case 4（冗長拘束）", rem4, 0),
+    ] {
+        if got != want {
+            bad.push(format!("{name}の残り自由度が {got}（{want} のはず）"));
+        }
+    }
+    if !matches!(status4, SketchConstraintStatus::OverConstrained { .. }) {
+        bad.push(format!("Case 4（冗長拘束）が過剰拘束と出ていません: {status4:?}"));
+    }
+    if !matches!(status1, SketchConstraintStatus::UnderConstrained { .. }) {
+        bad.push(format!("Case 1（4自由点）が不足拘束と出ていません: {status1:?}"));
+    }
+    if !matches!(status2, SketchConstraintStatus::FullyConstrained) {
+        bad.push(format!("Case 2（完全拘束正方形）が完全拘束と出ていません: {status2:?}"));
+    }
+    if !bad.is_empty() {
+        for line in &bad {
+            println!("**{line}**（4-651）。");
+        }
+        std::process::exit(1);
+    }
     println!("every sketch constraint case evaluated with exact degrees of freedom");
 }
