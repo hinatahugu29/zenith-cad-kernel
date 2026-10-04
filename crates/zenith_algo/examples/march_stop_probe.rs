@@ -358,6 +358,32 @@ fn main() {
         "
 A branch that neither closes nor reaches a patch edge is half a cut."
     );
+
+    // **数の床**（4-649。型②——**数えているのに、終了コードに繋いでいない**）。
+    //
+    // **`ended_inside` は、この探りが欠陥と呼んでいるもの**です
+    // ——**すぐ下の行が「半分の切り口」「輪が閉じなくなる原因」と
+    // 書いています**。**0 でなければ赤**で、**閾値の判断は要りません。**
+    //
+    // **組の数も固定**（`traced`）なので、**減ったら黙って検体が落ちた**
+    // ということです（4-619 の形）。
+    const EXPECTED_PAIRS: usize = 9;
+    let mut bad = Vec::new();
+    if ended_inside != 0 {
+        bad.push(format!("パッチの中で終わった枝が {ended_inside} 本"));
+    }
+    if traced != EXPECTED_PAIRS {
+        bad.push(format!(
+            "辿った組が {traced} 組（記録は {EXPECTED_PAIRS} 組）"
+        ));
+    }
+    if !bad.is_empty() {
+        println!();
+        for line in &bad {
+            println!("**{line}**（4-649）。");
+        }
+        std::process::exit(1);
+    }
     println!("Passing it on as an intersection edge is how the loop fails to close.");
 }
 
