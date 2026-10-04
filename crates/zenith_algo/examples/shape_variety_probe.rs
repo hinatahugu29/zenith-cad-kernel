@@ -190,6 +190,26 @@ fn main() {
         "read {read} of {}   volume ok {matched}   WRONG {wrong}",
         SUBJECTS.len()
     );
+
+    // **数の床**（4-639。4-619/4-622 と同じ型）。
+    //
+    // **この門は、検体が 1 つ読めなくなっても緑でした。** 読めない検体は
+    // `continue` するだけで、**`WRONG` は 0 のまま、終了コードも 0** です
+    // ——**門が見ているのは `WRONG [1-9]` と終了コード**なので、
+    // **`read 8 of 9` は素通り**します。
+    //
+    // **4-410 は、まさにこの形で 12 日隠れました**（読んだ円錐が
+    // 高さ 0 の囲み箱で丸ごと飛ばされ、件数が 36 → 29 に減ったのに緑）。
+    // **ここは検体が固定の配列**（`[Subject; 9]`）なので、
+    // **減ったら赤、増えたら「床を上げてください」**で構いません。
+    if read != SUBJECTS.len() || matched != SUBJECTS.len() {
+        println!();
+        println!(
+            "**数が合いません**: 読めた {read} 件 / 体積が合った {matched} 件（どちらも {} 件のはず）——**黙って飛ばされた検体があります**（4-639）。",
+            SUBJECTS.len()
+        );
+        std::process::exit(1);
+    }
     println!();
     for subject in &SUBJECTS {
         println!("{:<20} {}", subject.name, subject.brings);
