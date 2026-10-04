@@ -77,9 +77,15 @@ if ! cargo run --quiet --release -p zenith_algo --example external_data_probe; t
 fi
 echo
 
+# **飛ばしたものを、画面の外にも残します**（4-660）——**画面には
+# 「緑ではありません」と出るのに、`verdict.txt` には「緑（全部）」と
+# 書いていました**。**判定を読むだけの人には、飛ばしたことが見えません。**
+skipped=""
+
 echo "== 通しテスト =="
 if [ "$NO_TESTS" = "1" ]; then
   echo "  **--no-tests なので回していません。** **これは緑ではありません。**"
+  skipped="$skipped 通しテスト(--no-tests)"
   echo "  別に回してください: cargo test --release --workspace --exclude zenith_py"
   echo
 elif ! cargo test --release --workspace --exclude zenith_py > "$OUT/tests.txt" 2>&1; then
@@ -234,6 +240,7 @@ if [ -z "$DOC_PYTHON" ]; then
 fi
 if [ -z "$DOC_PYTHON" ]; then
   echo "  **Python がありません。** check_doc_claims は回していません（緑ではありません）。"
+  skipped="$skipped check_doc_claims(Python なし)"
 else
   started=$(date +%s)
   "$DOC_PYTHON" tools/check_doc_claims.py > "$OUT/doc_claims.txt" 2>&1
@@ -264,6 +271,7 @@ fi
 
 if [ -z "$PYTHON" ]; then
   echo "  **Python がありません。** 下の 2 つは回していません（緑ではありません）。"
+  skipped="$skipped check_python_surface/check_python_arguments(Python なし)"
   echo "    tools/check_python_surface.py / tools/check_python_arguments.py"
 elif ! PYO3_PYTHON="$("$PYTHON" -c 'import sys; print(sys.executable)')"         cargo build --release -p zenith_py > "$OUT/pybuild.txt" 2>&1; then
   echo "  **拡張モジュールが建ちません。** $OUT/pybuild.txt"
@@ -367,6 +375,7 @@ else
   if [ -z "$BLENDER" ]; then
     printf "  %-30s 飛ばす（Blender がありません。緑ではありません）
 " "glTF を Blender に"
+    skipped="$skipped glTF を Blender に(Blender なし)"
   else
     # **検体は、ここで書き出します**——**門が自己完結していないと、
     # 「前に回したときの検体」を読むことになります**（5 章の
@@ -455,23 +464,25 @@ verdict="$OUT/verdict.txt"
 {
   echo "回した時刻: $(date '+%Y-%m-%d %H:%M:%S')"
   echo "rc: $fail"
-  if [ "$fail" = "0" ] && [ "$NO_TESTS" = "1" ]; then
-    echo "判定: 門は緑／**通しテストを回していません**（--no-tests）"
-  elif [ "$fail" = "0" ]; then
-    echo "判定: 緑（全部）"
-  else
+  if [ "$fail" != "0" ]; then
     echo "判定: 赤"
     echo "赤いもの:$red"
+  elif [ -n "$skipped" ]; then
+    echo "判定: 門は緑／**飛ばした項目があります**——**「全部緑」ではありません**"
+  else
+    echo "判定: 緑（全部）"
   fi
+  # **飛ばしたものは、赤でも緑でも必ず 1 行出します**（4-660）。
+  echo "飛ばしたもの:${skipped:- なし}"
   # **どの口を立てて回したか**——**これが分からないと、数字が再現できません**
   # （4-577）。
   echo "立っていた ZENITH_ の口:"
   env | grep -E '^ZENITH_' | sort | sed 's/^/  /' || echo "  （なし)"
 } > "$verdict" 2>&1
 
-if [ "$fail" = "0" ] && [ "$NO_TESTS" = "1" ]; then
-  echo "**門は緑です——ただし通しテストは回していません（--no-tests）。**"
-  echo "**「全部緑」ではありません。** cargo test を別に回して、両方で見てください。"
+if [ "$fail" = "0" ] && [ -n "$skipped" ]; then
+  echo "**門は緑です——ただし飛ばした項目があります:$skipped**"
+  echo "**「全部緑」ではありません。** 飛ばしたものを別に回して、両方で見てください。"
   echo "出力: $OUT（判定は $verdict）"
 elif [ "$fail" = "0" ]; then
   echo "**門は全部緑です。**"
