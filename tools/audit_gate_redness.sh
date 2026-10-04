@@ -40,11 +40,13 @@ ALLOWED="tess_density_probe"
 gates=$(sed -n '/^GATES="/,/"$/p' tools/run_gates.sh \
   | sed 's/^GATES="//; s/"$//' \
   | tr ' ' '\n' | sed '/^$/d')
-# **門の輪の外**にあるが、同じ物差しで見ておきたいもの。
-# **門の本数には足しません**（足すと「門 N 本」が嘘になります。4-658）
-extras="contact_placement_probe"
+# **`run_gates.sh` は `--quick` でないとき、ここに 1 本足します**
+# （`GATES="$GATES contact_placement_probe"`）。**これも門です**——
+# **4-658 で「門の外」と書いたのは読み違いでした**（4-662）。
+# **全部回すときの姿**で数えます。
+quick_only="contact_placement_probe"
 gates="$gates
-$extras"
+$quick_only"
 
 printf "%-32s %5s %5s %7s %7s  %s\n" "門" "exit" "赤語" "assert" "unwrap" "答えが違うとき"
 printf -- "----------------------------------------------------------------------------------\n"
@@ -52,18 +54,10 @@ printf -- "---------------------------------------------------------------------
 blind=0
 blind_list=""
 total=0
-extra_total=0
-extra_blind=0
 for g in $gates; do
   f="crates/zenith_algo/examples/$g.rs"
   [ -f "$f" ] || continue
-  is_extra=0
-  for x in $extras; do [ "$x" = "$g" ] && is_extra=1; done
-  if [ "$is_extra" = "1" ]; then
-    extra_total=$((extra_total + 1))
-  else
-    total=$((total + 1))
-  fi
+  total=$((total + 1))
   # **コメント行は数えません**（4-661）——**`//exit(1);` を「床がある」と
   # 読むと、床を外したことに気づけません**（実演で引っかかりました）。
   body=$(grep -vE '^[[:space:]]*(//|/\*|\*)' "$f")
@@ -76,12 +70,8 @@ for g in $gates; do
   u=$(printf '%s
 ' "$body" | grep -cE '\.unwrap\(\)|\.expect\(')
   if [ "$e" = "0" ] && [ "$w" = "0" ]; then
-    if [ "$is_extra" = "1" ]; then
-      extra_blind=$((extra_blind + 1))
-    else
-      blind=$((blind + 1))
-      blind_list="$blind_list $g"
-    fi
+    blind=$((blind + 1))
+    blind_list="$blind_list $g"
     if [ "$a" = "0" ] && [ "$u" = "0" ]; then
       verdict="**落ちる道が無い**"
     else
@@ -93,8 +83,8 @@ done
 
 printf -- "----------------------------------------------------------------------------------\n"
 echo "門 $total 本のうち、**答えが間違っても赤にならないもの $blind 本**。"
-echo "（**門の外**で同じ物差しを当てたもの $extra_total 本のうち $extra_blind 本。"
-echo "  **上の $total 本には入れていません**）"
+echo "（**これは全部回すときの姿**です。\`--quick\` は"
+echo "  contact_placement_probe を外すので $((total - 1)) 本になります）"
 echo
 echo '**この数は「悪い」とは限りません**——tess_density_probe は'
 echo '「報告専用」と自分の出力に書いてあります。**断りの無いものだけが宿題**です。'

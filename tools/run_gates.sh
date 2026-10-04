@@ -151,12 +151,31 @@ if [ "$QUICK" = "0" ]; then
 else
   echo '**--quick なので contact_placement_probe を外しました。**'
   echo "**外したものは「緑」ではありません**——回していないだけです。"
+  skipped="$skipped contact_placement_probe(--quick)"
   echo
 fi
 
-echo "== 門 =="
 fail=0
 red=""
+
+echo "== 門に床があるか =="
+# **門を足したのに床を置き忘れたら、ここで赤**（4-661）。
+# **今夜 13 本ためたのは、これが無かったから**です——
+# **「数えるだけ」の監査は、次の 1 本について何も言いません。**
+started=$(date +%s)
+if bash tools/audit_gate_redness.sh --gate > "$OUT/gate_floors.txt" 2>&1; then
+  printf "  %-30s 緑    (%ss)
+" "audit_gate_redness --gate" "$(( $(date +%s) - started ))"
+else
+  fail=1
+  red="$red gate_floors"
+  printf "  %-30s **赤**  (%ss)  %s
+" "audit_gate_redness --gate" "$(( $(date +%s) - started ))" "$OUT/gate_floors.txt"
+  tail -4 "$OUT/gate_floors.txt"
+fi
+
+echo
+echo "== 門 =="
 for probe in $GATES; do
   exe="./target/release/examples/$probe"
   if [ ! -x "$exe" ] && [ ! -f "$exe.exe" ]; then
@@ -228,22 +247,6 @@ done
 # **Python は要りません**（crates の中を読むだけ）ので、
 # **Python の口より前**に置きます。
 echo
-echo "== 門に床があるか =="
-# **門を足したのに床を置き忘れたら、ここで赤**（4-661）。
-# **今夜 13 本ためたのは、これが無かったから**です——
-# **「数えるだけ」の監査は、次の 1 本について何も言いません。**
-started=$(date +%s)
-if bash tools/audit_gate_redness.sh --gate > "$OUT/gate_floors.txt" 2>&1; then
-  printf "  %-30s 緑    (%ss)
-" "audit_gate_redness --gate" "$(( $(date +%s) - started ))"
-else
-  fail=1
-  red="$red gate_floors"
-  printf "  %-30s **赤**  (%ss)  %s
-" "audit_gate_redness --gate" "$(( $(date +%s) - started ))" "$OUT/gate_floors.txt"
-  tail -4 "$OUT/gate_floors.txt"
-fi
-
 echo
 echo "== 文書の指し先 =="
 DOC_PYTHON="${ZENITH_PYTHON:-}"
