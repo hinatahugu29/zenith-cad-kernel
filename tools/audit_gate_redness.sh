@@ -22,24 +22,39 @@ cd "$(dirname "$0")/.."
 gates=$(sed -n '/^GATES="/,/"$/p' tools/run_gates.sh \
   | sed 's/^GATES="//; s/"$//' \
   | tr ' ' '\n' | sed '/^$/d')
+# **門の輪の外**にあるが、同じ物差しで見ておきたいもの。
+# **門の本数には足しません**（足すと「門 N 本」が嘘になります。4-658）
+extras="contact_placement_probe"
 gates="$gates
-contact_placement_probe"
+$extras"
 
 printf "%-32s %5s %5s %7s %7s  %s\n" "門" "exit" "赤語" "assert" "unwrap" "答えが違うとき"
 printf -- "----------------------------------------------------------------------------------\n"
 
 blind=0
 total=0
+extra_total=0
+extra_blind=0
 for g in $gates; do
   f="crates/zenith_algo/examples/$g.rs"
   [ -f "$f" ] || continue
-  total=$((total + 1))
+  is_extra=0
+  for x in $extras; do [ "$x" = "$g" ] && is_extra=1; done
+  if [ "$is_extra" = "1" ]; then
+    extra_total=$((extra_total + 1))
+  else
+    total=$((total + 1))
+  fi
   e=$(grep -cE 'exit\([12]\)' "$f")
   w=$(grep -cE '"WRONG|PANIC|miss\(es\)|over the allowance' "$f")
   a=$(grep -cE 'assert!|assert_eq!|panic!' "$f")
   u=$(grep -cE '\.unwrap\(\)|\.expect\(' "$f")
   if [ "$e" = "0" ] && [ "$w" = "0" ]; then
-    blind=$((blind + 1))
+    if [ "$is_extra" = "1" ]; then
+      extra_blind=$((extra_blind + 1))
+    else
+      blind=$((blind + 1))
+    fi
     if [ "$a" = "0" ] && [ "$u" = "0" ]; then
       verdict="**落ちる道が無い**"
     else
@@ -51,6 +66,8 @@ done
 
 printf -- "----------------------------------------------------------------------------------\n"
 echo "門 $total 本のうち、**答えが間違っても赤にならないもの $blind 本**。"
+echo "（**門の外**で同じ物差しを当てたもの $extra_total 本のうち $extra_blind 本。"
+echo "  **上の $total 本には入れていません**）"
 echo
 echo '**この数は「悪い」とは限りません**——tess_density_probe は'
 echo '「報告専用」と自分の出力に書いてあります。**断りの無いものだけが宿題**です。'
