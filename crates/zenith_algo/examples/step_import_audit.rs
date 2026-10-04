@@ -210,11 +210,26 @@ fn main() {
             .filter(|path| path.extension().map(|ext| ext == "step").unwrap_or(false))
             .collect();
         names.sort();
+        // **0 件は 0 件**（4-657。**4-656 と同じ穴が、ここにも在りました**）。
+        //
+        // **`target/showcase` が無ければ節ごと飛ばし、`problems` は 0 の
+        // まま**でした——**実測: 退避して回すと検体が 54 → 20 に減っても
+        // rc=0。** **4-653 でここに床を入れたのに、すり抜けました。**
+        //
+        // **数は固定ではありません**（生成物なので増えます）ので、
+        // **「増えたら赤」にはしません**——**0 件だけを赤**にします。
+        if names.is_empty() {
+            println!("        **target/showcase に step が 1 つもありません**（4-657）。");
+            problems += 1;
+        }
+        println!("        （showcase から {} 件読みました）", names.len());
         for path in names {
             problems += read_foreign(&path);
         }
     } else {
         println!("    target/showcase is missing; run the export_showcase example first");
+        // **無いことに気づいて印字しながら、緑で通っていました**（4-657）。
+        problems += 1;
     }
 
     println!();
@@ -232,12 +247,22 @@ fn main() {
             })
             .collect();
         names.sort();
+        // **0 件は 0 件**（4-657）。**気づいて印字しながら、緑で通って
+        // いました**——`target/showcase` と同じ形です。
         if names.is_empty() {
             println!("    no OpenCASCADE reference files; run tools/occ_reference_export.py");
+            problems += 1;
+        } else {
+            println!("    （OCC が書いたものを {} 件読みました）", names.len());
         }
         for path in names {
             problems += read_foreign(&path);
         }
+    } else {
+        // **節ごと飛ばして緑**でした（4-657）。**`target/showcase` の
+        // ほうには `else` が在ったのに、こちらには無かった**だけです。
+        println!("    target/validation is missing; run tools/occ_reference_export.py");
+        problems += 1;
     }
 
     // **床**（4-653）。**探り自身が失敗と名付けたものだけ**を数えています
