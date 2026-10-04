@@ -103,7 +103,21 @@ fi
 # 追跡下（`tests/fixtures`）にあるので、そこから置いてから書き出します。
 mkdir -p target/validation
 cp crates/zenith_algo/tests/fixtures/*.step target/validation/ 2>/dev/null || true
-./target/release/examples/export_validation_suite > "$OUT/export.txt" 2>&1 || true
+# **終了コードを捨てません**（4-659）——ここが黙って失敗すると、
+# **下の門は古い `target/validation` を読んで緑で通ります**。
+# **「0 件書けた」も失敗です**（4-656 と同じ穴）。
+if ! ./target/release/examples/export_validation_suite > "$OUT/export.txt" 2>&1; then
+  echo "WRONG 1 export_validation_suite が落ちました（rc 非 0）"
+  tail -20 "$OUT/export.txt"
+  exit 1
+fi
+wrote=$(grep -oE "^wrote [0-9]+ subject\(s\)" "$OUT/export.txt" | tail -1 | awk "{print \$2}")
+if [ -z "$wrote" ] || [ "$wrote" -eq 0 ]; then
+  echo "WRONG 1 export_validation_suite が検体を 1 件も書きませんでした（\"$wrote\"）"
+  tail -20 "$OUT/export.txt"
+  exit 1
+fi
+echo "export_validation_suite: $wrote 件書きました"
 echo
 
 GATES="builder_audit planar_face_audit boolean_topology_probe
@@ -357,7 +371,17 @@ else
     # **検体は、ここで書き出します**——**門が自己完結していないと、
     # 「前に回したときの検体」を読むことになります**（5 章の
     # 「古い実行ファイル」と同じ一族）。
-    ./target/release/examples/export_mesh_suite > "$OUT/mesh_exports.txt" 2>&1 || true
+    # **ここも終了コードを捨てません**（4-659）。**0 ファイルも失敗です。**
+    if ! ./target/release/examples/export_mesh_suite > "$OUT/mesh_exports.txt" 2>&1; then
+      echo "WRONG 1 export_mesh_suite が落ちました（rc 非 0）"
+      tail -20 "$OUT/mesh_exports.txt"
+      exit 1
+    fi
+    nfiles=$(find target/mesh_exports -type f 2>/dev/null | wc -l)
+    if [ "$nfiles" -eq 0 ]; then
+      echo "WRONG 1 export_mesh_suite が target/mesh_exports に 1 つも書きませんでした"
+      exit 1
+    fi
   fi
   # **配る包みを、Blender の中で読ませます**（4-433）。
   #
