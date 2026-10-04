@@ -43,9 +43,22 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 QUICK=0
-if [ "${1:-}" = "--quick" ]; then
-  QUICK=1
-fi
+# **通しテストを飛ばす口**（4-633）。**1 回に回せる時間に上限がある機械**
+# （背景の走行が 30 分で止められ、端末タブも使えない）で、**門を 2 回に
+# 分けて回すため**です——**通しテストだけ別に回し、ここでは門だけ回します。**
+#
+# **これは「緑」を名乗れません。** **判定の行にも「通しテストを回して
+# いません」と書きます**——**飛ばしたことが判定に残らないと、読み違えます**
+# （`check_doc_claims` が Python 無しのとき「緑ではありません」と書くのと
+# 同じ理屈）。
+NO_TESTS=0
+for arg in "$@"; do
+  case "$arg" in
+    --quick) QUICK=1 ;;
+    --no-tests) NO_TESTS=1 ;;
+    *) echo "知らない引数です: $arg（--quick と --no-tests だけ受けます）"; exit 2 ;;
+  esac
+done
 
 OUT="${TMPDIR:-/tmp}/zenith-gates"
 mkdir -p "$OUT"
@@ -65,13 +78,19 @@ fi
 echo
 
 echo "== 通しテスト =="
-if ! cargo test --release --workspace --exclude zenith_py > "$OUT/tests.txt" 2>&1; then
+if [ "$NO_TESTS" = "1" ]; then
+  echo "  **--no-tests なので回していません。** **これは緑ではありません。**"
+  echo "  別に回してください: cargo test --release --workspace --exclude zenith_py"
+  echo
+elif ! cargo test --release --workspace --exclude zenith_py > "$OUT/tests.txt" 2>&1; then
   echo "**通しテストが落ちました。** $OUT/tests.txt"
   tail -30 "$OUT/tests.txt"
   exit 1
 fi
-awk -F'[ ;]+' '/^test result:/{p+=$4; f+=$6; n++} END{printf "  %d 本 / %d 件通過 / %d 件失敗\n", n, p, f}' "$OUT/tests.txt"
-echo
+if [ "$NO_TESTS" != "1" ]; then
+  awk -F'[ ;]+' '/^test result:/{p+=$4; f+=$6; n++} END{printf "  %d 本 / %d 件通過 / %d 件失敗\n", n, p, f}' "$OUT/tests.txt"
+  echo
+fi
 
 echo "== 門をつくります =="
 if ! cargo build --release -p zenith_algo --examples > "$OUT/build.txt" 2>&1; then
@@ -412,7 +431,9 @@ verdict="$OUT/verdict.txt"
 {
   echo "回した時刻: $(date '+%Y-%m-%d %H:%M:%S')"
   echo "rc: $fail"
-  if [ "$fail" = "0" ]; then
+  if [ "$fail" = "0" ] && [ "$NO_TESTS" = "1" ]; then
+    echo "判定: 門は緑／**通しテストを回していません**（--no-tests）"
+  elif [ "$fail" = "0" ]; then
     echo "判定: 緑（全部）"
   else
     echo "判定: 赤"
@@ -424,7 +445,11 @@ verdict="$OUT/verdict.txt"
   env | grep -E '^ZENITH_' | sort | sed 's/^/  /' || echo "  （なし)"
 } > "$verdict" 2>&1
 
-if [ "$fail" = "0" ]; then
+if [ "$fail" = "0" ] && [ "$NO_TESTS" = "1" ]; then
+  echo "**門は緑です——ただし通しテストは回していません（--no-tests）。**"
+  echo "**「全部緑」ではありません。** cargo test を別に回して、両方で見てください。"
+  echo "出力: $OUT（判定は $verdict）"
+elif [ "$fail" = "0" ]; then
   echo "**門は全部緑です。**"
   echo "出力: $OUT（判定は $verdict）"
   echo
