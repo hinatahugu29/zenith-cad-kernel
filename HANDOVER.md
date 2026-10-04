@@ -29426,6 +29426,91 @@ py tools/tally_split_reasons.py out.txt
 
 ---
 
+### 4-636. **`TORUS_SEAM_ALIGN` を、STEP を読む門 24 本すべてに当てました**——**動いたのは 3 本、どれも筋どおり**（2026年10月4日）
+
+4-635 は「**探り 1 本だけ**」と断って終わりました。**残りを全部やります。**
+
+#### まず、**自分の見当が粗かったことを直します**
+
+4-635 で**名前から「読んだ立体を使う門」を 8 本**と見当をつけました。
+**機械的に洗ったら 26 本**でした——
+
+```bash
+grep -E '\.step|StepImporter|import_solids' crates/zenith_algo/examples/<門>.rs
+```
+
+**`closure_probe`・`pcurve_fidelity_probe`・`shape_variety_probe`・
+`seam_torus_wall_probe`** など、**名前からは読めない門が 18 本**。
+**そして、動いた 2 本はそのうちに在りました**——
+**名前で見当をつけていたら、取りこぼしていました。**
+
+#### 当てた結果（**24 本**。既定赤の 2 本と `--quick` が外す 1 本を除く）
+
+| 門 | 差分 |
+| :--- | :--- |
+| **`pcurve_fidelity_probe`** | **8 行** |
+| **`shape_variety_probe`** | **4 行** |
+| `foreign_boolean_probe`（4-635） | **1 行**（恒等式の残差のみ） |
+| 残り 21 本 | **0 行**（ビット単位で同じ） |
+
+**21 本は `rc=0/0`・差分 0**——`closure_probe`・`cone_slab_probe`・
+`cutter_placement_probe`・`export_validation_suite`・`external_data_probe`・
+`gate_membership_probe`・`grid_fallback_probe`・`intersection_edge_probe`・
+`march_stop_probe`・`regularize_probe`・**`seam_torus_wall_probe`**・
+`step_representation_probe`・`step_unit_probe`・`unused_builder_probe`・
+`step_import_audit`・`foreign_distance_probe`・`foreign_slice_probe`・
+`foreign_edit_probe`・`foreign_inertia_probe`・`foreign_cross_pair_probe`。
+
+#### 動いた 2 本は、**4-631 が予告したとおり**でした
+
+**(1) `pcurve_fidelity_probe`**——**p-curve が通るようになりました。**
+
+```text
+< occ_reference_pipe_bend.step  face 0 nurbs      -         -         -         -         -
+> occ_reference_pipe_bend.step  face 0 nurbs  1.123e-14 1.465e-14 1.123e-14 1.776e-14 1.421e-14
+```
+
+**`-` は「p-curve が無い」**——**4-612 からの鎖の入口**です
+（**壁の面が p-curve を作れず、黙って共有しない経路に落ちる**）。
+**いまは 1e-14**、**機械精度**。**鎖の一番上が外れたことが、
+別の門からも見えました。**
+
+**`torus_segment` も 1e-15 の桁で動きます**（5.702e-15 → 5.617e-15）
+——**4-635 の恒等式の揺れと同じ**で、**ほぼ同じ値を別の経路で計算した分**です。
+
+**(2) `shape_variety_probe`**——**体積は同じ、三角形が増えます。**
+
+```text
+< pipe_bend  3  3  1579.136704  1579.136704  1.11e-10  ok   8700 tri
+> pipe_bend  3  3  1579.136704  1579.136704  1.11e-10  ok  66044 tri
+```
+
+**体積も恒等式も判定も、1 文字も動きません。** **三角形だけ 7.6 倍**
+（**この門は `u_divisions = v_divisions = 64`**）。
+
+> **これは「増えた」のであって「壊れた」のではありません。**
+> **正しい格子は `2d × 4d`**（4-631）——**64 で張れば、それだけ要ります。**
+> **既定に上げるなら、表示メッシュが重くなることは引き受ける話**です。
+> **4-631 は刻み 24 で 1340 → 9404（7.0 倍）**、**ここは 64 で
+> 8700 → 66044（7.6 倍）**。**倍率は、ほぼ同じ。**
+
+#### いま、既定化の材料として言えること
+
+| 見た所 | 結果 |
+| :--- | :--- |
+| `linkrods` の H8 | **触る面が無い**（4-634） |
+| STEP を読む門 24 本 | **21 本は同一**、**3 本が動き、どれも筋どおり** |
+| 体積 | **どの門でも 1 つも動いていません** |
+| 代償 | **`pipe_bend` の表示メッシュが 7.6 倍**（64 刻みで 8700 → 66044） |
+| 既定赤の 2 本 | **`import_closure_probe`・`winding_contract_probe`**——**直ったら赤にする作り**（4-611/4-612）。**上げるなら見逃しを外すこと** |
+
+**まだ回していないもの**: **通しテスト**（16 分。4-633 の制約で、
+この口の下では回していません）、**`contact_placement_probe`**（`--quick` が外す）、
+**STEP を読まない門**（**口は `step_import.rs` の中だけ**なので
+**道が無い**とみていますが、**回してはいません**）。
+
+---
+
 ### 4-635. **`TORUS_SEAM_ALIGN` の下でブーリアンを回しました**——**動いたのは恒等式の残差 1 行だけ**（2026年10月4日）
 
 4-634 が「**ほかの検体でブーリアンを回した数は、この口の下では誰も
