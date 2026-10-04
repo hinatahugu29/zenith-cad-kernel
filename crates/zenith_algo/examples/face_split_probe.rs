@@ -410,4 +410,48 @@ fn main() {
         "{multi_clean} of {} multi-cut faces are clean, {multi_problems} with problems",
         multi.len()
     );
+
+    // **数の床**（4-645。4-644 と同じ型②——**数えているのに、
+    // 終了コードに繋いでいない**）。
+    //
+    // **この探りは 2 つ数えます**——**切り込み**と**多重切り**。
+    // **どちらも `with problems` と印字するだけ**で、**`exit` が無く**、
+    // **門の 4 語にも当たりません**。**問題が出ても緑**でした。
+    //
+    // **場面はどちらも固定**（`subjects` と `multi`）なので、
+    // **数が変われば赤**、**問題が 1 件でもあれば赤**。
+    const EXPECTED_SPLITS: usize = 4;
+    const EXPECTED_MULTI: usize = 2;
+    let mut bad = Vec::new();
+    if subjects.len() != EXPECTED_SPLITS {
+        bad.push(format!(
+            "切り込みの場面が {} 件（記録は {EXPECTED_SPLITS} 件）",
+            subjects.len()
+        ));
+    }
+    if multi.len() != EXPECTED_MULTI {
+        bad.push(format!(
+            "多重切りの場面が {} 件（記録は {EXPECTED_MULTI} 件）",
+            multi.len()
+        ));
+    }
+    if problems != 0 || clean != subjects.len() {
+        bad.push(format!(
+            "切り込みに問題 {problems} 件（通ったのは {clean} / {} 件）",
+            subjects.len()
+        ));
+    }
+    if multi_problems != 0 || multi_clean != multi.len() {
+        bad.push(format!(
+            "多重切りに問題 {multi_problems} 件（通ったのは {multi_clean} / {} 件）",
+            multi.len()
+        ));
+    }
+    if !bad.is_empty() {
+        println!();
+        for line in &bad {
+            println!("**{line}**（4-645）。");
+        }
+        std::process::exit(1);
+    }
 }
