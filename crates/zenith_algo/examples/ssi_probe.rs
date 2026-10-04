@@ -268,6 +268,13 @@ fn main() {
         "fitting the marched points into one curve", "points", "step", "deviation", "verdict"
     );
     println!("{}", "-".repeat(98));
+    // **数の床**（4-643。4-639／4-640 と同じ型）。
+    //
+    // **判定は `ok` か `too far` か `no fit` と印字するだけ**でした。
+    // **門が見ているのは `WRONG` / `PANIC` / `miss(es)` /
+    // `over the allowance` と終了コード**なので、**`too far` も
+    // `no fit` も素通り**します——**交線が当てはまらなくなっても緑**。
+    let mut fitted = 0usize;
     for subject in &subjects {
         match IntersectionMarcher::fit_to_tolerance(&subject.a, &subject.b, 2.0, 1e-6, &tol) {
             Some((curve, marched, deviation)) => println!(
@@ -276,7 +283,12 @@ fn main() {
                 marched.points.len(),
                 curve.control_points.len(),
                 deviation,
-                if deviation <= 1e-6 { "ok" } else { "too far" }
+                if deviation <= 1e-6 {
+                    fitted += 1;
+                    "ok"
+                } else {
+                    "too far"
+                }
             ),
             None => println!(
                 "{:<48} {:>8} {:>10} {:>14} {:>12}",
@@ -288,4 +300,15 @@ fn main() {
     println!("deviation = the fitted curve measured against both surfaces at positions coprime");
     println!("            with the ones it was interpolated through, where it is exact by");
     println!("            construction and would report zero for any curve at all");
+
+    // **場面は固定**（`subjects`）なので、**全部当てはまらなければ赤**。
+    println!();
+    println!("{fitted} of {} fitted within 1e-6", subjects.len());
+    if fitted != subjects.len() {
+        println!(
+            "**当てはまらない場面があります**: {fitted} / {} 件（4-643）。",
+            subjects.len()
+        );
+        std::process::exit(1);
+    }
 }
