@@ -23,8 +23,13 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+# **検体を選べます**（4-667。**既定は linkrods**）——
+# **「たるみの内側」がこのファイル固有かどうかを見るため。**
+SUBJECT="${ZENITH_SUBJECT:-reference/OCCT/data/step/linkrods.step}"
+[ -f "$SUBJECT" ] || { echo "検体がありません: $SUBJECT"; exit 2; }
 OUT="${1:-target/face_slack}"
 mkdir -p "$OUT"
+echo "検体: $SUBJECT"
 
 PY="${ZENITH_PYTHON:-}"
 if [ -z "$PY" ]; then
@@ -41,7 +46,7 @@ for e in read_volume_convergence_probe roughness_convergence_probe; do
 done
 
 echo "== ① 面の上の点を書き出します =="
-ZENITH_FACE_POINTS="$OUT/points.txt" "$EXE/read_volume_convergence_probe" > "$OUT/rvc.txt" 2>&1 \
+ZENITH_SUBJECT="$SUBJECT" ZENITH_FACE_POINTS="$OUT/points.txt"   "$EXE/read_volume_convergence_probe" > "$OUT/rvc.txt" 2>&1 \
   || { echo "WRONG 1 read_volume_convergence_probe が落ちました"; tail -20 "$OUT/rvc.txt"; exit 1; }
 # **間引く口**（既定は間引きません）——**この照合は OCC 側が長く、
 # 作りを確かめるだけでも 30 分かかります**。`ZENITH_FACE_SLACK_STRIDE=20`
@@ -58,7 +63,7 @@ pts=$(wc -l < "$OUT/points.txt")
 echo "  $pts 点"
 
 echo "== ③ ファイル自身のたるみ（37 枚すべて） =="
-ZENITH_ROUGHNESS_ALL=1 "$EXE/roughness_convergence_probe" > "$OUT/rough.txt" 2>&1 \
+ZENITH_ROUGHNESS_ALL=1 "$EXE/roughness_convergence_probe" "$SUBJECT" > "$OUT/rough.txt" 2>&1 \
   || { echo "WRONG 1 roughness_convergence_probe が落ちました"; tail -20 "$OUT/rough.txt"; exit 1; }
 awk '/128 点/{h=1;next} h&&/^[0-9]/{print $1, $7} /p-curve/{h=0}' "$OUT/rough.txt" > "$OUT/edge.txt"
 awk '/p-curve の粗さ/{p=1} p&&/^[0-9]/{print $1, $6}' "$OUT/rough.txt" > "$OUT/pcurve.txt"
@@ -101,7 +106,7 @@ awk -v done="$OUT/done.txt" '
 ' "$OUT/done.txt" "$OUT/points.txt" > "$OUT/todo.txt"
 if [ -s "$OUT/todo.txt" ]; then
   echo "  残り $(awk '{print $1}' "$OUT/todo.txt" | sort -u | wc -l) 枚 / $(wc -l < "$OUT/todo.txt") 点"
-  ZENITH_FACE_POINTS="$OUT/todo.txt" "$PY" tools/occ_face_distance.py > "$OUT/dist_new.txt" 2>&1
+  ZENITH_FACE_POINTS="$OUT/todo.txt" "$PY" tools/occ_face_distance.py "$SUBJECT" > "$OUT/dist_new.txt" 2>&1
   grep -a '^[0-9]' "$OUT/dist_new.txt" | awk 'NF == 6' >> "$OUT/dist.txt"
 else
   echo "  すべて測り済みです。"

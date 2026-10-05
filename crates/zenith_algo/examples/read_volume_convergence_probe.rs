@@ -17,7 +17,14 @@ use zenith_io::StepImporter;
 use zenith_tess::TessellationParams;
 
 fn main() {
-    let sample = "reference/OCCT/data/step/linkrods.step";
+    // **検体を選べます**（4-667。**既定は linkrods のまま**）——
+    // **「たるみの内側」が linkrods 固有かどうかを、他のファイルでも
+    // 測れるように**します（4-664）。**OCC の V(A) は linkrods の
+    // 数**（4-511）なので、**他の検体では並べません。**
+    const DEFAULT: &str = "reference/OCCT/data/step/linkrods.step";
+    let owned = std::env::var("ZENITH_SUBJECT").unwrap_or_else(|_| DEFAULT.to_string());
+    let sample: &str = &owned;
+    let is_linkrods = sample == DEFAULT;
     let Ok(solids) = StepImporter::import_solids_from_file(sample) else {
         println!("{sample} が読めません");
         return;
@@ -29,19 +36,33 @@ fn main() {
     // **OCC の数**（4-511）: `V(A)` = 3.847002。
     const OCC: f64 = 3.847002;
     let base = TessellationParams::default();
-    println!("OCC の V(A) = {OCC:.6}");
+    if is_linkrods {
+        println!("OCC の V(A) = {OCC:.6}");
+    } else {
+        println!("**OCC の V(A) は linkrods の数です**——この検体では並べません。");
+    }
     println!();
-    println!("分割     体積          OCC との差     相対");
+    if is_linkrods {
+        println!("分割     体積          OCC との差     相対");
+    } else {
+        println!("分割     体積");
+    }
     for divisions in [8usize, 12, 16, 24, 32, 48, 64, 96] {
         let mut params = base.clone();
         params.u_divisions = divisions;
         params.v_divisions = divisions;
         let volume = MassCalculator::compute_volume_from_brep(&read, &params);
-        println!(
-            "{divisions:>4}   {volume:.6}   {:+.3e}   {:+.3e}",
-            volume - OCC,
-            (volume - OCC) / OCC
-        );
+        if is_linkrods {
+            println!(
+                "{divisions:>4}   {volume:.6}   {:+.3e}   {:+.3e}",
+                volume - OCC,
+                (volume - OCC) / OCC
+            );
+        } else {
+            // **並べる相手がいない列は、出しません**（4-667）——
+            // **出すと、意味のある差に見えます。**
+            println!("{divisions:>4}   {volume:.6}");
+        }
     }
     println!();
     println!("**増え続けるなら、ずれているのは立体ではなく測り方です。**");
