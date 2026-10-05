@@ -30,6 +30,11 @@ fn main() {
 
     println!("{path}: 面 {} 枚", read.outer_shell.faces.len());
     println!();
+    // **既定では「動く面」だけ出します**。**`ZENITH_ROUGHNESS_ALL=1` で
+    // 全部**（4-665）——**動かない面は「たるみが無い」のではなく、
+    // 「標本を増やしても変わらない」だけ**です。**4-664 で面27 の
+    // たるみが読めず、内側とも外とも言えませんでした。**
+    let show_all = std::env::var("ZENITH_ROUGHNESS_ALL").as_deref() == Ok("1");
     println!("面   申告        8 点        16 点       32 点       64 点       128 点      128/8");
     let mut worst_ratio = 0.0f64;
     let mut worst_face = usize::MAX;
@@ -48,7 +53,7 @@ fn main() {
             worst_face = index;
         }
         // **動く面だけ出します。** 全部出すと、動かない面に埋もれます。
-        if ratio > 1.001 {
+        if show_all || ratio > 1.001 {
             println!(
                 "{index:<4} {:.4e}  {:.4e}  {:.4e}  {:.4e}  {:.4e}  {:.4e}  {ratio:.3}",
                 face.tolerance,
@@ -79,7 +84,7 @@ fn main() {
         };
         let (a, b, c, d) = (at(37), at(74), at(148), at(296));
         let ratio = if a > 0.0 { d / a } else { 1.0 };
-        if ratio > 1.001 {
+        if show_all || ratio > 1.001 {
             println!(
                 "{index:<4} {:.4e}  {a:.4e}  {b:.4e}  {c:.4e}  {d:.4e}  {ratio:.3}",
                 face.pcurve_tolerance
