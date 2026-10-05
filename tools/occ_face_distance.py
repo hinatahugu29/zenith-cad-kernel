@@ -6,6 +6,12 @@
 30 分で終わりません**——**点を 1 つも渡さなくても終わりません。**
 **距離だけが要るときに、割る必要はありません。**
 
+**`ZENITH_SURFACE_TOO=1` を立てると、「トリムしていない曲面まで」も
+出します**（4-673）——**4-672 で分かったとおり、立体までの距離は
+「曲面のずれ」ではなく「トリムの食い違い」を測っています。**
+**曲面までの距離が小さく、立体までが大きければ、それは縁の帯**です。
+**遅くなります**（点ごとに全部の曲面へ投影するので）。
+
 **測るのは 4-561 と同じ**——**こちらの面の上の点を OCC に渡して、
 内か外かと、立体までの距離を聞く**。**面ごとにまとめます。**
 
@@ -71,13 +77,19 @@ for line in open(sample_file, encoding="utf-8"):
         (float(parts[1]), float(parts[2]), float(parts[3]))
     )
 
-print("面   点数   内    外    最大距離     中央距離")
-print("-" * 56)
+surface_too = os.environ.get("ZENITH_SURFACE_TOO") == "1"
+if surface_too:
+    print("面   点数   内    外    最大距離     中央距離     最大(曲面)   中央(曲面)")
+    print("-" * 80)
+else:
+    print("面   点数   内    外    最大距離     中央距離")
+    print("-" * 56)
 grand_in = grand_out = 0
 for index in sorted(by_face):
     points = by_face[index]
     inside = outside = 0
     distances = []
+    surface_distances = []
     for x, y, z in points:
         point = FreeCAD.Vector(x, y, z)
         # **公差 0 で聞きます**——**内か外かだけが要る**ので（4-561）。
@@ -86,14 +98,32 @@ for index in sorted(by_face):
         else:
             outside += 1
         distances.append(solid.distToShape(Part.Vertex(point))[0])
+        if surface_too:
+            # **トリムしていない曲面まで**（4-673）。**いちばん近い 1 枚**。
+            best = float("inf")
+            for face in solid.Faces:
+                try:
+                    got = face.Surface.projectPoint(point, "LowerDistance")
+                except Exception:
+                    continue
+                value = got if isinstance(got, float) else min(got)
+                if value < best:
+                    best = value
+            surface_distances.append(best)
     distances.sort()
+    surface_distances.sort()
     grand_in += inside
     grand_out += outside
-    print(
+    row = (
         f"{index:<4} {len(points):<6} {inside:<5} {outside:<5} "
-        f"{distances[-1]:.4e}  {distances[len(distances) // 2]:.4e}",
-        flush=True,
+        f"{distances[-1]:.4e}  {distances[len(distances) // 2]:.4e}"
     )
+    if surface_too and surface_distances:
+        row += (
+            f"  {surface_distances[-1]:.4e}  "
+            f"{surface_distances[len(surface_distances) // 2]:.4e}"
+        )
+    print(row, flush=True)
 
 print("-" * 56)
 print(f"こちらの面の上の点: 内 {grand_in} 個 / 外 {grand_out} 個")
