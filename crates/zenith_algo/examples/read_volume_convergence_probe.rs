@@ -100,9 +100,15 @@ fn main() {
     if let Ok(target) = std::env::var("ZENITH_FACE_POINTS") {
         use std::io::Write;
         let mut out = String::new();
+        // **刻みを上げられます**（4-671。既定 12 は 4-561 のまま）——
+        // **面の点が粗いと、いちばん離れている所を踏みません。**
+        let n: usize = std::env::var("ZENITH_FACE_POINT_GRID")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(12);
         let grid = TessellationParams {
-            u_divisions: 12,
-            v_divisions: 12,
+            u_divisions: n,
+            v_divisions: n,
         };
         for (index, face) in read.outer_shell.faces.iter().enumerate() {
             let mesh = zenith_tess::tessellate_face(face, &grid);
@@ -116,6 +122,41 @@ fn main() {
         }
         match std::fs::File::create(&target).and_then(|mut f| f.write_all(out.as_bytes())) {
             Ok(()) => println!("面の上の点を {target} に書きました（{} 行）", out.lines().count()),
+            Err(error) => println!("{target} に書けません: {error}"),
+        }
+    }
+
+    // **こちらの 3D 稜の上の点を書き出します**（4-671。`ZENITH_EDGE_POINTS=<先>`）。
+    //
+    // **4-668 の宿題**——**離れ ÷ 稜のたるみ が、ある面では 1.0、
+    // 別の面では 0.5** でした。**OCC の面が、こちらの稜を通っているか
+    // どうか**が分かれば、その違いが決まります:
+    //   **稜が OCC の面に乗っている** → 浮いているのはこちらの曲面だけ（1.0）
+    //   **稜が たるみの半分だけ離れている** → 両方が折半（0.5）
+    //
+    // **形は `ZENITH_FACE_POINTS` と同じ**（面番号 x y z）ので、
+    // **同じ `tools/occ_face_distance.py` に渡せます。**
+    if let Ok(target) = std::env::var("ZENITH_EDGE_POINTS") {
+        use std::io::Write;
+        const STEPS: usize = 64;
+        let mut out = String::new();
+        for (index, face) in read.outer_shell.faces.iter().enumerate() {
+            let wires = std::iter::once(&face.outer_wire).chain(face.inner_wires.iter());
+            for wire in wires {
+                for edge in &wire.edges {
+                    for step in 0..=STEPS {
+                        let point = edge.evaluate_normalized(step as f64 / STEPS as f64);
+                        out.push_str(&format!(
+                            "{index} {:.9} {:.9} {:.9}
+",
+                            point.x, point.y, point.z
+                        ));
+                    }
+                }
+            }
+        }
+        match std::fs::File::create(&target).and_then(|mut f| f.write_all(out.as_bytes())) {
+            Ok(()) => println!("稜の上の点を {target} に書きました（{} 行）", out.lines().count()),
             Err(error) => println!("{target} に書けません: {error}"),
         }
     }
