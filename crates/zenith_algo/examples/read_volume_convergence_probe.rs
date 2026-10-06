@@ -91,6 +91,17 @@ fn main() {
         let mut total_volume = 0.0;
         for (index, face) in read.outer_shell.faces.iter().enumerate() {
             let (area, volume) = zenith_algo::MassCalculator::compute_face_integral(face, &fine);
+            // **面の種別も出します**（4-680。`ZENITH_FACE_KIND=1`、既定オフ）
+            // ——**刻みで動かない面があり、どの道を通っているかを知るため。**
+            if std::env::var_os("ZENITH_FACE_KIND").is_some() {
+                let kind = match &face.geometry {
+                    zenith_topo::FaceGeometry::Plane(_) => "Plane",
+                    zenith_topo::FaceGeometry::Nurbs(_) => "Nurbs",
+                    _ => "その他",
+                };
+                let pc = if face.pcurves.is_some() { "p-curve あり" } else { "p-curve なし" };
+                println!("    面{index:<3} 種別 {kind:<6} {pc}");
+            }
             total_area += area;
             total_volume += volume;
             println!("  面{index:<3} 面積 {area:.9}  寄与 {volume:+.9}");
