@@ -74,9 +74,15 @@ fn main() {
     if std::env::var_os("ZENITH_FACE_AREAS").is_some() {
         println!();
         println!("面ごとの面積（こちら）:");
+        // **刻みを上げられます**（4-679。既定 64 は 4-561 のまま）——
+        // **面積が収束しているかを見るため。**
+        let n: usize = std::env::var("ZENITH_FACE_AREA_GRID")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(64);
         let fine = TessellationParams {
-            u_divisions: 64,
-            v_divisions: 64,
+            u_divisions: n,
+            v_divisions: n,
         };
         // **体積への寄与**も出します（4-561）。`compute_face_integral` は
         // **(面積, 体積) を返します**——**体積の内訳は、こちら**です。
