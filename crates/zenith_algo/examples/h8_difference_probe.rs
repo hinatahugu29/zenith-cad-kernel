@@ -117,6 +117,38 @@ fn main() {
                 let holes = uses.values().filter(|count| **count == 1).count();
                 let overlaps = uses.values().filter(|count| **count > 2).count();
                 println!("  立体{index}: 体積 {volume:.6}、面 {faces} 枚、三角形 {}", mesh.indices.len());
+                // **切った結果の面の上の点を書き出します**（4-685。
+                // `ZENITH_FACE_POINTS=<先>`、既定オフ）——**入口で効いた
+                // 物差し（4-664〜4-684）を、出口にも当てるため。**
+                // **形は `read_volume_convergence_probe` と同じ**（面番号 x y z）。
+                if let Ok(target) = std::env::var("ZENITH_FACE_POINTS") {
+                    use std::io::Write;
+                    let grid = zenith_tess::TessellationParams {
+                        u_divisions: 12,
+                        v_divisions: 12,
+                    };
+                    let mut out = String::new();
+                    for (at, face) in solid.outer_shell.faces.iter().enumerate() {
+                        let patch = zenith_tess::tessellate_face(face, &grid);
+                        for point in &patch.positions {
+                            out.push_str(&format!(
+                                "{at} {:.9} {:.9} {:.9}
+",
+                                point.x, point.y, point.z
+                            ));
+                        }
+                    }
+                    let name = format!("{target}.{which}.{index}.txt");
+                    match std::fs::File::create(&name)
+                        .and_then(|mut f| f.write_all(out.as_bytes()))
+                    {
+                        Ok(()) => println!(
+                            "    面の上の点を {name} に書きました（{} 行）",
+                            out.lines().count()
+                        ),
+                        Err(error) => println!("    {name} に書けません: {error}"),
+                    }
+                }
                 // **絶対と相対を、両方出します**（4-559）。
                 //
                 // **「合わせる桁は 1e-4」の単位が、どこにも書いてありません。**
