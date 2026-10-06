@@ -71,6 +71,28 @@ fn main() {
     // `py tools/occ_face_area_reference.py` が出します。**並べれば、
     // どの面の形が違うのかが分かります**——**体積は全部の和**なので、
     // **和だけ見ていても、どこがずれているかは出てきません。**
+    // **メッシュからも体積を出します**（4-684。`ZENITH_MESH_VOLUME=1`、既定オフ）
+    // ——**B-rep の積分と、三角形を積んだ値が、同じ所に収束するか。**
+    // **ずれるなら、差は幾何ではなく、こちらの積分の中にあります。**
+    if std::env::var_os("ZENITH_MESH_VOLUME").is_some() {
+        println!();
+        println!("メッシュから積んだ体積（こちら）:");
+        println!("分割   体積            三角形");
+        for divisions in [16usize, 32, 64, 96, 128] {
+            let params = TessellationParams {
+                u_divisions: divisions,
+                v_divisions: divisions,
+            };
+            let mesh = zenith_tess::tessellate_solid(&read, &params);
+            let properties = MassCalculator::compute_from_mesh(&mesh);
+            println!(
+                "{divisions:>4}   {:.6}   {}",
+                properties.volume,
+                mesh.indices.len()
+            );
+        }
+    }
+
     if std::env::var_os("ZENITH_FACE_AREAS").is_some() {
         println!();
         println!("面ごとの面積（こちら）:");
