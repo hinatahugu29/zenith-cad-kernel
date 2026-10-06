@@ -1796,20 +1796,13 @@ fn loop_deflection_target(pcurve_loop: &FacePcurveLoop, params: &TessellationPar
     // 費用は線形にしか増えない。分割数に紐づけず、形の大きさに対する比で決める。
     let divisions = params.u_divisions.max(params.v_divisions).max(8) as f64;
     let from_divisions = diagonal / (divisions * 4.0);
-    // **比を外から締められます**（4-687。**既定は 1e-5 のまま**）。
-    //
-    // **なぜ要るか**: トリムした面の面積が、OCC の値より相対 1.4e-5〜4.8e-5
-    // 小さく残ります（4-678、4-683）。**その残差を決めているのが、この比
-    // なのかどうか**を測るための口です。**締めると遅くなります**——
-    // **境界の折れは 1 次元なので費用は線形**ですが、**折れ線が細かくなると
-    // earcut とその後の細分が重くなります**（4-75）。
-    // **速くするためにも、答えを良くするためにも、既定では触りません。**
-    let relative = std::env::var("ZENITH_LOOP_DEFLECTION_REL")
-        .ok()
-        .and_then(|v| v.parse::<f64>().ok())
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .unwrap_or(1e-5);
-    (diagonal * relative).min(from_divisions).max(1e-12)
+    // **ここを外から締める口を一度置いて、外しました**（4-688）——
+    // **7 検体すべてで、1e-2 から 1e-8 まで振っても面積が 1 ビットも
+    // 動きません**。**面ごとに呼ばれる所に、効かない `env::var` を
+    // 置くだけになります。**
+    // **効かない理由**: 検体の面は、解析の道・アフィンの道・ノット整合の
+    // 道のどれかに入り、**ここまで来ません**（4-687）。
+    (diagonal * 1e-5).min(from_divisions).max(1e-9)
 }
 
 fn sample_pcurve_segment_adaptive(
