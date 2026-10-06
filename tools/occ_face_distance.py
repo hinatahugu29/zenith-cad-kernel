@@ -78,12 +78,18 @@ for line in open(sample_file, encoding="utf-8"):
     )
 
 surface_too = os.environ.get("ZENITH_SURFACE_TOO") == "1"
+# **帯の中に入った点の割合**（4-675）——**4-672 で、立体までの距離が
+# 測っているのは「トリムの食い違い」だと分かりました。** **なら、
+# 「どれだけ離れているか」より「面のどれだけが帯か」が要ります。**
+# **床（5.4e-10）の 20 倍を境にします**——**床の揺らぎを拾わない範囲で、
+# いちばん低い所**。
+STRIP = 1.0e-8
 if surface_too:
-    print("面   点数   内    外    最大距離     中央距離     最大(曲面)   中央(曲面)")
-    print("-" * 80)
+    print("面   点数   帯%     平均距離     最大距離     中央距離     最大(曲面)   中央(曲面)")
+    print("-" * 91)
 else:
-    print("面   点数   内    外    最大距離     中央距離")
-    print("-" * 56)
+    print("面   点数   帯%     平均距離     最大距離     中央距離")
+    print("-" * 67)
 grand_in = grand_out = 0
 for index in sorted(by_face):
     points = by_face[index]
@@ -110,13 +116,18 @@ for index in sorted(by_face):
                 if value < best:
                     best = value
             surface_distances.append(best)
+    in_strip = sum(1 for d in distances if d > STRIP)
+    # **平均距離 × 面積 = その面の帯が持つ体積**（4-675）。**面積は
+    # こちらの数**（`ZENITH_FACE_AREAS=1 read_volume_convergence_probe`）と
+    # **外で掛けます**——この口は面積を知りません。
+    mean = sum(distances) / len(distances)
     distances.sort()
     surface_distances.sort()
     grand_in += inside
     grand_out += outside
     row = (
-        f"{index:<4} {len(points):<6} {inside:<5} {outside:<5} "
-        f"{distances[-1]:.4e}  {distances[len(distances) // 2]:.4e}"
+        f"{index:<4} {len(points):<6} {100.0 * in_strip / len(points):<6.2f}  "
+        f"{mean:.4e}  {distances[-1]:.4e}  {distances[len(distances) // 2]:.4e}"
     )
     if surface_too and surface_distances:
         row += (
@@ -128,3 +139,6 @@ for index in sorted(by_face):
 print("-" * 56)
 print(f"こちらの面の上の点: 内 {grand_in} 個 / 外 {grand_out} 個")
 print("（内に偏るなら、こちらの面は OCC の面より内側を通っています。4-561）")
+print()
+print(f"**帯%** は、OCC の立体から {STRIP:.0e} より遠い点の割合です（4-675）。")
+print("**面が OCC の面よりはみ出している（あるいは足りない）帯の広さ**の目安。")
