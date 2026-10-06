@@ -913,6 +913,27 @@ fn flat_split_limit() -> Option<f64> {
 const MAX_REFINED_TRIANGLES: usize = 200_000;
 const MAX_REFINEMENT_PASSES: usize = 24;
 
+/// **上限を外から上げられます**（4-687。**既定は上の 2 本のまま**）。
+///
+/// **なぜ要るか**: トリムの細分が、面積を OCC の値の**手前ではなく
+/// 向こう側**に落とします（4-686。実測 4 枚、2 検体）。
+/// **「続ければ OCC に行くのか、別の所に行くのか」**を測るための口で、
+/// **速くするためにも、答えを良くするためにも、既定では触りません。**
+/// **立てると答えが変わり、遅くなります。**
+fn refine_budget() -> usize {
+    std::env::var("ZENITH_TRIM_REFINE_BUDGET")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(MAX_REFINED_TRIANGLES)
+}
+
+fn refine_passes() -> usize {
+    std::env::var("ZENITH_TRIM_REFINE_PASSES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(MAX_REFINEMENT_PASSES)
+}
+
 /// 最長辺二分でトリム領域を細かくする。
 ///
 /// `protected` に入っている辺は割らない。隣の面と共有している境界を割ると、
@@ -1094,8 +1115,10 @@ pub(crate) fn refine_uv_triangulation_protected(
         (parts.len() == 3).then(|| Point3::new(parts[0], parts[1], parts[2]))
     });
 
-    for _ in 0..MAX_REFINEMENT_PASSES {
-        if triangles.len() * 2 > MAX_REFINED_TRIANGLES {
+    let budget = refine_budget();
+    let passes = refine_passes();
+    for _ in 0..passes {
+        if triangles.len() * 2 > budget {
             return;
         }
 
@@ -1773,7 +1796,20 @@ fn loop_deflection_target(pcurve_loop: &FacePcurveLoop, params: &TessellationPar
     // 費用は線形にしか増えない。分割数に紐づけず、形の大きさに対する比で決める。
     let divisions = params.u_divisions.max(params.v_divisions).max(8) as f64;
     let from_divisions = diagonal / (divisions * 4.0);
-    (diagonal * 1e-5).min(from_divisions).max(1e-9)
+    // **比を外から締められます**（4-687。**既定は 1e-5 のまま**）。
+    //
+    // **なぜ要るか**: トリムした面の面積が、OCC の値より相対 1.4e-5〜4.8e-5
+    // 小さく残ります（4-678、4-683）。**その残差を決めているのが、この比
+    // なのかどうか**を測るための口です。**締めると遅くなります**——
+    // **境界の折れは 1 次元なので費用は線形**ですが、**折れ線が細かくなると
+    // earcut とその後の細分が重くなります**（4-75）。
+    // **速くするためにも、答えを良くするためにも、既定では触りません。**
+    let relative = std::env::var("ZENITH_LOOP_DEFLECTION_REL")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+        .unwrap_or(1e-5);
+    (diagonal * relative).min(from_divisions).max(1e-12)
 }
 
 fn sample_pcurve_segment_adaptive(
