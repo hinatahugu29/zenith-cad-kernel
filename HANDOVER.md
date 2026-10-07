@@ -29603,6 +29603,9 @@ py tools/tally_split_reasons.py out.txt
 `boolean.rs` の `BooleanClock`。**9 か所で `lap` を打っています**）。
 
 **通しテスト**: rc=0、**154 本 / 751 件通過 / 0 件失敗**、警告 0（31分29秒）。
+**門**: **54 / 54、赤 0**（harness 30 本 ＋ 単独 24 本。
+最長は `contact_placement_probe` 1,242 秒、`curved_pair_identity_probe` 1,030 秒
+——**この機械は同じ門で 2 倍振れます**）。
 
 
 ### 4-696. **4,538 万回の曲面評価は、240 秒のうち 12 秒でした**（2026年10月7日）
