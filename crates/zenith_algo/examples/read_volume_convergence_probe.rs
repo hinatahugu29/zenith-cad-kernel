@@ -165,6 +165,52 @@ fn main() {
         }
     }
 
+    // **こちらのトリムループを uv で書き出します**（4-689。
+    // `ZENITH_PCURVE_UV=<先>`、既定オフ）。
+    //
+    // **なぜ要るか**: 体積の差を面ごとに割り振る道が無い（4-681、4-684）。
+    // **両側の絶対値を競うのではなく、2 つのトリム領域の差分だけを積めば
+    // よい**——**帯は薄いので、そこだけなら精度が出ます**。
+    // **そのためには、こちらのトリムを OCC 側の台本（Python）から
+    // 引けるようにしておく必要があります。**
+    //
+    // 形: `面番号 ループ番号 u v`（ループごとに順番どおり）。
+    if let Ok(target) = std::env::var("ZENITH_PCURVE_UV") {
+        use std::io::Write;
+        const STEPS: usize = 96;
+        let tol = zenith_math::Tolerance::default();
+        let mut out = String::new();
+        let mut ranges = String::new();
+        for (index, face) in read.outer_shell.faces.iter().enumerate() {
+            if let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry {
+                let ((u0, u1), (v0, v1)) = surface.param_range();
+                ranges.push_str(&format!("{index} {u0:.12} {u1:.12} {v0:.12} {v1:.12}
+"));
+            }
+            let Ok(pcurves) = face.pcurves(&tol) else { continue };
+            let loops = std::iter::once(&pcurves.outer_loop).chain(pcurves.inner_loops.iter());
+            for (which, pcurve_loop) in loops.enumerate() {
+                for segment in &pcurve_loop.segments {
+                    let (t0, t1) = segment.curve.param_range();
+                    for step in 0..=STEPS {
+                        let t = t0 + (t1 - t0) * step as f64 / STEPS as f64;
+                        let p = segment.curve.evaluate(t);
+                        out.push_str(&format!("{index} {which} {:.12} {:.12}
+", p.x, p.y));
+                    }
+                }
+            }
+        }
+        let write = |name: &str, body: &str| match std::fs::File::create(name)
+            .and_then(|mut f| f.write_all(body.as_bytes()))
+        {
+            Ok(()) => println!("{name} に {} 行", body.lines().count()),
+            Err(error) => println!("{name} に書けません: {error}"),
+        };
+        write(&format!("{target}.loops.txt"), &out);
+        write(&format!("{target}.ranges.txt"), &ranges);
+    }
+
     // **こちらの 3D 稜の上の点を書き出します**（4-671。`ZENITH_EDGE_POINTS=<先>`）。
     //
     // **4-668 の宿題**——**離れ ÷ 稜のたるみ が、ある面では 1.0、
