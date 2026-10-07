@@ -72,6 +72,14 @@ fn main() {
     // 辻褄が合っているか**（|A∪B| + |A∩B| = |A| + |B|）は、
     // **OCC が無くても確かめられます**——**合っていなければ、
     // ずれているのはこちらの内側**です。
+    // **仕事量を数えます**（4-696。`ZENITH_H8_WORK=1`、既定オフ）——
+    // **H8 の差は 240 秒**かかります。**どこで時間が消えているか**を
+    // 言うには、まず**何回やっているか**が要ります。
+    let work_before = if std::env::var_os("ZENITH_H8_WORK").is_some() {
+        Some(zenith_geom::work_counter::snapshot())
+    } else {
+        None
+    };
     let unverified = std::env::var_os("ZENITH_H8_UNVERIFIED").is_some();
     let result = if unverified {
         BooleanEngine::boolean_solids_exact_result_unverified(&read, &cutter, op, &tol)
@@ -79,6 +87,32 @@ fn main() {
         BooleanEngine::boolean_solids_exact_result(&read, &cutter, op, &tol)
     };
     let seconds = started.elapsed().as_secs_f64();
+    if let Some(before) = work_before {
+        let w = zenith_geom::work_counter::snapshot().since(&before);
+        println!("仕事量（{which}、{seconds:.1} 秒）:");
+        for (name, count) in [
+            ("曲面の評価", w.surface_evaluations),
+            ("点を曲面へ落とす", w.point_surface_projections),
+            ("　うち粗い探索", w.point_surface_coarse_searches),
+            ("　うちニュートン", w.projection_newton_iterations),
+            ("p-curve へ落とす", w.pcurve_projections),
+            ("境界の点を見る", w.boundary_check_projections),
+            ("法線を落とす", w.normal_projections),
+            ("行進のニュートン", w.marching_newton_iterations),
+            ("行進の呼び出し", w.marching_calls),
+            ("種を探す", w.seed_searches),
+            ("p-curve を導く", w.pcurve_derivations),
+            ("　うち使い回し", w.pcurve_cache_hits),
+            ("面の積分", w.face_integrals),
+            ("uv の三角化", w.uv_triangulations),
+            ("uv の三角形", w.uv_triangles),
+            ("uv の境界点", w.uv_boundary_points),
+        ] {
+            if count > 0 {
+                println!("  {name:<20} {count:>14}");
+            }
+        }
+    }
 
     match result {
         Ok(result) => {
