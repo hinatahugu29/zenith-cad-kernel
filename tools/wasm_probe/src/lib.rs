@@ -82,3 +82,44 @@ pub extern "C" fn zenith_wasm_embedded_step() -> u32 {
         Err(_) => 0,
     }
 }
+
+/// **実寸の検体を読んで、面の数・三角形の数・体積を返します**（4-692）。
+///
+/// **`linkrods.step` を焼き込みます**（**wasm32 に file system は
+/// ありません**）。**ブーリアンは掛けません**——**H8 は既定オフの口を
+/// 20 本立てて初めて返る**のに、**wasm では環境変数が読めない**ので
+/// 既定のままになります。**ここで見たいのは「実寸が通るか」**です。
+///
+/// 返り値は固定小数: `体積 * 1000` を切り捨てた整数。
+/// **0 なら読めなかった**ということ。
+#[no_mangle]
+pub extern "C" fn zenith_wasm_big_subject_volume(divisions: u32) -> u32 {
+    const STEP: &str = include_str!("../../../reference/OCCT/data/step/linkrods.step");
+    let Ok(solids) = zenith_io::StepImporter::import_solids_from_str(STEP) else {
+        return 0;
+    };
+    let Some(solid) = solids.into_iter().max_by_key(|s| s.outer_shell.faces.len()) else {
+        return 0;
+    };
+    let n = divisions.max(2) as usize;
+    let params = TessellationParams {
+        u_divisions: n,
+        v_divisions: n,
+    };
+    let volume = zenith_algo::MassCalculator::compute_volume_from_brep(&solid, &params);
+    (volume * 1000.0) as u32
+}
+
+/// **その検体の面の数**（別に返すと、どちらが 0 なのか分かります）。
+#[no_mangle]
+pub extern "C" fn zenith_wasm_big_subject_faces() -> u32 {
+    const STEP: &str = include_str!("../../../reference/OCCT/data/step/linkrods.step");
+    match zenith_io::StepImporter::import_solids_from_str(STEP) {
+        Ok(solids) => solids
+            .iter()
+            .map(|s| s.outer_shell.faces.len())
+            .max()
+            .unwrap_or(0) as u32,
+        Err(_) => 0,
+    }
+}
