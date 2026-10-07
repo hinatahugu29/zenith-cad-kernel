@@ -10764,6 +10764,10 @@ fn intersect_nurbs_patches(
     surface_b: &NurbsSurface3,
     tol: &Tolerance,
 ) -> FaceIntersectionKind {
+    // **この関数ぜんたいの時間**（4-699。`ZENITH_BOOLEAN_TIME=1`、1 秒超だけ）。
+    let whole_clock = std::env::var_os("ZENITH_BOOLEAN_TIME")
+        .is_some()
+        .then(std::time::Instant::now);
     let extent = surface_patch_extent(surface_a).max(surface_patch_extent(surface_b));
     // **歩幅は、交線が住める所の大きさで決めます**（4-478）。
     //
@@ -10805,6 +10809,13 @@ fn intersect_nurbs_patches(
 
     // 枝は2本まで見る。1枚のパッチと1枚のパッチが3本以上で交わる配置は
     // 今の検体には無く、上限を上げるとブーリアンの走査が目に見えて遅くなる。
+    //
+    // **1 秒を超えた呼び出しだけ控えます**（4-699。`ZENITH_BOOLEAN_TIME=1`）
+    // ——**H8 の 78% は 1 組の面**（4-698）なので、**その 1 回が
+    // どこで使われているか**を見ます。
+    let march_clock = std::env::var_os("ZENITH_BOOLEAN_TIME")
+        .is_some()
+        .then(std::time::Instant::now);
     let branches = zenith_geom::IntersectionMarcher::fit_all_branches(
         surface_a,
         surface_b,
@@ -10829,6 +10840,12 @@ fn intersect_nurbs_patches(
             .unwrap_or(2),
         tol,
     );
+    if let Some(began) = march_clock {
+        let took = began.elapsed().as_secs_f64();
+        if took > 1.0 {
+            eprintln!("BOOLEANTIME     {took:>8.3} 秒  fit_all_branches（1 回）");
+        }
+    }
 
     // **切れた枝が出たときだけ、許容を場面の大きさに乗せて辿り直します**
     // （4-498）。
@@ -10921,6 +10938,12 @@ fn intersect_nurbs_patches(
     //
     // **1 回目の枝はそのまま残します**——4-528 で、撒き方を全体で変えると
     // **他の組の曲線の形が変わり、あぶれが増えました**。ここは**足すだけ**です。
+    if let Some(began) = whole_clock {
+        let took = began.elapsed().as_secs_f64();
+        if took > 1.0 {
+            eprintln!("BOOLEANTIME     {took:>8.3} 秒  再挑戦まで（枝の選別の前）");
+        }
+    }
     let max_branches = std::env::var("ZENITH_SSI_BRANCHES")
         .ok()
         .and_then(|text| text.parse::<usize>().ok())
@@ -10969,6 +10992,12 @@ fn intersect_nurbs_patches(
     // **交線が1本も取れないと、その面の組は `Unsupported` になり、ブーリアンは
     // そこから先に進めません。** 落ちた理由が分からないと、交差の実装が悪いのか
     // 種が見つからないのかを切り分けられません。
+    if let Some(began) = whole_clock {
+        let took = began.elapsed().as_secs_f64();
+        if took > 1.0 {
+            eprintln!("BOOLEANTIME     {took:>8.3} 秒  枝の選別まで");
+        }
+    }
     let explain = std::env::var_os("ZENITH_SSI_WHY").is_some();
     if explain {
         // **許容と、その元になった大きさも出します**（4-223）。
@@ -11000,6 +11029,12 @@ fn intersect_nurbs_patches(
     }
 
     let mut edges = Vec::new();
+    if let Some(began) = whole_clock {
+        let took = began.elapsed().as_secs_f64();
+        if took > 1.0 {
+            eprintln!("BOOLEANTIME     {took:>8.3} 秒  行進と再挑戦まで（枝を畳む前）");
+        }
+    }
     for (curve, marched, _) in branches {
         // パッチの**縁に沿って**走る交線は、切り込みではなく接触の記録である。
         // 平面がトーラスの赤道を通ると、そこはパッチの境界そのものなので、
@@ -11063,13 +11098,20 @@ fn intersect_nurbs_patches(
         ));
     }
 
-    match edges.len() {
+    let outcome = match edges.len() {
         0 => FaceIntersectionKind::Unsupported,
         1 => FaceIntersectionKind::Curve {
             edge: edges.into_iter().next().unwrap(),
         },
         _ => FaceIntersectionKind::Curves { edges },
+    };
+    if let Some(began) = whole_clock {
+        let took = began.elapsed().as_secs_f64();
+        if took > 1.0 {
+            eprintln!("BOOLEANTIME     {took:>8.3} 秒  intersect_nurbs_patches（1 回ぜんたい）");
+        }
     }
+    outcome
 }
 
 /// 辿った点が、どちらかのパッチの縁に**ずっと**乗っているか。

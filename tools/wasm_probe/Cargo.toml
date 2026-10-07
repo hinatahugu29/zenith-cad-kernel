@@ -34,6 +34,10 @@ path = "src/env_cost.rs"
 name = "eval_cost"
 path = "src/eval_cost.rs"
 
+[[bin]]
+name = "project_cost"
+path = "src/project_cost.rs"
+
 [dependencies]
 zenith_math = { path = "../../crates/zenith_math" }
 zenith_geom = { path = "../../crates/zenith_geom" }
