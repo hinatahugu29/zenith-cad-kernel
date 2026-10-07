@@ -11,6 +11,20 @@ fn main() {
         let v = zenith_wasm_probe::zenith_wasm_big_subject_volume(n);
         println!("  linkrods 刻み {n}: 体積*1000 = {v}  {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
     }
+    println!("  --- 描き直し（読み込み抜き。linkrods 37 面） ---");
+    zenith_wasm_probe::zenith_wasm_redraw(8);
+    for n in [8u32, 12, 16, 24, 32] {
+        let mut best = f64::INFINITY;
+        let mut tris = 0;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            tris = zenith_wasm_probe::zenith_wasm_redraw(n);
+            let ms = t.elapsed().as_secs_f64() * 1000.0;
+            if ms < best { best = ms; }
+        }
+        println!("  刻み {n:>2}: 三角形 {tris:>6} 枚  {best:.1} ms（3 回の最短）");
+    }
+    println!("  --- 箱の差 ---");
     for n in [8u32, 16, 24] {
         let t = std::time::Instant::now();
         let tris = zenith_wasm_probe::zenith_wasm_box_difference(n);

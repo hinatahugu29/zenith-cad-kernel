@@ -123,3 +123,37 @@ pub extern "C" fn zenith_wasm_big_subject_faces() -> u32 {
         Err(_) => 0,
     }
 }
+
+// **描き直しの値段**（4-695）。**読み込みと分けて測ります**——
+// **GUI で効くのは「もう持っている立体を、もう一度三角形にする」時間**
+// だけです。**読むのは 1 回**、**描くのは毎フレーム**。
+//
+// `OnceLock` に立体を持って、2 回目以降は読まずに刻みます。
+static SUBJECT: std::sync::OnceLock<Option<zenith_topo::Solid>> = std::sync::OnceLock::new();
+
+fn subject() -> Option<&'static zenith_topo::Solid> {
+    SUBJECT
+        .get_or_init(|| {
+            const STEP: &str = include_str!("../../../reference/OCCT/data/step/linkrods.step");
+            zenith_io::StepImporter::import_solids_from_str(STEP)
+                .ok()
+                .and_then(|solids| solids.into_iter().max_by_key(|s| s.outer_shell.faces.len()))
+        })
+        .as_ref()
+}
+
+/// **立体を 1 度だけ読んで、刻み直した三角形の枚数を返します。**
+/// **2 回目以降は読みません**ので、**描き直しの値段だけ**が出ます。
+#[no_mangle]
+pub extern "C" fn zenith_wasm_redraw(divisions: u32) -> u32 {
+    let Some(solid) = subject() else { return 0 };
+    let n = divisions.max(2) as usize;
+    let mesh = tessellate_solid(
+        solid,
+        &TessellationParams {
+            u_divisions: n,
+            v_divisions: n,
+        },
+    );
+    (mesh.indices.len() / 3) as u32
+}

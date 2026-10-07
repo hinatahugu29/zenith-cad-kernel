@@ -38,5 +38,11 @@ zenith_tess = { path = "../../crates/zenith_tess" }
 zenith_algo = { path = "../../crates/zenith_algo" }
 zenith_io   = { path = "../../crates/zenith_io" }
 
+# **wasm は小さく、ネイティブは速く**（4-695）。
+# **同じ `opt-level` で測ると、ネイティブが不当に遅く出ます**
+# （実測: `z` で 418 ms、`3` で下の表のとおり）。
 [profile.release]
-opt-level = "z"
+opt-level = 3
+
+# **wasm だけ小さく建てたいとき**は、こう渡してください:
+#   RUSTFLAGS="-C opt-level=z" cargo build --release --target wasm32-unknown-unknown

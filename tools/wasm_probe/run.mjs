@@ -31,6 +31,19 @@ for (const n of [8, 16]) {
   const mb = ex.memory ? (ex.memory.buffer.byteLength / 1048576).toFixed(1) : "?";
   console.log(`  linkrods 刻み ${n}: 体積*1000 = ${v}  ${ms.toFixed(0)} ms  メモリ ${mb} MB`);
 }
+console.log("  --- 描き直し（読み込み抜き。linkrods 37 面） ---");
+ex.zenith_wasm_redraw(8);   // 1 回目は読み込みを含むので捨てます
+for (const n of [8, 12, 16, 24, 32]) {
+  let best = Infinity, tris = 0;
+  for (let k = 0; k < 3; k++) {
+    const t0 = process.hrtime.bigint();
+    tris = ex.zenith_wasm_redraw(n);
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    if (ms < best) best = ms;
+  }
+  console.log(`  刻み ${String(n).padStart(2)}: 三角形 ${String(tris).padStart(6)} 枚  ${best.toFixed(1)} ms（3 回の最短）`);
+}
+console.log("  --- 箱の差 ---");
 for (const n of [8, 16, 24]) {
   const t0 = process.hrtime.bigint();
   const tris = ex.zenith_wasm_box_difference(n);
