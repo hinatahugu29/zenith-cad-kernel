@@ -26,6 +26,10 @@ crate-type = ["cdylib", "rlib"]
 name = "native_check"
 path = "src/main.rs"
 
+[[bin]]
+name = "env_cost"
+path = "src/env_cost.rs"
+
 [dependencies]
 zenith_math = { path = "../../crates/zenith_math" }
 zenith_geom = { path = "../../crates/zenith_geom" }
