@@ -340,8 +340,13 @@ impl BooleanEngine {
         // 整えてから渡します。**元から整っている入力では何も起きません**
         // ので、自前の立体の答えは動きません。詳しくは
         // [`Regularizer::hold_like_our_own`]。
+        // **段ごとの時間**（4-697。`ZENITH_BOOLEAN_TIME=1`、既定オフ）——
+        // **H8 の差は 240〜383 秒**かかるのに、**曲面の評価は 12 秒だけ**
+        // （4-696）。**残る 95% がどこかを、まず粗く分けます。**
+        let clock = BooleanClock::start();
         let held_a = crate::Regularizer::hold_like_our_own(solid_a, tol);
         let held_b = crate::Regularizer::hold_like_our_own(solid_b, tol);
+        clock.lap("整える（regularize）");
         let solid_a = &held_a;
         let solid_b = &held_b;
 
@@ -398,6 +403,7 @@ impl BooleanEngine {
         let shell_assembly = crate::BrepIntersectionBuilder::collect_boolean_shell_assembly(
             solid_a, solid_b, op, tol,
         );
+        clock.lap("シェルを組む（collect_boolean_shell_assembly）");
         // **接触を含む配置では、返す前に材料を数えます**（4-189）。
         //
         // 接しているだけの線は面を割りません（4-184）。割らないので**縫合は
@@ -1145,4 +1151,38 @@ fn halton(mut index: usize, base: usize) -> f64 {
         fraction /= base as f64;
     }
     result
+}
+
+/// **ブーリアンの段ごとの時間**（4-697）。**既定では何もしません。**
+///
+/// `ZENITH_BOOLEAN_TIME=1` のときだけ、`lap` を呼ぶたびに
+/// **前の `lap` からの秒数**を `stderr` に出します。
+/// **`stdout` には出しません**——**門の出力に混ざらないように。**
+pub(crate) struct BooleanClock {
+    start: Option<std::time::Instant>,
+    last: std::cell::Cell<Option<std::time::Instant>>,
+}
+
+impl BooleanClock {
+    pub(crate) fn start() -> Self {
+        let on = std::env::var_os("ZENITH_BOOLEAN_TIME").is_some();
+        let now = on.then(std::time::Instant::now);
+        Self {
+            start: now,
+            last: std::cell::Cell::new(now),
+        }
+    }
+
+    pub(crate) fn lap(&self, name: &str) {
+        let (Some(begin), Some(previous)) = (self.start, self.last.get()) else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        eprintln!(
+            "BOOLEANTIME {:>8.3} 秒  （累計 {:>8.3} 秒）  {name}",
+            now.duration_since(previous).as_secs_f64(),
+            now.duration_since(begin).as_secs_f64()
+        );
+        self.last.set(Some(now));
+    }
 }

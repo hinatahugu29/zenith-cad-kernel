@@ -1534,9 +1534,14 @@ impl BrepIntersectionBuilder {
         op: crate::BooleanOpType,
         tol: &Tolerance,
     ) -> BooleanShellAssembly {
+        // **段ごとの時間**（4-697。`ZENITH_BOOLEAN_TIME=1`、既定オフ）。
+        // **粗く分けたら 94% がこの関数の中**でした（整える 16.7 秒、
+        // ここ 363.0 秒、残り 8.1 秒）。**もう一段、中を分けます。**
+        let clock = crate::boolean::BooleanClock::start();
         let faces_a = all_solid_faces(solid_a);
         let faces_b = all_solid_faces(solid_b);
         let mut face_pair_candidates = Self::collect_face_pair_candidates(&faces_a, &faces_b, tol);
+        clock.lap("　面の組を選ぶ");
         // **接しているだけの線では、面を割りません**（4-184。規約 3-1）。
         let dropped_contact_curves = drop_non_bounding_contact_curves(
             solid_a,
@@ -1546,9 +1551,11 @@ impl BrepIntersectionBuilder {
             &mut face_pair_candidates,
             tol,
         );
+        clock.lap("　接触線を落とす");
         let face_pair_candidate_count = face_pair_candidates.len();
         let mut edge_candidates =
             Self::intersection_edge_candidates_from_face_pairs(face_pair_candidates, tol);
+        clock.lap("　**交線を求める**");
 
         // **交線に、それを産んだ 2 枚の粗さを持たせます**（4-550。
         // `ZENITH_EDGE_TOL_FROM_FACES=1`。**既定では走りません**）。
@@ -1616,6 +1623,7 @@ impl BrepIntersectionBuilder {
         // **閉じた輪という不変量で、足りない交線を拾い直します**（4-441）。
         let repaired = repair_open_intersection_loops(&faces_a, &faces_b, &mut edge_candidates, tol);
         let _ = repaired;
+        clock.lap("　端を寄せる・輪を拾い直す");
         let selection = Self::selected_face_pieces_from_candidates(
             solid_a,
             solid_b,
@@ -1623,18 +1631,21 @@ impl BrepIntersectionBuilder {
             op,
             tol,
         );
+        clock.lap("　**面を割って片を選ぶ**");
         let cap_generation = Self::build_planar_caps_grouped_by_planar_face(
             &edge_candidates,
             &faces_a,
             &faces_b,
             tol,
         );
+        clock.lap("　蓋を作る");
         let assembly = Self::assemble_selected_face_pieces_with_caps_for(
             &selection.selected_face_pieces,
             &cap_generation.cap_faces,
             Some((solid_a, solid_b, op)),
             tol,
         );
+        clock.lap("　組み立てる");
 
         // **落とさなかった、接している線を控えます**（4-449）。
         //
