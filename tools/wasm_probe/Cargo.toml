@@ -1,0 +1,38 @@
+# **核が WebAssembly で建って、走って、同じ答えを返すか**を測る口（4-691）。
+#
+# **`[workspace]` を空で置いて、親の workspace から切り離しています**——
+# `cargo test --release --workspace` に混ざらないように。
+# **ここは「測るための小屋」**で、製品の一部ではありません。
+#
+#   # wasm で建てて走らせる（node が要ります）
+#   cd tools/wasm_probe
+#   cargo build --release --target wasm32-unknown-unknown
+#   node run.mjs target/wasm32-unknown-unknown/release/zenith_wasm_probe.wasm
+#
+#   # 同じ呼び出しをネイティブでも（答えを突き合わせるため）
+#   cargo run --release --bin native_check
+[workspace]
+
+[package]
+name = "zenith_wasm_probe"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "native_check"
+path = "src/main.rs"
+
+[dependencies]
+zenith_math = { path = "../../crates/zenith_math" }
+zenith_geom = { path = "../../crates/zenith_geom" }
+zenith_topo = { path = "../../crates/zenith_topo" }
+zenith_tess = { path = "../../crates/zenith_tess" }
+zenith_algo = { path = "../../crates/zenith_algo" }
+zenith_io   = { path = "../../crates/zenith_io" }
+
+[profile.release]
+opt-level = "z"
