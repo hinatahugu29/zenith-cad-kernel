@@ -10843,7 +10843,19 @@ fn intersect_nurbs_patches(
     if let Some(began) = march_clock {
         let took = began.elapsed().as_secs_f64();
         if took > 1.0 {
-            eprintln!("BOOLEANTIME     {took:>8.3} 秒  fit_all_branches（1 回）");
+            // **点の数と上限も出します**（4-700）——**行進 1 回あたり
+            // ニュートンが約 2,250 回**（4-696 から割った数）は多すぎます。
+            // **上限に当たっているのか、刻みが細かいのか**を見ます。
+            let counts: Vec<String> = branches
+                .iter()
+                .map(|(_, marched, _)| marched.points.len().to_string())
+                .collect();
+            eprintln!(
+                "BOOLEANTIME     {took:>8.3} 秒  fit_all_branches（1 回）  枝 {} 本、点 [{}]、上限 {}",
+                branches.len(),
+                counts.join(", "),
+                zenith_geom::march_point_budget()
+            );
         }
     }
 
@@ -10941,7 +10953,10 @@ fn intersect_nurbs_patches(
     if let Some(began) = whole_clock {
         let took = began.elapsed().as_secs_f64();
         if took > 1.0 {
-            eprintln!("BOOLEANTIME     {took:>8.3} 秒  再挑戦まで（枝の選別の前）");
+            eprintln!(
+                "BOOLEANTIME     {took:>8.3} 秒  再挑戦まで（枝の選別の前）  枝 {} 本",
+                branches.len()
+            );
         }
     }
     let max_branches = std::env::var("ZENITH_SSI_BRANCHES")
@@ -10995,7 +11010,10 @@ fn intersect_nurbs_patches(
     if let Some(began) = whole_clock {
         let took = began.elapsed().as_secs_f64();
         if took > 1.0 {
-            eprintln!("BOOLEANTIME     {took:>8.3} 秒  枝の選別まで");
+            eprintln!(
+                "BOOLEANTIME     {took:>8.3} 秒  枝の選別まで  枝 {} 本",
+                branches.len()
+            );
         }
     }
     let explain = std::env::var_os("ZENITH_SSI_WHY").is_some();
