@@ -242,6 +242,10 @@ impl BrepIntersectionBuilder {
         // 交わり、トリムへの切り詰め。**どこで落ちたかが分かるまで、直す先が
         // 決まりません。**
         let pair_why = std::env::var_os("ZENITH_PAIR_WHY").is_some();
+        // **組ごとの時間を控える器**（4-698）。**既定では `None`** なので、
+        // **押す所も測る所も走りません。**
+        let mut pair_times: Option<Vec<(std::time::Duration, usize, usize)>> =
+            std::env::var_os("ZENITH_BOOLEAN_TIME").is_some().then(Vec::new);
         for (face_a_index, face_a) in faces_a.iter().enumerate() {
             for (face_b_index, face_b) in faces_b.iter().enumerate() {
                 if !face_bboxes_intersect(
@@ -397,7 +401,14 @@ impl BrepIntersectionBuilder {
                         eprintln!("PAIRTRACE   A の箱 z [{:.6}, {:.6}] x [{:.4}, {:.4}] y [{:.4}, {:.4}]", bbox.min.z, bbox.max.z, bbox.min.x, bbox.max.x, bbox.min.y, bbox.max.y);
                     }
                 }
-                if let Some((kind, analytic)) = intersect_face_supports(face_a, face_b, tol)
+                // **組ごとの時間**（4-698。`ZENITH_BOOLEAN_TIME=1` のときだけ）。
+                // **この段が 80%**（4-697）なので、**どの組が重いか**を見ます。
+                let pair_clock = pair_times.is_some().then(std::time::Instant::now);
+                let support = intersect_face_supports(face_a, face_b, tol);
+                if let (Some(times), Some(began)) = (pair_times.as_mut(), pair_clock) {
+                    times.push((began.elapsed(), face_a_index, face_b_index));
+                }
+                if let Some((kind, analytic)) = support
                     .and_then(|(kind, analytic)| {
                         clip_candidate_to_face_bboxes(
                             kind,
@@ -480,6 +491,23 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // **組ごとの時間を出します**（4-698。`ZENITH_BOOLEAN_TIME=1` のときだけ）。
+        if let Some(mut times) = pair_times.take() {
+            let total: f64 = times.iter().map(|(d, _, _)| d.as_secs_f64()).sum();
+            times.sort_by(|a, b| b.0.cmp(&a.0));
+            eprintln!(
+                "BOOLEANTIME   組 {} 件の合計 {:.3} 秒。重い順に 10 件:",
+                times.len(),
+                total
+            );
+            for (duration, a, b) in times.iter().take(10) {
+                eprintln!(
+                    "BOOLEANTIME     {:>8.3} 秒  （{:>5.1}%）  A面{a} x B面{b}",
+                    duration.as_secs_f64(),
+                    100.0 * duration.as_secs_f64() / total.max(f64::MIN_POSITIVE)
+                );
+            }
+        }
         candidates
     }
 
