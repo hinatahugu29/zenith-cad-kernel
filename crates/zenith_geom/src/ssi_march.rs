@@ -1933,6 +1933,14 @@ impl IntersectionMarcher {
     ) -> Vec<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> {
         let mut found: Vec<(crate::nurbs_curve::NurbsCurve3, MarchedIntersection, f64)> =
             Vec::new();
+        // **辿りと当てはめの、どちらに時間が行くか**（4-704。
+        // `ZENITH_BOOLEAN_TIME=1`、既定オフ）。**4-702 で「66.9 秒の 88% は
+        // 数えている口が無い所」**まで来たので、**ここで 2 つに割ります。**
+        let timing = std::env::var_os("ZENITH_BOOLEAN_TIME").is_some();
+        let mut march_secs = 0.0f64;
+        let mut fit_secs = 0.0f64;
+        let mut march_calls = 0u32;
+        let mut fit_calls = 0u32;
 
         // 費用はここで決まる。ブーリアンは面の組ごとにこれを呼ぶので、格子を
         // 大きくすると効いてくる。20 x 20 にしたときはテスト一式が10分を
@@ -2037,7 +2045,13 @@ impl IntersectionMarcher {
             let mut step = first_step;
             let mut previous: Option<(f64, f64)> = None;
             for attempt in 0..8 {
-                let Some(marched) = Self::march(s1, s2, seed_u, seed_v, step, march_point_budget(), tol) else {
+                let march_began = timing.then(std::time::Instant::now);
+                let marched_try = Self::march(s1, s2, seed_u, seed_v, step, march_point_budget(), tol);
+                if let Some(began) = march_began {
+                    march_secs += began.elapsed().as_secs_f64();
+                    march_calls += 1;
+                }
+                let Some(marched) = marched_try else {
                     step *= 0.5;
                     continue;
                 };
@@ -2045,7 +2059,13 @@ impl IntersectionMarcher {
                     step *= 0.5;
                     continue;
                 }
-                let Some((curve, deviation)) = Self::fit_curve(s1, s2, &marched, 3) else {
+                let fit_began = timing.then(std::time::Instant::now);
+                let fitted = Self::fit_curve(s1, s2, &marched, 3);
+                if let Some(began) = fit_began {
+                    fit_secs += began.elapsed().as_secs_f64();
+                    fit_calls += 1;
+                }
+                let Some((curve, deviation)) = fitted else {
                     step *= 0.5;
                     continue;
                 };
@@ -2103,6 +2123,11 @@ impl IntersectionMarcher {
         }
         }
 
+        if timing && (march_secs + fit_secs) > 1.0 {
+            eprintln!(
+                "BOOLEANTIME       辿り {march_secs:.3} 秒（{march_calls} 回）／当てはめ {fit_secs:.3} 秒（{fit_calls} 回）  spread={spread}"
+            );
+        }
         found
     }
 
