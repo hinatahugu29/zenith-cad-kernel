@@ -1794,7 +1794,10 @@ impl IntersectionMarcher {
         if points.len() < 2 {
             return None;
         }
+        let fit_timing = std::env::var_os("ZENITH_BOOLEAN_TIME").is_some();
+        let interp_began = fit_timing.then(std::time::Instant::now);
         let curve = crate::nurbs_curve::NurbsCurve3::interpolate_points(degree, &points).ok()?;
+        let interp_secs = interp_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
 
         let (t0, t1) = curve.param_range();
         // 補間に使ったのは点の数ぶんの位置なので、標本数はそれと互いに素に取る。
@@ -1817,6 +1820,7 @@ impl IntersectionMarcher {
             }
         };
         let mut worst: f64 = 0.0;
+        let deviation_began = fit_timing.then(std::time::Instant::now);
         for step in 0..=samples {
             let fraction = step as f64 / samples as f64;
             let t = t0 + (t1 - t0) * fraction;
@@ -1833,6 +1837,15 @@ impl IntersectionMarcher {
                     ExtremumEngine::point_to_surface_seeded(point, surface, uv.0, uv.1, 64, 1e-13)
                         .ok()?;
                 worst = worst.max(projection.distance);
+            }
+        }
+        if let (Some(began), true) = (deviation_began, fit_timing) {
+            let deviation_secs = began.elapsed().as_secs_f64();
+            if interp_secs + deviation_secs > 0.5 {
+                eprintln!(
+                    "BOOLEANTIME         当てはめ 1 回: 補間 {interp_secs:.3} 秒／ずれを測る {deviation_secs:.3} 秒  点 {} 個、標本 {samples} 個",
+                    points.len()
+                );
             }
         }
         Some((curve, worst))

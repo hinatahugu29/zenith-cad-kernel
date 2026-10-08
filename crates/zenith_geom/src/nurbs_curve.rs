@@ -109,6 +109,102 @@ impl NurbsCurve3 {
     ///
     /// 手順は The NURBS Book の A9.1（大域補間）。弦長で媒介変数を割り当て、
     /// ノットはその平均で置き、`N P = Q` を解く。有理ではない（重みは 1）。
+/// **補間の行列を帯として解く口**（4-705 の測り。`ZENITH_BANDED_INTERPOLATE`）。
+///
+/// **既定は使いません**——既定は今までどおり `count × count` の密 LU です。
+/// **なぜ要るか**（4-705 の実測）: **4,097 点の補間 1 回で 16.7 秒**。
+/// 行列は 1 行に非ゼロが `degree+1` 個しかなく、**1,678 万マスのうち
+/// 埋まっているのは 0.1%** です。
+///
+/// **返り `None` は「帯では解かない」の意**で、呼ぶ側は密に落ちます。
+/// `None` を返すのは 3 つの場合——**非ゼロが片側 `degree` の帯から出た**、
+/// **枢軸がゼロに近い**、**点が 2 個未満**。**枢軸を入れ替えません**ので、
+/// **入れ替えが要る行列は、帯では解きません。**
+fn solve_interpolation_banded(
+    count: usize,
+    degree: usize,
+    parameters: &[f64],
+    knots: &KnotVector,
+    points: &[Point3],
+) -> Option<Vec<[f64; 3]>> {
+    if count < 2 || degree == 0 || parameters.len() != count || points.len() != count {
+        return None;
+    }
+    let band = degree;
+    let width = 2 * band + 1;
+    let mut a = vec![0.0f64; count * width];
+    for (row, parameter) in parameters.iter().enumerate() {
+        let span = knots.find_span(count, degree, *parameter);
+        let basis = knots.basis_functions(span, degree, *parameter);
+        for (offset, value) in basis.iter().enumerate().take(degree + 1) {
+            let column = span.checked_sub(degree)?.checked_add(offset)?;
+            if column >= count {
+                continue;
+            }
+            let delta = column as isize - row as isize;
+            if delta < -(band as isize) || delta > band as isize {
+                return None;
+            }
+            a[row * width + (delta + band as isize) as usize] = *value;
+        }
+    }
+
+    let mut rhs: Vec<[f64; 3]> = points.iter().map(|p| [p.x, p.y, p.z]).collect();
+
+    // 前進消去。行 i の非ゼロは列 i±band にしか無く、入れ替えないので
+    // 消去で帯の外へ出ません。仕事は count × band^2 です。
+    for k in 0..count {
+        let pivot = a[k * width + band];
+        if pivot.abs() < 1e-300 {
+            return None;
+        }
+        let last = (k + band).min(count - 1);
+        for i in (k + 1)..=last {
+            let slot = (band as isize + k as isize - i as isize) as usize;
+            let factor = a[i * width + slot];
+            if factor == 0.0 {
+                continue;
+            }
+            let factor = factor / pivot;
+            for j in k..=last {
+                let from = a[k * width + (band + (j - k))];
+                if from == 0.0 {
+                    continue;
+                }
+                let to = (band as isize + j as isize - i as isize) as usize;
+                a[i * width + to] -= factor * from;
+            }
+            for c in 0..3 {
+                rhs[i][c] -= factor * rhs[k][c];
+            }
+        }
+    }
+
+    // 後退代入。
+    let mut out = vec![[0.0f64; 3]; count];
+    for i in (0..count).rev() {
+        let mut acc = rhs[i];
+        let last = (i + band).min(count - 1);
+        for j in (i + 1)..=last {
+            let coeff = a[i * width + (band + (j - i))];
+            if coeff == 0.0 {
+                continue;
+            }
+            for c in 0..3 {
+                acc[c] -= coeff * out[j][c];
+            }
+        }
+        let diagonal = a[i * width + band];
+        if diagonal.abs() < 1e-300 {
+            return None;
+        }
+        for c in 0..3 {
+            out[i][c] = acc[c] / diagonal;
+        }
+    }
+    Some(out)
+}
+
     pub fn interpolate_points(degree: usize, points: &[Point3]) -> Result<Self, String> {
         let count = points.len();
         if count < 2 {
@@ -140,7 +236,24 @@ impl NurbsCurve3 {
         knots.extend(std::iter::repeat(1.0).take(degree + 1));
         let knot_vector = KnotVector::new(knots);
 
-        // 3. N P = Q を解く。点の数は交線1本ぶん程度なので密行列で足りる。
+        // 3. N P = Q を解く。
+        //
+        // **既定は密行列**です（4-705 まで、ずっとこれでした）。**`ZENITH_BANDED_INTERPOLATE`
+        // を立てると帯として解きます**——4-705 で 4,097 点 1 回 16.7 秒を測った所です。
+        if std::env::var_os("ZENITH_BANDED_INTERPOLATE").is_some() {
+            if let Some(rows) =
+                Self::solve_interpolation_banded(count, degree, &parameters, &knot_vector, points)
+            {
+                let control_points = rows
+                    .into_iter()
+                    .map(|row| {
+                        ControlPoint3::unweighted(Point3::new(row[0], row[1], row[2]))
+                    })
+                    .collect();
+                return Self::new(degree, control_points, knot_vector);
+            }
+        }
+
         let mut matrix = nalgebra::DMatrix::<f64>::zeros(count, count);
         for (row, parameter) in parameters.iter().enumerate() {
             let span = knot_vector.find_span(count, degree, *parameter);
