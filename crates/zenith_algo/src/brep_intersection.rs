@@ -10816,6 +10816,8 @@ fn intersect_nurbs_patches(
     let march_clock = std::env::var_os("ZENITH_BOOLEAN_TIME")
         .is_some()
         .then(std::time::Instant::now);
+    // **行進 1 回ぶんの仕事量**（4-702）——**1 回 7 秒の中身**を見ます。
+    let march_work = march_clock.map(|_| zenith_geom::work_counter::snapshot());
     let branches = zenith_geom::IntersectionMarcher::fit_all_branches(
         surface_a,
         surface_b,
@@ -10856,6 +10858,18 @@ fn intersect_nurbs_patches(
                 counts.join(", "),
                 zenith_geom::march_point_budget()
             );
+            if let Some(before) = march_work.as_ref() {
+                let w = zenith_geom::work_counter::snapshot().since(before);
+                eprintln!(
+                    "BOOLEANTIME       この 1 回の仕事: 曲面の評価 {}、種を探す {}、行進の呼び出し {}、行進のニュートン {}、点を曲面へ落とす {}（うちニュートン {}）",
+                    w.surface_evaluations,
+                    w.seed_searches,
+                    w.marching_calls,
+                    w.marching_newton_iterations,
+                    w.point_surface_projections,
+                    w.projection_newton_iterations
+                );
+            }
         }
     }
 
