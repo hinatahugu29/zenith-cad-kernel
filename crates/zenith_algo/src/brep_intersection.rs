@@ -245,6 +245,11 @@ impl BrepIntersectionBuilder {
         let bbox_secs = bbox_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
         let mut clip_secs = 0.0f64;
         let mut clip_calls = 0u32;
+        // **鎖の 3 つを別々に**（4-712）。4-711 で鎖ぜんたいが 25 回 12.421 秒
+        // だと測りました。**どれが重いかは、割るまで分かりません。**
+        let mut bbox_clip_secs = 0.0f64;
+        let mut trim_clip_secs = 0.0f64;
+        let mut split_secs = 0.0f64;
 
         // **どの組が、どこで落ちたか**（`ZENITH_PAIR_WHY=1`。4-323）。
         //
@@ -422,20 +427,32 @@ impl BrepIntersectionBuilder {
                 let clip_began = outside_timing.then(std::time::Instant::now);
                 let clipped = support
                     .and_then(|(kind, analytic)| {
-                        clip_candidate_to_face_bboxes(
+                        let began = outside_timing.then(std::time::Instant::now);
+                        let out = clip_candidate_to_face_bboxes(
                             kind,
                             bboxes_a[face_a_index].as_ref(),
                             bboxes_b[face_b_index].as_ref(),
                             tol,
-                        )
-                        .map(|kind| (kind, analytic))
+                        );
+                        if let Some(began) = began {
+                            bbox_clip_secs += began.elapsed().as_secs_f64();
+                        }
+                        out.map(|kind| (kind, analytic))
                     })
                     .and_then(|(kind, analytic)| {
-                        clip_candidate_to_planar_trims(kind, face_a, face_b, tol).map(|kind| {
-                            (
-                                split_candidate_at_trim_crossings(kind, face_a, face_b, tol),
-                                analytic,
-                            )
+                        let began = outside_timing.then(std::time::Instant::now);
+                        let trimmed = clip_candidate_to_planar_trims(kind, face_a, face_b, tol);
+                        if let Some(began) = began {
+                            trim_clip_secs += began.elapsed().as_secs_f64();
+                        }
+                        trimmed.map(|kind| {
+                            let began = outside_timing.then(std::time::Instant::now);
+                            let split =
+                                split_candidate_at_trim_crossings(kind, face_a, face_b, tol);
+                            if let Some(began) = began {
+                                split_secs += began.elapsed().as_secs_f64();
+                            }
+                            (split, analytic)
                         })
                     });
                 if let Some(began) = clip_began {
@@ -516,6 +533,9 @@ impl BrepIntersectionBuilder {
         if outside_timing {
             eprintln!(
                 "BOOLEANTIME   組の時計の外: 囲み箱 {bbox_secs:.3} 秒／切り詰め {clip_secs:.3} 秒（{clip_calls} 回）／端から辿り直す {loose_secs:.3} 秒／継ぎ目を作り直す {joint_secs:.3} 秒"
+            );
+            eprintln!(
+                "BOOLEANTIME   切り詰めの中: 囲み箱へ {bbox_clip_secs:.3} 秒／トリムへ {trim_clip_secs:.3} 秒／横切りで割る {split_secs:.3} 秒"
             );
         }
 
