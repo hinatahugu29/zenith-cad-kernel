@@ -29629,7 +29629,17 @@ enter_h8_ports(op);                                        // ← もう遅い
 **93 件そろえて通しました**——**採点していない件数 0** です。
 **4-716 の「3 件が居座る」状態は、解けました。**
 
-**それでも、テストと門の全数通しは回していません。**
+**部分的な検証も足しました**（2026/10/10 06:48）:
+**例 137 本のコンパイルがエラー 0・警告 0**、**速い門 14 本が rc=0・赤語 0**
+（`ssi_probe` `march_stop_probe` `boolean_topology_probe` `face_split_probe`
+`pcurve_fidelity_probe` `intersection_edge_probe` `regularize_probe`
+`grid_fallback_probe` `cone_slab_probe` `cutter_placement_probe`
+`shape_variety_probe` `oblique_section_probe` `face_merge_probe`
+`banded_interpolate_probe`）。
+
+**それでも、テストと門の全数通しは回していません。** **42 本回していません**
+——**重いものほど回していない**（`foreign_cross_pair_probe`、
+`curved_pair_identity_probe`、`fit_samples_probe` も入っていません）。
 **次に触るときは、まず全数通しから。**
 
 
