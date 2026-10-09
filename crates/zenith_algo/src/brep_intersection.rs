@@ -232,8 +232,19 @@ impl BrepIntersectionBuilder {
         tol: &Tolerance,
     ) -> Vec<FaceIntersectionCandidate> {
         let mut candidates = Vec::new();
+        // **組ごとの時計の外を割ります**（4-711。`ZENITH_BOOLEAN_TIME=1` のときだけ）。
+        //
+        // 4-708 で**「段は 28.7 秒、組 25 件の合計は 18.910 秒」**と測りました。
+        // **差の 9.8 秒はどの組にも付いていません**——組ごとの時計は
+        // `intersect_face_supports` だけを囲んでいて、**囲み箱づくり・切り詰め・
+        // 相手のいない端から辿り直す段・継ぎ目を作り直す段は、その外**です。
+        let outside_timing = std::env::var_os("ZENITH_BOOLEAN_TIME").is_some();
+        let bbox_began = outside_timing.then(std::time::Instant::now);
         let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_boundary_bbox).collect();
         let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_boundary_bbox).collect();
+        let bbox_secs = bbox_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        let mut clip_secs = 0.0f64;
+        let mut clip_calls = 0u32;
 
         // **どの組が、どこで落ちたか**（`ZENITH_PAIR_WHY=1`。4-323）。
         //
@@ -408,7 +419,8 @@ impl BrepIntersectionBuilder {
                 if let (Some(times), Some(began)) = (pair_times.as_mut(), pair_clock) {
                     times.push((began.elapsed(), face_a_index, face_b_index));
                 }
-                if let Some((kind, analytic)) = support
+                let clip_began = outside_timing.then(std::time::Instant::now);
+                let clipped = support
                     .and_then(|(kind, analytic)| {
                         clip_candidate_to_face_bboxes(
                             kind,
@@ -425,7 +437,12 @@ impl BrepIntersectionBuilder {
                                 analytic,
                             )
                         })
-                    })
+                    });
+                if let Some(began) = clip_began {
+                    clip_secs += began.elapsed().as_secs_f64();
+                    clip_calls += 1;
+                }
+                if let Some((kind, analytic)) = clipped
                 {
                     candidates.push(FaceIntersectionCandidate {
                         face_a_index,
@@ -439,6 +456,7 @@ impl BrepIntersectionBuilder {
 
         // **相手のいない端から、隣の組を辿り直します。** 組を独立に辿ると、
         // 隣の升に入るぶんの弧が短いときに抜けます（4-62）。
+        let loose_began = outside_timing.then(std::time::Instant::now);
         Self::trace_from_loose_ends_into(
             faces_a,
             faces_b,
@@ -447,9 +465,12 @@ impl BrepIntersectionBuilder {
             &mut candidates,
             tol,
         );
+        let loose_secs = loose_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
 
         // **接する所の継ぎ目を、解析的な交線から作り直します**（4-182）。
+        let joint_began = outside_timing.then(std::time::Instant::now);
         Self::rebuild_tangent_joints(faces_a, faces_b, &mut candidates, tol);
+        let joint_secs = joint_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
 
         // **輪のあとに足された候補にも、トリムへの切り詰めを掛けます**
         // （4-382。`ZENITH_LATE_CLIP=1`。**既定では走りません**）。
@@ -489,6 +510,13 @@ impl BrepIntersectionBuilder {
                     "LATECLIP 輪のあとの候補 {before} 本を切り詰め、{dropped} 本が消えました"
                 );
             }
+        }
+
+        // **組ごとの時計の外を出します**（4-711）。
+        if outside_timing {
+            eprintln!(
+                "BOOLEANTIME   組の時計の外: 囲み箱 {bbox_secs:.3} 秒／切り詰め {clip_secs:.3} 秒（{clip_calls} 回）／端から辿り直す {loose_secs:.3} 秒／継ぎ目を作り直す {joint_secs:.3} 秒"
+            );
         }
 
         // **組ごとの時間を出します**（4-698。`ZENITH_BOOLEAN_TIME=1` のときだけ）。
