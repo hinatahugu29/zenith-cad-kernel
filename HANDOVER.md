@@ -29662,6 +29662,29 @@ torus_segment / half slab / AuB: 上限 2048 は体積 5425.618264、上限 64 �
 重なっていない**からです。**H8 のように交線が 2,000 点を超える検体を
 門に入れるのが先**です——**いまの 10 検体はどれも短すぎます。**
 
+#### この追加について回した検証（全数ではありません）
+
+**`march_budget_probe` を足した commit について、全数通しは回していません。**
+**代わりに、時間内に収まる 2 つを回しました。**
+
+| 回したもの | 結果 |
+| :--- | :--- |
+| `cargo build --release -p zenith_algo --examples`（**例 137 本ぜんぶ**） | **エラー 0、警告 0** |
+| **速い門 20 本**（下記） | **20 本すべて rc=0、赤語 0**（3 分） |
+
+回した 20 本: `ssi_probe` `march_stop_probe` `boolean_topology_probe`
+`face_split_probe` `pcurve_fidelity_probe` `intersection_edge_probe`
+`regularize_probe` `inertia_probe` `distance_probe` `slice_probe`
+`cutter_placement_probe` `cone_slab_probe` `shape_variety_probe`
+`grid_fallback_probe` `oblique_section_probe` `face_merge_probe`
+`tess_density_probe` `boolean_gate_probe` `mesh_watertight_probe`
+`banded_interpolate_probe`
+
+> **これは「門を通した」ではありません。** **36 本回していません**
+> （重いものほど回していない——`foreign_cross_pair_probe` も
+> `curved_pair_identity_probe` も入っていません）。
+> **次に触るときは、まず全数通しから**です。
+
 #### 次に測るなら
 
 **`linkrods` を門の検体に入れる**。**H8 の交線は 4,097 点**（4-705）なので、
