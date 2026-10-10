@@ -3237,7 +3237,14 @@ impl BrepIntersectionBuilder {
                         next_faces.push(current_face);
                         continue;
                     }
-                    match crate::FaceSplitter::split_by_chain(&current_face, chain, tol) {
+                    // **鎖で割る 1 回を測ります**（4-727。既定オフ）。
+                    let chain_began = split_cost::on().then(std::time::Instant::now);
+                    let chain_outcome =
+                        crate::FaceSplitter::split_by_chain(&current_face, chain, tol);
+                    if let Some(began) = chain_began {
+                        split_cost::add_chain(0, began.elapsed().as_secs_f64());
+                    }
+                    match chain_outcome {
                         Ok((pieces, report))
                             if report.area_residual <= chain_area_allowance(&current_face) && pieces.len() >= 2 =>
                         {
@@ -3293,12 +3300,24 @@ impl BrepIntersectionBuilder {
                         next_faces.push(current_face);
                         continue;
                     }
+                    // **鎖をトリムで切る 1 回を測ります**（4-727。既定オフ）。
+                    let clip_began = split_cost::on().then(std::time::Instant::now);
                     let clipped = clip_chain_to_face_trim(&current_face, &chain, tol);
+                    if let Some(began) = clip_began {
+                        split_cost::add_chain(1, began.elapsed().as_secs_f64());
+                    }
                     let Some(clipped) = clipped else {
                         next_faces.push(current_face);
                         continue;
                     };
-                    match crate::FaceSplitter::split_by_chain(&current_face, &clipped, tol) {
+                    // **鎖で割る 1 回を測ります**（4-727。既定オフ）。
+                    let chain_began = split_cost::on().then(std::time::Instant::now);
+                    let chain_outcome =
+                        crate::FaceSplitter::split_by_chain(&current_face, &clipped, tol);
+                    if let Some(began) = chain_began {
+                        split_cost::add_chain(0, began.elapsed().as_secs_f64());
+                    }
+                    match chain_outcome {
                         Ok((pieces, report))
                             if report.area_residual <= chain_area_allowance(&current_face) && pieces.len() >= 2 =>
                         {
@@ -3652,6 +3671,13 @@ fn collect_batch_splits_for_faces(
                         .map(|before| zenith_geom::work_counter::snapshot().since(before));
                     let (wire_calls, wire_edges, wire_secs) = split_cost::take_wire();
                     let (step_secs, step_calls) = split_cost::take_steps();
+                    let (chain_secs, chain_calls) = split_cost::take_chain();
+                    if chain_calls.iter().any(|n| *n > 0) {
+                        eprintln!(
+                            "BOOLEANTIME       {side}面{face_index} 鎖の道の中: 鎖で割る {:.3} 秒（{} 回）／鎖をトリムで切る {:.3} 秒（{} 回）",
+                            chain_secs[0], chain_calls[0], chain_secs[1], chain_calls[1]
+                        );
+                    }
                     if step_calls.iter().any(|n| *n > 0) {
                         eprintln!(
                             "BOOLEANTIME       {side}面{face_index} 1 本ずつの内訳: **鎖にまとめて当て直す {:.3} 秒（{} 回）**／当たった呼び出し {:.3} 秒（{} 回）／外れた呼び出し {:.3} 秒（{} 回）",
@@ -15884,6 +15910,30 @@ pub(crate) mod split_cost {
         static WIRE_SECS: Cell<f64> = const { Cell::new(0.0) };
         static STEP_SECS: Cell<[f64; 3]> = const { Cell::new([0.0; 3]) };
         static STEP_CALLS: Cell<[u64; 3]> = const { Cell::new([0; 3]) };
+        static CHAIN_SECS: Cell<[f64; 2]> = const { Cell::new([0.0; 2]) };
+        static CHAIN_CALLS: Cell<[u64; 2]> = const { Cell::new([0; 2]) };
+    }
+
+    /// **鎖の道の中**（4-727）。0 = 鎖で割る、1 = 鎖をトリムで切る。
+    pub(crate) fn add_chain(which: usize, secs: f64) {
+        CHAIN_SECS.with(|c| {
+            let mut v = c.get();
+            v[which] += secs;
+            c.set(v);
+        });
+        CHAIN_CALLS.with(|c| {
+            let mut v = c.get();
+            v[which] += 1;
+            c.set(v);
+        });
+    }
+
+    /// 鎖の道ぶんを出して、ゼロに戻します。
+    pub(crate) fn take_chain() -> ([f64; 2], [u64; 2]) {
+        (
+            CHAIN_SECS.with(|c| c.replace([0.0; 2])),
+            CHAIN_CALLS.with(|c| c.replace([0; 2])),
+        )
     }
 
     /// **平面の面を割る、残りの 3 段**（4-726）。
