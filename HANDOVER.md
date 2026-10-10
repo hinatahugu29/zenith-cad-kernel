@@ -29637,10 +29637,17 @@ enter_h8_ports(op);                                        // ← もう遅い
 `shape_variety_probe` `oblique_section_probe` `face_merge_probe`
 `banded_interpolate_probe`）。
 
-**それでも、テストと門の全数通しは回していません。** **42 本回していません**
-——**重いものほど回していない**（`foreign_cross_pair_probe`、
-`curved_pair_identity_probe`、`fit_samples_probe` も入っていません）。
-**次に触るときは、まず全数通しから。**
+#### 全数通しも回しました（2026/10/10 09:50）
+
+| 回したもの | 結果 |
+| :--- | :--- |
+| `cargo test --release --workspace --exclude zenith_py` | **751 件通過、0 件失敗、警告 0**（19 分） |
+| `bash tools/run_gates.sh --quick --no-tests` | **rc=0、赤 0**（74 分） |
+| `contact_placement_probe` | **緑、赤語 0**（16 分） |
+| **門ぜんぶ** | **56/56 緑** |
+
+**包みの指紋は一致していました**（例しか触っていないので、作り直し不要）。
+**4-717 の時点で「42 本回していない」と書いた所は、これで埋まりました。**
 
 
 ### 4-716. **`linkrods` を門の検体に足したら、8 件が断られました**（2026年10月10日）
