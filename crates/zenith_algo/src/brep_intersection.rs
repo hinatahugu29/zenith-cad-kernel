@@ -1160,10 +1160,26 @@ impl BrepIntersectionBuilder {
             .map(|(index, edges)| (index, deduplicate_split_edges(&edges, tol)))
             .collect();
 
-        PlanarOperandBatchSplits {
-            splits_a: collect_batch_splits_for_faces(faces_a, edges_by_face_a, tol, "A"),
-            splits_b: collect_batch_splits_for_faces(faces_b, edges_by_face_b, tol, "B"),
+        // **A 側と B 側を別々に測ります**（4-722。`ZENITH_BOOLEAN_TIME=1`、既定オフ）。
+        //
+        // 4-722 で**この関数ぜんたいが 14.970 秒**だと測りました。
+        // **オペランドは 2 つあり、面の数が違います**——**linkrods は 37 枚、
+        // 切り手の箱は 6 枚**です。**どちら側が重いかで、見る先が変わります。**
+        let batch_timing = std::env::var_os("ZENITH_BOOLEAN_TIME").is_some();
+        let a_began = batch_timing.then(std::time::Instant::now);
+        let splits_a = collect_batch_splits_for_faces(faces_a, edges_by_face_a, tol, "A");
+        let a_secs = a_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        let b_began = batch_timing.then(std::time::Instant::now);
+        let splits_b = collect_batch_splits_for_faces(faces_b, edges_by_face_b, tol, "B");
+        let b_secs = b_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        if batch_timing {
+            eprintln!(
+                "BOOLEANTIME   割るの中: A 側（面 {} 枚）{a_secs:.3} 秒／B 側（面 {} 枚）{b_secs:.3} 秒",
+                faces_a.len(),
+                faces_b.len()
+            );
         }
+        PlanarOperandBatchSplits { splits_a, splits_b }
     }
 
     pub fn collect_classified_planar_face_split_candidates(
@@ -1297,16 +1313,27 @@ impl BrepIntersectionBuilder {
         op: crate::BooleanOpType,
         tol: &Tolerance,
     ) -> BooleanFaceSelection {
+        // **この段の中を 4 つに割ります**（4-722。`ZENITH_BOOLEAN_TIME=1`、既定オフ）。
+        //
+        // 4-719 の時点で、**この段は 19 秒**——**2 番目に重い所**です。
+        // **段ぜんたいに時計が 1 つあるだけ**だったので、**中は見えません。**
+        let stage_timing = std::env::var_os("ZENITH_BOOLEAN_TIME").is_some();
         let faces_a = all_solid_faces(solid_a);
         let faces_b = all_solid_faces(solid_b);
+        let split_began = stage_timing.then(std::time::Instant::now);
         let batch_splits =
             Self::batch_splits_from_candidates(&faces_a, &faces_b, candidates.clone(), tol);
+        let split_secs = split_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        // **オペランドを 2 つとも刻み直します。** **既定の刻みで**です。
+        let tess_began = stage_timing.then(std::time::Instant::now);
         let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
         let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
+        let tess_secs = tess_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
 
         let mut selected_face_pieces = Vec::new();
         let inner_a = face_comes_from_inner_shell(solid_a);
         let inner_b = face_comes_from_inner_shell(solid_b);
+        let pick_began = stage_timing.then(std::time::Instant::now);
         selected_face_pieces.extend(select_operand_faces_after_batch_split(
             &faces_a,
             &inner_a,
@@ -1338,6 +1365,12 @@ impl BrepIntersectionBuilder {
         // `box × box` 45度回転の差で 12、積で 22）。
         //
         // 落としても形は動きません。面積 0 の面は立体の境界に何も足しません。
+        let pick_secs = pick_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        if stage_timing {
+            eprintln!(
+                "BOOLEANTIME   面を割って片を選ぶの中: 割る {split_secs:.3} 秒／オペランドを刻み直す {tess_secs:.3} 秒／片を選ぶ {pick_secs:.3} 秒"
+            );
+        }
         log_stage("選んだ直後", &selected_face_pieces);
         selected_face_pieces.retain(|piece| !face_encloses_no_area(&piece.face, tol));
         log_stage("面積を囲まない片を落とした後", &selected_face_pieces);
@@ -2181,8 +2214,15 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        // **ここから先を測ります**（4-726。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
+        // **8 回読んで 8 回外しました**ので、**残りを全部測ります。**
+        let step_on = split_cost::on();
+        let path_began = step_on.then(std::time::Instant::now);
         let path_a = wire_path_between(boundary, &start_hit, &end_hit, tol)?;
         let path_b = wire_path_between(boundary, &end_hit, &start_hit, tol)?;
+        if let Some(began) = path_began {
+            split_cost::add_step(0, began.elapsed().as_secs_f64());
+        }
 
         let face_a = face_from_wire_path_and_split_chain(face, path_a, &ordered, tol)?;
         let face_b = face_from_wire_path_and_split_chain(face, path_b, &ordered, tol)?;
@@ -2271,12 +2311,28 @@ impl BrepIntersectionBuilder {
             return Err("Split edge must cross the face interior".to_string());
         }
 
+        // **ここから先を測ります**（4-726。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
+        // **8 回読んで 8 回外しました**ので、**残りを全部測ります。**
+        let step_on = split_cost::on();
+        let path_began = step_on.then(std::time::Instant::now);
         let path_a = wire_path_between(boundary, &start_hit, &end_hit, tol)?;
         let path_b = wire_path_between(boundary, &end_hit, &start_hit, tol)?;
+        if let Some(began) = path_began {
+            split_cost::add_step(0, began.elapsed().as_secs_f64());
+        }
 
+        let build_began = step_on.then(std::time::Instant::now);
         let face_a = face_from_wire_path_and_split_edge(face, path_a, split_edge, tol)?;
         let face_b = face_from_wire_path_and_split_edge(face, path_b, split_edge, tol)?;
-        distribute_inner_wires(face, vec![face_a, face_b], plane, tol)
+        if let Some(began) = build_began {
+            split_cost::add_step(1, began.elapsed().as_secs_f64());
+        }
+        let hand_began = step_on.then(std::time::Instant::now);
+        let out = distribute_inner_wires(face, vec![face_a, face_b], plane, tol);
+        if let Some(began) = hand_began {
+            split_cost::add_step(2, began.elapsed().as_secs_f64());
+        }
+        out
     }
 
     pub fn split_face_by_edge(
@@ -2549,7 +2605,13 @@ impl BrepIntersectionBuilder {
         split_edges: &[Edge],
         tol: &Tolerance,
     ) -> Result<PlanarFaceMultiSplitResult, String> {
+        // **この中を測ります**（4-724。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
+        //
+        // 4-723 で**外から数えられる量のどれも、割る値段を説明しない**と
+        // 分かりました（**7 回読んで 7 回外しました**）。**中に入ります。**
+        let cost_on = split_cost::on();
         // 面の内部で閉じるループは境界間分割では表せないので、先に刻印を試す
+        let interior_began = cost_on.then(std::time::Instant::now);
         if split_edges.len() >= 3 {
             if let Ok(faces) = Self::split_planar_face_by_interior_loop(face, split_edges, tol) {
                 return Ok(PlanarFaceMultiSplitResult {
@@ -2574,6 +2636,10 @@ impl BrepIntersectionBuilder {
         let mut skipped_split_count: usize = 0;
         // 1本では当たらなかった稜。**あとで鎖にまとめて当て直します。**
         let mut leftover: Vec<Edge> = Vec::new();
+        if let Some(began) = interior_began {
+            split_cost::add_interior(began.elapsed().as_secs_f64());
+        }
+        let loop_began = cost_on.then(std::time::Instant::now);
 
         for split_edge in split_edges {
             let mut next_faces = Vec::new();
@@ -2600,7 +2666,21 @@ impl BrepIntersectionBuilder {
                     next_faces.push(current_face);
                     continue;
                 }
-                match Self::split_face_by_edge(&current_face, split_edge, tol) {
+                // **当たった呼び出しと外れた呼び出しを、別々に測ります**
+                // （4-726）。**37 組のうち 35 組が外れていて、外れる道の
+                // どこで時間を使っているか**が分かりません。
+                let inner_began = cost_on.then(std::time::Instant::now);
+                let inner = Self::split_face_by_edge(&current_face, split_edge, tol);
+                if cost_on {
+                    split_cost::add_inner(inner.is_ok());
+                    if let Some(began) = inner_began {
+                        split_cost::add_step(
+                            if inner.is_ok() { 1 } else { 2 },
+                            began.elapsed().as_secs_f64(),
+                        );
+                    }
+                }
+                match inner {
                     Ok(split_faces) => {
                         // **「当たった」は、片が増えたという意味ではありません**
                         // （4-540）。**1 枚しか返らない当たりがあります。**
@@ -3136,6 +3216,12 @@ impl BrepIntersectionBuilder {
                 applied_split_count
             );
         }
+        // **鎖にまとめて当て直す道を測ります**（4-726）。
+        //
+        // **`split_face_by_edge` の呼び出しは全部合わせて 0.039 秒**なのに、
+        // **この区間は 4.757 秒**でした（B面0）。**99% は呼び出しの外**です。
+        // **外れた交線を鎖にまとめて当て直すのが、ここ**です。
+        let leftover_began = split_cost::on().then(std::time::Instant::now);
         if applied_split_count > 0 && leftover.len() >= 2 {
             let chains = group_edges_into_chains(&deduplicate_split_edges(&leftover, tol), tol);
             if leftover_why {
@@ -3414,6 +3500,12 @@ impl BrepIntersectionBuilder {
             }
         }
 
+        if let Some(began) = leftover_began {
+            split_cost::add_step(0, began.elapsed().as_secs_f64());
+        }
+        if let Some(began) = loop_began {
+            split_cost::add_loop(began.elapsed().as_secs_f64());
+        }
         Ok(PlanarFaceMultiSplitResult {
             faces,
             applied_split_count,
@@ -3530,7 +3622,79 @@ fn collect_batch_splits_for_faces(
         .into_iter()
         .filter_map(|(face_index, split_edges)| {
             let face = faces.get(face_index)?;
+            // **面 1 枚ごとの時間と、その面が抱える交線の本数**（4-723。
+            // `ZENITH_BOOLEAN_TIME=1`、既定オフ）。
+            //
+            // 4-722 で**面 6 枚の側が面 37 枚の側より重い**と測りました。
+            // **値段は「面の数」ではなく「1 枚が抱える交線の本数」**だと
+            // 読めますが、**1 枚ごとには測っていません。**
+            let face_began = std::env::var_os("ZENITH_BOOLEAN_TIME")
+                .is_some()
+                .then(std::time::Instant::now);
+            // **仕事量も数えます**（4-725）。**1 回 123〜805 ms の中で、
+            // 何を何回やっているか**——**4-696 で曲面の評価は 273 ns、
+            // 4-699 で種ありの射影は 25 µs** と測ってあります。
+            let work_before = face_began.map(|_| zenith_geom::work_counter::snapshot());
             let outcome = BrepIntersectionBuilder::split_face_by_edges(face, &split_edges, tol);
+            if let Some(began) = face_began {
+                let secs = began.elapsed().as_secs_f64();
+                if secs > 0.05 {
+                    // **本数では説明できませんでした**（4-723）。**出来上がりの
+                    // 枚数と、面そのものの大きさ**も一緒に出します。
+                    let made = match &outcome {
+                        Ok(result) => result.faces.len(),
+                        Err(_) => 0,
+                    };
+                    let (interior_secs, interior_calls, loop_secs, inner_calls, inner_ok) =
+                        split_cost::take();
+                    let work = work_before
+                        .as_ref()
+                        .map(|before| zenith_geom::work_counter::snapshot().since(before));
+                    let (wire_calls, wire_edges, wire_secs) = split_cost::take_wire();
+                    let (step_secs, step_calls) = split_cost::take_steps();
+                    if step_calls.iter().any(|n| *n > 0) {
+                        eprintln!(
+                            "BOOLEANTIME       {side}面{face_index} 1 本ずつの内訳: **鎖にまとめて当て直す {:.3} 秒（{} 回）**／当たった呼び出し {:.3} 秒（{} 回）／外れた呼び出し {:.3} 秒（{} 回）",
+                            step_secs[0], step_calls[0],
+                            step_secs[1], step_calls[1],
+                            step_secs[2], step_calls[2]
+                        );
+                    }
+                    if wire_calls > 0 {
+                        eprintln!(
+                            "BOOLEANTIME       {side}面{face_index} 輪の上で点を探した: {wire_secs:.3} 秒、{wire_calls} 回、走査した稜 {wire_edges} 本"
+                        );
+                    }
+                    if let Some(w) = &work {
+                        eprintln!(
+                            "BOOLEANTIME       {side}面{face_index} の仕事: 曲面の評価 {}、点を曲面へ落とす {}、p-curve へ落とす {}、境界の判定 {}、法線 {}",
+                            w.surface_evaluations,
+                            w.point_surface_projections,
+                            w.pcurve_projections,
+                            w.boundary_check_projections,
+                            w.normal_projections
+                        );
+                    }
+                    let wires = face.outer_wire.edges.len();
+                    let holes = face.inner_wires.len();
+                    // **面の種類と、抱える交線の形**（4-723）。
+                    // **本数でも、出来た枚数でも、外周の稜の数でも
+                    // 説明できませんでした。** **交線が直線か曲線か**を見ます。
+                    let kind = match &face.geometry {
+                        FaceGeometry::Plane(_) => "平面",
+                        FaceGeometry::Nurbs(_) => "曲面",
+                        _ => "その他",
+                    };
+                                        let points: usize = split_edges
+                        .iter()
+                        .map(|edge| edge.curve.control_points.len())
+                        .sum();
+                    eprintln!(
+                        "BOOLEANTIME     {side}面{face_index}（{kind}）: {secs:.3} 秒 ＝ 内側の輪 {interior_secs:.3} 秒（{interior_calls} 回）＋ 1 本ずつ {loop_secs:.3} 秒（組 {inner_calls} 回、当たり {inner_ok}）、交線 {} 本、制御点 {points} 個、出来た面 {made} 枚、外周の稜 {wires} 本、穴 {holes} 個",
+                        split_edges.len()
+                    );
+                }
+            }
             if why {
                 match &outcome {
                     Ok(result) => eprintln!(
@@ -4397,6 +4561,24 @@ fn locate_point_on_wire(edges: &[OrientedEdge], point: Point3, tol: &Tolerance) 
     const COARSE_SAMPLES: usize = 64;
     const REFINE_STEPS: usize = 80;
 
+    // **ここを測ります**（4-726。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
+    //
+    // 4-725 で**平面の面を割る 8.7 秒が、どのカウンタにも触れない**と
+    // 分かりました。**ここは外周の稜 1 本につき 64 点の粗い標本と
+    // 80 段の詰め**をします——**曲線の評価なので、曲面のカウンタには
+    // 出ません。** **割るたびに片の外周へ重い交線が入る**ので、
+    // **稜の数が増えます。**
+    struct WireClock(Option<std::time::Instant>);
+    impl Drop for WireClock {
+        fn drop(&mut self) {
+            if let Some(began) = self.0 {
+                split_cost::add_wire_secs(began.elapsed().as_secs_f64());
+            }
+        }
+    }
+    let wire_began = split_cost::on().then(std::time::Instant::now);
+    let _wire_clock = WireClock(wire_began);
+
     let mut best: Option<(f64, WireHit)> = None;
     // **届かなかったとき、いちばん近い稜まで何ぼだったか**（4-359。
     // `ZENITH_ONWIRE_WHY=1`）。
@@ -4413,6 +4595,9 @@ fn locate_point_on_wire(edges: &[OrientedEdge], point: Point3, tol: &Tolerance) 
     // **割る場所を決めるには、距離だけでは足りません**——**どの稜の、
     // 媒介変数のどこか**が要ります。ここはその 2 つを併せて持ちます。
     let mut nearest_where: Option<(usize, f64)> = None;
+    if wire_began.is_some() {
+        split_cost::add_wire_scan(edges.len() as u64);
+    }
     for (edge_index, edge) in edges.iter().enumerate() {
         let distance_at = |t: f64| (edge.evaluate_normalized(t) - point).norm();
 
@@ -15678,4 +15863,100 @@ fn snap_candidate_curves_to_planes(
         }
     }
     moved
+}
+
+/// **面 1 枚を割る値段の内訳**（4-724。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
+///
+/// 4-723 で**外から数えられる量のどれも説明しない**と分かったので、
+/// **中に入ります**。**見るのは 2 つ**——**内側の輪で一度に割る道**
+/// （交線が 3 本以上のときだけ試します）と、**1 本ずつ当てていく本編**。
+pub(crate) mod split_cost {
+    use std::cell::Cell;
+
+    thread_local! {
+        static INTERIOR_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static INTERIOR_CALLS: Cell<u64> = const { Cell::new(0) };
+        static LOOP_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static INNER_CALLS: Cell<u64> = const { Cell::new(0) };
+        static INNER_OK: Cell<u64> = const { Cell::new(0) };
+        static WIRE_CALLS: Cell<u64> = const { Cell::new(0) };
+        static WIRE_EDGES: Cell<u64> = const { Cell::new(0) };
+        static WIRE_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static STEP_SECS: Cell<[f64; 3]> = const { Cell::new([0.0; 3]) };
+        static STEP_CALLS: Cell<[u64; 3]> = const { Cell::new([0; 3]) };
+    }
+
+    /// **平面の面を割る、残りの 3 段**（4-726）。
+    /// 0 = 輪の道を取る、1 = 片の面を組む、2 = 穴を振り分ける。
+    pub(crate) fn add_step(which: usize, secs: f64) {
+        STEP_SECS.with(|c| {
+            let mut v = c.get();
+            v[which] += secs;
+            c.set(v);
+        });
+        STEP_CALLS.with(|c| {
+            let mut v = c.get();
+            v[which] += 1;
+            c.set(v);
+        });
+    }
+
+    /// 3 段ぶんを出して、ゼロに戻します。
+    pub(crate) fn take_steps() -> ([f64; 3], [u64; 3]) {
+        (
+            STEP_SECS.with(|c| c.replace([0.0; 3])),
+            STEP_CALLS.with(|c| c.replace([0; 3])),
+        )
+    }
+
+    /// 輪の上で点を探した分を出して、ゼロに戻します。
+    pub(crate) fn take_wire() -> (u64, u64, f64) {
+        (
+            WIRE_CALLS.with(|c| c.replace(0)),
+            WIRE_EDGES.with(|c| c.replace(0)),
+            WIRE_SECS.with(|c| c.replace(0.0)),
+        )
+    }
+
+    pub(crate) fn on() -> bool {
+        std::env::var_os("ZENITH_BOOLEAN_TIME").is_some()
+    }
+
+    pub(crate) fn add_interior(secs: f64) {
+        INTERIOR_SECS.with(|c| c.set(c.get() + secs));
+        INTERIOR_CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    pub(crate) fn add_loop(secs: f64) {
+        LOOP_SECS.with(|c| c.set(c.get() + secs));
+    }
+
+    /// **輪の上で点を探した回数と、走査した稜の数**（4-726）。
+    pub(crate) fn add_wire_scan(edges: u64) {
+        WIRE_CALLS.with(|c| c.set(c.get() + 1));
+        WIRE_EDGES.with(|c| c.set(c.get() + edges));
+    }
+
+    /// 輪の上で点を探すのにかかった時間（4-726）。
+    pub(crate) fn add_wire_secs(secs: f64) {
+        WIRE_SECS.with(|c| c.set(c.get() + secs));
+    }
+
+    pub(crate) fn add_inner(ok: bool) {
+        INNER_CALLS.with(|c| c.set(c.get() + 1));
+        if ok {
+            INNER_OK.with(|c| c.set(c.get() + 1));
+        }
+    }
+
+    /// 溜まったものを出して、ゼロに戻します。**面 1 枚ごとに読みます。**
+    pub(crate) fn take() -> (f64, u64, f64, u64, u64) {
+        (
+            INTERIOR_SECS.with(|c| c.replace(0.0)),
+            INTERIOR_CALLS.with(|c| c.replace(0)),
+            LOOP_SECS.with(|c| c.replace(0.0)),
+            INNER_CALLS.with(|c| c.replace(0)),
+            INNER_OK.with(|c| c.replace(0)),
+        )
+    }
 }
