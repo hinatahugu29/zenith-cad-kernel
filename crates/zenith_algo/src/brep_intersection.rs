@@ -239,6 +239,10 @@ impl BrepIntersectionBuilder {
         // `intersect_face_supports` だけを囲んでいて、**囲み箱づくり・切り詰め・
         // 相手のいない端から辿り直す段・継ぎ目を作り直す段は、その外**です。
         let outside_timing = std::env::var_os("ZENITH_BOOLEAN_TIME").is_some();
+        // **覚えた多角形は、演算をまたいで持ち越しません**（4-720）。
+        if trim_polygon_cache::on() {
+            trim_polygon_cache::clear();
+        }
         let bbox_began = outside_timing.then(std::time::Instant::now);
         let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_boundary_bbox).collect();
         let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_boundary_bbox).collect();
@@ -527,6 +531,11 @@ impl BrepIntersectionBuilder {
                     "LATECLIP 輪のあとの候補 {before} 本を切り詰め、{dropped} 本が消えました"
                 );
             }
+        }
+
+        // **トリムへの切り詰めの中を出します**（4-719）。
+        if outside_timing {
+            trim_clip_cost::report();
         }
 
         // **組ごとの時計の外を出します**（4-711）。
@@ -9281,20 +9290,34 @@ fn point_inside_face_trim(face: &Face, point: Point3, tol: &Tolerance) -> Option
     let uv = match &face.geometry {
         FaceGeometry::Plane(plane) => project_to_plane_uv(point, plane),
         FaceGeometry::Nurbs(surface) => {
+            let began = trim_clip_cost::on().then(std::time::Instant::now);
             let projection =
-                ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric).ok()?;
+                ExtremumEngine::point_to_surface(point, surface, 32, tol.parametric);
+            if let Some(began) = began {
+                trim_clip_cost::add_project(began.elapsed().as_secs_f64());
+            }
+            let projection = projection.ok()?;
             Point2::new(projection.u, projection.v)
         }
         _ => return None,
     };
+    let pcurve_began = trim_clip_cost::on().then(std::time::Instant::now);
     let pcurves = match &face.geometry {
-        FaceGeometry::Plane(_) => face.plane_pcurves().ok()?,
-        _ => face.pcurves(tol).ok()?,
+        FaceGeometry::Plane(_) => face.plane_pcurves(),
+        _ => face.pcurves(tol),
     };
+    if let Some(began) = pcurve_began {
+        trim_clip_cost::add_pcurve(began.elapsed().as_secs_f64());
+    }
+    let pcurves = pcurves.ok()?;
     // **多角形の粗さが、そのまま刻む場所の誤差になります**（4-342）。
     // 1 区間 24 点では、境界までの外れが 1.375e-4 残りました。
     const PER_SEGMENT: usize = 128;
-    let polygon = sample_pcurve_loop(&pcurves.outer_loop, PER_SEGMENT);
+    let polygon_began = trim_clip_cost::on().then(std::time::Instant::now);
+    let polygon = polygon_at(&pcurves.outer_loop, PER_SEGMENT);
+    if let Some(began) = polygon_began {
+        trim_clip_cost::add_polygon(began.elapsed().as_secs_f64());
+    }
     if polygon.len() < 3 {
         return None;
     }
@@ -9316,17 +9339,29 @@ fn point_inside_face_trim(face: &Face, point: Point3, tol: &Tolerance) -> Option
     let mut inside = point_in_polygon_2d(uv, &polygon, tol.parametric);
     let to_wire = distance_to_outer_wire(face, point);
     let mut density = PER_SEGMENT;
+    let refine_began = trim_clip_cost::on().then(std::time::Instant::now);
     for _ in 0..2 {
+        let sag_began = trim_clip_cost::on().then(std::time::Instant::now);
         let sag = polygon_sagitta_bound(&polygon_at(&pcurves.outer_loop, density));
+        if let Some(began) = sag_began {
+            trim_clip_cost::add_sag(began.elapsed().as_secs_f64());
+        }
         if !to_wire.is_finite() || to_wire > sag {
             break;
         }
         density *= 8;
+        let finer_began = trim_clip_cost::on().then(std::time::Instant::now);
         let finer = polygon_at(&pcurves.outer_loop, density);
+        if let Some(began) = finer_began {
+            trim_clip_cost::add_finer(began.elapsed().as_secs_f64());
+        }
         if finer.len() < 3 {
             break;
         }
         inside = point_in_polygon_2d(uv, &finer, tol.parametric);
+    }
+    if let Some(began) = refine_began {
+        trim_clip_cost::add_refine(began.elapsed().as_secs_f64());
     }
     if !inside {
         return Some(false);
@@ -9369,7 +9404,116 @@ fn polygon_sagitta_bound(polygon: &[Point2]) -> f64 {
 }
 
 /// その輪を、指定の細かさで多角形にする。
+/// **輪の多角形を覚える口**（4-720 の測り。`ZENITH_TRIM_POLYGON_CACHE`）。
+///
+/// **既定では覚えません**——既定は今までどおり、毎回取り直します。
+///
+/// # なぜ要るか（4-719 の実測）
+///
+/// **`point_inside_face_trim` の 2.57 ms のうち 4.4 ms × 1,603 回**が、
+/// **境界ぎわで輪を 1 区間 8,192 点まで引き直す所**でした。
+/// **多角形は、問い合わせの点に依りません**——**同じ輪・同じ密度なら、
+/// 同じ多角形**です。**交線を二分 40 段で詰めるあいだ、同じものを
+/// 何度も作り直しています。**
+///
+/// # 答えは変わりません
+///
+/// **返すのは、取り直したのと同じ多角形**です。**丸めも順序も変えません**
+/// ——**同じ関数の返りを、そのまま取っておくだけ**です。
+///
+/// # 鍵の取り方と、その危うさ
+///
+/// **鍵は（輪の番地、密度、指紋）**です。**番地だけでは足りません**
+/// ——**面が落ちて、別の面が同じ番地に来ることがあります。**
+/// **指紋は、区間の数と、最初と最後の区間の端の座標**から作ります。
+/// **これで取り違えるには、番地も区間数も端の座標も一致**する必要が
+/// あります。
+///
+/// **それでも、取り違えないことを証明したわけではありません。**
+/// **だから既定オフ**です。**門（`trim_polygon_cache_probe`）で、
+/// 覚えた場合と覚えない場合の答えを突き合わせます。**
+mod trim_polygon_cache {
+    use super::{sample_pcurve_loop, FacePcurveLoop, Point2};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    thread_local! {
+        static STORE: RefCell<HashMap<(usize, usize, u64), Rc<Vec<Point2>>>> =
+            RefCell::new(HashMap::new());
+        static HITS: RefCell<(u64, u64)> = const { RefCell::new((0, 0)) };
+    }
+
+    pub(super) fn on() -> bool {
+        std::env::var_os("ZENITH_TRIM_POLYGON_CACHE").is_some()
+    }
+
+    /// **区間の `edge_id` を順に混ぜた指紋。**
+    ///
+    /// **座標より確かです**——`FacePcurveSegment` は稜の id を持っています。
+    /// **番地が同じでも、別の輪なら id の並びが違います。**
+    fn fingerprint(loop_data: &FacePcurveLoop) -> u64 {
+        let mut value: u64 = loop_data.segments.len() as u64;
+        for segment in &loop_data.segments {
+            value = value
+                .rotate_left(13)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                ^ segment.edge_id;
+        }
+        value
+    }
+
+    /// 覚えてあれば返し、無ければ作って覚えます。
+    pub(super) fn polygon(loop_data: &FacePcurveLoop, per_segment: usize) -> Rc<Vec<Point2>> {
+        let key = (
+            loop_data as *const FacePcurveLoop as usize,
+            per_segment,
+            fingerprint(loop_data),
+        );
+        if let Some(found) = STORE.with(|store| store.borrow().get(&key).cloned()) {
+            HITS.with(|h| h.borrow_mut().0 += 1);
+            return found;
+        }
+        let built = Rc::new(sample_pcurve_loop(loop_data, per_segment));
+        HITS.with(|h| h.borrow_mut().1 += 1);
+        STORE.with(|store| {
+            let mut store = store.borrow_mut();
+            // **ここが膨らむと、覚えること自体が重くなります。**
+            // **面の数 × 密度 3 段階**で足りるはずですが、**鍵に番地が
+            // 入っている**ので、別の演算の分も溜まります。**上限を置きます。**
+            if store.len() >= 4096 {
+                store.clear();
+            }
+            store.insert(key, Rc::clone(&built));
+        });
+        built
+    }
+
+    /// 1 つの演算のはじめに捨てます。**番地の取り違えを持ち越しません。**
+    pub(super) fn clear() {
+        STORE.with(|store| store.borrow_mut().clear());
+    }
+
+    /// 当たった回数と作った回数を出します（`ZENITH_BOOLEAN_TIME` のとき）。
+    pub(super) fn report() {
+        let (hit, built) = HITS.with(|h| {
+            let mut h = h.borrow_mut();
+            let out = *h;
+            *h = (0, 0);
+            out
+        });
+        if hit + built > 0 {
+            eprintln!(
+                "BOOLEANTIME   覚えた多角形: 当たり {hit} 回／作った {built} 回"
+            );
+        }
+    }
+}
+
 fn polygon_at(loop_data: &FacePcurveLoop, per_segment: usize) -> Vec<Point2> {
+    if trim_polygon_cache::on() {
+        return (*trim_polygon_cache::polygon(loop_data, per_segment)).clone();
+    }
     sample_pcurve_loop(loop_data, per_segment)
 }
 
@@ -9808,6 +9952,158 @@ fn clip_candidate_to_planar_trims(
     }
 }
 
+/// **トリムへの切り詰めの中を数える器**（4-719。`ZENITH_BOOLEAN_TIME` のみ、
+/// 既定オフ）。
+///
+/// 4-712 で**鎖 3 本のうちトリムへの切り詰めに 12.640 秒ぜんぶ**だと測りました。
+/// **腕は 2 つ**——**平面のトリムで切る**（`clip_curve_to_planar_face_trim`）と
+/// **曲面のトリムで切る**（`clip_curve_to_nurbs_face_trim_side`）。
+/// **曲面のほうは 1 本 × 1 枚で 128 点を標本し、境目を二分 40 段**詰めます。
+/// **どちらが重いかは、割るまで分かりません**——**4-704 から 4 度、
+/// 名前で推し量って外しました。**
+pub(crate) mod trim_clip_cost {
+    use std::cell::Cell;
+
+    thread_local! {
+        static PLANAR_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static NURBS_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static PLANAR_CALLS: Cell<u64> = const { Cell::new(0) };
+        static NURBS_CALLS: Cell<u64> = const { Cell::new(0) };
+        static EDGES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn on() -> bool {
+        std::env::var_os("ZENITH_BOOLEAN_TIME").is_some()
+    }
+
+    pub(crate) fn add_planar(secs: f64) {
+        PLANAR_SECS.with(|c| c.set(c.get() + secs));
+        PLANAR_CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    pub(crate) fn add_nurbs(secs: f64) {
+        NURBS_SECS.with(|c| c.set(c.get() + secs));
+        NURBS_CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    pub(crate) fn add_edge() {
+        EDGES.with(|c| c.set(c.get() + 1));
+    }
+
+    thread_local! {
+        static SCAN_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static BISECT_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static INSIDE_CALLS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// **128 点の走査**にかかった時間。
+    pub(crate) fn add_scan(secs: f64) {
+        SCAN_SECS.with(|c| c.set(c.get() + secs));
+    }
+
+    /// **二分 40 段**にかかった時間。
+    pub(crate) fn add_bisect(secs: f64) {
+        BISECT_SECS.with(|c| c.set(c.get() + secs));
+    }
+
+    /// **`point_inside_face_trim` を呼んだ回数**（4-718）。
+    pub(crate) fn add_inside() {
+        INSIDE_CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    thread_local! {
+        static PROJECT_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static PCURVE_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static POLYGON_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static REFINE_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static REFINE_PASSES: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// **種なしの射影**（4-719）。
+    pub(crate) fn add_project(secs: f64) {
+        PROJECT_SECS.with(|c| c.set(c.get() + secs));
+    }
+
+    /// **p-curve を作り直す**（4-719）。
+    pub(crate) fn add_pcurve(secs: f64) {
+        PCURVE_SECS.with(|c| c.set(c.get() + secs));
+    }
+
+    /// **輪を多角形にする（1 区間 128 点）**（4-719）。
+    pub(crate) fn add_polygon(secs: f64) {
+        POLYGON_SECS.with(|c| c.set(c.get() + secs));
+    }
+
+    /// **あいまいな帯で引き直す**（4-719）。
+    pub(crate) fn add_refine(secs: f64) {
+        REFINE_SECS.with(|c| c.set(c.get() + secs));
+        REFINE_PASSES.with(|c| c.set(c.get() + 1));
+    }
+
+    thread_local! {
+        static SAG_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static SAG_CALLS: Cell<u64> = const { Cell::new(0) };
+        static FINER_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static FINER_CALLS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// **たるみを測るための多角形**（4-719）。**break の判定より前**にあるので、
+    /// **引き直さない場合でも必ず走ります。**
+    pub(crate) fn add_sag(secs: f64) {
+        SAG_SECS.with(|c| c.set(c.get() + secs));
+        SAG_CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// **ほんとうに引き直した所**（密度を 8 倍にして取り直す）。
+    pub(crate) fn add_finer(secs: f64) {
+        FINER_SECS.with(|c| c.set(c.get() + secs));
+        FINER_CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// 上の 4 つを出します。
+    pub(crate) fn report_inside() {
+        let project = PROJECT_SECS.with(|c| c.replace(0.0));
+        let pcurve = PCURVE_SECS.with(|c| c.replace(0.0));
+        let polygon = POLYGON_SECS.with(|c| c.replace(0.0));
+        let refine = REFINE_SECS.with(|c| c.replace(0.0));
+        let passes = REFINE_PASSES.with(|c| c.replace(0));
+        if project + pcurve + polygon + refine > 0.0 {
+            eprintln!(
+                "BOOLEANTIME   面の内外を訊く 1 回の中: 種なしの射影 {project:.3} 秒／p-curve を作り直す {pcurve:.3} 秒／多角形にする {polygon:.3} 秒／引き直す輪 {refine:.3} 秒（{passes} 回入った）"
+            );
+            let sag = SAG_SECS.with(|c| c.replace(0.0));
+            let sag_calls = SAG_CALLS.with(|c| c.replace(0));
+            let finer = FINER_SECS.with(|c| c.replace(0.0));
+            let finer_calls = FINER_CALLS.with(|c| c.replace(0));
+            eprintln!(
+                "BOOLEANTIME   引き直す輪の中: たるみを測る多角形 {sag:.3} 秒（{sag_calls} 回）／ほんとうに引き直した所 {finer:.3} 秒（{finer_calls} 回）"
+            );
+        }
+    }
+
+    /// 溜まったものを出して、ゼロに戻します。
+    pub(crate) fn report() {
+        let planar = PLANAR_SECS.with(|c| c.replace(0.0));
+        let nurbs = NURBS_SECS.with(|c| c.replace(0.0));
+        let planar_calls = PLANAR_CALLS.with(|c| c.replace(0));
+        let nurbs_calls = NURBS_CALLS.with(|c| c.replace(0));
+        let edges = EDGES.with(|c| c.replace(0));
+        let scan = SCAN_SECS.with(|c| c.replace(0.0));
+        let bisect = BISECT_SECS.with(|c| c.replace(0.0));
+        let inside = INSIDE_CALLS.with(|c| c.replace(0));
+        if planar + nurbs > 0.0 {
+            eprintln!(
+                "BOOLEANTIME   トリムへの切り詰めの中: 平面の腕 {planar:.3} 秒（{planar_calls} 回）／曲面の腕 {nurbs:.3} 秒（{nurbs_calls} 回）／切った交線 {edges} 本"
+            );
+            eprintln!(
+                "BOOLEANTIME   曲面の腕の中: 128 点の走査 {scan:.3} 秒／二分 40 段 {bisect:.3} 秒／面の内外を訊いた回数 {inside}"
+            );
+        }
+        report_inside();
+        super::trim_polygon_cache::report();
+    }
+}
+
 fn clip_curve_to_both_planar_trims(
     edge: &Edge,
     face_a: &Face,
@@ -9833,6 +10129,9 @@ fn clip_curve_to_both_planar_trims(
     };
 
     let mut pieces = vec![edge.clone()];
+    if trim_clip_cost::on() {
+        trim_clip_cost::add_edge();
+    }
     if explain {
         show("元", &pieces);
     }
@@ -9842,14 +10141,24 @@ fn clip_curve_to_both_planar_trims(
             .flat_map(|piece| {
                 // **平面なら平面の切り方、曲面なら曲面の切り方**（4-361）。
                 // 曲面のほうは長らく素通りしていました。
-                if let Some(clipped) = clip_curve_to_planar_face_trim(piece, face, tol) {
+                let timing = trim_clip_cost::on();
+                let planar_began = timing.then(std::time::Instant::now);
+                let planar = clip_curve_to_planar_face_trim(piece, face, tol);
+                if let Some(began) = planar_began {
+                    trim_clip_cost::add_planar(began.elapsed().as_secs_f64());
+                }
+                if let Some(clipped) = planar {
                     if explain {
                         show(&format!("{which} 平面のトリムで切った"), &clipped);
                     }
                     return clipped;
                 }
-                if let Some(clipped) = clip_curve_to_nurbs_face_trim_side(piece, face, which, tol)
-                {
+                let nurbs_began = timing.then(std::time::Instant::now);
+                let nurbs = clip_curve_to_nurbs_face_trim_side(piece, face, which, tol);
+                if let Some(began) = nurbs_began {
+                    trim_clip_cost::add_nurbs(began.elapsed().as_secs_f64());
+                }
+                if let Some(clipped) = nurbs {
                     if explain {
                         show(&format!("{which} 曲面のトリムで切った"), &clipped);
                     }
@@ -9972,6 +10281,9 @@ fn clip_curve_to_nurbs_face_trim_inner(
     // **境界の上は、はみ出していません。**
     let on_boundary = tol.linear;
     let inside_at = |t: f64| {
+        if trim_clip_cost::on() {
+            trim_clip_cost::add_inside();
+        }
         let point = edge.curve.evaluate(t);
         if distance_to_outer_wire(face, point) <= on_boundary {
             return Some(true);
@@ -9982,8 +10294,18 @@ fn clip_curve_to_nurbs_face_trim_inner(
     // **読めない点が 1 つでもあれば、切りません。** 「読めなかった」を
     // 「外」に化けさせない（4-214 の流儀）——**切りすぎるより、切らない**。
     let mut states: Vec<bool> = Vec::with_capacity(SAMPLES + 1);
+    let scan_began = trim_clip_cost::on().then(std::time::Instant::now);
     for index in 0..=SAMPLES {
-        states.push(inside_at(at(index))?);
+        let Some(state) = inside_at(at(index)) else {
+            if let Some(began) = scan_began {
+                trim_clip_cost::add_scan(began.elapsed().as_secs_f64());
+            }
+            return None;
+        };
+        states.push(state);
+    }
+    if let Some(began) = scan_began {
+        trim_clip_cost::add_scan(began.elapsed().as_secs_f64());
     }
     if states.iter().all(|inside| *inside) {
         // 全部が中なら、切る必要はありません。
@@ -9996,6 +10318,7 @@ fn clip_curve_to_nurbs_face_trim_inner(
 
     // 内外が入れ替わる位置を、二分で詰めます。
     let mut cuts: Vec<f64> = Vec::new();
+    let bisect_began = trim_clip_cost::on().then(std::time::Instant::now);
     for index in 1..=SAMPLES {
         if states[index] == states[index - 1] {
             continue;
@@ -10017,6 +10340,9 @@ fn clip_curve_to_nurbs_face_trim_inner(
     }
 
     // 区間ごとに切り出し、**中の区間だけ**を残します。
+    if let Some(began) = bisect_began {
+        trim_clip_cost::add_bisect(began.elapsed().as_secs_f64());
+    }
     let mut bounds = vec![t0];
     bounds.extend(cuts.iter().copied());
     bounds.push(t1);
