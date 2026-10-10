@@ -3672,6 +3672,12 @@ fn collect_batch_splits_for_faces(
                     let (wire_calls, wire_edges, wire_secs) = split_cost::take_wire();
                     let (step_secs, step_calls) = split_cost::take_steps();
                     let (chain_secs, chain_calls) = split_cost::take_chain();
+                    let (area_secs, area_calls) = crate::face_split::area_cost::take();
+                    if area_calls > 0 {
+                        eprintln!(
+                            "BOOLEANTIME       {side}面{face_index} 面積の積分: {area_secs:.3} 秒（{area_calls} 回）"
+                        );
+                    }
                     if chain_calls.iter().any(|n| *n > 0) {
                         eprintln!(
                             "BOOLEANTIME       {side}面{face_index} 鎖の道の中: 鎖で割る {:.3} 秒（{} 回）／鎖をトリムで切る {:.3} 秒（{} 回）",

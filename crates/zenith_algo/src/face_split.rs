@@ -35,6 +35,35 @@
 //! 両側から見ることになる。
 
 use zenith_geom::{ExtremumEngine, NurbsCurve3};
+
+/// **面積の積分の値段**（4-728。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
+///
+/// 4-725 で**曲面の面を割る 7.3 秒が、曲面の評価 440 万回**だと測りました。
+/// **割った結果の検算に、元と片の面積を積分で出します**——
+/// **1 枚につき格子ぶんの評価**が走ります。**そこが 440 万回の出どころか**を
+/// 数えます。
+pub(crate) mod area_cost {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SECS: Cell<f64> = const { Cell::new(0.0) };
+        static CALLS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn on() -> bool {
+        std::env::var_os("ZENITH_BOOLEAN_TIME").is_some()
+    }
+
+    pub(crate) fn add(secs: f64) {
+        SECS.with(|c| c.set(c.get() + secs));
+        CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// 溜まったものを出して、ゼロに戻します。
+    pub(crate) fn take() -> (f64, u64) {
+        (SECS.with(|c| c.replace(0.0)), CALLS.with(|c| c.replace(0)))
+    }
+}
 use zenith_math::{Point3, Tolerance};
 use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Vertex, Wire};
@@ -151,10 +180,10 @@ fn parameter_area_check(face: &Face, pieces: &[Face]) -> ParameterAreaCheck {
             // 測れないときは、下の `unmeasurable_piece` が立ち、呼ぶ側が
             // 「測れなかった」と言って断ります。
             let params = TessellationParams::default();
-            let original = MassCalculator::compute_face_integral(face, &params).0;
+            let original = area_cost_timed(face, &params);
             let areas = pieces
                 .iter()
-                .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+                .map(|piece| area_cost_timed(piece, &params))
                 .collect();
             // **どの片が測れなかったか**を控えます。元が測れているのに片だけ
             // 測れないなら、上の 3D の数は**トリムを知らない数**です
@@ -264,10 +293,10 @@ fn residual_confirmed_in_3d(face: &Face, pieces: &[Face], check: &ParameterAreaC
         );
     }
     let params = TessellationParams::default();
-    let original = MassCalculator::compute_face_integral(face, &params).0;
+    let original = area_cost_timed(face, &params);
     let summed: f64 = pieces
         .iter()
-        .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+        .map(|piece| area_cost_timed(piece, &params))
         .sum();
     let residual = if original.abs() > 1e-12 {
         (summed - original).abs() / original.abs()
@@ -318,10 +347,10 @@ fn compare_area_checks(label: &str, face: &Face, pieces: &[Face], check: &Parame
         return;
     }
     let params = TessellationParams::default();
-    let original_3d = MassCalculator::compute_face_integral(face, &params).0;
+    let original_3d = area_cost_timed(face, &params);
     let pieces_3d: Vec<f64> = pieces
         .iter()
-        .map(|piece| MassCalculator::compute_face_integral(piece, &params).0)
+        .map(|piece| area_cost_timed(piece, &params))
         .collect();
     let summed_3d: f64 = pieces_3d.iter().sum();
     let residual_3d = if original_3d.abs() > 1e-12 {
@@ -2387,4 +2416,14 @@ mod tests {
             "a curve that stops inside the face must not produce two pieces"
         );
     }
+}
+
+/// 面積の積分を、時計つきで呼びます（4-728。既定オフでは時計は走りません）。
+fn area_cost_timed(face: &Face, params: &TessellationParams) -> f64 {
+    let began = area_cost::on().then(std::time::Instant::now);
+    let out = MassCalculator::compute_face_integral(face, params).0;
+    if let Some(began) = began {
+        area_cost::add(began.elapsed().as_secs_f64());
+    }
+    out
 }
