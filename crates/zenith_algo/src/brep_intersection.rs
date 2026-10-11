@@ -3679,6 +3679,12 @@ fn collect_batch_splits_for_faces(
                     let (wire_calls, wire_edges, wire_secs) = split_cost::take_wire();
                     let (step_secs, step_calls) = split_cost::take_steps();
                     let (chain_secs, chain_calls) = split_cost::take_chain();
+                    let (wd_calls, wd_proj, wd_secs) = split_cost::take_wire_distance();
+                    if wd_calls > 0 {
+                        eprintln!(
+                            "BOOLEANTIME       {side}面{face_index} 境界までの距離: {wd_secs:.3} 秒、{wd_calls} 回、射影 {wd_proj} 回"
+                        );
+                    }
                     let (area_secs, area_calls) = crate::face_split::area_cost::take();
                     if area_calls > 0 {
                         eprintln!(
@@ -4892,13 +4898,27 @@ fn deduplicate_split_edges(edges: &[Edge], tol: &Tolerance) -> Vec<Edge> {
 /// Links edges end to end into chains, by coincident endpoints.
 /// 点から面の外周ワイヤまでの距離。
 fn distance_to_outer_wire(face: &Face, point: Point3) -> f64 {
+    // **ここを数えます**（4-734。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
+    //
+    // 4-727 で**鎖の端合わせが 40 回で 9.7 秒（1 回 240 ms）**、
+    // **葉は 1 回 512 点の標本**だと測りました。**その 1 点ごとに、
+    // 輪の稜 1 本ずつへ種なしの射影**（`point_to_curve`、64 回まで）を
+    // 掛けています。**点は毎回違う**ので、4-720 の「同じものを作り直す」
+    // 形ではありません。**値段は射影の回数そのもの**です。
+    let began = split_cost::on().then(std::time::Instant::now);
     let mut best = f64::MAX;
+    if began.is_some() {
+        split_cost::add_wire_distance(face.outer_wire.edges.len() as u64);
+    }
     for oriented in &face.outer_wire.edges {
         if let Ok(result) =
             zenith_geom::ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 64, 1e-14)
         {
             best = best.min(result.distance);
         }
+    }
+    if let Some(began) = began {
+        split_cost::add_wire_distance_secs(began.elapsed().as_secs_f64());
     }
     best
 }
@@ -15925,6 +15945,28 @@ pub(crate) mod split_cost {
         static STEP_CALLS: Cell<[u64; 3]> = const { Cell::new([0; 3]) };
         static CHAIN_SECS: Cell<[f64; 2]> = const { Cell::new([0.0; 2]) };
         static CHAIN_CALLS: Cell<[u64; 2]> = const { Cell::new([0; 2]) };
+        static WIRE_DIST_CALLS: Cell<u64> = const { Cell::new(0) };
+        static WIRE_DIST_PROJ: Cell<u64> = const { Cell::new(0) };
+        static WIRE_DIST_SECS: Cell<f64> = const { Cell::new(0.0) };
+    }
+
+    /// **境界までの距離を測った回数と、そこで走った射影の数**（4-734）。
+    pub(crate) fn add_wire_distance(edges: u64) {
+        WIRE_DIST_CALLS.with(|c| c.set(c.get() + 1));
+        WIRE_DIST_PROJ.with(|c| c.set(c.get() + edges));
+    }
+
+    pub(crate) fn add_wire_distance_secs(secs: f64) {
+        WIRE_DIST_SECS.with(|c| c.set(c.get() + secs));
+    }
+
+    /// 境界までの距離ぶんを出して、ゼロに戻します。
+    pub(crate) fn take_wire_distance() -> (u64, u64, f64) {
+        (
+            WIRE_DIST_CALLS.with(|c| c.replace(0)),
+            WIRE_DIST_PROJ.with(|c| c.replace(0)),
+            WIRE_DIST_SECS.with(|c| c.replace(0.0)),
+        )
     }
 
     /// **鎖の道の中**（4-727）。0 = 鎖で割る、1 = 鎖をトリムで切る。
