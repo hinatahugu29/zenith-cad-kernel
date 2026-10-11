@@ -3680,6 +3680,13 @@ fn collect_batch_splits_for_faces(
                     let (step_secs, step_calls) = split_cost::take_steps();
                     let (chain_secs, chain_calls) = split_cost::take_chain();
                     let (wd_calls, wd_proj, wd_secs) = split_cost::take_wire_distance();
+                    let (pc_scan, pc_newton, pc_calls, pc_steps, pc_capped) =
+                        zenith_geom::extremum::point_curve_cost::take();
+                    if pc_calls > 0 {
+                        eprintln!(
+                            "BOOLEANTIME       {side}面{face_index} 点を曲線へ落とす: 走査 {pc_scan:.3} 秒／詰め {pc_newton:.3} 秒（{pc_calls} 回、ニュートン {pc_steps} 歩、上限まで回り切った {pc_capped} 回）"
+                        );
+                    }
                     if wd_calls > 0 {
                         eprintln!(
                             "BOOLEANTIME       {side}面{face_index} 境界までの距離: {wd_secs:.3} 秒、{wd_calls} 回、射影 {wd_proj} 回"
@@ -4897,6 +4904,24 @@ fn deduplicate_split_edges(edges: &[Edge], tol: &Tolerance) -> Vec<Edge> {
 
 /// Links edges end to end into chains, by coincident endpoints.
 /// 点から面の外周ワイヤまでの距離。
+/// **境界までの距離を測るときの打ち切り**（4-736 の測り。
+/// `ZENITH_WIRE_DISTANCE_TOL`）。
+///
+/// **既定は 1e-14**——いまと同じです。**なぜ口が要るか**（4-735 の実測）:
+/// **1 射影あたりニュートンが 46.4 歩**回っています（上限 64）。
+/// **素直な射影なら 3〜6 歩**なので、**収束していません。**
+///
+/// **見分けるため**です——**緩めて歩数が減るなら打ち切りが厳しすぎる**、
+/// **変わらないなら歩そのものが 1 次収束**です。
+/// **既定を変える口ではありません。**
+fn wire_distance_tolerance() -> f64 {
+    std::env::var("ZENITH_WIRE_DISTANCE_TOL")
+        .ok()
+        .and_then(|text| text.parse::<f64>().ok())
+        .filter(|value| *value > 0.0)
+        .unwrap_or(1e-14)
+}
+
 fn distance_to_outer_wire(face: &Face, point: Point3) -> f64 {
     // **ここを数えます**（4-734。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
     //
@@ -4912,7 +4937,12 @@ fn distance_to_outer_wire(face: &Face, point: Point3) -> f64 {
     }
     for oriented in &face.outer_wire.edges {
         if let Ok(result) =
-            zenith_geom::ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 64, 1e-14)
+            zenith_geom::ExtremumEngine::point_to_curve(
+                point,
+                &oriented.edge.curve,
+                64,
+                wire_distance_tolerance(),
+            )
         {
             best = best.min(result.distance);
         }

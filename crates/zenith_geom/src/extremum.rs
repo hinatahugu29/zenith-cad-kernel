@@ -30,6 +30,14 @@ impl ExtremumEngine {
     ) -> Result<PointCurveProjection, String> {
         let (t_min, t_max) = curve.param_range();
 
+        // **走査と詰めを別々に測ります**（4-735。`ZENITH_BOOLEAN_TIME` のみ、
+        // 既定オフ）。
+        //
+        // 4-734 で**この関数が 285,225 回、1 回 約 67 µs**だと測りました。
+        // **走査だけで 32 点の曲線の評価**が走ります——**913 万回**です。
+        // **走査と詰めのどちらが重いかは、割るまで分かりません。**
+        let cost_on = point_curve_cost::on();
+        let scan_began = cost_on.then(std::time::Instant::now);
         // 1. 粗いサンプリングで最良の初期値を探索
         let num_samples = 32;
         let mut best_t = t_min;
@@ -47,9 +55,23 @@ impl ExtremumEngine {
 
         // 2. ニュートン・ラフソン法でパラメータ t を精密反復改善
         // 目的関数 f(t) = (C(t) - P) . C'(t) = 0
+        if let Some(began) = scan_began {
+            point_curve_cost::add_scan(began.elapsed().as_secs_f64());
+        }
+        let newton_began = cost_on.then(std::time::Instant::now);
+        let mut newton_steps = 0u64;
+        // **上限で打ち切られたか、break で抜けたか**（4-736）。
+        //
+        // **`current_t` は範囲内に clamp されます。** **最近点が稜の端に
+        // あるとき、ニュートンは外へ押し出して clamp され、`Δt` が
+        // 小さくなりません**——**上限まで回り切る**はずです。
+        // **打ち切りを 5 桁緩めても歩数が 3.5% しか減らなかった**のは、
+        // それで説明が付きます（4-735）。**数えて確かめます。**
+        let mut broke_out = false;
         let mut current_t = best_t;
 
         for _ in 0..max_iterations {
+            newton_steps += 1;
             let ders = curve.evaluate_derivatives(current_t, 2);
             let c_t = curve.evaluate(current_t);
             let diff = c_t - point;
@@ -62,6 +84,7 @@ impl ExtremumEngine {
             let f = diff.dot(&c_prime);
 
             if f.abs() < tolerance {
+                broke_out = true;
                 break;
             }
 
@@ -73,13 +96,31 @@ impl ExtremumEngine {
             let f_prime = c_prime.norm_squared() + diff.dot(&c_prime_prime);
 
             if f_prime.abs() < 1e-12 {
+                broke_out = true;
                 break;
             }
 
             let delta_t = f / f_prime;
+            let moved_from = current_t;
             current_t = (current_t - delta_t).clamp(t_min, t_max);
+            // **動かなくなったら、そこが答えです**（4-737 の測り。
+            // `ZENITH_CURVE_CLAMP_STOP`。**既定では止まりません**）。
+            //
+            // 4-736 の実測: **7 割の射影が 64 歩を使い切って抜けています。**
+            // **最近点が稜の端にあるとき、ニュートンは外へ押し出し、clamp され、
+            // `current_t` は動きません**——**`delta_t` は大きいまま**なので、
+            // **下の break が働きません。**
+            //
+            // **返すのは clamp 後の `current_t`** なので、**動かないなら 64 歩
+            // まわしても同じ値**です。**ここで止めても同じ値を返します**
+            // ——**「同じ答えを安く出す」口**です（4-732 の分け方）。
+            if clamp_stop_enabled() && current_t == moved_from {
+                broke_out = true;
+                break;
+            }
 
             if delta_t.abs() < tolerance {
+                broke_out = true;
                 break;
             }
         }
@@ -87,6 +128,12 @@ impl ExtremumEngine {
         let closest_point = curve.evaluate(current_t);
         let distance = (closest_point - point).norm();
 
+        if let Some(began) = newton_began {
+            point_curve_cost::add_newton(began.elapsed().as_secs_f64(), newton_steps);
+            if !broke_out {
+                point_curve_cost::add_capped();
+            }
+        }
         Ok(PointCurveProjection {
             parameter: current_t,
             closest_point,
@@ -498,5 +545,57 @@ impl SurfaceClosure {
         } else {
             value.clamp(min, max)
         }
+    }
+}
+
+/// **点を曲線へ落とす 1 回の内訳**（4-735。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
+///
+/// 4-734 で**285,225 回、1 回 約 67 µs**だと測りました。
+/// **走査（32 点）と詰め（ニュートン、最大 64 回）**に割ります。
+/// **clamp で動かなくなったら止める口**（4-737 の測り。
+/// `ZENITH_CURVE_CLAMP_STOP`）。**既定では止まりません。**
+fn clamp_stop_enabled() -> bool {
+    std::env::var_os("ZENITH_CURVE_CLAMP_STOP").is_some()
+}
+
+pub mod point_curve_cost {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SCAN_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static NEWTON_SECS: Cell<f64> = const { Cell::new(0.0) };
+        static CALLS: Cell<u64> = const { Cell::new(0) };
+        static STEPS: Cell<u64> = const { Cell::new(0) };
+        static CAPPED: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub fn on() -> bool {
+        std::env::var_os("ZENITH_BOOLEAN_TIME").is_some()
+    }
+
+    pub fn add_scan(secs: f64) {
+        SCAN_SECS.with(|c| c.set(c.get() + secs));
+        CALLS.with(|c| c.set(c.get() + 1));
+    }
+
+    /// **上限まで回り切った回数**（4-736）。
+    pub fn add_capped() {
+        CAPPED.with(|c| c.set(c.get() + 1));
+    }
+
+    pub fn add_newton(secs: f64, steps: u64) {
+        NEWTON_SECS.with(|c| c.set(c.get() + secs));
+        STEPS.with(|c| c.set(c.get() + steps));
+    }
+
+    /// 溜まったものを出して、ゼロに戻します。
+    pub fn take() -> (f64, f64, u64, u64, u64) {
+        (
+            SCAN_SECS.with(|c| c.replace(0.0)),
+            NEWTON_SECS.with(|c| c.replace(0.0)),
+            CALLS.with(|c| c.replace(0)),
+            STEPS.with(|c| c.replace(0)),
+            CAPPED.with(|c| c.replace(0)),
+        )
     }
 }
