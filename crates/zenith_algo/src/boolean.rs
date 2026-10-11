@@ -347,6 +347,10 @@ impl BooleanEngine {
         let held_a = crate::Regularizer::hold_like_our_own(solid_a, tol);
         let held_b = crate::Regularizer::hold_like_our_own(solid_b, tol);
         clock.lap("整える（regularize）");
+        // **整えるの中を出します**（4-731。既定オフ）。
+        if std::env::var_os("ZENITH_BOOLEAN_TIME").is_some() {
+            crate::regularize::regularize_cost::report();
+        }
         let solid_a = &held_a;
         let solid_b = &held_b;
 

@@ -155,6 +155,9 @@ impl Regularizer {
 
         // 保持している p-curve が積分を担っている面は、組み直すと答えが変わる。
         // どの面がそうかは推測せず、p-curve を外して積分し直して測る。
+        // **3 つに割って測ります**（4-731。既定オフ）。
+        let cost_on = regularize_cost::on();
+        let protect_began = cost_on.then(std::time::Instant::now);
         let protected: Vec<bool> = shell
             .faces
             .iter()
@@ -169,7 +172,15 @@ impl Regularizer {
             }
         }
 
+        if let Some(began) = protect_began {
+            regularize_cost::add(0, began.elapsed().as_secs_f64());
+        }
+        let split_began = cost_on.then(std::time::Instant::now);
         let faces = Self::split_closed_edges(&shell.faces, &protected, tol, &mut report);
+        if let Some(began) = split_began {
+            regularize_cost::add(1, began.elapsed().as_secs_f64());
+        }
+        let shared_began = cost_on.then(std::time::Instant::now);
 
         let mut out = Vec::with_capacity(faces.len());
         // 新しく作る辺は、シェル全体で一つの棚から配る。パッチごとに作ると
@@ -195,6 +206,9 @@ impl Regularizer {
         }
 
         report.face_count = out.len();
+        if let Some(began) = shared_began {
+            regularize_cost::add(2, began.elapsed().as_secs_f64());
+        }
         (Shell::new(out, shell.is_closed), report)
     }
 
@@ -1013,5 +1027,47 @@ mod tests {
         assert_eq!(total.closed_edges_split, 4);
         assert_eq!(total.face_count, 12);
         assert!(total.is_fully_regular());
+    }
+}
+
+/// **整える段の内訳**（4-731。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
+///
+/// **この段は 10 秒**あり、**4-701 から一度も割っていません。**
+/// **シェル 1 枚ごとに 3 つ**——**守る面を選ぶ**、**閉じた稜を刻む**、
+/// **共有する稜を集める**。
+pub(crate) mod regularize_cost {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SECS: Cell<[f64; 3]> = const { Cell::new([0.0; 3]) };
+        static CALLS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn on() -> bool {
+        std::env::var_os("ZENITH_BOOLEAN_TIME").is_some()
+    }
+
+    /// 0 = 守る面を選ぶ、1 = 閉じた稜を刻む、2 = 共有する稜を集める。
+    pub(crate) fn add(which: usize, secs: f64) {
+        SECS.with(|c| {
+            let mut v = c.get();
+            v[which] += secs;
+            c.set(v);
+        });
+        if which == 0 {
+            CALLS.with(|c| c.set(c.get() + 1));
+        }
+    }
+
+    /// 溜まったものを出して、ゼロに戻します。
+    pub(crate) fn report() {
+        let v = SECS.with(|c| c.replace([0.0; 3]));
+        let calls = CALLS.with(|c| c.replace(0));
+        if v.iter().any(|secs| *secs > 0.0) {
+            eprintln!(
+                "BOOLEANTIME   整えるの中: 守る面を選ぶ {:.3} 秒／閉じた稜を刻む {:.3} 秒／共有する稜を集める {:.3} 秒（シェル {} 枚）",
+                v[0], v[1], v[2], calls
+            );
+        }
     }
 }
