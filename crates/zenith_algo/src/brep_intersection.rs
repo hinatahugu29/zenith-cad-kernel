@@ -243,6 +243,10 @@ impl BrepIntersectionBuilder {
         if trim_polygon_cache::on() {
             trim_polygon_cache::clear();
         }
+        // **元の面積の覚えも、演算をまたいで持ち越しません**（4-730）。
+        if crate::face_split::area_memo::on() {
+            crate::face_split::area_memo::clear();
+        }
         let bbox_began = outside_timing.then(std::time::Instant::now);
         let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_boundary_bbox).collect();
         let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_boundary_bbox).collect();
@@ -1370,6 +1374,9 @@ impl BrepIntersectionBuilder {
             eprintln!(
                 "BOOLEANTIME   面を割って片を選ぶの中: 割る {split_secs:.3} 秒／オペランドを刻み直す {tess_secs:.3} 秒／片を選ぶ {pick_secs:.3} 秒"
             );
+            // **元の面積の覚えは、この段で使われます**（4-730）。
+            // **段より前に読むと、まだ 0 です**——1 度そうしました。
+            crate::face_split::area_memo::report();
         }
         log_stage("選んだ直後", &selected_face_pieces);
         selected_face_pieces.retain(|piece| !face_encloses_no_area(&piece.face, tol));

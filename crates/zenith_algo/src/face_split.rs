@@ -180,7 +180,7 @@ fn parameter_area_check(face: &Face, pieces: &[Face]) -> ParameterAreaCheck {
             // 測れないときは、下の `unmeasurable_piece` が立ち、呼ぶ側が
             // 「測れなかった」と言って断ります。
             let params = TessellationParams::default();
-            let original = area_cost_timed(face, &params);
+            let original = original_area(face, &params);
             let areas = pieces
                 .iter()
                 .map(|piece| area_cost_timed(piece, &params))
@@ -293,7 +293,7 @@ fn residual_confirmed_in_3d(face: &Face, pieces: &[Face], check: &ParameterAreaC
         );
     }
     let params = TessellationParams::default();
-    let original = area_cost_timed(face, &params);
+    let original = original_area(face, &params);
     let summed: f64 = pieces
         .iter()
         .map(|piece| area_cost_timed(piece, &params))
@@ -347,7 +347,7 @@ fn compare_area_checks(label: &str, face: &Face, pieces: &[Face], check: &Parame
         return;
     }
     let params = TessellationParams::default();
-    let original_3d = area_cost_timed(face, &params);
+    let original_3d = original_area(face, &params);
     let pieces_3d: Vec<f64> = pieces
         .iter()
         .map(|piece| area_cost_timed(piece, &params))
@@ -2416,6 +2416,113 @@ mod tests {
             "a curve that stops inside the face must not produce two pieces"
         );
     }
+}
+
+/// **元の面の面積を覚える口**（4-730 の測り。`ZENITH_FACE_AREA_MEMO`）。
+///
+/// **既定では覚えません**——既定は今までどおり、毎回積分します。
+///
+/// # なぜ要るか（4-728 の実測）
+///
+/// **割った検算は、元と片の面積を積分して突き合わせます。**
+/// **元の面積は、割る前から決まっています**——**同じ面を何度割ろうとしても
+/// 同じ値**です。**A面1 は 18 回積分していて、そのうち 6 回は同じ元の面**
+/// でした（**1 回で約 10 万回の曲面の評価**）。
+///
+/// # 覚えるのは元の面だけです
+///
+/// **片は覚えません。** **片は割るたびに新しく作られる**ので、
+/// **番地が使い回されたときに取り違える危険**があります。
+/// **元の面は、その割り算のあいだずっと生きています。**
+///
+/// # 鍵の取り方
+///
+/// **（面の番地、外周の輪の id、外周の稜の id を順に混ぜた指紋、穴の数）**。
+/// **番地だけでは足りません**——**面が落ちて別の面が同じ番地に来る**
+/// ことがあります。**演算のはじめに捨てる**ので、**演算をまたいでは
+/// 持ち越しません。**
+///
+/// **それでも、取り違えないことを証明したわけではありません。**
+/// **だから既定オフ**です。
+pub(crate) mod area_memo {
+    use super::{Face, TessellationParams};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    thread_local! {
+        static STORE: RefCell<HashMap<(usize, u64, u64, usize), f64>> =
+            RefCell::new(HashMap::new());
+        static HITS: RefCell<(u64, u64)> = const { RefCell::new((0, 0)) };
+    }
+
+    pub(crate) fn on() -> bool {
+        std::env::var_os("ZENITH_FACE_AREA_MEMO").is_some()
+    }
+
+    fn key(face: &Face) -> (usize, u64, u64, usize) {
+        let mut mixed: u64 = face.outer_wire.edges.len() as u64;
+        for oriented in &face.outer_wire.edges {
+            mixed = mixed
+                .rotate_left(13)
+                .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+                ^ oriented.edge.id;
+        }
+        (
+            face as *const Face as usize,
+            face.outer_wire.id,
+            mixed,
+            face.inner_wires.len(),
+        )
+    }
+
+    /// 覚えてあれば返し、無ければ `build` で出して覚えます。
+    pub(crate) fn area_of(
+        face: &Face,
+        params: &TessellationParams,
+        build: impl FnOnce(&Face, &TessellationParams) -> f64,
+    ) -> f64 {
+        let k = key(face);
+        if let Some(found) = STORE.with(|store| store.borrow().get(&k).copied()) {
+            HITS.with(|h| h.borrow_mut().0 += 1);
+            return found;
+        }
+        let value = build(face, params);
+        HITS.with(|h| h.borrow_mut().1 += 1);
+        STORE.with(|store| {
+            let mut store = store.borrow_mut();
+            if store.len() >= 4096 {
+                store.clear();
+            }
+            store.insert(k, value);
+        });
+        value
+    }
+
+    /// 1 つの演算のはじめに捨てます。
+    pub(crate) fn clear() {
+        STORE.with(|store| store.borrow_mut().clear());
+    }
+
+    /// 当たった回数と出した回数を出します（`ZENITH_BOOLEAN_TIME` のとき）。
+    pub(crate) fn report() {
+        let (hit, built) = HITS.with(|h| {
+            let mut h = h.borrow_mut();
+            let out = *h;
+            *h = (0, 0);
+            out
+        });
+        if hit + built > 0 {
+            eprintln!("BOOLEANTIME   覚えた元の面積: 当たり {hit} 回／出した {built} 回");
+        }
+    }
+}
+
+/// **元の面**の面積。覚える口が立っていれば、2 度目からは覚えた値を返します。
+fn original_area(face: &Face, params: &TessellationParams) -> f64 {
+    if area_memo::on() {
+        return area_memo::area_of(face, params, area_cost_timed);
+    }
+    area_cost_timed(face, params)
 }
 
 /// 面積の積分を、時計つきで呼びます（4-728。既定オフでは時計は走りません）。
