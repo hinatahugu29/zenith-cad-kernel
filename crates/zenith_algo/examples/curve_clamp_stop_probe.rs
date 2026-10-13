@@ -235,8 +235,8 @@ fn main() {
 
     println!("clamp で止めると、答えが動くか（4-738）");
     println!();
-    println!("**止めない**（いまの既定）と**止める**で、同じ演算を 2 度回して");
-    println!("突き合わせます。`ZENITH_CURVE_CLAMP_STOP` は既定オフの口です。");
+    println!("**4-750 で既定は「止める」に昇格しました**。`ZENITH_CURVE_CLAMP_STOP=0` で");
+    println!("「止めない」旧既定に戻した場合と、いまの既定を突き合わせます。");
     println!();
     println!("**`linkrods` の 3 行は既定の設定ではありません**（H8 の口を立てています）。");
     println!();
@@ -338,10 +338,11 @@ fn main() {
                 if h8 {
                     enter_h8_ports(op);
                 }
-                // 止めない（いまの既定）。
-                std::env::remove_var("ZENITH_CURVE_CLAMP_STOP");
+                // 止めない（4-750 で既定が「止める」に変わったので、
+                // 0 を明示しないと旧既定になりません）。
+                std::env::set_var("ZENITH_CURVE_CLAMP_STOP", "0");
                 let plain = run(a, &b, op, &tol);
-                // 止める。
+                // 止める（いまの既定）。
                 std::env::set_var("ZENITH_CURVE_CLAMP_STOP", "1");
                 let short = run(a, &b, op, &tol);
                 std::env::remove_var("ZENITH_CURVE_CLAMP_STOP");

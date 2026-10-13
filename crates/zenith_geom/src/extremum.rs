@@ -104,7 +104,7 @@ impl ExtremumEngine {
             let moved_from = current_t;
             current_t = (current_t - delta_t).clamp(t_min, t_max);
             // **動かなくなったら、そこが答えです**（4-737 の測り。
-            // `ZENITH_CURVE_CLAMP_STOP`。**既定では止まりません**）。
+            // `ZENITH_CURVE_CLAMP_STOP`。**4-750 で既定オンに昇格**）。
             //
             // 4-736 の実測: **7 割の射影が 64 歩を使い切って抜けています。**
             // **最近点が稜の端にあるとき、ニュートンは外へ押し出し、clamp され、
@@ -553,9 +553,12 @@ impl SurfaceClosure {
 /// 4-734 で**285,225 回、1 回 約 67 µs**だと測りました。
 /// **走査（32 点）と詰め（ニュートン、最大 64 回）**に割ります。
 /// **clamp で動かなくなったら止める口**（4-737 の測り。
-/// `ZENITH_CURVE_CLAMP_STOP`）。**既定では止まりません。**
+/// `ZENITH_CURVE_CLAMP_STOP`）。**4-750 で既定オンに昇格**——
+/// `=0` で旧既定（64 歩を使い切るまで止めない）に戻せます。
 fn clamp_stop_enabled() -> bool {
-    std::env::var_os("ZENITH_CURVE_CLAMP_STOP").is_some()
+    std::env::var("ZENITH_CURVE_CLAMP_STOP")
+        .map(|value| value != "0")
+        .unwrap_or(true)
 }
 
 pub mod point_curve_cost {
