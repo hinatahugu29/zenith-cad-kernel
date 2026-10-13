@@ -3771,10 +3771,14 @@ fn sphere_patch_for_boundary(
 /// Both directions are closed, so both are read the same way as a cylinder's
 /// angle: the range in use is what lies outside the widest gap.
 /// **トーラスの継ぎ目を、面の継ぎ目の稜に合わせる切替**（4-631。
-/// `ZENITH_TORUS_SEAM_ALIGN=1`。**既定では走りません**）。
+/// **4-746 で既定オンに昇格**。`ZENITH_TORUS_SEAM_ALIGN=0` で外せます）。
 fn torus_seam_align() -> bool {
     static FLAG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FLAG.get_or_init(|| std::env::var_os("ZENITH_TORUS_SEAM_ALIGN").is_some())
+    *FLAG.get_or_init(|| {
+        std::env::var("ZENITH_TORUS_SEAM_ALIGN")
+            .map(|value| value != "0")
+            .unwrap_or(true)
+    })
 }
 
 /// **輪の中で 2 度通る稜（＝継ぎ目）の中点を返します**（4-631）。
@@ -3895,7 +3899,7 @@ fn torus_patch_for_boundary(
     let (mut start_minor, minor_sweep) = angular_span(&mut minor_angles);
 
     // **1 周のときだけ、継ぎ目を面の継ぎ目の稜に合わせます**（4-631。
-    // `ZENITH_TORUS_SEAM_ALIGN=1`。**既定では走りません**）。
+    // 4-746 で既定オンに昇格。`ZENITH_TORUS_SEAM_ALIGN=0` で外せます）。
     //
     // # なぜ要るのか
     //

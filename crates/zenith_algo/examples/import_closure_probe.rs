@@ -93,7 +93,6 @@ fn main() {
     println!();
     let mut open = 0usize;
     let mut dropped_any = 0usize;
-    let mut known_still_red = 0usize;
     // **1 つだけ見たいとき**（`ZENITH_FACE_OWNER_WHY` と併せて使います）。
     let only = std::env::var("ZENITH_CLOSURE_ONLY").ok();
     for (name, path) in &subjects {
@@ -157,17 +156,10 @@ fn main() {
         }
         let holes = undirected.values().filter(|count| **count == 1).count();
         let overlaps = undirected.values().filter(|count| **count > 2).count();
-        // **既知の赤**（4-611、4-612）。**`occ:pipe_bend` だけは、どの刻みでも
-        // 穴 = 10 × 刻み** です（**壁が p-curve を作れず、計画を見ない経路へ
-        // 落ちて、蓋と刻みが 4 倍違う**。4-612）。**見せる・数えない・
-        // 直ったら教える**にします。
-        let known_red =
-            name == "occ:pipe_bend" && holes == divisions * 10 && overlaps == 0;
-        if holes + overlaps > 0 && !known_red {
+        // **`occ:pipe_bend` の既知の赤は、4-631（`ZENITH_TORUS_SEAM_ALIGN`）の
+        // 既定オン昇格（4-746）で直りました。見逃しは外してあります。**
+        if holes + overlaps > 0 {
             open += 1;
-        }
-        if known_red {
-            known_still_red += 1;
         }
         if dropped > 0 {
             dropped_any += 1;
@@ -320,8 +312,6 @@ fn main() {
             mesh.indices.len(),
             if holes + overlaps == 0 {
                 "閉じている"
-            } else if known_red {
-                "**既知の赤**（4-612。rc には数えません）"
             } else {
                 "**開いている**"
             }
@@ -329,17 +319,10 @@ fn main() {
         }
     }
     println!();
-    println!("**開いている通り {open} 通り**（既知の赤を除く）、**溶接で三角形が落ちた通り {dropped_any} 通り**。");
+    println!("**開いている通り {open} 通り**、**溶接で三角形が落ちた通り {dropped_any} 通り**。");
     // **1 つだけ見ているときは、判定しません**（検体が揃っていないので）。
     if only.is_some() {
         return;
-    }
-    // **既知の赤が直ったら、赤にして教えます**（4-612）。**見逃しを残すと、
-    // 次の退行を隠します。**
-    if known_still_red == 0 {
-        println!("**`occ:pipe_bend` の既知の赤が、出なくなりました。**");
-        println!("**直ったのなら、この掃き出しの見逃し（4-612）を外してください。**");
-        std::process::exit(1);
     }
     if open > 0 {
         println!("**読んだ立体の表示メッシュが開いています。**");

@@ -123,8 +123,6 @@ fn main() {
     }
 
     let mut bad = 0usize;
-    // **既知の赤が、まだ赤いか**（4-611）。**直ったら教えます**。
-    let mut known_still_red = 0usize;
     let mut rows = 0usize;
     // **OCCT が配っている実物 2 つ**と、**常設の検体（こちらが書いて OCCT が
     // 読み直した 20 個）**を並べます（4-611）。**どちらも刻み 7 通り**です。
@@ -212,35 +210,15 @@ fn main() {
             let (folded, crossed) = count(&mesh.positions, &mesh.indices, &face_of);
             let worst = holes + overlaps + folded + crossed;
             rows += 1;
-            // **既知の赤は、赤のまま見せますが rc には数えません**（4-611）。
-            //
-            // **`occ:pipe_bend` は、どの刻みでも穴が開いています**——
-            // **穴の数は `10 × 刻み` ぴったり**（8→80、12→120、…48→480）。
-            // **これは私が入れた口のせいではありません**（**既定・口 1 本ずつ・
-            // 口 2 本の 4 通りすべてで同じ数**）。**ずっとそうだった**のに、
-            // **誰も測っていませんでした**（`mesh_watertight_probe` にも
-            // `mesh_density_probe` にも、この検体は入っていません）。
-            //
-            // **これを rc に数えると、門が最初から赤**になり、
-            // **巻き方の退行を捕まえる役に立ちません。** **別の的**なので、
-            // **見せる・数えない・直ったら教える**にします。
-            let known_red = name == "occ:pipe_bend" && holes == divisions * 10 && overlaps == 0;
-            if worst > 0 && !known_red {
+            // **`occ:pipe_bend` の既知の赤は、4-631（`ZENITH_TORUS_SEAM_ALIGN`）の
+            // 既定オン昇格（4-746）で直りました。見逃しは外してあります。**
+            if worst > 0 {
                 bad += 1;
-            }
-            if known_red {
-                known_still_red += 1;
             }
             println!(
                 "  {name:<10} 刻み {divisions:>2}  三角形 {:>7}  穴 {holes:>3}  重なり {overlaps:>3}  折り返し {folded:>3}  別の 2 枚が同じ向き {crossed:>3}  {}",
                 mesh.indices.len(),
-                if worst == 0 {
-                    "緑"
-                } else if known_red {
-                    "**既知の赤**（4-611。rc には数えません）"
-                } else {
-                    "**赤**"
-                }
+                if worst == 0 { "緑" } else { "**赤**" }
             );
         }
     }
@@ -251,23 +229,9 @@ fn main() {
         println!("**上の表は、その状態の実測**です。");
         std::process::exit(1);
     }
-    // **既知の赤が直ったら、赤にして教えます**（4-611）。**直ったのに
-    // 見逃しを続けると、次の退行を隠します。**
-    if known_still_red == 0 {
-        println!("**`occ:pipe_bend` の既知の赤が、出なくなりました。**");
-        println!("**直ったのなら、この掃き出しの見逃し（4-611）を外してください**");
-        println!("——**見逃しを残したままにすると、次の退行を隠します。**");
-        std::process::exit(1);
-    }
     if bad == 0 {
-        println!(
-            "**巻き方は {} 通りすべてで 0 本です**（既知の赤 {known_still_red} 通りを除く）。",
-            rows - known_still_red
-        );
+        println!("**巻き方は {rows} 通りすべてで 0 本です。**");
         println!("**穴・重なり・折り返し・別の 2 枚が同じ向き、どれも立っていません。**");
-        println!();
-        println!("**`occ:pipe_bend` だけは、どの刻みでも穴が開いています**（4-611。");
-        println!("**穴は `10 × 刻み` ぴったり。巻き方の口とは関係なく、ずっとそう**）。");
     } else {
         println!("**{bad} 通りで立っています**（{rows} 通り中）。");
         println!("**4-582・4-602 の結果が戻っています**——`mesh_winding_probe` の");
