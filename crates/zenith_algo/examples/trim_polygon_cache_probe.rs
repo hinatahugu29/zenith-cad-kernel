@@ -231,8 +231,8 @@ fn main() {
 
     println!("多角形を覚えると、答えが動くか（4-721）");
     println!();
-    println!("**覚えない**（いまの既定）と**覚える**で、同じ演算を 2 度回して");
-    println!("突き合わせます。`ZENITH_TRIM_POLYGON_CACHE` は既定オフの口です。");
+    println!("**4-749 で既定は「覚える」に昇格しました**。`ZENITH_TRIM_POLYGON_CACHE=0` で");
+    println!("「覚えない」旧既定に戻した場合と、いまの既定を突き合わせます。");
     println!();
     println!("**`linkrods` の 3 行は既定の設定ではありません**（H8 の口を立てています）。");
     println!();
@@ -334,10 +334,11 @@ fn main() {
                 if h8 {
                     enter_h8_ports(op);
                 }
-                // 覚えない（いまの既定）。
-                std::env::remove_var("ZENITH_TRIM_POLYGON_CACHE");
+                // 覚えない（4-749 で既定が「覚える」に変わったので、
+                // 0 を明示しないと旧既定になりません）。
+                std::env::set_var("ZENITH_TRIM_POLYGON_CACHE", "0");
                 let plain = run(a, &b, op, &tol);
-                // 覚える。
+                // 覚える（いまの既定）。
                 std::env::set_var("ZENITH_TRIM_POLYGON_CACHE", "1");
                 let short = run(a, &b, op, &tol);
                 std::env::remove_var("ZENITH_TRIM_POLYGON_CACHE");

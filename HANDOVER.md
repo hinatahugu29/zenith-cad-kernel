@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月13日（**4-413 〜 4-748 を足しました**）
+**最終更新**: 2026年10月13日（**4-413 〜 4-749 を足しました**）
 
 > ## 速さの口（2026/10/13。**既定に昇格する作業を開始しました**）
 >
@@ -13,7 +13,7 @@
 > | 口 | 既定 | 答えの動き | 門 | 由来 |
 > | :--- | :--- | ---: | :--- | :--- |
 > | `ZENITH_BANDED_INTERPOLATE` | **既定オン**（4-748） | 7.105e-15（18 組） | `banded_interpolate_probe`（56 秒） | 4-706 |
-> | `ZENITH_TRIM_POLYGON_CACHE` | 既定オフ（未着手） | **0**（93 件） | `trim_polygon_cache_probe`（53 分） | 4-720 |
+> | `ZENITH_TRIM_POLYGON_CACHE` | **既定オン**（4-749） | **0**（93 件） | `trim_polygon_cache_probe`（13 分） | 4-720 |
 > | `ZENITH_CURVE_CLAMP_STOP` | 既定オフ（未着手） | **0**（93 件） | `curve_clamp_stop_probe`（40 分） | 4-737 |
 > | `ZENITH_SSI_FITSAMPLES` | 既定オフ（未着手。立てる先は 1024） | **0**（93 件） | `fit_samples_probe`（39 分） | 4-740、4-742 |
 >
@@ -29605,6 +29605,45 @@ py tools/tally_split_reasons.py out.txt
 「断り文が切れていないか」を疑ってください。**
 
 ---
+
+### 4-749. **`ZENITH_TRIM_POLYGON_CACHE` を既定オンに昇格しました——速さの口 4 本のうち 2 本目**（2026年10月13日）
+
+4-748 と同じ手順の 2 本目です。
+
+#### 測り直しました
+
+`trim_polygon_cache_probe` を現コードで回し、**93 件すべて相対のずれ
+0.000e0**（`linkrods` の H8 箱 3 演算も含む）を確認しました。所要
+779 秒（前回の実測は 53 分でしたが、機械の混み具合で振れます。4-603
+と同じ理屈）。
+
+#### 変えたこと
+
+`crates/zenith_algo/src/brep_intersection.rs` の `trim_polygon_cache::on()`
+を、**既定オン**（`ZENITH_TRIM_POLYGON_CACHE=0` で旧既定の「毎回
+取り直す」に戻せる）に変えました。**この口は元々 `OnceLock` を
+使っていなかった**ので、4-748 でハマった「プロセス内で何度も
+付け外すと固定される」問題は踏んでいません。
+
+`trim_polygon_cache_probe.rs` 側も、`remove_var` の意味が「覚えない」
+から「覚える（新既定）」に変わったので、**覚えない側を測るには
+`0` を明示する**ように直しました。
+
+#### 確かめたこと
+
+| 回したもの | 結果 |
+| :--- | :--- |
+| `trim_polygon_cache_probe`（直したもの） | **緑（93 件、相対ずれ 0.000e0）** |
+| `cargo test --release --workspace --exclude zenith_py` | **751 件通過、0 件失敗** |
+| `bash tools/run_gates.sh --quick --no-tests` | **59/59 緑**（`trim_polygon_cache_probe` 779 秒） |
+| `py tools/build_pyd.py` | **指紋を更新して通過** |
+| `py tools/check_doc_claims.py` | **緑** |
+
+#### 残り
+
+速さの口はあと 2 本——`ZENITH_CURVE_CLAMP_STOP`・
+`ZENITH_SSI_FITSAMPLES=1024`。同じ手順で続けます。
+
 
 ### 4-748. **`ZENITH_BANDED_INTERPOLATE` を既定オンに昇格しました——速さの口 4 本のうち 1 本目**（2026年10月13日）
 

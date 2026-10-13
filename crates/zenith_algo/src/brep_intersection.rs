@@ -9680,7 +9680,8 @@ fn polygon_sagitta_bound(polygon: &[Point2]) -> f64 {
 /// その輪を、指定の細かさで多角形にする。
 /// **輪の多角形を覚える口**（4-720 の測り。`ZENITH_TRIM_POLYGON_CACHE`）。
 ///
-/// **既定では覚えません**——既定は今までどおり、毎回取り直します。
+/// **4-749 で既定オンに昇格**——`ZENITH_TRIM_POLYGON_CACHE=0` で
+/// 毎回取り直す旧既定へ戻せます。
 ///
 /// # なぜ要るか（4-719 の実測）
 ///
@@ -9704,8 +9705,8 @@ fn polygon_sagitta_bound(polygon: &[Point2]) -> f64 {
 /// あります。
 ///
 /// **それでも、取り違えないことを証明したわけではありません。**
-/// **だから既定オフ**です。**門（`trim_polygon_cache_probe`）で、
-/// 覚えた場合と覚えない場合の答えを突き合わせます。**
+/// **門（`trim_polygon_cache_probe`）で、覚えた場合と覚えない場合の
+/// 答えを突き合わせ続けます。**
 mod trim_polygon_cache {
     use super::{sample_pcurve_loop, FacePcurveLoop, Point2};
     use std::cell::RefCell;
@@ -9718,8 +9719,11 @@ mod trim_polygon_cache {
         static HITS: RefCell<(u64, u64)> = const { RefCell::new((0, 0)) };
     }
 
+    /// **既定オン**（4-749。`ZENITH_TRIM_POLYGON_CACHE=0` で外せます）。
     pub(super) fn on() -> bool {
-        std::env::var_os("ZENITH_TRIM_POLYGON_CACHE").is_some()
+        std::env::var("ZENITH_TRIM_POLYGON_CACHE")
+            .map(|value| value != "0")
+            .unwrap_or(true)
     }
 
     /// **区間の `edge_id` を順に混ぜた指紋。**
