@@ -2,7 +2,8 @@
 //!
 //! 4-705 で、交線の当てはめ 171.8 秒のうち **93% が `interpolate_points` の
 //! 密 LU** だと測りました。`ZENITH_BANDED_INTERPOLATE` は同じ行列を帯として
-//! 解く口（既定オフ）です。**速いかどうかの前に、同じ答えかどうか**を測ります。
+//! 解く口で、**4-748 で既定オンに昇格しました**。**速いかどうかの前に、
+//! 同じ答えかどうか**を測ります。
 //!
 //!     cargo run --release -p zenith_algo --example banded_interpolate_probe
 //!
@@ -39,8 +40,8 @@ fn sample_points(count: usize, kind: &str) -> Vec<Point3> {
 fn main() {
     println!("帯で解いた補間と、密で解いた補間を比べます（4-706）");
     println!();
-    println!("**既定は密**です。`ZENITH_BANDED_INTERPOLATE` は既定オフの口で、");
-    println!("この測りの中だけ立てます。");
+    println!("**4-748 で既定は帯に昇格しました**。ここでは `ZENITH_BANDED_INTERPOLATE=0` で");
+    println!("密に戻した場合と、既定（帯）を突き合わせます。");
     println!();
     println!(
         "{:<10} {:>6} {:>10} {:>10} {:>12} {:>12}",
@@ -55,7 +56,8 @@ fn main() {
         for count in [16usize, 64, 503, 2048, 2503, 4097] {
             let points = sample_points(count, kind);
 
-            std::env::remove_var("ZENITH_BANDED_INTERPOLATE");
+            // **4-748 で既定オンに昇格**——`0` を明示しないと密になりません。
+            std::env::set_var("ZENITH_BANDED_INTERPOLATE", "0");
             let dense_began = Instant::now();
             let dense = NurbsCurve3::interpolate_points(3, &points);
             let dense_secs = dense_began.elapsed().as_secs_f64();

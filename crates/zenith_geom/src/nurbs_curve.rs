@@ -109,9 +109,20 @@ impl NurbsCurve3 {
     ///
     /// 手順は The NURBS Book の A9.1（大域補間）。弦長で媒介変数を割り当て、
     /// ノットはその平均で置き、`N P = Q` を解く。有理ではない（重みは 1）。
-/// **補間の行列を帯として解く口**（4-705 の測り。`ZENITH_BANDED_INTERPOLATE`）。
+    /// `ZENITH_BANDED_INTERPOLATE` の既定（4-748。**既定オン**。`=0` で密に戻せます）。
+    ///
+    /// **毎回読みます**（`OnceLock` にしません）——**`banded_interpolate_probe`
+    /// が同じプロセスの中で何度も付け外しして比べる**ので、固定すると
+    /// その測りが壊れます（4-748）。
+    fn banded_interpolate_default() -> bool {
+        std::env::var("ZENITH_BANDED_INTERPOLATE")
+            .map(|value| value != "0")
+            .unwrap_or(true)
+    }
+
+/// **補間の行列を帯として解く口**（4-705 の測り。`ZENITH_BANDED_INTERPOLATE`。
+/// 4-748 で既定オンに昇格）。
 ///
-/// **既定は使いません**——既定は今までどおり `count × count` の密 LU です。
 /// **なぜ要るか**（4-705 の実測）: **4,097 点の補間 1 回で 16.7 秒**。
 /// 行列は 1 行に非ゼロが `degree+1` 個しかなく、**1,678 万マスのうち
 /// 埋まっているのは 0.1%** です。
@@ -238,9 +249,10 @@ fn solve_interpolation_banded(
 
         // 3. N P = Q を解く。
         //
-        // **既定は密行列**です（4-705 まで、ずっとこれでした）。**`ZENITH_BANDED_INTERPOLATE`
-        // を立てると帯として解きます**——4-705 で 4,097 点 1 回 16.7 秒を測った所です。
-        if std::env::var_os("ZENITH_BANDED_INTERPOLATE").is_some() {
+        // **既定は帯行列**です（4-748 で既定オンに昇格。それまでは密行列が
+        // 既定でした）。**4-705 で 4,097 点 1 回 16.7 秒を測った所**です。
+        // `ZENITH_BANDED_INTERPOLATE=0` で密行列に戻せます。
+        if Self::banded_interpolate_default() {
             if let Some(rows) =
                 Self::solve_interpolation_banded(count, degree, &parameters, &knot_vector, points)
             {

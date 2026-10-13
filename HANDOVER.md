@@ -1,20 +1,26 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月13日（**4-413 〜 4-747 を足しました**）
+**最終更新**: 2026年10月13日（**4-413 〜 4-748 を足しました**）
 
-> ## 速さの口（2026/10/12。**昇格は持ち主の判断です**）
+> ## 速さの口（2026/10/13。**既定に昇格する作業を開始しました**）
 >
-> **H8 の `A−B` は、既定で 239〜251 秒**です。**既定オフの口を入れると
-> 36 秒**になります（**6.9 倍**）。**口は 2 種類**あります。
+> **H8 の `A−B` は、素の既定で 239〜251 秒**です。**答えを 1 ビットも
+> 変えない口を全部入れると 36 秒**になります（**6.9 倍**）。**口は
+> 2 種類**あります。
 >
-> ### 答えを 1 ビットも変えない口——4 つ（**全部に門があります**）
+> ### 答えを 1 ビットも変えない口——4 つ
 >
-> | 口 | 設定 | 答えの動き | 門 | 由来 |
+> | 口 | 既定 | 答えの動き | 門 | 由来 |
 > | :--- | :--- | ---: | :--- | :--- |
-> | `ZENITH_BANDED_INTERPOLATE` | 立てる | 7.105e-15（18 組） | `banded_interpolate_probe`（84 秒） | 4-706 |
-> | `ZENITH_TRIM_POLYGON_CACHE` | 立てる | **0**（93 件） | `trim_polygon_cache_probe`（53 分） | 4-720 |
-> | `ZENITH_CURVE_CLAMP_STOP` | 立てる | **0**（93 件） | `curve_clamp_stop_probe`（40 分） | 4-737 |
-> | `ZENITH_SSI_FITSAMPLES` | **1024** | **0**（93 件） | `fit_samples_probe`（39 分） | 4-740、4-742 |
+> | `ZENITH_BANDED_INTERPOLATE` | **既定オン**（4-748） | 7.105e-15（18 組） | `banded_interpolate_probe`（56 秒） | 4-706 |
+> | `ZENITH_TRIM_POLYGON_CACHE` | 既定オフ（未着手） | **0**（93 件） | `trim_polygon_cache_probe`（53 分） | 4-720 |
+> | `ZENITH_CURVE_CLAMP_STOP` | 既定オフ（未着手） | **0**（93 件） | `curve_clamp_stop_probe`（40 分） | 4-737 |
+> | `ZENITH_SSI_FITSAMPLES` | 既定オフ（未着手。立てる先は 1024） | **0**（93 件） | `fit_samples_probe`（39 分） | 4-740、4-742 |
+>
+> **4 本とも、立てれば答えは動かないと確かめてあります。** **既定への
+> 昇格は、`ZENITH_TORUS_SEAM_ALIGN`（4-746）で実演した手順——測り直す
+> →見逃しを外す→既定を反転する→通しと門を確認する——を 1 本ずつ
+> 繰り返しています**（ROADMAP.md 柱①）。
 >
 > **4 つ入れた H8**（同じ走りの中で交互に測りました）:
 >
@@ -29599,6 +29605,52 @@ py tools/tally_split_reasons.py out.txt
 「断り文が切れていないか」を疑ってください。**
 
 ---
+
+### 4-748. **`ZENITH_BANDED_INTERPOLATE` を既定オンに昇格しました——速さの口 4 本のうち 1 本目**（2026年10月13日）
+
+ROADMAP.md の柱①で立てた「答えを 1 ビットも変えない 4 つの口を、
+`ZENITH_TORUS_SEAM_ALIGN`（4-746）と同じ手順で 1 本ずつ既定に上げる」
+の最初の 1 本です。持ち主から「6 時間動ける、どこから手を付けるか
+検討・実行してよい」と言われたので着手しました。
+
+#### 測り直しました
+
+`banded_interpolate_probe` を現コードで回し、4-706 と同じ 18 組で
+**制御点のいちばん大きなずれ 7.105e-15、曲線のずれ 7.105e-15**
+（許す幅 1e-9 の内）を確認しました。
+
+#### 変えたこと
+
+`crates/zenith_geom/src/nurbs_curve.rs` の `interpolate_points` を、
+**既定で `ZENITH_BANDED_INTERPOLATE` が立っているのと同じ帯行列で
+解く**ように変えました。`=0` を渡すと密 LU（旧既定）に戻ります。
+
+**ハマった所**: 判定を `OnceLock` で固定する形にすると、同じプロセス
+内で何度も付け外して比べる `banded_interpolate_probe` 自身の測りが
+壊れます（最初に読んだ値のまま固定されるので、2 回目以降の付け外しが
+効かない）。`ZENITH_TORUS_SEAM_ALIGN` は単一プロセスの起動時にしか
+読まないので `OnceLock` で問題になりませんでしたが、**この口は
+プロセス内で何度も読み直す口**なので、`OnceLock` を外して毎回読む
+形にしました。**`banded_interpolate_probe` 自身も直しました**——
+`remove_var` が「密」の意味だったのが、既定反転後は「帯（既定）」の
+意味に変わったので、密側を測るには明示的に `0` を渡す必要があります。
+
+#### 確かめたこと
+
+| 回したもの | 結果 |
+| :--- | :--- |
+| `banded_interpolate_probe`（直したもの） | **緑（制御点・曲線とも最大 7.105e-15）** |
+| `cargo test --release --workspace --exclude zenith_py` | **751 件通過、0 件失敗** |
+| `bash tools/run_gates.sh --quick --no-tests` | **59/59 緑**（`banded_interpolate_probe` 56 秒） |
+| `py tools/build_pyd.py` | **指紋を更新して通過** |
+| `py tools/check_doc_claims.py` | **緑** |
+
+#### 残り
+
+速さの口はあと 3 本——`ZENITH_TRIM_POLYGON_CACHE`・
+`ZENITH_CURVE_CLAMP_STOP`・`ZENITH_SSI_FITSAMPLES=1024`。
+同じ手順で続けます。
+
 
 ### 4-747. **`main` への早送りは、ツール側の分類器に断られました。見つけた未記録の口 `ZENITH_IMPRINT_KEEPS_TOL` は、安全だが昇格する理由が無いと分かりました**（2026年10月13日）
 
