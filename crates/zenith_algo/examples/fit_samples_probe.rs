@@ -232,8 +232,8 @@ fn main() {
 
     println!("ずれの標本に上限を置くと、答えが動くか（4-710）");
     println!();
-    println!("**上限オフ**（いまの既定）と**上限 {cap}** で、同じ演算を 2 度回して");
-    println!("突き合わせます。`ZENITH_SSI_FITSAMPLES` は既定オフの口（4-495）です。");
+    println!("**上限オフ**（4-751 で既定オンに昇格する前の旧既定）と**上限 {cap}** で、");
+    println!("同じ演算を 2 度回して突き合わせます。");
     println!();
 
     let subjects = [
@@ -322,8 +322,9 @@ fn main() {
                 if h8 {
                     enter_h8_ports(op);
                 }
-                // 上限オフ。
-                std::env::remove_var("ZENITH_SSI_FITSAMPLES");
+                // 上限オフ（4-751 で既定が 1024 になったので、`0` を
+                // 明示しないと上限なしになりません）。
+                std::env::set_var("ZENITH_SSI_FITSAMPLES", "0");
                 let plain = run(a, &b, op, &tol);
                 // 上限あり。
                 std::env::set_var("ZENITH_SSI_FITSAMPLES", cap.to_string());
