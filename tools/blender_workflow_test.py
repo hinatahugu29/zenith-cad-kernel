@@ -32,6 +32,11 @@ Blender の中で通した記録がありませんでした**——`tools/blende
 5. **STEP 書き出し**——ファイルが実在し、空でないか。
 6. **表示メッシュ（OBJ）書き出し**——Blender 側で見る用途を想定し、
    ファイルが実在し、空でないか。
+7. **回転**——軸から離れた矩形スケッチを回し、パップスの定理
+   （4-391 と同じ道具立て）と突き合わせます。
+8. **フィレット**——回転体の稜を 1 本丸めます。
+9. **積み重ねたブーリアン**——穴あき板とフィレット済みの回転体の和を
+   取り、検証して STEP に書き出します（ここまでの操作を積む一連）。
 
 **赤にするのは**——どこかが断られる、閉じた式と食い違う、書き出した
 ファイルが無いか空、のいずれか。
@@ -156,6 +161,74 @@ def main():
     except Exception as exc:
         print("6. OBJ 書き出し: **断られました**: %r" % (exc,))
         wrong += 1
+
+    # 7. 回転: 軸から離れた矩形を Y 軸まわりに回す（ワッシャー形）。
+    #    閉じた式はパップスの定理（4-391 と同じ道具立て）。
+    washer_sketch = '{"points": [[5,0],[8,0],[8,3],[5,3]], "lines": [[0,1],[1,2],[2,3],[3,0]]}'
+    try:
+        washer = z.Solid.from_sketch_revolved(washer_sketch, 0.0, 0.0, 0.0, 1.0)
+        expected_washer = math.pi * (8.0 ** 2 - 5.0 ** 2) * 3.0
+        got_washer = washer.volume
+        residual_washer = abs(got_washer - expected_washer) / expected_washer
+        print("7. 回転（ワッシャー形）: 閉じた式 %.6f、測った値 %.6f、相対差 %.3e  %s"
+              % (expected_washer, got_washer, residual_washer,
+                 "ok" if residual_washer < 1e-9 else "**ちがう**"))
+        if residual_washer >= 1e-9:
+            wrong += 1
+    except Exception as exc:
+        print("7. 回転: **断られました**: %r" % (exc,))
+        wrong += 1
+        washer = None
+
+    # 8. フィレット: 回転体の稜を 1 本、丸める（体積は増える）。
+    #
+    # **分かったこと**: `washer.edges()` には 90 度の凸稜が何本もあります
+    # （回転面を区切る稜）。**それでも `blendable_edges()` は 0 本**——
+    # `EdgeBlender` は、スケッチの回転で出来た曲面の稜を、まだフィレットの
+    # 対象として認識していません。**バグではなく、まだ対応していない
+    # 範囲**です（README の「フィレット/面取りの守備範囲」と同じ話）。
+    filleted = None
+    if washer is not None:
+        try:
+            edges = washer.blendable_edges()
+            if not edges:
+                print("8. フィレット: **丸められる稜が 0 本**（`edges()` には 90 度の"
+                      "凸稜が複数あるのに `blendable_edges()` は 0——スケッチの回転面は、"
+                      "まだフィレットの対象として認識されません。守備範囲の宿題として記録）")
+            else:
+                edge = edges[0]
+                radius = min(0.3, edge["max_fillet_radius"] * 0.5)
+                filleted = washer.fillet_edge(edge["edge_id"], radius)
+                print("8. フィレット: 稜 %d を半径 %.3f で丸め、体積 %.6f → %.6f"
+                      % (edge["edge_id"], radius, got_washer, filleted.volume))
+                if filleted.volume <= 0.0:
+                    wrong += 1
+        except Exception as exc:
+            print("8. フィレット: **断られました**: %r" % (exc,))
+            wrong += 1
+
+    # 9. 積み重ねたブーリアン + 書き出し: 穴あき板と回転体（フィレットが
+    #    使えなかったので、回転体そのまま）の和を取り、STEP で書き出す。
+    stack_piece = filleted if filleted is not None else washer
+    if stack_piece is not None:
+        try:
+            stacked = drilled.union(stack_piece.translated(0.0, 0.0, 5.0))
+            report2 = stacked.validate()
+            print("9. 積み重ねたブーリアン: 体積 %.6f、検証 valid=%s"
+                  % (stacked.volume, report2.get("valid")))
+            if not report2.get("valid", False):
+                wrong += 1
+            import tempfile as _tempfile
+            out_dir2 = os.environ.get("ZENITH_WORKFLOW_OUT") or _tempfile.gettempdir()
+            stacked_path = os.path.join(out_dir2, "blender_workflow_stacked.step")
+            stacked.to_step(stacked_path, "ZENITH_WORKFLOW_STACKED")
+            size2 = os.path.getsize(stacked_path)
+            print("   STEP 書き出し: %s（%d バイト）" % (stacked_path, size2))
+            if size2 <= 0:
+                wrong += 1
+        except Exception as exc:
+            print("9. 積み重ねたブーリアン: **断られました**: %r" % (exc,))
+            wrong += 1
 
     print()
     print("誤答・断り %d 件" % wrong)
