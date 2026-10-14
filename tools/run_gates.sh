@@ -441,6 +441,25 @@ else
     fi
   fi
 
+  # **スケッチ→押し出し→ブーリアン→書き出しを、Blender の中で通します**
+  # （ROADMAP.md 柱③。4-758）。**原始立体だけの `blender_load_addon.py`
+  # とは別に、入口が実際に使えるかをここで見ます。**
+  if [ -n "$BLENDER" ]; then
+    started=$(date +%s)
+    ZENITH_ROOT="$PWD" "$BLENDER" --background --factory-startup       --python tools/blender_workflow_test.py > "$OUT/blender_workflow.txt" 2>&1
+    code=$?
+    elapsed=$(( $(date +%s) - started ))
+    if [ "$code" != "0" ]; then
+      fail=1
+      red="$red blender_workflow"
+      printf "  %-30s **赤**  exit=%s  (%ss)  %s
+" "スケッチ→押出→書き出し" "$code" "$elapsed" "$OUT/blender_workflow.txt"
+    else
+      printf "  %-30s 緑    (%ss)
+" "スケッチ→押出→書き出し" "$elapsed"
+    fi
+  fi
+
   if [ -n "$BLENDER" ] && [ -f target/mesh_exports/manifest.json ]; then
     started=$(date +%s)
     "$BLENDER" --background --factory-startup       --python tools/blender_read_gltf_exports.py > "$OUT/blender_gltf.txt" 2>&1
