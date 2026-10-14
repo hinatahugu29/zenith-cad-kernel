@@ -15,6 +15,7 @@ thiserror.workspace = true
 serde.workspace = true
 approx.workspace = true
 log.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 

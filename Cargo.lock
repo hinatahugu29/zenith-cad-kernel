@@ -519,6 +519,7 @@ dependencies = [
  "approx",
  "log",
  "nalgebra",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror",

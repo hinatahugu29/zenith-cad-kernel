@@ -3656,9 +3656,8 @@ fn collect_batch_splits_for_faces(
     // 絞れているのに（4-321 で A 面 1・面 35 まで来ました）、割る側の出力と
     // **番号が繋がっていませんでした**。
     let why = std::env::var_os("ZENITH_BATCH_WHY").is_some();
-    edges_by_face
-        .into_iter()
-        .filter_map(|(face_index, split_edges)| {
+    let items: Vec<(usize, Vec<Edge>)> = edges_by_face.into_iter().collect();
+    let split_one = |(face_index, split_edges): (usize, Vec<Edge>)| -> Option<PlanarFaceBatchSplit> {
             let face = faces.get(face_index)?;
             // **面 1 枚ごとの時間と、その面が抱える交線の本数**（4-723。
             // `ZENITH_BOOLEAN_TIME=1`、既定オフ）。
@@ -3827,8 +3826,18 @@ fn collect_batch_splits_for_faces(
                 split_edge_count: split_edges.len(),
                 result,
             })
-        })
-        .collect()
+    };
+    // **4-757 の口**（`ZENITH_PARALLEL_SPLIT`。既定オフ）。**面ごとの
+    // `split_face_by_edges` は、他の面の結果に依らない**ので、並列に
+    // 呼べるはずです。**診断（`ZENITH_BOOLEAN_TIME`・`ZENITH_BATCH_WHY`）
+    // はスレッドごとの集計になり、並列のときは数が信用できません**——
+    // **答え（`PlanarFaceBatchSplit`）そのものは変わりません。**
+    if std::env::var_os("ZENITH_PARALLEL_SPLIT").is_some() {
+        use rayon::prelude::*;
+        items.into_par_iter().filter_map(split_one).collect()
+    } else {
+        items.into_iter().filter_map(split_one).collect()
+    }
 }
 
 /// Builds cap faces from closed loops, letting a loop inside another become a
