@@ -1,32 +1,37 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月14日（**4-413 〜 4-753 を足しました**）
+**最終更新**: 2026年10月14日（**4-413 〜 4-754 を足しました**）
 
-> ## ROADMAP 柱①「その先」——H8 の口 20 本を他の検体にも立てたら（2026/10/14）
+> ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 17 本を既定オンに昇格しました（2026/10/14）
 >
-> **速さの口 4 本（上の表）とは違う性質**だと分かりました。
-> `foreign_boolean_probe` と同じ **10 検体・90 件**に **H8 の口 20 本**
-> （`tools/h8_ports.sh`。答えを返すための口で、速さの口ではありません）
-> を立てたところ、**90 件すべて許す幅 1e-6 の内**でしたが、
-> **最悪 7.573e-8（`torus` / `corner block` / `A^B`）——0 ではありません**。
+> 4-752・4-753 で、H8 の口 20 本を `linkrods` 以外の 10 検体（90 件）
+> にも立てて測ったところ、**最悪 7.573e-8 のずれ**があり、**切り分けて
+> `ZENITH_SUBDIV_THIRD` を外すと最悪 1.251e-8**（他 89 件は 1e-10 以下）
+> まで縮むと分かりました。
 >
-> **切り分けました**（4-753）——**その 7.573e-8 は、20 本中ほぼ 1 本
-> `ZENITH_SUBDIV_THIRD`（積にだけ立てる口）が作っています**。
-> **残り 19 本は、この 1 件では単独でも 1e-12 台**（float の雑音と
-> 同じ桁）でした。`ZENITH_SUBDIV_THIRD` を外して 90 件を測り直すと、
-> **最悪は 1.251e-8 に縮み**（`cone` / `corner block` / `A^B`。
-> **体積が 0.003238 とほぼ 0 の、退化に近い組**）、**それ以外は
-> 1e-10 以下**でした。
+> **さらに `ZENITH_WELD_ENDS` も外すと、残り 19 本は 90 件とも最悪
+> 1.818e-9**（float の雑音と同じ桁）——**4 つの速さの口と同じ安全の
+> 階級**だと確かめました（4-754）。
 >
-> **`ZENITH_SUBDIV_THIRD` は、もともと「断りを誤答に変える」と
-> 分かっていた口**です（4-558。`enter_h8_ports` が積にしか立てない
-> 理由）。**今回の測りは、その既知の危うさと符合します。**
+> **19 本を既定オンにしたところ、`ZENITH_ID_WELD` と
+> `ZENITH_ID_WELD_PLANES` の組だけ（単独では無害）が、薄い輪を切った
+> トーラスの `A^B`（深さ 1e-4）を断る退行を作りました**
+> （`h8_promo_regress_probe` で 171 通りの組を総当たりして発見）。
+> **この 2 本だけ既定オフへ戻し、残り 17 本を既定オンにしました。**
 >
-> **結論**: この 20 本（と、とくに `ZENITH_SUBDIV_THIRD`）は、
-> **一括で既定に上げるものではありません**——**19 本の大半は小さい
-> ながらも「答えを 1 ビットも変えない」4 本とは別の桁**で、
-> **個別に見て判断するものです。** `h8_ports_on_others_probe` を
-> 門に足し、**いまの小さなずれが広がったら赤にする**形にしました。
+> **結果——H8 の `linkrods` が、口 3〜4 本で返るようになりました**
+> （旧既定は 20 本）:
+>
+> | 演算 | 必要な口 | 体積 |
+> | :--- | :--- | ---: |
+> | `A−B` | `WELD_ENDS`・`ID_WELD`・`ID_WELD_PLANES` | 1.551149 |
+> | `A∪B` | 同上 | 7.805801 |
+> | `A^B` | 同上 ＋ `SUBDIV_THIRD` | 2.295747 |
+>
+> **体積・面数とも、口 20 本のときと完全に同じ**です。`ZENITH_SUBDIV_THIRD`
+> は既知の危うさ（4-558）のため、`ZENITH_ID_WELD`／`ZENITH_ID_WELD_PLANES`
+> は今回見つけた組の退行のため、**この 3 本だけが既定オフのまま残って
+> います。** ROADMAP.md 柱①を参照。
 
 > ## 速さの口（2026/10/14。**答えを 1 ビットも変えない 4 本は、全部既定オンになりました**）
 >
@@ -29634,6 +29639,95 @@ py tools/tally_split_reasons.py out.txt
 「断り文が切れていないか」を疑ってください。**
 
 ---
+
+### 4-754. **H8 の口 20 本のうち 17 本を既定オンに昇格しました——`linkrods` が口 3〜4 本で返るようになりました**（2026年10月14日）
+
+4-753 の続きです。`ZENITH_SUBDIV_THIRD` を外した 19 本の安全性を、
+もう一段深く確かめ、既定へ昇格しました。
+
+#### もう 1 本、外しました——`ZENITH_WELD_ENDS`
+
+`h8_ports_bisect_probe` で `cone` / `corner block` / `A^B` を測ると、
+**`ZENITH_WELD_ENDS` 単独で 4.581e-8**（`SUBDIV_THIRD` は 0.000e0の
+この組では無関係）。**`WELD_ENDS` は実際に距離のしきい値で点を
+動かす口**なので、小さな体積変化は原理的に当然です。
+
+`SUBDIV_THIRD` と `WELD_ENDS` を両方外した **19 本**で 90 件を
+測り直すと、**最悪 1.818e-9**——**全件が float の雑音と同じ桁**
+でした。**これは 4 つの速さの口（4-748〜4-751）と同じ安全の
+階級**です。
+
+#### 19 本を既定オンにするコードを書きました
+
+`crates/zenith_algo/src/brep_intersection.rs` に共有の判定
+`h8_port_on(name)`（`=0` で戻せる既定オン）を足し、`face_split.rs`
+にも同じ形で複製しました（クレートを分けるほどの重複ではないので
+2 行だけ複製）。`zenith_topo/src/face.rs` の `ZENITH_EDGE_TOL_BOUNDARY`
+と `zenith_io/src/step_import.rs` の `roughness_samples()`（既定
+8 → 64）も同様に直しました。**`ZENITH_CHAIN_AREA_TOL` と
+`ZENITH_KEEP_MIXED_HOLES` は判定が逆向き**（立てると既定の動きを
+止める）だったので、`!h8_port_on(...)` にしました。
+
+#### 通しテストで、2 つの既存のつまずきを踏みました
+
+1. **`seam_torus_loop_repair_test.rs` の
+   `without_the_repair_the_intersection_curves_do_not_close`**が
+   `4` を期待して `2` になり落ちました。**この警告文自身が予告して
+   いた形**（「repair moved somewhere else、this test is stale」）
+   ——4-480／4-484 の経緯と同じ理屈で、`ZENITH_SSI_EMPTY_RETRY`・
+   `ZENITH_SSI_EXTRA_BRANCHES` が既定オンになったことで、未修理の
+   生の交線候補の内訳が変わっただけでした。**ブーリアン自体
+   （`boolean_solids_exact_result`）は変わらず通る**ので、期待値を
+   `2` に直しました。
+
+2. **`thin_ring_face_point_test.rs` の
+   `a_thin_ring_cut_of_a_torus_is_unioned_and_matches_the_closed_form`**
+   が、深さ 1e-4 の `A^B` で**本当に断られる**退行でした
+   （「Face N boundary point ... off surface」）。**これは数値の
+   ブレではなく実害**です。
+
+#### 退行の切り分け——単独では無害、組だけが効く
+
+新しく `h8_promo_regress_probe` を作り、**19 本を 1 本ずつ**測った
+ところ**全部 `Ok`**。**全 19 本を一緒に立てたときだけ断られる**
+ので、**2 本の組を 171 通り総当たり**しました。
+
+**`ZENITH_ID_WELD` ＋ `ZENITH_ID_WELD_PLANES` の組だけが断ります。**
+単独ではどちらも無害です。**両方とも「同じ稜から出た端・重心を
+揺らす」口**で、組み合わせると、薄い輪（深さ 1e-4）の境界点を
+面の許容を超えて動かすようです（原因の深追いはしていません）。
+
+**この 2 本だけ既定オフへ戻しました。** 残り **17 本**を既定オンに
+しています。
+
+#### 確かめたこと
+
+| 回したもの | 結果 |
+| :--- | :--- |
+| `h8_promo_regress_probe`（新規） | **19 本どれも単独は `Ok`。組は `ID_WELD`＋`ID_WELD_PLANES` のみ断る** |
+| `thin_ring_face_point_test`（直した後） | **緑** |
+| `cargo test --release --workspace --exclude zenith_py` | **751 件通過、0 件失敗**（`seam_torus_loop_repair_test` の期待値直し込み） |
+| `bash tools/run_gates.sh --quick --no-tests` | **60/60 緑** |
+| `py tools/build_pyd.py` | **指紋を更新して通過** |
+
+#### `linkrods` が、口 3〜4 本で返るようになりました
+
+`ZENITH_WELD_ENDS`・`ZENITH_ID_WELD`・`ZENITH_ID_WELD_PLANES`（と
+`A^B` だけ `ZENITH_SUBDIV_THIRD`）の **3〜4 本**だけで、`linkrods`
+の 3 演算が**旧既定の 20 本と完全に同じ体積・面数**で返ります——
+
+```text
+A-B:  体積 1.551149、面 37 枚（43.0 秒）
+A^B:  体積 2.295747、面 37 枚（37.3 秒）
+AuB:  体積 7.805801、面 49 枚（36.6 秒）
+```
+
+**ROADMAP 柱①の「口を立てずに実物の STEP が切れる」に、大きく
+近づきました。** 残っているのは `WELD_ENDS`・`ID_WELD`・
+`ID_WELD_PLANES`・`SUBDIV_THIRD` の 4 本——**3 本は今回見つけた
+組の退行のため、1 本（`SUBDIV_THIRD`）は既存の既知の危うさのため**
+既定オフに残しています。
+
 
 ### 4-753. **4-752 の 7.573e-8 を切り分けました——犯人はほぼ `ZENITH_SUBDIV_THIRD` 1 本でした**（2026年10月14日）
 

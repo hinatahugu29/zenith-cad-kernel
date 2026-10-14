@@ -186,9 +186,17 @@ fn without_the_repair_the_intersection_curves_do_not_close() {
     // 細かい種が見つけた枝が**他の枝を締め出し**、**トーラスを 2 離した
     // 配置が返らなくなりました**。**浮いた端 2 つと、返る配置 2 つ**を
     // 秤に掛けて、**返る配置を採りました**（浮いた端は修理が埋めます）。
+    //
+    // **4-754 で 4 → 2 に戻りました**——**この警告文が予告していたとおり**
+    // （「repair moved somewhere else」）です。`ZENITH_SSI_EMPTY_RETRY`・
+    // `ZENITH_SSI_EXTRA_BRANCHES` を含む H8 の口 19 本を既定オンに
+    // 昇格したところ、**この検体では細かい種に戻ったのと同じ数**に
+    // なりました。**ブーリアン自体は下の `boolean_solids_exact_result`
+    // で変わらず通る**ので、退行ではなく「縫う前の生の交線候補」の
+    // 内訳が変わっただけです。
     assert_eq!(
-        loose, 4,
-        "the un-repaired intersection curves should still leave 4 loose ends;          if this changed, the repair moved somewhere else and this test is stale"
+        loose, 2,
+        "the un-repaired intersection curves should leave 2 loose ends (4-754: H8 の口 19 本を既定オンに昇格した後の数);          if this changed again, the repair moved somewhere else and this test is stale"
     );
 
     // **それでもブーリアンは通ります**——**間を埋めているのが修理**です。

@@ -168,6 +168,14 @@ const NULL_PIECE_FRACTION: f64 = 1e-9;
 /// どれかの面で p-curve が取れなければ 3D の面積に落ちます。**元は測れたのに
 /// 片だけ測れなかったときは、その 3D の数もトリムを知りません**ので、
 /// `unmeasurable_piece` を立てて呼ぶ側に断らせます（4-214、4-215）。
+/// **H8 の口のうち、4-754 で既定オンに昇格した 19 本の判定**
+/// （`brep_intersection.rs` の `h8_port_on` と同じ形。クレートをまたぐ
+/// `pub(crate)` にはしていません——重複は 2 行だけです）。
+/// **`=0` で旧既定（立てない）に戻せます。**
+fn h8_port_on(name: &str) -> bool {
+    std::env::var(name).map(|value| value != "0").unwrap_or(true)
+}
+
 fn parameter_area_check(face: &Face, pieces: &[Face]) -> ParameterAreaCheck {
     match parameter_areas(face, pieces) {
         Some((original, areas)) => ParameterAreaCheck::new(original, areas, true, None),
@@ -447,7 +455,7 @@ impl FaceSplitter {
         // **`Face::bounding_box()` では見られません**——NURBS のとき
         // **曲面まるごと**（円柱の全周）を含めるので、いつも「中」です。
         // **外周の輪の箱**で見ます。
-        if std::env::var_os("ZENITH_HOLE_BOX_GUARD").is_some() {
+        if h8_port_on("ZENITH_HOLE_BOX_GUARD") {
             let box_of = face.outer_wire.bounding_box();
             let slack = tol.linear.max(face.tolerance) * 10.0;
             for piece in &ordered {
@@ -646,7 +654,7 @@ impl FaceSplitter {
             //
             // **幅を緩める手は 6 戦 0 勝**（4-352）なので、**既定にはしません。**
             // **測るための口**です。
-            if std::env::var_os("ZENITH_FACE_SNAP").is_some() {
+            if h8_port_on("ZENITH_FACE_SNAP") {
                 fixed.max(face.tolerance + face.pcurve_tolerance)
             } else {
                 fixed
@@ -693,7 +701,7 @@ impl FaceSplitter {
         if ends_off_boundary > limit {
             // **穴から穴へ渡る切り込み**（4-523 で設計・測定、4-531 で入れ直し。
             // `ZENITH_HOLE_CUT=1`。**既定では走りません**）。
-            if std::env::var_os("ZENITH_HOLE_CUT").is_some() {
+            if h8_port_on("ZENITH_HOLE_CUT") {
                 if let Some(result) =
                     Self::split_hole_to_hole(face, cut, start, end, limit, curve_off_surface, tol)
                 {
@@ -1029,8 +1037,9 @@ impl FaceSplitter {
         // 実測（`linkrods` の積、穴切り #2）は
         // **1.84262249929e-6 と 1.84264006264e-6**——**差は 1.8e-11、10 万分の 1**。
         // **巻き方という位相の話を、丸め誤差に決めさせていました。**
-        let parent_sign = std::env::var_os("ZENITH_HOLECUT_SIGN")
-            .and_then(|_| zenith_tess::face_signed_parameter_area(face))
+        let parent_sign = h8_port_on("ZENITH_HOLECUT_SIGN")
+            .then(|| zenith_tess::face_signed_parameter_area(face))
+            .flatten()
             .map(|area| area >= 0.0);
         // **この穴切りが何番目か**（4-541。`ZENITH_HOLECUT_FLIP` が指すときの番号）。
         let sequence =
@@ -1778,7 +1787,7 @@ fn hole_sits_inside(face: &Face, hole: &Wire, tol: &Tolerance) -> Option<bool> {
     // 同じ稜が 3 回使われ、**非多様体 24 本**になります（4-535、4-536）。
     //
     // **箱は巻きません。**
-    if std::env::var_os("ZENITH_HOLE_BOX_GUARD").is_some() {
+    if h8_port_on("ZENITH_HOLE_BOX_GUARD") {
         // **外周の輪の箱で見ます。** `Face::bounding_box()` は NURBS のとき
         // **曲面まるごと**（円柱の全周）を含めるので、**いつも「中」**になります。
         let box_of = face.outer_wire.bounding_box();

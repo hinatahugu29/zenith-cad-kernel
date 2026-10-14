@@ -146,12 +146,17 @@ const H8_PORTS: &[(&str, &str)] = &[
     ("ZENITH_ID_WELD_PLANES", "1"),
 ];
 
-/// **4-752 の追測**（ROADMAP 柱①）。`ZENITH_H8_PORTS_NO_SUBDIV3=1` で、
-/// `ZENITH_SUBDIV_THIRD` を外して 19 本だけで突き合わせられます——
-/// **どれが 7.573e-8 を作っているかの切り分け**（`h8_ports_bisect_probe`
-/// で単独でも再現したので、ここでも確かめます）。
+/// **4-752・4-753 の追測**（ROADMAP 柱①）。`ZENITH_H8_PORTS_NO_SUBDIV3=1`
+/// で `ZENITH_SUBDIV_THIRD` を、`ZENITH_H8_PORTS_NO_WELD_ENDS=1` で
+/// `ZENITH_WELD_ENDS` を外せます——**`h8_ports_bisect_probe` が
+/// `torus`（`SUBDIV_THIRD`）と `cone`（`WELD_ENDS`）でそれぞれ単独
+/// 再現した 2 本を、90 件でも外して確かめます**。
 fn enter_h8_ports(op: BooleanOpType) {
+    let skip_weld_ends = std::env::var_os("ZENITH_H8_PORTS_NO_WELD_ENDS").is_some();
     for (name, value) in H8_PORTS {
+        if skip_weld_ends && *name == "ZENITH_WELD_ENDS" {
+            continue;
+        }
         std::env::set_var(name, value);
     }
     let skip_subdiv3 = std::env::var_os("ZENITH_H8_PORTS_NO_SUBDIV3").is_some();

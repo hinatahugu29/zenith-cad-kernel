@@ -109,15 +109,21 @@ fn run(a: &Solid, b: &Solid, op: BooleanOpType, tol: &Tolerance) -> Outcome {
 
 fn main() {
     let tol = Tolerance::default();
+    // **4-753 の追測**（ROADMAP 柱①）。`ZENITH_BISECT_SUBJECT` で検体を
+    // 選べます（既定 `torus`）——`cone`（`A^B` 体積 0.003238、退化に
+    // 近い組。4-753 で `SUBDIV_THIRD` を外しても 1.251e-8 が残った組）
+    // を切り分けるために足しました。
+    let subject = std::env::var("ZENITH_BISECT_SUBJECT").unwrap_or_else(|_| "torus".to_string());
     let path = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
-        .join("occ_reference_torus.step");
-    let solids = StepImporter::import_solids_from_file(&path).expect("torus を読めません");
+        .join(format!("occ_reference_{subject}.step"));
+    let solids =
+        StepImporter::import_solids_from_file(&path).unwrap_or_else(|_| panic!("{subject} を読めません"));
     let a = solids.first().expect("立体が無い");
     let mesh = tessellate_solid(a, &params());
     let (low, high) = mesh_bounds(&mesh);
     let b = corner_block(&low, &high).expect("切り手を作れません");
 
-    println!("torus / corner block / A^B を、H8 の口 1 本ずつで測ります（4-752 の宿題）");
+    println!("{subject} / corner block / A^B を、H8 の口 1 本ずつで測ります（4-752 の宿題）");
     println!();
 
     clear_all();

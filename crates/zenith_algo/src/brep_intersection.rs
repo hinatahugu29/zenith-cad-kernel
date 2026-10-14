@@ -1416,7 +1416,7 @@ impl BrepIntersectionBuilder {
         //
         // **4-306 が持ち込んだ重い失敗（4-316）が消え**、軽いほうも
         // 4-306 の直前より減っています。
-        if std::env::var_os("ZENITH_KEEP_MIXED_HOLES").is_none() {
+        if !h8_port_on("ZENITH_KEEP_MIXED_HOLES") {
             drop_mixed_hole_rims(&mut selected_face_pieces, tol);
             log_stage("縁の合わない穴を畳んだ後", &selected_face_pieces);
         }
@@ -1429,8 +1429,12 @@ impl BrepIntersectionBuilder {
         }
 
         // **同じ稜から出た端を揃えます**（4-533。`ZENITH_ID_WELD=<上限>`。
-        // **既定では走りません**）。上限は動かしてよい距離で、`1` と書けば
-        // 継ぎ目の隙間ぶん（5e-4）を既定にします。
+        // **既定では走りません**——**4-754 で昇格を試みましたが、
+        // `ZENITH_ID_WELD_PLANES` との組み合わせだけで、薄い輪を切った
+        // トーラスの `A^B`（深さ 1e-4）が断られる退行を見つけ、
+        // 両方とも既定オフへ戻しました**（`h8_promo_regress_probe`）。
+        // 上限は動かしてよい距離で、`1` と書けば継ぎ目の隙間ぶん（5e-4）
+        // を既定にします。
         if let Ok(value) = std::env::var("ZENITH_ID_WELD") {
             let cap = value.parse::<f64>().ok().filter(|v| *v > 0.0).unwrap_or(5e-4);
             let cap = if cap == 1.0 { 5e-4 } else { cap };
@@ -1574,7 +1578,7 @@ impl BrepIntersectionBuilder {
         operands: Option<(&Solid, &Solid, crate::BooleanOpType)>,
         tol: &Tolerance,
     ) -> BooleanFaceAssembly {
-        let by_geometry = std::env::var_os("ZENITH_CAP_ORIENT_BY_GEOMETRY").is_some();
+        let by_geometry = h8_port_on("ZENITH_CAP_ORIENT_BY_GEOMETRY");
         let mut selected_face_pieces = pieces.to_vec();
         for face in cap_faces {
             let forward_piece = SelectedBooleanFacePiece {
@@ -1693,7 +1697,7 @@ impl BrepIntersectionBuilder {
         //
         // **全体の公差を緩めるのとは違います**（4-534 で断った widening）。
         // **その稜を産んだ 2 枚が申告した値**を、**その稜にだけ**持たせます。
-        if std::env::var_os("ZENITH_EDGE_TOL_FROM_FACES").is_some() {
+        if h8_port_on("ZENITH_EDGE_TOL_FROM_FACES") {
             for candidate in edge_candidates.iter_mut() {
                 let roughness = |faces: &[Face], index: usize| -> f64 {
                     faces
@@ -2667,7 +2671,7 @@ impl BrepIntersectionBuilder {
             // は最初に当たった片で打ち切ります**——**当て方が揃っていません**。
             // **同じ領域の片が二重にできる**（4-530 の非多様体 32）のは、ここが
             // 疑わしい所です。
-            let one_piece = std::env::var_os("ZENITH_SPLIT_ONE_PIECE").is_some();
+            let one_piece = h8_port_on("ZENITH_SPLIT_ONE_PIECE");
             for current_face in faces {
                 if one_piece && applied_this_edge {
                     next_faces.push(current_face);
@@ -3240,7 +3244,7 @@ impl BrepIntersectionBuilder {
                 for current_face in faces {
                     // **鎖も、当たった最初の片だけに当てる口**（4-531。
                     // `ZENITH_SPLIT_ONE_PIECE=1`。**既定では走りません**）。
-                    if applied_this_chain && std::env::var_os("ZENITH_SPLIT_ONE_PIECE").is_some() {
+                    if applied_this_chain && h8_port_on("ZENITH_SPLIT_ONE_PIECE") {
                         next_faces.push(current_face);
                         continue;
                     }
@@ -3303,7 +3307,7 @@ impl BrepIntersectionBuilder {
                 let mut next_faces = Vec::new();
                 let mut applied_this_chain = false;
                 for current_face in faces {
-                    if applied_this_chain && std::env::var_os("ZENITH_SPLIT_ONE_PIECE").is_some() {
+                    if applied_this_chain && h8_port_on("ZENITH_SPLIT_ONE_PIECE") {
                         next_faces.push(current_face);
                         continue;
                     }
@@ -3426,7 +3430,7 @@ impl BrepIntersectionBuilder {
         // （B面0 の片、面積 0.453、代表点はピン穴の中心から 0.09）。
         if applied_split_count > 0
             && !leftover.is_empty()
-            && std::env::var_os("ZENITH_LEFTOVER_LOOPS").is_some()
+            && h8_port_on("ZENITH_LEFTOVER_LOOPS")
         {
             let extraction = collect_closed_intersection_edge_loops(&leftover, tol);
             let why = std::env::var_os("ZENITH_SPLIT_WHY").is_some();
@@ -3583,6 +3587,14 @@ struct StitchEdgeUse {
 ///
 /// **診断が、自分のいちばん大事な出力を隠していました。**
 ///
+/// **H8 の口のうち、4-754 で既定オンに昇格した 19 本の判定**
+/// （`h8_ports_on_others_probe`〈4-752・4-753〉で、`ZENITH_SUBDIV_THIRD`
+/// と `ZENITH_WELD_ENDS` を除く 19 本が 90 件・最悪 1.818e-9（float の
+/// 雑音と同じ桁）と確かめた分）。**`=0` で旧既定（立てない）に戻せます。**
+fn h8_port_on(name: &str) -> bool {
+    std::env::var(name).map(|value| value != "0").unwrap_or(true)
+}
+
 /// 既定は 700 文字。`ZENITH_WHY_CHARS` で変えられます（`0` なら全文）。
 fn why_text(reason: &str) -> String {
     let limit = std::env::var("ZENITH_WHY_CHARS")
@@ -3607,7 +3619,7 @@ fn why_text(reason: &str) -> String {
 /// 実測（4-540、A面1）: 鎖 0 は残差 **6.953e-7** で通り、鎖 1 は **1.843e-6**
 /// で落ちます。**落ちた鎖が、積に足りない 1 枚**でした。
 fn chain_area_allowance(face: &Face) -> f64 {
-    if std::env::var_os("ZENITH_CHAIN_AREA_TOL").is_none()
+    if !h8_port_on("ZENITH_CHAIN_AREA_TOL")
         || std::env::var_os("ZENITH_NO_AREA_TOL").is_some()
         || face.tolerance <= 1e-6
     {
@@ -4528,7 +4540,7 @@ fn select_operand_faces_after_batch_split(
             // `linkrods` の A面6 は、**同じ領域の片を 2 枚**持ちます（4-531。
             // 面積 0.407334 が 2 枚ずつ、2 組）。**輪の取り方が違うので、囲み箱でも
             // 外周でも見分けられません**——**面積と代表点で見ます**。
-            if std::env::var_os("ZENITH_DEDUP_SELECTED").is_some() {
+            if h8_port_on("ZENITH_DEDUP_SELECTED") {
                 let round = |value: f64| (value * 1e6).round() as i64;
                 let here = representative_face_point(face);
                 let key = (
@@ -11587,7 +11599,7 @@ fn intersect_nurbs_patches(
     // 切り手の天面は、**種は 8 個あるのに、当てはめが最良で 2.4e-6**
     // ——許容 1e-6 に届かず `0 branch(es)`。**OCC はここで長さ 2.735 の交線を出します。**
     // **1 回目で見つかった配置は、この道を通りません**（4-498 と同じ「だけ」）。
-    let branches = if branches.is_empty() && std::env::var_os("ZENITH_SSI_EMPTY_RETRY").is_some() {
+    let branches = if branches.is_empty() && h8_port_on("ZENITH_SSI_EMPTY_RETRY") {
         let retried = zenith_geom::IntersectionMarcher::fit_all_branches(
             surface_a,
             surface_b,
@@ -11631,7 +11643,7 @@ fn intersect_nurbs_patches(
         .unwrap_or(2);
     let branches = if !branches.is_empty()
         && branches.len() < max_branches
-        && std::env::var_os("ZENITH_SSI_EXTRA_BRANCHES").is_some()
+        && h8_port_on("ZENITH_SSI_EXTRA_BRANCHES")
     {
         let mut branches = branches;
         let extra = zenith_geom::IntersectionMarcher::fit_all_branches_spread(
@@ -13374,7 +13386,7 @@ fn split_edge_at_interior_points(
     // **潰れた稜の門は、この段より手前で終わっています**
     // ——**ここで生まれた切れ端は、誰も見ません**（4-555 実測:
     // この段の前 0 本、後 4 本）。**生まれないようにします。**
-    let same_point = if std::env::var_os("ZENITH_VERTEX_IMPRINT_TOL").is_some() {
+    let same_point = if h8_port_on("ZENITH_VERTEX_IMPRINT_TOL") {
         tol.linear.max(edge.tolerance)
     } else {
         tol.linear
@@ -13756,7 +13768,7 @@ fn face_encloses_no_area(face: &Face, tol: &Tolerance) -> bool {
     let area = vector_area.norm() * 0.5;
 
     let mut verdict = perimeter <= tol.linear || area <= tol.linear * perimeter;
-    if verdict && perimeter > tol.linear && std::env::var_os("ZENITH_WRAPPED_AREA").is_some() {
+    if verdict && perimeter > tol.linear && h8_port_on("ZENITH_WRAPPED_AREA") {
         let real =
             crate::MassCalculator::compute_face_integral(face, &TessellationParams::default()).0;
         if real > tol.linear * perimeter {
@@ -15596,7 +15608,9 @@ fn weld_piece_ends_by_edge_id(pieces: &mut [SelectedBooleanFacePiece], cap: f64)
             }
             let mut centre = Point3::from(sum / group.len() as f64);
             // **重心を、乗るべき平面へ戻します**（4-571。
-            // `ZENITH_ID_WELD_PLANES=1`。**既定では走りません**）。
+            // `ZENITH_ID_WELD_PLANES=1`。**既定では走りません**——
+            // **4-754 で `ZENITH_ID_WELD` との組み合わせの退行が
+            // 見つかり、両方とも既定オフへ戻しました**）。
             //
             // **重心は、平面の上に居るべき点を平面の外へ出します。**
             // 実測（`linkrods` の和。4-570）: **切り手の天面 `z = 1.41` の上の

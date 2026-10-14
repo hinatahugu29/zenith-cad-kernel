@@ -587,7 +587,11 @@ impl Face {
             // （粗さ 0）に、読んだ NURBS（粗さ 1.9e-4）との交線が載ると、
             // **平面の物差しで測られて落ちます**。`regularize.rs` は稜で
             // 同じことを既にしています（`tol.linear.max(edge.tolerance)`）。
-            let use_edge_tolerance = std::env::var_os("ZENITH_EDGE_TOL_BOUNDARY").is_some();
+            // **4-754 で既定オンに昇格。`=0` で旧既定（面の粗さだけで
+            // 見る）に戻せます。**
+            let use_edge_tolerance = std::env::var("ZENITH_EDGE_TOL_BOUNDARY")
+                .map(|value| value != "0")
+                .unwrap_or(true);
             // **落ちた点が、どの稜のどこから来たか**を出します（4-554。
             // `ZENITH_BOUNDARY_WHY=1`）。**「稜の粗さが 1e-6 のまま」
             // までは分かっても、どの稜なのかが分からないと、上流の

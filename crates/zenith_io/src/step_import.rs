@@ -348,12 +348,15 @@ impl StepImporter {
     /// 既定は 8（これまでどおり）。`ZENITH_IMPORT_ROUGHNESS_SAMPLES` で
     /// 増やせます。**増やすと申告値が上がります**——**緩むのではなく、
     /// 見落としていた点が見えるようになる**ということです。
+    /// **4-754 で既定 64 に昇格**（4-752・4-753 で、H8 の口 20 本のうち
+    /// これを含む 19 本が 90 件で最悪 1.818e-9 と確かめた分。旧既定は
+    /// 8）。特定の本数に戻したいときは、その数をそのまま渡してください。
     fn roughness_samples() -> usize {
         std::env::var("ZENITH_IMPORT_ROUGHNESS_SAMPLES")
             .ok()
             .and_then(|raw| raw.parse::<usize>().ok())
             .filter(|n| *n >= 2)
-            .unwrap_or(8)
+            .unwrap_or(64)
     }
 
     fn import_ceiling() -> f64 {
