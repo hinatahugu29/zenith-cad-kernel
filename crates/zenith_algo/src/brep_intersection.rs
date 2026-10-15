@@ -1429,15 +1429,20 @@ impl BrepIntersectionBuilder {
         }
 
         // **同じ稜から出た端を揃えます**（4-533。`ZENITH_ID_WELD=<上限>`。
-        // **既定では走りません**——**4-754 で昇格を試みましたが、
-        // `ZENITH_ID_WELD_PLANES` との組み合わせだけで、薄い輪を切った
-        // トーラスの `A^B`（深さ 1e-4）が断られる退行を見つけ、
-        // 両方とも既定オフへ戻しました**（`h8_promo_regress_probe`）。
-        // 上限は動かしてよい距離で、`1` と書けば継ぎ目の隙間ぶん（5e-4）
-        // を既定にします。
-        if let Ok(value) = std::env::var("ZENITH_ID_WELD") {
-            let cap = value.parse::<f64>().ok().filter(|v| *v > 0.0).unwrap_or(5e-4);
-            let cap = if cap == 1.0 { 5e-4 } else { cap };
+        // **既定オン**（4-759。`=0` で戻せます）——**4-754 で
+        // `ZENITH_ID_WELD_PLANES` との組み合わせだけ、薄い輪を切った
+        // トーラスの `A^B`（深さ 1e-4）が断られる退行を見つけ、両方とも
+        // 既定オフへ戻していましたが、根（4-755。`seated` 判定が `cap` を
+        // 面の隣接関係の代わりに使っていたこと）を 4-759 で直し、
+        // `h8_promo_regress_probe` の全 19 本・薄い輪・`linkrods` の和の
+        // 3 つで確認して既定オンに戻しました**。上限は動かしてよい距離で、
+        // `1` と書けば継ぎ目の隙間ぶん（5e-4）を既定にします。
+        if h8_port_on("ZENITH_ID_WELD") {
+            let cap = std::env::var("ZENITH_ID_WELD")
+                .ok()
+                .and_then(|value| value.parse::<f64>().ok())
+                .filter(|v| *v > 0.0 && *v != 1.0)
+                .unwrap_or(5e-4);
             let moved = weld_piece_ends_by_edge_id(&mut selected_face_pieces, cap);
             eprintln!("IDWELD 上限 {cap:.3e} で端を {moved} 個動かしました");
         }
@@ -15577,14 +15582,21 @@ fn weld_candidate_ends(
 ///
 /// 動かした端の数を返します。
 fn weld_piece_ends_by_edge_id(pieces: &mut [SelectedBooleanFacePiece], cap: f64) -> usize {
-    // 1. 稜の id ごとに、両端の点を集めます。
+    // 1. 稜の id ごとに、両端の点と、その稜を使っている片の番号を集めます。
+    //    片の番号は、4-755 の「面のつながり（隣接関係）を見て『本当に
+    //    同じ面か』を区別する」口（下の `ZENITH_ID_WELD_PLANES`）で使います。
     let mut ends_by_id: BTreeMap<u64, Vec<Point3>> = BTreeMap::new();
-    for piece in pieces.iter() {
+    let mut piece_indices_by_id: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
+    for (piece_index, piece) in pieces.iter().enumerate() {
         for wire in std::iter::once(&piece.face.outer_wire).chain(piece.face.inner_wires.iter()) {
             for oriented in &wire.edges {
                 let entry = ends_by_id.entry(oriented.edge.id).or_default();
                 entry.push(oriented.edge.start_vertex.point);
                 entry.push(oriented.edge.end_vertex.point);
+                let indices = piece_indices_by_id.entry(oriented.edge.id).or_default();
+                if !indices.contains(&piece_index) {
+                    indices.push(piece_index);
+                }
             }
         }
     }
@@ -15592,7 +15604,7 @@ fn weld_piece_ends_by_edge_id(pieces: &mut [SelectedBooleanFacePiece], cap: f64)
     // 2. id ごとに、点を「始めの側」と「終わりの側」の 2 群に分けて重心を取ります。
     //    **2 回以上使われている id だけ**が対象です。
     let mut moves: Vec<(Point3, Point3)> = Vec::new();
-    for points in ends_by_id.values() {
+    for (edge_id, points) in ends_by_id.iter() {
         if points.len() < 4 {
             continue; // 使用が 1 回だけ。揃える相手がいません。
         }
@@ -15617,9 +15629,10 @@ fn weld_piece_ends_by_edge_id(pieces: &mut [SelectedBooleanFacePiece], cap: f64)
             }
             let mut centre = Point3::from(sum / group.len() as f64);
             // **重心を、乗るべき平面へ戻します**（4-571。
-            // `ZENITH_ID_WELD_PLANES=1`。**既定では走りません**——
-            // **4-754 で `ZENITH_ID_WELD` との組み合わせの退行が
-            // 見つかり、両方とも既定オフへ戻しました**）。
+            // **既定オン**（4-759。`ZENITH_ID_WELD_PLANES=0` で戻せます）
+            // ——**4-754 で `ZENITH_ID_WELD` との組み合わせの退行が
+            // 見つかり、両方とも既定オフへ戻していましたが、4-759 で
+            // 下の `seated` 判定を直し、既定オンに戻しました**。
             //
             // **重心は、平面の上に居るべき点を平面の外へ出します。**
             // 実測（`linkrods` の和。4-570）: **切り手の天面 `z = 1.41` の上の
@@ -15630,9 +15643,19 @@ fn weld_piece_ends_by_edge_id(pieces: &mut [SelectedBooleanFacePiece], cap: f64)
             // **群の点が全部乗っている平面**にだけ戻します（**乗っていない
             // 平面へ引き寄せません**）。**平面が 2 枚以上なら、順に落として
             // 数回まわします**（箱の稜のように、交わりの線の上へ戻ります）。
-            if std::env::var_os("ZENITH_ID_WELD_PLANES").is_some() {
+            if h8_port_on("ZENITH_ID_WELD_PLANES") {
                 let mut planes: Vec<(Point3, Vec3)> = Vec::new();
-                for piece in pieces.iter() {
+                // **4-755 の直し**: 候補は、この稜の id を実際に使っている
+                // 片（＝この稜に隣接する面）だけに絞ります。`cap` を距離の
+                // 許容として使う `seated` 判定は残しますが、**まず隣接関係で
+                // 絞ってから**使うので、薄い輪のように無関係な平面がたまたま
+                // `cap` の範囲内に入ってくる誤検出（4-755）が起きません。
+                let adjacent = piece_indices_by_id
+                    .get(edge_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                for &piece_index in adjacent {
+                    let piece = &pieces[piece_index];
                     let FaceGeometry::Plane(plane) = &piece.face.geometry else {
                         continue;
                     };
