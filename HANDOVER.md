@@ -29794,6 +29794,22 @@ is not implemented yet」で断られます。**これは今回の直しで新�
 ②フィレット済みの回転体を含むブーリアンが断られる（新しく見つかった
 別の宿題）——は、どちらもカーネル側の別の一手として残します。
 
+#### 追記（同日）——②を Blender を介さずに Rust だけで再現しました
+
+`ring_rim_probe` に、穴あき板＋円柱ドリルの板（`tools/blender_workflow_test.py`
+と同じ寸法）を Rust だけで作り、**フィレット済みワッシャー（半径 0.3）
+との和**を直接 `BooleanEngine::boolean_solids_exact` へ渡す形を足しました。
+
+**断り文**: `selected face stitching has 1 unmatched edge uses, 11
+non-manifold edge uses`——**選ばれた面の縫合で、1 本の稜が相手の
+いないまま、11 本の稜が 3 回以上使われている**状態です。フィレット
+前の素のワッシャーとの和（4-758）では起きませんでした——**フィレットが
+足した 4 枚の有理トーラス・パッチが、面の組選びか縫合のどこかで
+二重に数えられているのが疑わしい**ですが、`brep_intersection.rs` の
+面選択・縫合は数千行あり、**今日はここまで**——`cargo run --release
+-p zenith_algo --example ring_rim_probe` が Blender 無しで断りを
+再現する**ので、次に触る人はここから入れます。** まだ直していません。
+
 
 ### 4-761. **ROADMAP 柱②の次の一手——`A面33 × B面1` の残り時間は、当てはめではなく辿りそのものでした**（2026年10月16日）
 
