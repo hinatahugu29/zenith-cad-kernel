@@ -39,13 +39,31 @@ fn main() {
         }
     }
     println!("稜 {} 本", ids.len());
-    for id in ids {
-        match EdgeBlender::blendability(&solid, id) {
-            Ok(b) => println!(
-                "  稜{id}: ok 半径上限={:.4} 面取り上限={:.4} 二面角={:.1}",
-                b.max_fillet_radius, b.max_chamfer_distance, b.dihedral_angle_deg
-            ),
+    let mut first_ok: Option<u64> = None;
+    for id in &ids {
+        match EdgeBlender::blendability(&solid, *id) {
+            Ok(b) => {
+                println!(
+                    "  稜{id}: ok 半径上限={:.4} 面取り上限={:.4} 二面角={:.1}",
+                    b.max_fillet_radius, b.max_chamfer_distance, b.dihedral_angle_deg
+                );
+                if first_ok.is_none() {
+                    first_ok = Some(*id);
+                }
+            }
             Err(reason) => println!("  稜{id}: 断り — {reason}"),
+        }
+    }
+
+    if let Some(id) = first_ok {
+        match EdgeBlender::fillet_edge(&solid, id, 1.0) {
+            Ok(filleted) => {
+                println!(
+                    "稜{id} を半径1.0で実際にフィレット: ok, 面 {} 枚",
+                    filleted.outer_shell.faces.len()
+                );
+            }
+            Err(reason) => println!("稜{id} のフィレット実行: 断り — {reason}"),
         }
     }
 }

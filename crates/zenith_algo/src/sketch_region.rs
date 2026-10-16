@@ -713,5 +713,16 @@ pub fn revolve_sketch(
         loop_to_wire(&outline, plane, tol).ok_or_else(|| "輪を 3D の輪にできません".to_string())?;
     let origin = plane.at(axis_point);
     let along = plane.x_axis * direction.x + plane.y_axis * direction.y;
-    crate::RevolveBuilder::revolve_wire_solid(&wire, origin, along, tol)
+    let solid = crate::RevolveBuilder::revolve_wire_solid(&wire, origin, along, tol)?;
+
+    // **4 分割の継ぎ目を併合します**（4-762）。`revolve_wire_solid` は
+    // 全周を 90 度ずつ 4 枚のパッチに割って作るため、素のままでは
+    // 平面の天面・底面が 4 枚の扇形に割れたまま残り、継ぎ目の稜が
+    // 「隣接面が平面でない」という理由でブレンドの対象から外れて
+    // しまう（4-759）。`FaceMerger::simplify_solid` は曲面は併合しない
+    // ため円柱面の継ぎ目は残るが、**平面側（天面・底面）は 1 枚に
+    // まとまり、同軸の円柱縁（ワッシャー形の内外輪など）がブレンドの
+    // 対象として見えるようになる**（`ring_rim_probe` で実測）。
+    let (simplified, _report) = crate::FaceMerger::simplify_solid(&solid, tol)?;
+    Ok(simplified)
 }

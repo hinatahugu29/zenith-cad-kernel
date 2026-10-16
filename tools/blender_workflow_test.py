@@ -182,19 +182,21 @@ def main():
 
     # 8. フィレット: 回転体の稜を 1 本、丸める（体積は増える）。
     #
-    # **分かったこと**: `washer.edges()` には 90 度の凸稜が何本もあります
-    # （回転面を区切る稜）。**それでも `blendable_edges()` は 0 本**——
-    # `EdgeBlender` は、スケッチの回転で出来た曲面の稜を、まだフィレットの
-    # 対象として認識していません。**バグではなく、まだ対応していない
-    # 範囲**です（README の「フィレット/面取りの守備範囲」と同じ話）。
+    # **4-762 で直りました**: `washer.edges()` には 90 度の凸稜が何本も
+    # あるのに `blendable_edges()` が 0 本だったのは、`revolve_sketch` が
+    # 全周を 4 分割したパッチのまま返し、天面・底面が 4 枚の扇形に割れた
+    # ままだったからでした（4-759）。`revolve_sketch` の中で
+    # `FaceMerger::simplify_solid` を 1 回呼ぶだけで、天面・底面が 1 枚に
+    # まとまり、同軸の円柱縁（内外輪）がフィレットの対象として見える
+    # ようになりました（曲面どうしの継ぎ目は併合されないので、母線方向の
+    # 縁はまだ対象外です）。
     filleted = None
     if washer is not None:
         try:
             edges = washer.blendable_edges()
             if not edges:
-                print("8. フィレット: **丸められる稜が 0 本**（`edges()` には 90 度の"
-                      "凸稜が複数あるのに `blendable_edges()` は 0——スケッチの回転面は、"
-                      "まだフィレットの対象として認識されません。守備範囲の宿題として記録）")
+                print("8. フィレット: **丸められる稜が 0 本**（まだ対象外の縁のみ。"
+                      "4-762 の範囲外）")
             else:
                 edge = edges[0]
                 radius = min(0.3, edge["max_fillet_radius"] * 0.5)
@@ -207,12 +209,34 @@ def main():
             print("8. フィレット: **断られました**: %r" % (exc,))
             wrong += 1
 
-    # 9. 積み重ねたブーリアン + 書き出し: 穴あき板と回転体（フィレットが
-    #    使えなかったので、回転体そのまま）の和を取り、STEP で書き出す。
+    # 9. 積み重ねたブーリアン + 書き出し: 穴あき板と回転体の和を取り、
+    #    STEP で書き出す。
+    #
+    # **分かったこと（4-762）**: フィレット済みの回転体で和を取ると、
+    # 「Exact B-Rep boolean is not implemented yet」で断られます——
+    # フィレットでできたトーラス片を含む面の組が、既存のブーリアン
+    # 前処理が扱える配置の外にあるためです。**4-762 がフィレットを
+    # 初めて成功させたことで新しく踏めるようになった道で見つかった、
+    # 別の守備範囲の宿題**です（直していません）。フィレットが無かった
+    # 頃はこの経路に来られず、見えていませんでした。
+    #
+    # **この段自体の主旨は「積み重ねたブーリアンが通るか」**なので、
+    # 8 段目と同じ扱いで——フィレット済みの回転体でまず試し、この既知の
+    # 断りが出たら、回転体そのまま（フィレット前）で取り直します。
+    # **`wrong` には数えません**（8 段目の「0 本」と同じ、見つけた
+    # 事実の記録です）。
     stack_piece = filleted if filleted is not None else washer
     if stack_piece is not None:
         try:
-            stacked = drilled.union(stack_piece.translated(0.0, 0.0, 5.0))
+            try:
+                stacked = drilled.union(stack_piece.translated(0.0, 0.0, 5.0))
+            except Exception as exc:
+                if filleted is None:
+                    raise
+                print("9. 積み重ねたブーリアン: **フィレット済みの回転体では"
+                      "断られました**（4-762 で新しく見つかった守備範囲の宿題。"
+                      "記録のみ）: %r" % (exc,))
+                stacked = drilled.union(washer.translated(0.0, 0.0, 5.0))
             report2 = stacked.validate()
             print("9. 積み重ねたブーリアン: 体積 %.6f、検証 valid=%s"
                   % (stacked.volume, report2.get("valid")))
