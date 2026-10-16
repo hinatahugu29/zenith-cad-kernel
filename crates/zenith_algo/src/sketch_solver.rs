@@ -14,6 +14,13 @@ pub struct CircleId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ArcId(pub usize);
 
+/// 拘束の安定した番号。**`remove_constraint` の後も、他の拘束の番号は
+/// 動きません**（4-763。ROADMAP 柱④の「1 本足す・1 本消す」を、関数
+/// 境界だけで表せるかの最小の積み木）——`Vec::remove` で詰め直すと、
+/// 呼び手が前に受け取った番号がずれて別の拘束を指してしまう。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ConstraintId(pub usize);
+
 /// 2D点要素
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SketchPoint {
@@ -95,7 +102,10 @@ pub struct SketchSolver {
     pub circles: Vec<SketchCircle>,
     #[serde(default)]
     pub arcs: Vec<SketchArc>,
-    pub constraints: Vec<Constraint>,
+    /// `None` は消された拘束の跡（墓標）。**番号を詰め直さない**ので、
+    /// 他の拘束が持つ `ConstraintId` は `remove_constraint` の後も
+    /// そのまま有効（4-763）。
+    pub constraints: Vec<Option<Constraint>>,
 }
 
 impl SketchSolver {
@@ -122,7 +132,7 @@ impl SketchSolver {
             y,
             is_fixed: true,
         });
-        self.constraints.push(Constraint::FixedPoint(id, x, y));
+        self.constraints.push(Some(Constraint::FixedPoint(id, x, y)));
         id
     }
 
@@ -157,8 +167,28 @@ impl SketchSolver {
         id
     }
 
-    pub fn add_constraint(&mut self, constraint: Constraint) {
-        self.constraints.push(constraint);
+    pub fn add_constraint(&mut self, constraint: Constraint) -> ConstraintId {
+        let id = ConstraintId(self.constraints.len());
+        self.constraints.push(Some(constraint));
+        id
+    }
+
+    /// 拘束を 1 本消す（4-763）。**他の拘束の `ConstraintId` は動きません**
+    /// ——詰め直さず、その場に墓標（`None`）を残すだけです。既に消して
+    /// いた・範囲外の番号には `false` を返します（黙って無視しません）。
+    pub fn remove_constraint(&mut self, id: ConstraintId) -> bool {
+        match self.constraints.get_mut(id.0) {
+            Some(slot @ Some(_)) => {
+                *slot = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// いま効いている拘束だけを数える（墓標を数えません）。
+    pub fn active_constraint_count(&self) -> usize {
+        self.constraints.iter().flatten().count()
     }
 
     pub fn get_point(&self, id: PointId) -> Option<[f64; 2]> {
@@ -168,7 +198,7 @@ impl SketchSolver {
     /// 拘束方程式系を解き、全点の座標を最適化
     pub fn solve(&mut self, max_iterations: usize, tolerance: f64) -> Result<usize, String> {
         let num_points = self.points.len();
-        if num_points == 0 || self.constraints.is_empty() {
+        if num_points == 0 || self.active_constraint_count() == 0 {
             return Ok(0);
         }
 
@@ -256,7 +286,7 @@ impl SketchSolver {
         let num_vars = x.len();
         let mut jacobian_rows: Vec<DVector<f64>> = Vec::new();
 
-        for c in &self.constraints {
+        for c in self.constraints.iter().flatten() {
             match *c {
                 Constraint::Coincident(p1, p2) => {
                     let (i1, i2) = (p1.0, p2.0);
@@ -544,7 +574,7 @@ impl SketchSolver {
             remaining_dof,
             active_equations,
         } = self.analyse_freedom();
-        if self.constraints.is_empty() && total_dof > 0 {
+        if self.active_constraint_count() == 0 && total_dof > 0 {
             return SketchConstraintStatus::UnderConstrained { remaining_dof };
         }
         // 式の本数は拘束の種類から数えるのではなく、**自由変数に実際に掛かって

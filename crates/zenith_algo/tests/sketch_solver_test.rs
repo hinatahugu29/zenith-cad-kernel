@@ -238,3 +238,129 @@ fn diagnosing_does_not_move_the_sketch() {
         .collect();
     assert_eq!(before, after, "見ただけで点が動きました");
 }
+
+// ROADMAP.md 柱④「GUI 抜きで、拘束の追加・削除・再計算を API だけで
+// 決め切れるか」の最小の積み木（4-763）。
+
+#[test]
+fn removing_a_constraint_frees_the_degree_of_freedom_it_held() {
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_fixed_point(0.0, 0.0);
+    let p1 = solver.add_point(10.0, 0.5);
+
+    let horizontal = solver.add_constraint(Constraint::Horizontal(p0, p1));
+    let (_, _, remaining_with) = solver.degrees_of_freedom();
+    assert_eq!(remaining_with, 1, "Horizontal を掛けた直後の残り自由度");
+
+    assert!(solver.remove_constraint(horizontal));
+    let (_, _, remaining_without) = solver.degrees_of_freedom();
+    assert_eq!(remaining_without, 2, "消したら Horizontal 分の自由度が戻る");
+}
+
+#[test]
+fn removing_an_already_removed_constraint_returns_false_not_silently() {
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_fixed_point(0.0, 0.0);
+    let p1 = solver.add_point(10.0, 0.5);
+    let horizontal = solver.add_constraint(Constraint::Horizontal(p0, p1));
+
+    assert!(solver.remove_constraint(horizontal));
+    assert!(
+        !solver.remove_constraint(horizontal),
+        "既に消した拘束を、黙って「消せた」と言ってはいけない"
+    );
+}
+
+#[test]
+fn removing_one_constraint_does_not_move_the_id_of_the_others() {
+    // **番号を詰め直すと、呼び手が前に受け取った番号が別の拘束を
+    // 指してしまう。** 真ん中を消して、両端の番号がまだ正しい拘束を
+    // 指しているかを確かめる。
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_fixed_point(0.0, 0.0);
+    let p1 = solver.add_point(10.0, 0.5);
+    let p2 = solver.add_point(9.5, 5.5);
+
+    let first = solver.add_constraint(Constraint::Horizontal(p0, p1));
+    let middle = solver.add_constraint(Constraint::Distance(p0, p1, 10.0));
+    let last = solver.add_constraint(Constraint::Distance(p1, p2, 5.0));
+
+    assert!(solver.remove_constraint(middle));
+
+    // `first` と `last` はまだ有効で、消した `middle` だけが外れている
+    // ことを、自由度の変化で確かめる（番号がずれていたら、別の拘束を
+    // 二重に消すか、存在しない拘束を触ることになり、ここでずれが出る）。
+    assert!(!solver.remove_constraint(middle), "二重に消せてはいけない");
+    assert!(solver.remove_constraint(first));
+    assert!(solver.remove_constraint(last));
+    // `add_fixed_point(p0)` が足した `FixedPoint` 拘束だけが残る。
+    assert_eq!(solver.active_constraint_count(), 1);
+}
+
+#[test]
+fn adding_the_same_constraints_in_a_different_order_solves_to_the_same_shape() {
+    // 4-393 の「冗長と矛盾の見分け」と同じ理屈を、**足す順番を変えても**
+    // 保てるかを見る（ROADMAP 柱④ステップ 2）。
+    fn build(order: &[usize]) -> SketchSolver {
+        let mut solver = SketchSolver::new();
+        let p0 = solver.add_fixed_point(0.0, 0.0);
+        let p1 = solver.add_point(11.0, 0.3);
+        let p2 = solver.add_point(9.5, 5.5);
+        let p3 = solver.add_point(0.5, 5.0);
+        let l0 = solver.add_line(p0, p1);
+        let l1 = solver.add_line(p1, p2);
+        let l2 = solver.add_line(p2, p3);
+        let l3 = solver.add_line(p3, p0);
+
+        let all = [
+            Constraint::Horizontal(p0, p1),
+            Constraint::Vertical(p0, p3),
+            Constraint::Parallel(l0, l2),
+            Constraint::Parallel(l1, l3),
+            Constraint::Distance(p0, p1, 10.0),
+            Constraint::Distance(p0, p3, 5.0),
+        ];
+        for &index in order {
+            solver.add_constraint(all[index].clone());
+        }
+        solver.solve(400, 1e-9).expect("solve");
+        solver
+    }
+
+    let forward = build(&[0, 1, 2, 3, 4, 5]);
+    let shuffled = build(&[4, 2, 0, 5, 3, 1]);
+
+    for (a, b) in forward.points.iter().zip(shuffled.points.iter()) {
+        assert!((a.x - b.x).abs() < 1e-6, "x がずれました: {} vs {}", a.x, b.x);
+        assert!((a.y - b.y).abs() < 1e-6, "y がずれました: {} vs {}", a.y, b.y);
+    }
+}
+
+#[test]
+fn remove_then_readd_a_different_constraint_solves_like_building_it_fresh() {
+    // 「1 本足す・1 本消す・解き直す」を、インタラクティブな編集と
+    // 同じ順に行い、最初からその組だけを足した場合と同じ答えになるかを
+    // 見る（ROADMAP 柱④ステップ 1〜2）。
+    let mut edited = SketchSolver::new();
+    let p0 = edited.add_fixed_point(0.0, 0.0);
+    let p1 = edited.add_point(10.0, 3.0);
+    let wrong = edited.add_constraint(Constraint::Vertical(p0, p1));
+    edited.solve(400, 1e-9).expect("solve with the wrong constraint first");
+
+    assert!(edited.remove_constraint(wrong));
+    edited.add_constraint(Constraint::Horizontal(p0, p1));
+    edited.add_constraint(Constraint::Distance(p0, p1, 10.0));
+    edited.solve(400, 1e-9).expect("solve after editing");
+
+    let mut fresh = SketchSolver::new();
+    let q0 = fresh.add_fixed_point(0.0, 0.0);
+    let q1 = fresh.add_point(10.0, 3.0);
+    fresh.add_constraint(Constraint::Horizontal(q0, q1));
+    fresh.add_constraint(Constraint::Distance(q0, q1, 10.0));
+    fresh.solve(400, 1e-9).expect("solve fresh");
+
+    for (a, b) in edited.points.iter().zip(fresh.points.iter()) {
+        assert!((a.x - b.x).abs() < 1e-6, "x がずれました: {} vs {}", a.x, b.x);
+        assert!((a.y - b.y).abs() < 1e-6, "y がずれました: {} vs {}", a.y, b.y);
+    }
+}

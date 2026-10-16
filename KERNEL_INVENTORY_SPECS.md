@@ -1,8 +1,16 @@
 # 📐 Zenith CAD Kernel - 現行仕様・全コンポーネント詳細棚卸し仕様書
 **Document Version:** 1.9.0 (4-109〜4-113: 抜き勾配・断面の接触・非STEP出力の外部検算・DXFの層を反映)
 **Last Updated:** 2026-08-27（**第3章の通しテスト数と常設プローブ数だけ、
-2026-09-16 に測り直しました**。それ以外の記述は上の版のままです）
+2026-09-16 に測り直しました**。それ以外の記述は上の版のままです。
+**2026-10-16 に、スケッチ拘束ソルバーの節（§2.1-5）だけ追記しました**
+——`remove_constraint` の追加。それ以外は上の版のままです）
 **Status:** Official Production Specification
+
+> **2026-10-16 時点の最新実測**（この文書の本体ではなく、いまの値。
+> [`HANDOVER.md`](HANDOVER.md) 4-744〜4-763 が正）: 通しテスト
+> **154 バイナリ / 751 件 / 失敗 0**。`linkrods.step`（H8）の3演算に
+> 必要な口が **20本 → 1〜2本**に減りました。回転体のフィレットが
+> 初めて通るようになりました（4-762）。
 
 > **この文書は「何があるか」の棚卸しです。「どこまで測ったか」「何が
 > 足りないか」は別の場所にあります。**
@@ -170,6 +178,10 @@ CAD の主要モデリング機能群。
 
 #### 5. スケッチ幾何拘束ソルバー (`sketch_solver.rs`)
 - 2D点、線分、円の多変数ニュートン・ラフソン法による 12 種の幾何拘束充足。
+- **2026/10/16 に `remove_constraint` を足した**（HANDOVER 4-763）——
+  `ConstraintId` で安定した番号づけをし、消しても他の拘束の番号は動かない
+  （墓標方式。`Vec<Option<Constraint>>`）。「1本足す・1本消す・解き直す」が
+  順序に依存しないことをテストで確認済み。
 
 #### 6. パラメトリック・フィーチャーツリー (`feature_tree.rs`)
 - 対応オペレーション: `CreateBox`, `CreateCylinder`, `CreateCone`, `CreateTorus`, `FilletEdge`, `ChamferEdge`, `HollowBox`, **`HollowThroughBox`**, `ExtrudeHollow`, `ExtrudeDraft`, `RevolveSolid`, `RevolvePartialSolid`, `LoftSolid`, `SweepWire`, `SweepHelix`, `MirrorSolid`, `PushPullFace`, `ThickenFace`, `DraftBlock`, `TriangularRib`, `HexPrism`, `HexNut`, `SocketHeadCapScrew`, `PlainWasher`, `FlangedHexBolt`, `CountersinkHole`, `CounterboredSlot`, `SpringWasher`, `RetainingRing`, `CountersunkSocketScrew`, `WeldNeckFlange`, `TaperPipePlug`, `StudBolt`, `BellevilleSpring`。
