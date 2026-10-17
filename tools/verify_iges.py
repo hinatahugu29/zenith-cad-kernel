@@ -10,10 +10,16 @@ Zenith CAD Kernel: IGES 5.3 出力の外部相互検証（FreeCAD / OpenCASCADE 
 
 を確かめる。
 
-**体積では突き合わせない。** こちらの IGES はトリムを書いていない（Entity 128
-の曲面だけで、Entity 144 / 142 / 126 は出していない）ので、読めるのは面の
-土台であって閉じた立体ではない。したがって境界箱は元の立体と同じか大きく
-なるのが正しく、小さくなったらそれは曲面が欠けている。
+**体積では突き合わせない。** IGES はまだ面を縫合した Shell / Solid の
+実体を書いていないので、読み戻すと面がバラの Compound になる——閉じた
+立体として体積を測れるのは STEP の側。
+
+**4-769 でトリム（Entity 144 / 142 / 126）を書けるようになった。**
+`face.pcurves` を持つ面（自前ビルダーの面はほぼ全部）はトリムされた
+境界箱が返るはずで、境界箱は元の立体とほぼ一致する（`grow` が小さい）。
+`pcurves` を持たない面（他カーネルから読んだ全周1枚の面など）は依然
+支持曲面の生の範囲のままなので、そちらは `grow` が残る。**小さくなる
+（`shrink` が正）のは曲面が欠けている印**で、こちらは常に赤にする。
 
 不一致があれば非ゼロ終了するので、リリースゲートに使える。
 
@@ -41,6 +47,23 @@ def read_shape(path):
     shape = Part.Shape()
     shape.read(path)
     return shape
+
+
+def per_face_bound_box(shape):
+    """各面の `BoundBox` を合算して箱を作る。
+
+    4-769 で分かったこと: IGES は面を縫合した Shell / Solid の実体を
+    まだ書いていないので、読み戻すと面がバラの Compound になる。
+    **`shape.BoundBox`（全体）は、この形だと面ごとのトリムを無視して
+    支持曲面の生の範囲まで広がる**（実測: 20x30x40 の箱が
+    `shape.BoundBox` では (0,0,0)-(40,40,40) になるのに、面ごとの
+    `BoundBox` を合算すると正しい (0,0,0)-(20,30,40) になる）。
+    **トリムが効いているかどうかを測るには、この合算のほうを使う。**
+    """
+    box = FreeCAD.BoundBox()
+    for face in shape.Faces:
+        box.add(face.BoundBox)
+    return box
 
 
 def main():
@@ -71,7 +94,7 @@ def main():
             continue
 
         faces = len(shape.Faces)
-        box = shape.BoundBox
+        box = per_face_bound_box(shape)
         low = subject["low"]
         high = subject["high"]
 
@@ -106,8 +129,10 @@ def main():
     print("occ    = surfaces OpenCASCADE recovered from the IGES file")
     print("shrink = how far the imported surfaces fall INSIDE the solid's box")
     print("         (must be <= 0; anything positive means a surface is missing)")
-    print("grow   = how far they extend OUTSIDE it, which is expected because")
-    print("         we do not write the trimming entities yet")
+    print("grow   = how far they extend OUTSIDE it (per-face bound boxes,")
+    print("         summed). Faces with a stored p-curve are trimmed (144/142/126)")
+    print("         and should grow ~0; faces without one still write the raw")
+    print("         untrimmed surface (128) and keep growing.")
     return 1 if problems else 0
 
 

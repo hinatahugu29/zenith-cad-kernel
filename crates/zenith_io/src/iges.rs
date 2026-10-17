@@ -2,16 +2,18 @@
 //!
 //! 各 Face の支持曲面を Entity 128（有理Bスプライン曲面）として書き出す。
 //!
-//! **トリムは出力しない。** 出る形は「面の土台になっている曲面の集まり」で
-//! あって、B-Rep ソリッドではない。境界で切り取る Entity 144 / 142 / 126 は
-//! まだ書いていない。立体としてやり取りするなら STEP を使うこと。
+//! **4-769 でトリムを書けるようになりました。** 面が `pcurves`（境界の
+//! 2D パラメータ空間曲線。自前ビルダーが持ち、`pcurve_fidelity_probe` が
+//! 全標本 3e-12 以内を見張っているもの）を持っていれば、Entity 128（曲面）
+//! ＋ Entity 126（2D 境界曲線）＋ Entity 142（曲面上の曲線）＋
+//! Entity 102（複数区間の輪を束ねる複合曲線）＋ Entity 144（トリムされた
+//! 曲面）を書く。**`pcurves` を持たない面（STEP から読んだ他カーネルの
+//! 面など）は、以前と同じ Entity 128 だけ**——導出した p-curve は書かない
+//! （導出の精度に頼ると境界が元よりずれる。`step.rs` の `plan_surfaces_and_pcurves`
+//! と同じ判断）。
 //!
-//! ただし実測では、自前ビルダーの立体についてはこれで足りている。曲面が
-//! 元から面ごとのパッチに割れており、パラメータ矩形の縁がそのまま面の境界に
-//! なっているからである。`tools/verify_iges.py` で OpenCASCADE に読ませると、
-//! 5検体すべてで**曲面の枚数が一致し、境界箱のはみ出しも欠けも 0**（他カーネル
-//! から読んだ全周1枚の面のように、パラメータ域が面より広い曲面を持つ立体では
-//! はみ出す。そこはトリムを書くまでの制限として残る）。
+//! 立体としてやり取りするなら STEP を使うこと——IGES は面の集まりで、
+//! シェルや立体そのものの実体（514/186 等）はまだ書いていない。
 //!
 //! ここは以前、引数の `solid` を一度も読まずに、固定の文字列と中身の無い
 //! Entity 186 を1つ書くだけだった（`export_solid_to_string(_solid, ..)` の
@@ -23,9 +25,9 @@
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
-use zenith_geom::{ControlPoint3, KnotVector, NurbsSurface3, Surface3};
+use zenith_geom::{ControlPoint3, KnotVector, NurbsCurve2, NurbsSurface3, Surface3};
 use zenith_math::Point3;
-use zenith_topo::{Face, FaceGeometry, Solid};
+use zenith_topo::{Face, FaceGeometry, FacePcurveLoop, Solid};
 
 /// IGES 5.3 CADファイルエクスポーター
 pub struct IgesExporter;
@@ -50,6 +52,46 @@ fn real(value: f64) -> String {
     }
 }
 
+/// 書き出す実体を1つ集める。**DE ポインタは、これを積んだ順に
+/// `1, 3, 5, ...` と決まる**（各実体が DE を2行使うため）。
+struct EntityWriter {
+    /// (型番, フォーム番号, パラメータ本体の行)
+    entities: Vec<(u32, u32, Vec<String>)>,
+}
+
+impl EntityWriter {
+    fn new() -> Self {
+        Self {
+            entities: Vec::new(),
+        }
+    }
+
+    /// 実体を積み、その DE ポインタ（1 始まりの奇数）を返す。
+    fn push(&mut self, entity_type: u32, form: u32, body: Vec<String>) -> usize {
+        let de_pointer = self.entities.len() * 2 + 1;
+        self.entities.push((entity_type, form, body));
+        de_pointer
+    }
+}
+
+/// 72桁に収まるように詰める。最後のフィールドだけ `;` で閉じ、残りは `,`。
+fn pack_fields(fields: &[String]) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for (index, field) in fields.iter().enumerate() {
+        let terminator = if index + 1 == fields.len() { ';' } else { ',' };
+        let piece = format!("{field}{terminator}");
+        if current.len() + piece.len() > 64 {
+            lines.push(std::mem::take(&mut current));
+        }
+        current.push_str(&piece);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 impl IgesExporter {
     /// Solid を IGES 5.3 フォーマット (.igs / .iges) としてエクスポート
     pub fn export_solid_to_file<P: AsRef<Path>>(
@@ -71,62 +113,58 @@ impl IgesExporter {
 
     /// Solid から IGES 5.3 テキスト文字列を生成
     pub fn export_solid_to_string(solid: &Solid, product_name: &str) -> Result<String, String> {
-        let mut surfaces = Vec::new();
+        let mut writer = EntityWriter::new();
+        let mut extent = 0.0f64;
+        let mut face_count = 0usize;
+
         for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
             for face in &shell.faces {
-                surfaces.push(Self::surface_of(face)?);
+                let surface = Self::surface_of(face)?;
+                extent = extent.max(Self::surface_extent(&surface));
+                let surface_de = writer.push(128, 0, Self::entity_128_parameters(&surface));
+
+                if let Some(pcurves) = &face.pcurves {
+                    Self::write_trimmed_face(&mut writer, surface_de, pcurves);
+                } else {
+                    // `pcurves` が無い面（他カーネルから読んだ面など）は、
+                    // 以前と同じ曲面だけを書く。導出した p-curve は書かない
+                    // （`step.rs` の `plan_surfaces_and_pcurves` と同じ判断——
+                    // 導出は射影のやり直しで、精度が元の境界より落ちる）。
+                }
+                face_count += 1;
             }
         }
-        if surfaces.is_empty() {
+        if face_count == 0 {
             return Err("IGES export needs at least one face".to_string());
         }
-
-        let extent = surfaces
-            .iter()
-            .flat_map(|surface| surface.control_points.iter().flatten())
-            .fold(0.0f64, |worst, cp| {
-                worst
-                    .max(cp.point.x.abs())
-                    .max(cp.point.y.abs())
-                    .max(cp.point.z.abs())
-            });
-
-        // Directory Entry は1エンティティにつき2行、Parameter Data は可変行数。
-        // DE から PD の先頭行を指すので、PD の中身を先に組んで行数を数える。
-        let parameter_bodies: Vec<Vec<String>> =
-            surfaces.iter().map(Self::entity_128_parameters).collect();
 
         let mut directory = String::new();
         let mut parameters = String::new();
         let mut directory_sequence = 1usize;
         let mut parameter_sequence = 1usize;
 
-        for (index, body) in parameter_bodies.iter().enumerate() {
+        for (index, (entity_type, form, body)) in writer.entities.iter().enumerate() {
             let directory_line = directory_sequence;
             let parameter_line = parameter_sequence;
 
-            // 1行目: 型番, PDポインタ, 構造, 線種, レベル, ビュー, 変換行列,
-            //         ラベル表示, ステータス
             directory.push_str(&record(
                 &format!(
                     "{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}",
-                    128, parameter_line, 0, 0, 0, 0, 0, 0, "00000000"
+                    entity_type, parameter_line, 0, 0, 0, 0, 0, 0, "00000000"
                 ),
                 'D',
                 directory_sequence,
             ));
             directory_sequence += 1;
 
-            // 2行目: 型番, 線幅, 色, PD行数, フォーム番号, 予約, 予約,
-            //         ラベル, 添字
             directory.push_str(&record(
                 &format!(
                     "{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}{:>8}",
-                    128,
+                    entity_type,
                     0,
                     0,
                     body.len(),
-                    0,
+                    form,
                     "",
                     "",
                     format!("F{index:07}"),
@@ -228,11 +266,78 @@ impl IgesExporter {
         Ok(format!("{start}{global}{directory}{parameters}{terminate}"))
     }
 
+    /// 面のトリム境界（外周＋内側の輪）を Entity 144 として書く。
+    ///
+    /// **輪が1区間だけなら Entity 142 を直接境界として渡し、2区間以上なら
+    /// Entity 102（複合曲線）で束ねる**——どちらも IGES 5.3 の Entity 144 が
+    /// 受け取れる形だが、1本で済む所に複合曲線を被せると読み手によっては
+    /// 退化した複合曲線を嫌う。
+    fn write_trimmed_face(writer: &mut EntityWriter, surface_de: usize, pcurves: &zenith_topo::FacePcurves) {
+        let Some(outer_de) = Self::write_boundary_loop(writer, surface_de, &pcurves.outer_loop)
+        else {
+            return;
+        };
+        let inner_des: Vec<usize> = pcurves
+            .inner_loops
+            .iter()
+            .filter_map(|loop_| Self::write_boundary_loop(writer, surface_de, loop_))
+            .collect();
+
+        let mut fields = vec!["144".to_string(), format!("{surface_de}"), "1".to_string()];
+        fields.push(inner_des.len().to_string());
+        fields.push(format!("{outer_de}"));
+        for id in &inner_des {
+            fields.push(format!("{id}"));
+        }
+        writer.push(144, 0, pack_fields(&fields));
+    }
+
+    /// 1つの輪（外周または内側の穴）を、曲面上の曲線（142）の並びとして書き、
+    /// 2区間以上なら複合曲線（102）で束ねた DE ポインタを返す。
+    fn write_boundary_loop(
+        writer: &mut EntityWriter,
+        surface_de: usize,
+        loop_: &FacePcurveLoop,
+    ) -> Option<usize> {
+        if loop_.segments.is_empty() {
+            return None;
+        }
+        let segment_des: Vec<usize> = loop_
+            .segments
+            .iter()
+            .map(|segment| {
+                let curve_de = writer.push(126, 0, Self::entity_126_parameters(&segment.curve));
+                // CRTN=0（未指定）、CPTR=0（3Dの複合曲線は渡さない）、
+                // PREF=1（パラメータ空間側の表現を優先する、と宣言する）。
+                writer.push(
+                    142,
+                    0,
+                    pack_fields(&[
+                        "142".to_string(),
+                        format!("{surface_de}"),
+                        format!("{curve_de}"),
+                        "0".to_string(),
+                        "1".to_string(),
+                    ]),
+                )
+            })
+            .collect();
+
+        if segment_des.len() == 1 {
+            return Some(segment_des[0]);
+        }
+        let mut fields = vec!["102".to_string(), segment_des.len().to_string()];
+        for id in &segment_des {
+            fields.push(format!("{id}"));
+        }
+        Some(writer.push(102, 0, pack_fields(&fields)))
+    }
+
     /// Face の支持曲面を NURBS として取り出す。
     ///
     /// 平面は制御点の格子を持たないので、その面の境界がちょうど収まる矩形を
-    /// 張って返す。トリムを書いていない以上、ここを無限平面にすると受け側で
-    /// 際限なく広がってしまう。
+    /// 張って返す。トリムを書いていない呼び手（`pcurves` が無い面）では、
+    /// ここを無限平面にすると受け側で際限なく広がってしまう。
     fn surface_of(face: &Face) -> Result<NurbsSurface3, String> {
         match &face.geometry {
             FaceGeometry::Nurbs(nurbs) => Ok(nurbs.clone()),
@@ -282,6 +387,19 @@ impl IgesExporter {
 
     fn sampled(surface: &dyn Surface3) -> Result<NurbsSurface3, String> {
         NurbsSurface3::approximate_surface(surface, 12, 12)
+    }
+
+    fn surface_extent(surface: &NurbsSurface3) -> f64 {
+        surface
+            .control_points
+            .iter()
+            .flatten()
+            .fold(0.0f64, |worst, cp| {
+                worst
+                    .max(cp.point.x.abs())
+                    .max(cp.point.y.abs())
+                    .max(cp.point.z.abs())
+            })
     }
 
     /// Entity 128（有理Bスプライン曲面）のパラメータデータ。
@@ -344,20 +462,57 @@ impl IgesExporter {
             fields.push(real(value));
         }
 
-        // 64桁に収まるように詰める。最後のフィールドだけ ';' で閉じる。
-        let mut lines = Vec::new();
-        let mut current = String::new();
-        for (index, field) in fields.iter().enumerate() {
-            let terminator = if index + 1 == fields.len() { ';' } else { ',' };
-            let piece = format!("{field}{terminator}");
-            if current.len() + piece.len() > 64 {
-                lines.push(std::mem::take(&mut current));
-            }
-            current.push_str(&piece);
+        pack_fields(&fields)
+    }
+
+    /// Entity 126（有理Bスプライン曲線）のパラメータデータ。
+    ///
+    /// 曲面のパラメータ空間に乗る2D境界曲線を、Z=0 の3D曲線として書く
+    /// （IGES 126 は常に3D座標を持つ。XY がそのまま (u, v)、Z は常に 0）。
+    /// PROP1（平面フラグ）を立て、法線 (0,0,1) を末尾に添える。
+    ///
+    /// 並びは `128` と同じ骨組み:
+    /// `126, K, M, PROP1..PROP4, ノット, 重み, 制御点, V0, V1, [法線]`
+    fn entity_126_parameters(curve: &NurbsCurve2) -> Vec<String> {
+        let k = curve.control_points.len();
+
+        let closed = (curve.control_points[0].point - curve.control_points[k - 1].point).norm()
+            <= 1e-9;
+        let polynomial = curve
+            .control_points
+            .iter()
+            .all(|cp| (cp.weight - 1.0).abs() <= 1e-12);
+
+        let mut fields: Vec<String> = vec!["126".to_string()];
+        for value in [
+            k as i32 - 1,
+            curve.degree as i32,
+            1, // PROP1: 平面（パラメータ空間の2D曲線なので常に真）
+            closed as i32,
+            polynomial as i32,
+            0, // PROP4: 周期的ではない
+        ] {
+            fields.push(value.to_string());
         }
-        if !current.is_empty() {
-            lines.push(current);
+        for knot in &curve.knots.knots {
+            fields.push(real(*knot));
         }
-        lines
+        for cp in &curve.control_points {
+            fields.push(real(cp.weight));
+        }
+        for cp in &curve.control_points {
+            fields.push(real(cp.point.x));
+            fields.push(real(cp.point.y));
+            fields.push(real(0.0));
+        }
+        let (t_min, t_max) = curve.param_range();
+        fields.push(real(t_min));
+        fields.push(real(t_max));
+        // PROP1 = 1（平面）なので、単位法線を書く。
+        fields.push(real(0.0));
+        fields.push(real(0.0));
+        fields.push(real(1.0));
+
+        pack_fields(&fields)
     }
 }

@@ -6148,14 +6148,22 @@ fn test_iges_export() {
     // ここは以前 `content.contains("186")` を見ていた。当時のエクスポータは
     // 立体を読まずに中身の無い Entity 186 を1つ書くだけで、この検査はその
     // スタブが残した文字列を確かめていた。いまは面ごとに Entity 128（有理
-    // Bスプライン曲面）を書くので、箱なら6枚ぶんの Directory Entry が並ぶ。
-    let directory_records = content
+    // Bスプライン曲面）を書くので、箱なら6枚ぶんの Directory Entry が並ぶ
+    // ——4-769 でトリム（126/142/144）も書くようになったので、総数では
+    // なく Entity 128 の枚数だけを数える。
+    let entity_128_records = content
         .lines()
-        .filter(|line| line.len() >= 73 && line.as_bytes()[72] == b'D')
+        .enumerate()
+        .filter(|(index, line)| {
+            index % 2 == 0
+                && line.len() >= 73
+                && line.as_bytes()[72] == b'D'
+                && line.starts_with(&format!("{:>8}", 128))
+        })
         .count();
     assert_eq!(
-        directory_records, 12,
-        "a box has six faces, and each entity takes two directory records"
+        entity_128_records, 6,
+        "a box has six faces, and each gets exactly one Entity 128 (surface)"
     );
     assert!(
         content.contains("18.0000000000"),

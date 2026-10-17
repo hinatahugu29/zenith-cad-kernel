@@ -35,6 +35,22 @@ fn test_every_record_is_eighty_columns() {
     }
 }
 
+/// Directory Entry の1行目（型番が先頭8桁）から、ある型番の実体数を数える。
+/// **各実体は D セクションを2行使う**ので、1行目だけ（偶数番目）を見る。
+fn entity_type_count(iges: &str, entity_type: u32) -> usize {
+    let needle = format!("{entity_type:>8}");
+    records(iges)
+        .iter()
+        .enumerate()
+        .filter(|(index, line)| {
+            index % 2 == 0
+                && line.len() >= 73
+                && line.as_bytes()[72] == b'D'
+                && line.starts_with(&needle)
+        })
+        .count()
+}
+
 #[test]
 fn test_one_entity_128_per_face() {
     for (name, solid) in [
@@ -54,12 +70,18 @@ fn test_one_entity_128_per_face() {
                 .sum::<usize>();
         let iges = IgesExporter::export_solid_to_string(&solid, name).expect("export");
 
-        // Directory Entry は1エンティティにつき2行。
+        // Directory Entry は1実体につき2行。**4-769 でトリムを書くように
+        // なったので、面1枚につき 128 だけでなく 126/142/144 も増える**
+        // ——数えるのは「曲面（128）がちょうど面の数だけあるか」だけに絞る。
         assert_eq!(
-            section_count(&iges, 'D'),
-            faces * 2,
-            "{name}: {faces} faces need {} directory records",
-            faces * 2
+            entity_type_count(&iges, 128),
+            faces,
+            "{name}: {faces} faces need {faces} Entity 128 (surface)"
+        );
+        assert_eq!(
+            section_count(&iges, 'D') % 2,
+            0,
+            "{name}: Directory Entry records must come in pairs"
         );
         assert!(
             section_count(&iges, 'P') >= faces,
@@ -119,4 +141,30 @@ fn test_an_empty_solid_is_refused_rather_than_written() {
         IgesExporter::export_solid_to_string(&empty, "EMPTY").is_err(),
         "a solid with no faces has nothing to write; saying so beats writing a stub"
     );
+}
+
+#[test]
+fn a_face_with_a_stored_pcurve_gets_trimmed_not_just_the_raw_surface() {
+    // 4-769: `pcurves` を持つ面は、曲面（128）だけでなく境界曲線（126）・
+    // 曲面上の曲線（142）・トリムされた曲面（144）も書く。
+    let solid = PrimitiveBuilder::make_cylinder(10.0, 40.0).unwrap();
+    assert!(
+        solid.outer_shell.faces.iter().any(|f| f.pcurves.is_some()),
+        "この検体は少なくとも1面が pcurves を持つはず"
+    );
+    let iges = IgesExporter::export_solid_to_string(&solid, "CYL").expect("export");
+
+    assert!(entity_type_count(&iges, 144) > 0, "Entity 144（トリムされた曲面）が1つも無い");
+    assert!(entity_type_count(&iges, 142) > 0, "Entity 142（曲面上の曲線）が1つも無い");
+    assert!(entity_type_count(&iges, 126) > 0, "Entity 126（境界の2D曲線）が1つも無い");
+}
+
+#[test]
+fn trimming_does_not_change_which_faces_have_a_surface() {
+    // トリムを足す前と、書く曲面（128）の枚数が変わってはいけない——
+    // 増えた実体（126/142/144）は境界の情報で、面の数そのものではない。
+    let solid = HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).unwrap();
+    let faces = solid.outer_shell.faces.len();
+    let iges = IgesExporter::export_solid_to_string(&solid, "DRILLED").expect("export");
+    assert_eq!(entity_type_count(&iges, 128), faces);
 }
