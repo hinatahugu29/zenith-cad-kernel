@@ -357,8 +357,16 @@ impl IgesExporter {
                 };
                 for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
                     for oriented in &wire.edges {
-                        consider(oriented.edge.start_vertex.point);
-                        consider(oriented.edge.end_vertex.point);
+                        // **端点だけでは足りません。** 円を1本の稜（始点と終点が
+                        // 同じ点）で持つ面（他カーネルから読んだ円柱の蓋など）では、
+                        // 端点が同じ1点に重なり、円そのものの広がりが消える。
+                        // 曲線に沿って標本を取る（4-770）。
+                        let (t_min, t_max) = oriented.edge.curve.param_range();
+                        const SAMPLES: usize = 16;
+                        for i in 0..=SAMPLES {
+                            let t = t_min + (t_max - t_min) * (i as f64 / SAMPLES as f64);
+                            consider(oriented.edge.curve.evaluate(t));
+                        }
                     }
                 }
                 if !(max_u > min_u && max_v > min_v) {

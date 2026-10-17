@@ -3,17 +3,27 @@
 //! 出力は `target/iges/` に置き、同じ場所に `manifest.json` を書く。
 //! 突き合わせは `tools/verify_iges.py`（FreeCAD / OpenCASCADE）で行う。
 //!
-//! IGES 側はトリムを書いていない（Entity 128 の曲面だけ）ので、**体積では
-//! 突き合わせられない**。読み込んだ曲面の枚数と、境界箱が一致するかを見る。
-//! 曲面はトリム前の土台なので、境界箱は元の立体より大きくなることはあっても
-//! 小さくなってはいけない。
+//! **4-769 でトリム（Entity 144/142/126）を書けるようになった**——
+//! `face.pcurves` を持つ面（自前ビルダーの面がほぼ全部）は、読み込んだ
+//! 境界箱が元の立体とほぼ一致するはず。`pcurves` を持たない面
+//! （他カーネルから読んだ面）は以前と同じ、トリム前の土台（Entity 128
+//! の曲面だけ）のまま——境界箱は元の立体より大きくなることはあっても
+//! 小さくなってはいけない。**ROADMAP 柱⑤の次の一手**として、
+//! `shape_variety_probe` と同じ検体の広がり（トーラス・段付き軸）と、
+//! 他カーネルから読んだ面（`pcurves` 無し）の両方をここに足した。
 
 use std::fs;
+use std::path::PathBuf;
 
-use zenith_algo::{HoleBuilder, PrimitiveBuilder};
+use zenith_algo::{HoleBuilder, PrimitiveBuilder, ShaftBuilder};
 use zenith_io::IgesExporter;
 use zenith_math::Point3;
 use zenith_topo::Solid;
+
+fn fixture(name: &str) -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures"))
+        .join(format!("occ_reference_{name}.step"))
+}
 
 struct Subject {
     name: &'static str,
@@ -68,7 +78,35 @@ fn main() {
             name: "drilled_box_30x30x15_r5",
             solid: HoleBuilder::make_drilled_box(30.0, 30.0, 15.0, 5.0).unwrap(),
         },
+        Subject {
+            name: "torus_R12_r4",
+            solid: PrimitiveBuilder::make_torus(12.0, 4.0).unwrap(),
+        },
+        Subject {
+            name: "stepped_shaft",
+            solid: ShaftBuilder::make_stepped_shaft(&[(10.0, 20.0), (6.0, 15.0), (4.0, 10.0)])
+                .unwrap(),
+        },
     ];
+
+    // **他カーネルから読んだ面（`pcurves` 無し）の経路も、この掃き出しに
+    // 含める**——読めなければここで気づけるよう、`unwrap` せずに名指しで
+    // 飛ばす（4-411 と同じ、「無い」を「緑」と読み違えない流儀）。
+    let mut subjects = subjects;
+    for name in ["cylinder", "torus"] {
+        let path = fixture(name);
+        if !path.exists() {
+            eprintln!("skip foreign:{name} — {} が無い", path.display());
+            continue;
+        }
+        match zenith_io::StepImporter::import_solid_from_file(&path) {
+            Ok(solid) => subjects.push(Subject {
+                name: Box::leak(format!("foreign_{name}").into_boxed_str()),
+                solid,
+            }),
+            Err(error) => eprintln!("skip foreign:{name} — 読めません: {error}"),
+        }
+    }
 
     let directory = std::path::Path::new("target/iges");
     fs::create_dir_all(directory).expect("create target/iges");
