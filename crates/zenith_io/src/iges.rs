@@ -2,15 +2,29 @@
 //!
 //! 各 Face の支持曲面を Entity 128（有理Bスプライン曲面）として書き出す。
 //!
-//! **4-769 でトリムを書けるようになりました。** 面が `pcurves`（境界の
-//! 2D パラメータ空間曲線。自前ビルダーが持ち、`pcurve_fidelity_probe` が
-//! 全標本 3e-12 以内を見張っているもの）を持っていれば、Entity 128（曲面）
-//! ＋ Entity 126（2D 境界曲線）＋ Entity 142（曲面上の曲線）＋
-//! Entity 102（複数区間の輪を束ねる複合曲線）＋ Entity 144（トリムされた
-//! 曲面）を書く。**`pcurves` を持たない面（STEP から読んだ他カーネルの
-//! 面など）は、以前と同じ Entity 128 だけ**——導出した p-curve は書かない
-//! （導出の精度に頼ると境界が元よりずれる。`step.rs` の `plan_surfaces_and_pcurves`
-//! と同じ判断）。
+//! **4-769 でトリムの実体は書けるようになりました。** 面が `pcurves`
+//! （境界の2D パラメータ空間曲線。自前ビルダーが持ち、
+//! `pcurve_fidelity_probe` が全標本 3e-12 以内を見張っているもの）を
+//! 持っていれば、Entity 128（曲面）＋ Entity 126（2D 境界曲線）＋
+//! Entity 142（曲面上の曲線）＋ Entity 102（複数区間の輪を束ねる複合
+//! 曲線）＋ Entity 144（トリムされた曲面）を書く。**`pcurves` を持たない
+//! 面（STEP から読んだ他カーネルの面など）は、以前と同じ Entity 128
+//! だけ**——導出した p-curve は書かない（導出の精度に頼ると境界が
+//! 元よりずれる。`step.rs` の `plan_surfaces_and_pcurves` と同じ判断）。
+//!
+//! **4-771 で見つけたこと: 書いた Entity 144/142/126 は構文として正しく
+//! 読めますが、実際にトリムが効いているかは未確認のまま信じていました。**
+//! 面ごとの境界箱の合算では `grow 0` に見えましたが、**面ごとの面積を
+//! 測ると、トリムされていない全体の面積のままでした**
+//! （FreeCAD / OCCT 7.8。実測:箱の隅の四辺形が 450——矩形全体のまま、
+//! 正しい 205.365 まで切り取られていない。円柱の蓋も円の面積 314.16
+//! ではなく外接正方形の 400 のまま）。**最小の再現**（平面1枚を単純な
+//! 内側の正方形にトリムするだけの手作りの検体）**でも同じでした**——
+//! 自分のパイプライン固有の問題ではなく、**この書き方そのものが
+//! まだ OCCT にトリムを認めさせられていません**。パラメータ域の正規化・
+//! 複合曲線（102）の有無を変えても変わらず、根はまだ見つけていません。
+//! **境界箱が揃うことと、トリムが実際に効いていることは別**だという
+//! ことが、この検証不足の教訓です。
 //!
 //! 立体としてやり取りするなら STEP を使うこと——IGES は面の集まりで、
 //! シェルや立体そのものの実体（514/186 等）はまだ書いていない。
@@ -118,13 +132,24 @@ impl IgesExporter {
         let mut face_count = 0usize;
 
         for shell in std::iter::once(&solid.outer_shell).chain(solid.inner_shells.iter()) {
-            for face in &shell.faces {
+            for (face_index, face) in shell.faces.iter().enumerate() {
                 let surface = Self::surface_of(face)?;
                 extent = extent.max(Self::surface_extent(&surface));
                 let surface_de = writer.push(128, 0, Self::entity_128_parameters(&surface));
+                if std::env::var_os("ZENITH_IGES_WHY").is_some() {
+                    eprintln!("IGESWHY face{face_index} surface_de={surface_de}");
+                }
 
                 if let Some(pcurves) = &face.pcurves {
+                    let before = writer.entities.len();
                     Self::write_trimmed_face(&mut writer, surface_de, pcurves);
+                    if std::env::var_os("ZENITH_IGES_WHY").is_some() {
+                        eprintln!(
+                            "IGESWHY face{face_index} trim entities {}..{}",
+                            before * 2 + 1,
+                            writer.entities.len() * 2 - 1
+                        );
+                    }
                 } else {
                     // `pcurves` が無い面（他カーネルから読んだ面など）は、
                     // 以前と同じ曲面だけを書く。導出した p-curve は書かない
@@ -376,6 +401,22 @@ impl IgesExporter {
                 let corner = |u: f64, v: f64| {
                     ControlPoint3::unweighted(plane.origin + plane.u_axis * u + plane.v_axis * v)
                 };
+                // **パラメータ域を `[0,1]` に正規化せず、面の実際の (u, v)
+                // 幅（`min_u..max_u`）そのものにします**（4-771）。
+                //
+                // `face.pcurves` の2D境界曲線は、面の支持平面の生の
+                // (u, v)（`plane.origin` からの距離。0〜1 に縮めていない）
+                // で持っています。曲面（Entity 128）のパラメータ域を
+                // `clamped_uniform` の `[0,1]` にすると、境界曲線
+                // （Entity 126）の値と**単位が食い違う**ので、ここは
+                // 面の実際の幅に合わせます。**ただし、これだけでは
+                // トリムが効きません**——実測すると、個々の面の面積は
+                // この直しの前後で変わらず、トリム前の全体の面積の
+                // ままでした（4-771）。この直しは「単位を合わせる」
+                // という意味では必要ですが、**十分ではありません**。
+                // （実測:
+                // 30×15 の箱の隅の四辺形が、トリム後も 450——矩形全体
+                // のまま、205.365 まで切り取られていない）。
                 NurbsSurface3::new(
                     1,
                     1,
@@ -383,8 +424,8 @@ impl IgesExporter {
                         vec![corner(min_u, min_v), corner(min_u, max_v)],
                         vec![corner(max_u, min_v), corner(max_u, max_v)],
                     ],
-                    KnotVector::clamped_uniform(2, 1),
-                    KnotVector::clamped_uniform(2, 1),
+                    KnotVector::new(vec![min_u, min_u, max_u, max_u]),
+                    KnotVector::new(vec![min_v, min_v, max_v, max_v]),
                 )
             }
             FaceGeometry::Coons(coons) => Self::sampled(coons),

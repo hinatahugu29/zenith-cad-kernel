@@ -15,7 +15,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use zenith_algo::{HoleBuilder, PrimitiveBuilder, ShaftBuilder};
+use zenith_algo::{HoleBuilder, MassCalculator, PrimitiveBuilder, ShaftBuilder};
 use zenith_io::IgesExporter;
 use zenith_math::Point3;
 use zenith_topo::Solid;
@@ -141,9 +141,21 @@ fn main() {
         );
 
         let (low, high) = bounds(&subject.solid);
+        let all_pcurves = subject.solid.outer_shell.faces.iter().all(|f| f.pcurves.is_some())
+            && subject
+                .solid
+                .inner_shells
+                .iter()
+                .flat_map(|shell| shell.faces.iter())
+                .all(|f| f.pcurves.is_some());
+        let params = zenith_tess::TessellationParams {
+            u_divisions: 64,
+            v_divisions: 64,
+        };
+        let surface_area = MassCalculator::compute_from_brep(&subject.solid, &params).surface_area;
         manifest.push_str(&format!(
             "  {{\"name\": \"{}\", \"file\": \"{}.igs\", \"faces\": {}, \
-\"low\": [{}, {}, {}], \"high\": [{}, {}, {}]}}{}\n",
+\"low\": [{}, {}, {}], \"high\": [{}, {}, {}], \"all_pcurves\": {}, \"surface_area\": {}}}{}\n",
             subject.name,
             subject.name,
             faces,
@@ -153,6 +165,8 @@ fn main() {
             high.x,
             high.y,
             high.z,
+            all_pcurves,
+            surface_area,
             if index + 1 == subjects.len() { "" } else { "," }
         ));
     }

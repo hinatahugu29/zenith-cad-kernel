@@ -26,9 +26,14 @@ Zenith CAD Kernel: IGES 5.3 出力の外部相互検証（FreeCAD / OpenCASCADE 
     & "C:\\Program Files\\FreeCAD 1.1\\bin\\python.exe" tools/verify_iges.py
 """
 
+import io
 import json
 import os
 import sys
+
+# Windows のコンソールは既定で UTF-8 でないことがあり、日本語の出力が
+# 文字化けする（4-771）。標準出力を明示的に UTF-8 に差し替える。
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 FREECAD_BIN = r"C:\Program Files\FreeCAD 1.1\bin"
 if FREECAD_BIN not in sys.path:
@@ -112,6 +117,22 @@ def main():
             issues.append("face count {} != {}".format(faces, subject["faces"]))
         if shrink > SHRINK_TOLERANCE:
             issues.append("the imported surfaces fall {:.3e} short of the solid".format(shrink))
+
+        # 4-771: 境界箱が揃っても、トリムが実際に効いているとは言えない
+        # ——面ごとの面積を合算して、こちらの面積と突き合わせる。
+        # `all_pcurves` な検体（全面が `pcurves` を持つ）だけ、ここを
+        # 厳しく見る。持たない面がある検体は、トリム前の土台のままで
+        # 正しいので、ここでは見ない。
+        if subject.get("all_pcurves") and "surface_area" in subject:
+            occ_area = sum(f.Area for f in shape.Faces)
+            ours_area = subject["surface_area"]
+            area_rel = abs(occ_area - ours_area) / max(abs(ours_area), 1.0)
+            if area_rel > 1e-3:
+                issues.append(
+                    "面積が合いません（トリムが効いていない疑い）: ours={:.3f} occ={:.3f} (相対差 {:.3e})".format(
+                        ours_area, occ_area, area_rel
+                    )
+                )
 
         verdict = "ok" if not issues else "PROBLEM"
         if issues:
