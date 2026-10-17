@@ -25,6 +25,13 @@
 #     ZENITH_TRIM_WINDING_BY_NEIGHBOR=1 bash tools/h8_ports.sh difference
 #     ZENITH_H8_FACE_VOLUMES=1 bash tools/h8_ports.sh union
 #
+# **速くしたいだけなら `ZENITH_SSI_FITREL=1e-6` を重ねてください**
+# （4-772）——`A面33 × B面1`（H8 の最重量ペア）が 85% 以上縮みます
+# （7.2 秒 → 0.870 秒）。**ただし H8 専用です**——`h8_ports_on_others_probe`
+# の 90 件のうち 21 件（23%）を、検証の境界点チェックで新しく壊します。
+# **H8 以外の検体には使わないでください。** このスクリプト自身の既定には
+# 入れていません。
+#
 # # 出るはずの数（4-571。2026/09/28 の実測）
 #
 # | | 体積 | OCC（4-511） | 相対 |
