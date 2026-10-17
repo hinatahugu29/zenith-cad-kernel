@@ -82,6 +82,25 @@ fn main() {
         return;
     };
 
+    for (index, face) in filleted_washer.outer_shell.faces.iter().enumerate() {
+        let kind = match &face.geometry {
+            zenith_topo::FaceGeometry::Plane(_) => "Plane",
+            zenith_topo::FaceGeometry::Nurbs(_) => "Nurbs",
+            _ => "other",
+        };
+        let outer_edges = face.outer_wire.edges.len();
+        let inner_wires = face.inner_wires.len();
+        let z_values: Vec<f64> = face
+            .outer_wire
+            .edges
+            .iter()
+            .map(|oe| oe.edge.start_vertex.point.z)
+            .collect();
+        println!(
+            "  washer面{index}: {kind} 外周稜{outer_edges}本 内側輪{inner_wires}個 z={z_values:?}"
+        );
+    }
+
     // tools/blender_workflow_test.py と同じ、穴あき板 + 円柱ドリル。
     let plate_pts = [
         Point3::new(0.0, 0.0, 0.0),
@@ -119,7 +138,9 @@ fn main() {
     let drilled = BooleanEngine::boolean_solids_exact(&plate, &drill, BooleanOpType::Difference, &tol)
         .expect("drill plate");
 
-    let washer_moved = BrepTransform::translate_solid(&filleted_washer, Vec3::new(0.0, 0.0, 5.0));
+    let use_plain = std::env::var_os("ZENITH_RING_PLAIN").is_some();
+    let piece = if use_plain { &solid } else { &filleted_washer };
+    let washer_moved = BrepTransform::translate_solid(piece, Vec3::new(0.0, 0.0, 5.0));
     match BooleanEngine::boolean_solids_exact(&drilled, &washer_moved, BooleanOpType::Union, &tol) {
         Ok(stacked) => println!("積み重ねたブーリアン: ok、面 {} 枚", stacked.outer_shell.faces.len()),
         Err(reason) => println!("積み重ねたブーリアン: 断り — {reason}"),
