@@ -58,6 +58,22 @@ pub fn march_shrink_max() -> f64 {
         .unwrap_or(16.0)
 }
 
+/// **`Self::newton` の反復上限**（4-765 の測り。`ZENITH_SSI_NEWTON_MAX`）。
+///
+/// **既定は 40**——いまと同じです。**なぜ測る口が要るか**（4-765）:
+/// `A面33 × B面1`（接線方向に近い退化した組）は、`run` の歩幅縮小の
+/// 再試行（`0..8`）の中で毎回 `newton` を呼び直すため、**1 歩あたり
+/// 最悪 8×40=320 回のニュートンが起こり得る**構造になっている。
+/// **この口は、まだどの既定も変えていません**——上限を下げて答えが
+/// 動くかを測るための観察用です。
+pub fn march_newton_max() -> usize {
+    std::env::var("ZENITH_SSI_NEWTON_MAX")
+        .ok()
+        .and_then(|text| text.parse::<usize>().ok())
+        .filter(|value| *value >= 4)
+        .unwrap_or(40)
+}
+
 /// 辿った交線と、その確からしさ。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarchedIntersection {
@@ -638,7 +654,7 @@ impl IntersectionMarcher {
         let ((s_min, s_max), (t_min, t_max)) = s2.param_range();
         let limit = tol.linear.min(1e-10);
 
-        for _ in 0..40 {
+        for _ in 0..march_newton_max() {
             crate::work_counter::count_marching_newton_iteration();
             let (p1, du1, dv1) = s1.evaluate_derivatives_1st(state[0], state[1]);
             let (p2, du2, dv2) = s2.evaluate_derivatives_1st(state[2], state[3]);
