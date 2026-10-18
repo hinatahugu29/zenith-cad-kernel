@@ -29860,8 +29860,18 @@ ROADMAP柱②の次の一手3（「`ZENITH_PARALLEL_SPLIT`を既定に上げる�
 `parallel_split_probe`（既定オフ・`ZENITH_PARALLEL_SPLIT`の両方を
 交互に回し、93件を突き合わせる門）を回し直した——**93件、相対の
 いちばん大きなずれ 0.000e0、1ビットも動かず**（14分29秒、rc=0）。
-**答えを変えない直し**であることを確認した。`cargo test --release
---workspace --exclude zenith_py`は別途回している（結果はまだ）。
+**答えを変えない直し**であることを確認した。
+
+**続けて測った（2026年10月19日未明）**: `cargo test --release
+--workspace --exclude zenith_py`は全テスト緑（rc=0）。その後
+`bash tools/run_gates.sh --quick --no-tests`を回すと**`addon_package`
+が1つだけ赤**——`brep_intersection.rs`を直した後に`.pyd`を作り直して
+いなかっただけで、既知の挙動（`py tools/build_pyd.py`を回せば直る）
+だった。`py tools/build_pyd.py`で作り直し、`run_gates.sh --quick
+--no-tests`をもう一度回すと**rc=0、緑**（`h8_ports_on_others_probe`
+90件・`parallel_split_probe`93件とも、この回し直しの中でも1ビットも
+動かず）。**答えを変えない直しであることを、全数通しと門の両方で
+確認した。**
 
 **まだ既定には上げていない**——ROADMAP柱②の次の一手3はこれで
 塞がったが、昇格そのものは持ち主の判断として残す。
