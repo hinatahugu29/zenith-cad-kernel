@@ -247,6 +247,26 @@ impl BrepIntersectionBuilder {
         if crate::face_split::area_memo::on() {
             crate::face_split::area_memo::clear();
         }
+        // **`ZENITH_PARALLEL_SPLIT`（4-757）が面を割る段を rayon の
+        // グローバル・プールに投げるときは、ここまでの掃除だけでは
+        // 足りません**（ROADMAP 柱②の3）。**掃除は呼び出したスレッド
+        // 自身のスレッド・ローカルしか空にしない**ので、プールの
+        // 他のワーカー・スレッドには**前の演算の間に溜めたキャッシュ**
+        // が残ったままです。鍵は面の番地まで含みますが、番地は
+        // アロケータに再利用されるので、別の演算の `FacePcurveLoop` が
+        // 同じ番地・同じ指紋を持てば、古い答えを誤って当たり扱いする
+        // 余地が残ります。**既定オフの間は誰も見ていませんでした**
+        // ——プールの全スレッドを掃除します。
+        if std::env::var_os("ZENITH_PARALLEL_SPLIT").is_some() {
+            rayon::broadcast(|_| {
+                if trim_polygon_cache::on() {
+                    trim_polygon_cache::clear();
+                }
+                if crate::face_split::area_memo::on() {
+                    crate::face_split::area_memo::clear();
+                }
+            });
+        }
         let bbox_began = outside_timing.then(std::time::Instant::now);
         let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_boundary_bbox).collect();
         let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_boundary_bbox).collect();
@@ -1690,6 +1710,22 @@ impl BrepIntersectionBuilder {
         let mut edge_candidates =
             Self::intersection_edge_candidates_from_face_pairs(face_pair_candidates, tol);
         clock.lap("　**交線を求める**");
+
+        // **どの面の組が、どの交線を産んだかを出す**（4-776 の続き。
+        // `ZENITH_CANDIDATE_WHY=1`、既定オフ）。
+        if std::env::var_os("ZENITH_CANDIDATE_WHY").is_some() {
+            for candidate in &edge_candidates {
+                let s = candidate.edge.start_vertex.point;
+                let e = candidate.edge.end_vertex.point;
+                eprintln!(
+                    "CANDIDATEWHY 面A{} x 面B{}: ({:.6} {:.6} {:.6})->({:.6} {:.6} {:.6}) analytic={}",
+                    candidate.face_a_index,
+                    candidate.face_b_index,
+                    s.x, s.y, s.z, e.x, e.y, e.z,
+                    candidate.analytic,
+                );
+            }
+        }
 
         // **交線に、それを産んだ 2 枚の粗さを持たせます**（4-550。
         // `ZENITH_EDGE_TOL_FROM_FACES=1`。**既定では走りません**）。
