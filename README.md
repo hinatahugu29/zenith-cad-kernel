@@ -1,10 +1,10 @@
 # Zenith CAD Kernel
 
-**個人ひとりと AI が、45 日で書いた B-Rep CAD カーネルです。**
+**個人ひとりと AI が、61 日で書いた B-Rep CAD カーネルです。**
 
 > **English summary** — Zenith is a from-scratch B-Rep CAD kernel written in Rust
-> (~134,000 lines, 8 crates), built by **one person working with an AI assistant
-> over 39 days** (2026-08-19 → 2026-09-26, 1,241 commits). It performs exact boolean
+> (~150,000 lines, 8 crates), built by **one person working with an AI assistant
+> over 61 days** (2026-08-19 → 2026-10-18, 1,537 commits). It performs exact boolean
 > operations on solids, reads and writes STEP, and tessellates to watertight meshes.
 >
 > **Every claim in this repository is backed by a re-runnable measurement.**
@@ -29,14 +29,14 @@ CAD カーネル——立体を厳密に足したり引いたりする、CAD の
 数えるほどしか無く、書くのは**組織の仕事**だと思われてきました。実際、
 OpenCASCADE は 30 年かけて育っています。
 
-このリポジトリは、**それを個人ひとりと AI が 45 日でどこまで持っていけるか**の
+このリポジトリは、**それを個人ひとりと AI が 61 日でどこまで持っていけるか**の
 記録です。
 
 | | |
 | :--- | ---: |
-| 期間 | **2026/08/19 〜 10/02（45 日）** |
-| コミット | **1,325** |
-| Rust | **142,122 行 / 388 ファイル / 8 crate**（2026/10/02 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
+| 期間 | **2026/08/19 〜 10/18（61 日）** |
+| コミット | **1,537** |
+| Rust | **150,265 行 / 403 ファイル / 8 crate**（2026/10/18 実測。`crates/*/{src,tests,examples}` の `*.rs`） |
 | 掃き出し（計測プログラム） | **146 本**（`ls crates/zenith_algo/examples/*.rs | wc -l`。2026/10/15 実測） |
 | テスト | **154 バイナリ / 758 件 / 失敗 0 / 警告 0**（`cargo test --release --workspace --exclude zenith_py`。2026/10/18 実測） |
 | 門 | **65 本すべて緑**（フル版。`contact_placement_probe` 込み。2026/10/18 実測）（＋ **口を立てて回す門 1 本**。4-610）（`bash tools/run_gates.sh` の `== 門 ==`。通しテスト・文書の指し先・Python の口・口を立てて回す門まで数えると **69 項目**（4-661 で「門に床があるか」を 1 本足しました）。**2026/09/19 に外部ファイルを揃えたので、飛ばしている所はありません**。所要 **61〜82 分**（**機械の混み具合で振れます**。4-603）。2026/09/20 も rc=0。**2026/10/02 は rc=0 で、包みの行まで含めて全部緑**——**鮮度を更新時刻ではなく中身の指紋で見るようにした**ので、**枝を切り替えただけの嘘の赤が出ません**。4-620） |
@@ -207,7 +207,7 @@ OpenCASCADE は 30 年かけて育っています。
 
 CAD カーネルは長らく「個人が手を出す領域ではない」とされてきました。それが
 **本当に技術的な壁だったのか、それとも人手の壁だったのか**——このリポジトリは、
-その問いに 45 日ぶんの実測で答えようとしています。
+その問いに 61 日ぶんの実測で答えようとしています。
 
 もしこれが**火種**になって、「自分もやってみるか」と思う人が出てくるなら、
 それがいちばんの成果です。**カーネル開発を、組織の仕事から個人の射程へ。**
