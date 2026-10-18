@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月18日（**4-413 〜 4-777 を足しました**）
+**最終更新**: 2026年10月19日（**4-413 〜 4-778 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29731,6 +29731,59 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 組の退行のため、1 本（`SUBDIV_THIRD`）は既存の既知の危うさのため**
 既定オフに残しています。
 
+
+### 4-778. **柱③——4-777 の「次の一手②」に答えが出た。B面1（ワッシャー外周の回転面）の一部の候補が、`split_face_by_edge` の「cylinder-side しか割れない」制約に当たって飛ばされていた**（2026年10月19日）
+
+4-777 の「次の一手」（`BATCHWHY` の「飛ばした」側の判断が甘いのか
+を切り分ける）を、既存の`ZENITH_SPLIT_WHY`（理由を1行ずつ出す、
+既定オフ）で確かめた。
+
+#### 飛ばされた理由がそのまま出た
+
+```
+SPLITWHY (8.0000 0.0000 5.0000) -> (6.2450 0.0000 -0.0000) split nothing
+  Only recognized cylinder-side NURBS patches can be split;
+  Only recognized cylinder-side NURBS patches can be split;
+  Section edge must cross the face interior;
+  split_by_chain: piece 0 encloses no area ...
+SPLITWHY (8.0000 2.0000 5.0000) -> (7.0000 2.0000 1.1270) split nothing
+  Only recognized cylinder-side NURBS patches can be split;
+  Only recognized cylinder-side NURBS patches can be split;
+  Section endpoints do not land on the face sides; ...
+```
+
+**`split_face_by_edge`のNURBS経路は、いくつかの戦略を順に試し、
+全部外れたときだけ「飛ばす」**——その戦略の1つが「cylinder-side
+としてだけ認識されたNURBSパッチしか割れない」という明示的な制約
+文字列を持っている。**ワッシャーの外周面（B面1）は矩形プロファイルを
+回転させた回転面**で、円柱そのものではない区間（フィレットに
+隣接する部分）を含むため、この戦略にも、他の一般戦略（「断面が
+面の内部を横切る」「断面の端が面の縦に着地する」）にも**全部外れた**
+——これが「飛ばした」の正体。
+
+#### これで4-774〜4-777の線がつながった
+
+浮いた端（4-777）→ B12/B13（フィレット隣接の薄いNURBS片）や
+B1（回転面）の一部の候補が split を通らない → その面が元の境界の
+一部をそのまま残す → A側とB側で境界の頂点列が食い違う → imprint
+では直せない（頂点そのものが違う本数しかないので刻み込む場所が
+無い、4-776）。**最初の見立て（刻み込み不足）も2番目（別々の辿り）も
+外れていたが、どちらも「どこかで縁が割られていない」という
+正しい方向を指していた**——割られていない理由がようやく specific に
+分かった。
+
+#### まだ直していない。難しさの見積もり
+
+`split_face_by_edge`のNURBS割りを一般化するのは、**この1検体だけの
+話ではなく、回転面・ルーフト面などcylinder以外のNURBSを割る
+すべての場面に効く**——ブラスト半径が大きい。安易に広げると、
+4-445の「平面まで広げたらcone×torusが壊れた」と同じ型の退行を
+起こしかねない。**次に見る人への引き渡し**: `split_face_by_edge`の
+「cylinder-side」判定がどこにあるか（`crates/zenith_algo/src/`で
+"cylinder-side" または "Only recognized" を検索）を読み、①本当に
+円柱だけに制限する理由（曲率・パラメータ化の仮定）を確認し、
+②回転面一般へ広げる場合にどのテストで安全性を測るか
+（`cone_torus_mesh_test`相当の網）を先に決めてから着手すること。
 
 ### 4-777. **柱③——4-776 の「別々の march」も的が外れていた。根は `repair_open_intersection_loops` が Plane×NURBS の浮いた端を最初から見ない設計だったこと**（2026年10月18日）
 
