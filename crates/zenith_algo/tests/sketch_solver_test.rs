@@ -509,3 +509,59 @@ fn extract_loops_skips_removed_lines_and_arcs() {
         "消した線分は輪に入れてはいけない——開いた鎖になり、輪は読めない"
     );
 }
+
+// 円にも消す操作を足した（4-781。4-780の続き）。
+
+#[test]
+fn removing_a_circle_still_used_by_a_constraint_is_refused() {
+    let mut solver = SketchSolver::new();
+    let center = solver.add_point(0.0, 0.0);
+    let circle = solver.add_circle(center, 5.0);
+    solver.add_constraint(Constraint::Radius(circle, 5.0));
+
+    assert!(
+        !solver.remove_circle(circle),
+        "まだ拘束が指している円を消せてはいけない"
+    );
+}
+
+#[test]
+fn removing_a_circle_then_its_center_frees_them_in_order() {
+    let mut solver = SketchSolver::new();
+    let center = solver.add_point(0.0, 0.0);
+    let circle = solver.add_circle(center, 5.0);
+
+    assert!(solver.remove_circle(circle));
+    assert_eq!(solver.active_circle_count(), 0);
+    assert!(
+        solver.remove_point(center),
+        "円を先に消したので、その中心点も消せるはず"
+    );
+}
+
+#[test]
+fn removing_a_point_still_used_as_a_circles_center_is_refused() {
+    // `remove_point`（4-780）は線分・弧・拘束しか見ていなかった——
+    // 円の中心も同じ理屈で守らなければならない（4-781で見つけて直した）。
+    let mut solver = SketchSolver::new();
+    let center = solver.add_point(0.0, 0.0);
+    let _circle = solver.add_circle(center, 5.0);
+
+    assert!(
+        !solver.remove_point(center),
+        "まだ円の中心になっている点を消せてはいけない"
+    );
+}
+
+#[test]
+fn removing_an_already_removed_circle_returns_false_not_silently() {
+    let mut solver = SketchSolver::new();
+    let center = solver.add_point(0.0, 0.0);
+    let circle = solver.add_circle(center, 5.0);
+
+    assert!(solver.remove_circle(circle));
+    assert!(
+        !solver.remove_circle(circle),
+        "既に消した円を、黙って「消せた」と言ってはいけない"
+    );
+}

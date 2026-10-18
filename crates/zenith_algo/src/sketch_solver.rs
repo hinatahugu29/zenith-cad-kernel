@@ -53,6 +53,9 @@ pub struct SketchCircle {
     pub id: CircleId,
     pub center: PointId,
     pub radius: f64,
+    /// **墓標**（`SketchPoint::is_removed`と同じ理屈。4-781）。
+    #[serde(default)]
+    pub is_removed: bool,
 }
 
 /// 2D円弧要素。
@@ -163,7 +166,12 @@ impl SketchSolver {
 
     pub fn add_circle(&mut self, center: PointId, radius: f64) -> CircleId {
         let id = CircleId(self.circles.len());
-        self.circles.push(SketchCircle { id, center, radius });
+        self.circles.push(SketchCircle {
+            id,
+            center,
+            radius,
+            is_removed: false,
+        });
         id
     }
 
@@ -258,6 +266,10 @@ impl SketchSolver {
                 !arc.is_removed && (arc.center == id || arc.start == id || arc.end == id)
             })
             || self
+                .circles
+                .iter()
+                .any(|circle| !circle.is_removed && circle.center == id)
+            || self
                 .constraints
                 .iter()
                 .flatten()
@@ -304,6 +316,37 @@ impl SketchSolver {
         }
     }
 
+    /// その拘束が、与えた円を直に指しているか。
+    fn constraint_references_circle(constraint: &Constraint, id: CircleId) -> bool {
+        match constraint {
+            Constraint::TangentLineCircle(_, c) | Constraint::Radius(c, _) => *c == id,
+            _ => false,
+        }
+    }
+
+    /// 円を 1 つ消す（4-781。`remove_point`／`remove_line`／`remove_arc`
+    /// と同じ墓標。`remove_point`は循環を避けるため逆方向──円がまだ
+    /// その点を中心にしているかは見ているが、円自身の消去はここ）。
+    /// **まだ拘束（`TangentLineCircle`／`Radius`）に使われている円は
+    /// 消せません。**
+    pub fn remove_circle(&mut self, id: CircleId) -> bool {
+        let still_used = self
+            .constraints
+            .iter()
+            .flatten()
+            .any(|c| Self::constraint_references_circle(c, id));
+        if still_used {
+            return false;
+        }
+        match self.circles.get_mut(id.0) {
+            Some(circle) if !circle.is_removed => {
+                circle.is_removed = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// いま残っている点だけを数える（墓標を数えません）。
     pub fn active_point_count(&self) -> usize {
         self.points.iter().filter(|p| !p.is_removed).count()
@@ -317,6 +360,11 @@ impl SketchSolver {
     /// いま残っている弧だけを数える。
     pub fn active_arc_count(&self) -> usize {
         self.arcs.iter().filter(|a| !a.is_removed).count()
+    }
+
+    /// いま残っている円だけを数える。
+    pub fn active_circle_count(&self) -> usize {
+        self.circles.iter().filter(|c| !c.is_removed).count()
     }
 
     pub fn get_point(&self, id: PointId) -> Option<[f64; 2]> {
