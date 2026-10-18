@@ -29778,8 +29778,9 @@ ROADMAP柱④ステップ3の宿題（「点・線・弧は既に`PointId`／`Li
 消した線分を輪に混ぜない」）を足し、既存14本と合わせて
 `sketch_solver_test`が23本全部通過。`cargo test --release
 --workspace --exclude zenith_py`も全数緑（rc=0）。`py tools/build_pyd.py`
-で包みを作り直し済み。`run_gates.sh --quick --no-tests`は別途回している
-（結果はまだ）。
+で包みを作り直し済み。続けて`run_gates.sh --quick --no-tests`も
+回し、**rc=0・緑**（飛ばしたのは通しテスト〈`--no-tests`〉と
+`contact_placement_probe`〈`--quick`〉の既知の2つだけ）。
 
 #### 残っている宿題
 
