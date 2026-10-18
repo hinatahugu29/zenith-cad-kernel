@@ -225,6 +225,10 @@ pub fn extract_loops(solver: &SketchSolver, tol: &Tolerance) -> Option<Vec<Sketc
     // 区間は「両端の節点」と「弧（直線なら `None`）」で持ちます。
     let mut segments: Vec<(usize, usize, Option<LoopArc>)> = Vec::new();
     for line in &solver.lines {
+        if line.is_removed {
+            // 消した線分（4-780。ROADMAP柱④）。輪には入れない。
+            continue;
+        }
         let (Some(a), Some(b)) = (at(line.p1), at(line.p2)) else {
             return None;
         };
@@ -236,6 +240,10 @@ pub fn extract_loops(solver: &SketchSolver, tol: &Tolerance) -> Option<Vec<Sketc
         segments.push((ia, ib, None));
     }
     for arc in &solver.arcs {
+        if arc.is_removed {
+            // 消した弧（4-780。ROADMAP柱④）。輪には入れない。
+            continue;
+        }
         let (Some(center), Some(start), Some(end)) = (at(arc.center), at(arc.start), at(arc.end))
         else {
             return None;

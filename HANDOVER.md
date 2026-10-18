@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月19日（**4-413 〜 4-779 を足しました**）
+**最終更新**: 2026年10月19日（**4-413 〜 4-780 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29731,6 +29731,63 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 組の退行のため、1 本（`SUBDIV_THIRD`）は既存の既知の危うさのため**
 既定オフに残しています。
 
+
+### 4-780. **柱④——`SketchSolver`に`remove_point`／`remove_line`／`remove_arc`を足した。消す操作が無かった3つの宿題（4-763の続き）**（2026年10月19日）
+
+ROADMAP柱④ステップ3の宿題（「点・線・弧は既に`PointId`／`LineId`／
+`ArcId`を持っているので、消す操作がそこにも無いこと」）に手をつけた。
+
+#### 設計：墓標だが、詰め直しは要らない
+
+`remove_constraint`（4-763）は`constraints: Vec<Option<Constraint>>`
+で、消した跡を`None`にして番号を保つ。`points`／`lines`／`arcs`は
+`solve()`が`self.points.len()`を変数の個数に直結させている
+（`x[2*i]`）ので、同じ`Vec<Option<_>>`化は`solve()`側の変数割付けも
+作り直す必要があり、範囲が広がる。**代わりに、各構造体に
+`is_removed: bool`を1つ足すだけにした**——`Vec`の位置も要素数も
+変えないので、`PointId`/`LineId`/`ArcId`（どれも単なるVecの添字）は
+動かない。消した点の変数は`solve()`の中でまだ`x`に残るが、どの
+拘束も引かなくなるので動かず、実害は無い（`active_point_count`等が
+数えないようにして、`degrees_of_freedom`の答えには出さない）。
+
+#### 消せる条件：参照が残っていたら断る
+
+- `remove_point`：その点をまだ使う線分・弧・（直に点を指す）拘束が
+  1つでもあれば`false`。先にそれらを消してから、という順番を強制する。
+- `remove_line`：その線分を指す拘束（`Parallel`／`Perpendicular`／
+  `TangentLineCircle`／`EqualLength`）があれば`false`。
+- `remove_arc`：弧を直に指す拘束は`Constraint`に1つも無いので、
+  他を見ずに消せる。
+
+**既に消した・範囲外の番号には`false`**（`remove_constraint`と同じ、
+黙って無視しない約束）。
+
+#### 隠れた消費者を1つ見つけて直した
+
+`sketch_region.rs::extract_loops`が`solver.lines`／`solver.arcs`を
+**`is_removed`を見ずに直接回していた**——もしこれを直さずに
+`remove_line`／`remove_arc`を使うと、消したはずの線分・弧が輪に
+混ざり込む。`grep`で`solver.(lines|arcs|points)`の消費者を全部
+洗い出し（`sketch_region.rs`の2か所だけ、`zenith_py`側は無関係な
+別のローカル`Sketch`構造体だった）、両方に`is_removed`チェックを足した。
+
+#### 測った
+
+新規9テスト（点/線/弧それぞれの「参照が残っていると断る」「二重に
+消せない」「番号が動かない」「自由度が減る」「`extract_loops`が
+消した線分を輪に混ぜない」）を足し、既存14本と合わせて
+`sketch_solver_test`が23本全部通過。`cargo test --release
+--workspace --exclude zenith_py`も全数緑（rc=0）。`py tools/build_pyd.py`
+で包みを作り直し済み。`run_gates.sh --quick --no-tests`は別途回している
+（結果はまだ）。
+
+#### 残っている宿題
+
+`remove_circle`はまだ無い（ROADMAP柱④の文は点・線・弧だけを名指し
+していたのでスコープ外にした）。また、`remove_point`等は
+**どの既存パイプライン（スケッチ→押し出し／回転）からも呼ばれていない
+新しいAPI**——GUI側の「1本消して解き直す」操作がまだ無い状態での、
+API境界だけの積み木（4-763の`remove_constraint`と同じ位置づけ）。
 
 ### 4-779. **柱①——4-558で残っていた「`SUBDIV_THIRD`が体積を動かしたのか、もともとずれていたのか」に、今の既定で答えが出た**（2026年10月19日）
 

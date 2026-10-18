@@ -28,6 +28,12 @@ pub struct SketchPoint {
     pub x: f64,
     pub y: f64,
     pub is_fixed: bool,
+    /// **墓標**（4-763の`constraints`と同じ理屈。ROADMAP柱④）。番号を
+    /// 詰め直さず、ここを立てるだけ——他の要素が持つ`PointId`はそのまま
+    /// 有効。`solve()`は消された点の変数も黙って動かし続けるが、何も
+    /// それを引かないので止まったまま。
+    #[serde(default)]
+    pub is_removed: bool,
 }
 
 /// 2D線分要素
@@ -36,6 +42,9 @@ pub struct SketchLine {
     pub id: LineId,
     pub p1: PointId,
     pub p2: PointId,
+    /// **墓標**（上記`SketchPoint::is_removed`と同じ理屈）。
+    #[serde(default)]
+    pub is_removed: bool,
 }
 
 /// 2D円要素
@@ -63,6 +72,9 @@ pub struct SketchArc {
     pub end: PointId,
     /// 始点から終点へ、反時計回りに回るか。
     pub counterclockwise: bool,
+    /// **墓標**（`SketchPoint::is_removed`と同じ理屈）。
+    #[serde(default)]
+    pub is_removed: bool,
 }
 
 /// 幾何拘束
@@ -120,6 +132,7 @@ impl SketchSolver {
             x,
             y,
             is_fixed: false,
+            is_removed: false,
         });
         id
     }
@@ -131,6 +144,7 @@ impl SketchSolver {
             x,
             y,
             is_fixed: true,
+            is_removed: false,
         });
         self.constraints.push(Some(Constraint::FixedPoint(id, x, y)));
         id
@@ -138,7 +152,12 @@ impl SketchSolver {
 
     pub fn add_line(&mut self, p1: PointId, p2: PointId) -> LineId {
         let id = LineId(self.lines.len());
-        self.lines.push(SketchLine { id, p1, p2 });
+        self.lines.push(SketchLine {
+            id,
+            p1,
+            p2,
+            is_removed: false,
+        });
         id
     }
 
@@ -163,6 +182,7 @@ impl SketchSolver {
             start,
             end,
             counterclockwise,
+            is_removed: false,
         });
         id
     }
@@ -191,8 +211,119 @@ impl SketchSolver {
         self.constraints.iter().flatten().count()
     }
 
+    /// その拘束が、与えた点を直に指しているか（4-780。ROADMAP柱④）。
+    /// `Parallel`・`Perpendicular`・`TangentLineCircle`・`EqualLength`・
+    /// `Radius`は線分・円を指すだけで点を直に持たないので、ここでは
+    /// 見ない——その線分がまだその点を使っているかは、呼び手が
+    /// `lines`側で別に見る。
+    fn constraint_references_point(constraint: &Constraint, id: PointId) -> bool {
+        match constraint {
+            Constraint::Coincident(a, b)
+            | Constraint::Horizontal(a, b)
+            | Constraint::Vertical(a, b)
+            | Constraint::Distance(a, b, _)
+            | Constraint::HorizontalDistance(a, b, _)
+            | Constraint::VerticalDistance(a, b, _) => *a == id || *b == id,
+            Constraint::FixedPoint(a, _, _) => *a == id,
+            Constraint::Parallel(..)
+            | Constraint::Perpendicular(..)
+            | Constraint::TangentLineCircle(..)
+            | Constraint::EqualLength(..)
+            | Constraint::Radius(..) => false,
+        }
+    }
+
+    /// その拘束が、与えた線分を直に指しているか。
+    fn constraint_references_line(constraint: &Constraint, id: LineId) -> bool {
+        match constraint {
+            Constraint::Parallel(a, b) | Constraint::Perpendicular(a, b) | Constraint::EqualLength(a, b) => {
+                *a == id || *b == id
+            }
+            Constraint::TangentLineCircle(a, _) => *a == id,
+            _ => false,
+        }
+    }
+
+    /// 点を 1 つ消す（4-780。ROADMAP 柱④「点・線・弧にも消す操作を」）。
+    /// **他の要素の`PointId`は動きません**——`remove_constraint`と同じ
+    /// 墓標の仕掛け。**まだ線分・弧・拘束に使われている点は消せません**
+    /// （`false`を返す）——先にそちらを消してから、という順番を強制する。
+    /// 既に消した・範囲外の番号にも`false`。
+    pub fn remove_point(&mut self, id: PointId) -> bool {
+        let still_used = self
+            .lines
+            .iter()
+            .any(|line| !line.is_removed && (line.p1 == id || line.p2 == id))
+            || self.arcs.iter().any(|arc| {
+                !arc.is_removed && (arc.center == id || arc.start == id || arc.end == id)
+            })
+            || self
+                .constraints
+                .iter()
+                .flatten()
+                .any(|c| Self::constraint_references_point(c, id));
+        if still_used {
+            return false;
+        }
+        match self.points.get_mut(id.0) {
+            Some(point) if !point.is_removed => {
+                point.is_removed = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 線分を 1 つ消す。**まだ拘束に使われている線分は消せません。**
+    pub fn remove_line(&mut self, id: LineId) -> bool {
+        let still_used = self
+            .constraints
+            .iter()
+            .flatten()
+            .any(|c| Self::constraint_references_line(c, id));
+        if still_used {
+            return false;
+        }
+        match self.lines.get_mut(id.0) {
+            Some(line) if !line.is_removed => {
+                line.is_removed = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// 弧を 1 つ消す。**弧を直に指す拘束は無い**ので、他を見ずに消せます。
+    pub fn remove_arc(&mut self, id: ArcId) -> bool {
+        match self.arcs.get_mut(id.0) {
+            Some(arc) if !arc.is_removed => {
+                arc.is_removed = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// いま残っている点だけを数える（墓標を数えません）。
+    pub fn active_point_count(&self) -> usize {
+        self.points.iter().filter(|p| !p.is_removed).count()
+    }
+
+    /// いま残っている線分だけを数える。
+    pub fn active_line_count(&self) -> usize {
+        self.lines.iter().filter(|l| !l.is_removed).count()
+    }
+
+    /// いま残っている弧だけを数える。
+    pub fn active_arc_count(&self) -> usize {
+        self.arcs.iter().filter(|a| !a.is_removed).count()
+    }
+
     pub fn get_point(&self, id: PointId) -> Option<[f64; 2]> {
-        self.points.get(id.0).map(|p| [p.x, p.y])
+        self.points
+            .get(id.0)
+            .filter(|p| !p.is_removed)
+            .map(|p| [p.x, p.y])
     }
 
     /// 拘束方程式系を解き、全点の座標を最適化
@@ -524,11 +655,13 @@ impl SketchSolver {
         // （`sketch_solver_probe` に「Total DOF = 2, Rank = 5」と印字されていた）。
         // `saturating_sub` がそれを 0 に丸めるため、自由度が残っているスケッチが
         // `FullyConstrained` と報告されていた。
+        // **消した点は数えません**（4-780）——墓標の変数は誰も引かず、
+        // 自由度としては既に無い。
         let free_columns: Vec<usize> = self
             .points
             .iter()
             .enumerate()
-            .filter(|(_, point)| !point.is_fixed)
+            .filter(|(_, point)| !point.is_fixed && !point.is_removed)
             .flat_map(|(index, _)| [2 * index, 2 * index + 1])
             .collect();
         let total_dof = free_columns.len();

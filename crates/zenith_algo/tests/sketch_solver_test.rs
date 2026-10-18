@@ -364,3 +364,148 @@ fn remove_then_readd_a_different_constraint_solves_like_building_it_fresh() {
         assert!((a.y - b.y).abs() < 1e-6, "y がずれました: {} vs {}", a.y, b.y);
     }
 }
+
+// ROADMAP.md 柱④「点・線・弧にも消す操作を」の最小の積み木（4-780）。
+
+#[test]
+fn removing_a_point_refuses_while_a_line_still_uses_it() {
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_point(0.0, 0.0);
+    let p1 = solver.add_point(10.0, 0.0);
+    solver.add_line(p0, p1);
+
+    assert!(
+        !solver.remove_point(p0),
+        "まだ線分が使っている点を消せてはいけない"
+    );
+    assert_eq!(solver.active_point_count(), 2);
+}
+
+#[test]
+fn removing_a_line_then_its_points_frees_them_in_order() {
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_point(0.0, 0.0);
+    let p1 = solver.add_point(10.0, 0.0);
+    let line = solver.add_line(p0, p1);
+
+    assert!(solver.remove_line(line));
+    assert_eq!(solver.active_line_count(), 0);
+    assert!(solver.remove_point(p0));
+    assert!(solver.remove_point(p1));
+    assert_eq!(solver.active_point_count(), 0);
+}
+
+#[test]
+fn removing_an_already_removed_point_returns_false_not_silently() {
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_point(0.0, 0.0);
+
+    assert!(solver.remove_point(p0));
+    assert!(
+        !solver.remove_point(p0),
+        "既に消した点を、黙って「消せた」と言ってはいけない"
+    );
+}
+
+#[test]
+fn removing_one_point_does_not_move_the_id_of_the_others() {
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_point(0.0, 0.0);
+    let p1 = solver.add_point(10.0, 0.0);
+    let p2 = solver.add_point(5.0, 5.0);
+
+    assert!(solver.remove_point(p1));
+
+    // `p0`・`p2` はまだ有効な座標を指しているはず——番号がずれていたら、
+    // どちらかが `None` か別の点の座標を返す。
+    assert_eq!(solver.get_point(p0), Some([0.0, 0.0]));
+    assert_eq!(solver.get_point(p2), Some([5.0, 5.0]));
+    assert_eq!(solver.get_point(p1), None, "消した点は返してはいけない");
+    assert_eq!(solver.active_point_count(), 2);
+}
+
+#[test]
+fn removing_a_point_still_used_by_a_constraint_is_refused() {
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_point(0.0, 0.0);
+    let p1 = solver.add_point(10.0, 0.0);
+    solver.add_constraint(Constraint::Horizontal(p0, p1));
+
+    assert!(
+        !solver.remove_point(p0),
+        "まだ拘束が指している点を消せてはいけない"
+    );
+}
+
+#[test]
+fn removing_a_line_still_used_by_a_constraint_is_refused() {
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_point(0.0, 0.0);
+    let p1 = solver.add_point(10.0, 0.0);
+    let p2 = solver.add_point(0.0, 10.0);
+    let p3 = solver.add_point(10.0, 10.0);
+    let l0 = solver.add_line(p0, p1);
+    let l1 = solver.add_line(p2, p3);
+    solver.add_constraint(Constraint::Parallel(l0, l1));
+
+    assert!(
+        !solver.remove_line(l0),
+        "まだ拘束が指している線分を消せてはいけない"
+    );
+}
+
+#[test]
+fn removing_a_point_frees_the_degree_of_freedom_it_held() {
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_point(0.0, 0.0);
+    let _p1 = solver.add_point(10.0, 0.0);
+    let (total_before, _, _) = solver.degrees_of_freedom();
+    assert_eq!(total_before, 4);
+
+    assert!(solver.remove_point(p0));
+    let (total_after, _, _) = solver.degrees_of_freedom();
+    assert_eq!(total_after, 2, "消した点ぶんの自由度が引かれる");
+}
+
+#[test]
+fn removing_an_arc_needs_no_other_removal_first() {
+    // 弧を直に指す拘束は無い（`Constraint`に`ArcId`を持つ種類が無い）ので、
+    // 線分・点より先に消す必要はない。
+    let mut solver = SketchSolver::new();
+    let center = solver.add_point(0.0, 0.0);
+    let start = solver.add_point(5.0, 0.0);
+    let end = solver.add_point(0.0, 5.0);
+    let arc = solver.add_arc(center, start, end, true);
+
+    assert!(solver.remove_arc(arc));
+    assert_eq!(solver.active_arc_count(), 0);
+}
+
+#[test]
+fn extract_loops_skips_removed_lines_and_arcs() {
+    use zenith_algo::extract_loops;
+    use zenith_math::Tolerance;
+
+    let mut solver = SketchSolver::new();
+    let p0 = solver.add_point(0.0, 0.0);
+    let p1 = solver.add_point(10.0, 0.0);
+    let p2 = solver.add_point(10.0, 10.0);
+    let p3 = solver.add_point(0.0, 10.0);
+    solver.add_line(p0, p1);
+    solver.add_line(p1, p2);
+    solver.add_line(p2, p3);
+    let last = solver.add_line(p3, p0);
+
+    let tol = Tolerance::default();
+    assert!(
+        extract_loops(&solver, &tol).is_some(),
+        "閉じた四角形は輪として読めるはず"
+    );
+
+    assert!(solver.remove_line(last));
+    assert_eq!(
+        extract_loops(&solver, &tol),
+        None,
+        "消した線分は輪に入れてはいけない——開いた鎖になり、輪は読めない"
+    );
+}
