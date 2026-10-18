@@ -29755,8 +29755,11 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 新規4テスト（円を消す・二重に消せない・円を先に消せば中心点も消せる・
 **円の中心になっている点はremove_pointで消せないことを確認**）を足し、
 既存23本と合わせて`sketch_solver_test`が27本全部通過。
-`cargo test --release --workspace --exclude zenith_py`で全数確認中
-（結果はまだ）。
+`cargo test --release --workspace --exclude zenith_py`も全数緑
+（rc=0）。`py tools/build_pyd.py`で包みを作り直し、続けて
+`run_gates.sh --quick --no-tests`も**rc=0・緑**（飛ばしたのは
+既知の2つだけ）——4-780と同じ3段（単体テスト→全数テスト→門）
+で確認済み。
 
 **教訓**: 4-780を書いた直後に見つけた——**新しい消す操作を足すときは、
 既存の「まだ使われているか」チェックが新しい参照元（今回は円）まで
