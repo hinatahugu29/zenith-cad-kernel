@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月19日（**4-413 〜 4-784 を足しました**）
+**最終更新**: 2026年10月19日（**4-413 〜 4-786 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29731,6 +29731,112 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 組の退行のため、1 本（`SUBDIV_THIRD`）は既存の既知の危うさのため**
 既定オフに残しています。
 
+
+### 4-786. **4-782のROADMAP組み立て直しが、`doc_claims`門を自分で壊していた——削った表が、その門の入力そのものだった**（2026年10月19日）
+
+4-785（柱②の並列化の調査）をコミットした後に`run_gates.sh --quick
+--no-tests`を回すと、**`doc_claims`が赤**になった。`tools/check_doc_claims.py`
+は`ROADMAP.md`・`KERNEL_SPECS.md`・`KERNEL_INVENTORY_SPECS.md`の
+「`完了`または`✅`を含む行」から`` `crate::name` ``形式のバックトーク
+を拾い、crates内に実在するか確かめる門（4-440。「名指しされた実体が
+無い」を防ぐ）。
+
+#### 根
+
+**4-782で`ROADMAP.md`から削った「🏛️ 6大アーキテクチャ階層」の表こそ
+が、この門の唯一の入力源だった。** `KERNEL_SPECS.md`・
+`KERNEL_INVENTORY_SPECS.md`には元から「完了」「✅」を含む行が
+1本も無い（`grep -c`で確認）。表を削ったことで**当てた名前が0件**
+になり、`check_doc_claims.py`自身の安全装置（「0件を緑と読ませない」
+4-410の教訓）がそれを正しく赤にした——**門は正しく動いていた。
+壊したのは私の方**。
+
+#### 直した内容
+
+削った表の代わりに置いた「付録：モジュールの地図」に**`✅`の列を
+足し**、各行に`::`付きの実名（`zenith_algo::PrimitiveBuilder`・
+`zenith_topo::Solid`など）を載せ直した。**「完成度ではなく実在の
+印」**と明記——4-782の目的（完成度を主張する古い表をやめる）を
+保ったまま、`check_doc_claims.py`が拾える形にした。`py
+tools/check_doc_claims.py`で**当てた名前32件、全部cratesに実在**
+を確認。
+
+**教訓**: ドキュメントの大掃除をするときは、**削る内容が何らかの
+門の入力になっていないかを先に確かめること**——`grep`で見出しや
+キーワードを検索すれば1分で分かった。4-782の時点でこれをやって
+いなかった。
+
+### 4-785. **柱②——`collect_face_pair_candidates`の並列化を試み、93件で測って既定には上げられないと分かった。並列経路は、逐次と違い自分自身とも再現しない**（2026年10月19日）
+
+ROADMAP柱②の次の一手2（「`collect_face_pair_candidates`の並列化は
+`collect_batch_splits_for_faces`より難しい——共有の集計変数と
+`candidates`への書き込みが絡む」）に手をつけた。
+
+#### 実装
+
+主ループの本体（`intersect_face_supports`→`clip_candidate_to_face_bboxes`
+→`clip_candidate_to_planar_trims`→`split_candidate_at_trim_crossings`）
+を`rayon::into_par_iter`で並列化し、結果を`(face_a_index,
+face_b_index)`の昇順に**並べ直してから**返す関数
+`collect_face_pair_candidates_parallel`を足した（`ZENITH_PARALLEL_CANDIDATES=1`、
+既定オフ）。組ごとの時計・`ZENITH_PAIR_WHY`／`ZENITH_PAIR_TRACE`は
+共有の集計変数に書くため並列化しておらず、それらの口が立っている
+ときは呼び出し側が自動で逐次経路へ戻す。`parallel_split_probe`と
+同じ型の突き合わせ門`parallel_candidates_probe`も足した（11検体・
+3配置・3演算、93件）。
+
+#### 測って見つかったこと
+
+最初の測りで`torus`系に1e-11〜1e-12のずれが出た。`ZENITH_PARALLEL_SPLIT`
+と同じ型の掃除漏れ（`trim_polygon_cache`／`area_memo`がワーカー・
+スレッドに残る）を疑い、同じ`rayon::broadcast`掃除を
+`ZENITH_PARALLEL_CANDIDATES`にも足したが、**ずれは1ビットも
+動かなかった**——同じ型の穴ではなかった。
+
+**決定的だったのは「逐次 vs 並列」ではなく「並列 vs 並列」の比較**
+——同じ設定で独立に2回プロセスを起動し、高精度（12桁）で突き合わせ
+たところ、**逐次経路（左列）は2回とも1桁も違わず完全に再現した**
+一方、**並列経路（右列）は2回の実行間でも最後の数桁が揺れた**
+（`torus corner block A^B`: 67.162415093406 → 093402 → 093410、
+3回とも微妙に違う）。**これは「逐次と並列が違う値に収束する」の
+ではなく「並列経路自体が決定的でない」**という、もう一段重い話。
+
+**疑わしい機構**: `zenith_topo`の`Edge::new`は`EDGE_ID_GEN`という
+**グローバルなatomicカウンタ**（`fetch_add`）からidを取る
+（`vertex.rs`・`face.rs`・`shell.rs`・`solid.rs`も同じ型）。並列に
+`Edge::new`が呼ばれると、**どのEdgeがどの番号を取るかはスレッドの
+競合タイミングで決まる**——同じ幾何でも実行ごとに違うidが付く。
+下流のどこかに`edge_id`を使う決定（`trim_polygon_cache`の指紋、
+もしくは別の場所の並べ替え）があれば、そこで浮動小数の足し算の
+順序が揺れる。**ここまでは機構の推定**——どの下流処理が実際に
+効いているかは、まだ特定していない。
+
+#### 既定には上げない。コードは残す
+
+`parallel_candidates_probe`を93件（10検体×3配置×3演算＋`linkrods`
+H8の3演算）で回すと、**最悪2.535e-10**（`linkrods`のH8検体が最大）
+——`parallel_split_probe`の許す幅0と同じ基準で、**赤**（意図どおり
+`exit(1)`）。**この口は既定に上げてはいけない**——コード本体の
+コメントに警告を書いた。**`parallel_candidates_probe`は
+`tools/run_gates.sh`のGATESには登録していません**（`march_budget_probe`
+と同じ扱い——赤いままの診断用プローブを常設の門に混ぜると、
+`run_gates.sh`全体が理由も無く赤になる）。測りたい人が手で
+`cargo run --release -p zenith_algo --example parallel_candidates_probe`
+を回す。**この並列化の試み自体は、`ZENITH_PARALLEL_SPLIT`との対比
+として価値がある**——あちらは面を割る段（既存のEdgeを配るだけ、
+新しいEdgeをほぼ作らない）、こちらは交線を求める段（新しいEdgeを
+たくさん作る）。**「並列化できるか」は、その段が新しくグローバル
+idを取る量に依存する**、というのが今回の教訓。
+
+#### 次に見る人への引き渡し
+
+①`EDGE_ID_GEN`の競合が本当に効いているかを確かめるには、
+`collect_face_pair_candidates_parallel`の結果に対して、**並列mapの
+あとで逐次と同じ順にEdge idを振り直す**仕組みを足して、それでも
+ずれが残るかを測ること。②振り直しで直るなら、同じ振り直しを
+他の並列化候補（`worst_distance`を軽くする方向など）にも先に
+適用する価値がある——**グローバルidカウンタの競合は、この1箇所
+だけの話ではない可能性がある。**
 
 ### 4-784. **柱④——4つの消す操作をまとめて使う編集シナリオを測った。`remove_circle`が「まだRadius拘束が指している」を正しく断る所を1つ実演した**（2026年10月19日）
 

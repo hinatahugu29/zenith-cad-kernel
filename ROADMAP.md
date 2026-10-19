@@ -183,11 +183,22 @@ B面1` 1 組だけで 5.439 秒）＋ シェルを組む 24.456 秒**でした�
    （口無しで速くする）には、この口は使えないという結論です——
    `collect_face_pair_candidates` の並列化（下記 2.）か、
    `worst_distance` 自体を軽くする方向を探すのが次の筋です。
-2. **`collect_face_pair_candidates`（「面の組を選ぶ」8.7 秒）は、
-   `collect_batch_splits_for_faces` より難しい**——共有の集計変数
-   （組ごとの時間・鍵の指紋）と `candidates` への書き込みが絡むので、
-   単純な `par_iter` には直せません。手を付けるなら、まず結果を
-   集めてから集計する形に分けること。
+2. **試して、既定には上げられないと分かりました（2026/10/19。
+   HANDOVER 4-785）**: 「まず結果を集めてから集計する」形
+   （`ZENITH_PARALLEL_CANDIDATES=1`、`collect_face_pair_candidates_parallel`）
+   を実装し、`parallel_split_probe`と同じ型の門`parallel_candidates_probe`
+   （93件）を足しました。**`ZENITH_PARALLEL_SPLIT`と同じ型の掃除漏れ
+   （`trim_polygon_cache`）を直しても、ずれは消えませんでした**——
+   高精度で突き合わせると、**並列経路は自分自身とも再現しない**
+   （同じ設定で2回実行しても最後の数桁が揺れる）と分かり、これは
+   逐次と並列の違いではなく並列経路自体の非決定性でした。疑わしい
+   機構は`zenith_topo`のグローバルatomicカウンタ（`Edge::new`の
+   `EDGE_ID_GEN`ほか）——並列にEdgeを作ると、どのEdgeがどの番号を
+   取るかが競合タイミングで決まります。93件での最悪は2.535e-10
+   （`linkrods`のH8検体）——**この口は既定に上げてはいけません**。
+   コードと門は残し、コメントに警告を書きました。**次に見る人への
+   引き渡し**: 並列mapのあとで逐次と同じ順にEdge idを振り直す
+   仕組みを足し、それでもずれが残るかを確かめること。
 3. **直しました（2026/10/18。HANDOVER 4-775）**: `ZENITH_PARALLEL_SPLIT`
    が立っているときだけ、`rayon::broadcast` でプールの全ワーカー・
    スレッドの `trim_polygon_cache`／`area_memo` を掃除するようにしました。
@@ -429,17 +440,22 @@ HANDOVER 4-747）。**大半は「試して、効かなかった／置き換わ�
 
 **これは完成度の表ではありません。** 「どの機能がどのクレート・
 モジュールにあるか」だけを示す索引です。**できる/できないは
-[`README.md`](README.md) が正**で、ここには書きません。
+[`README.md`](README.md) が正**で、ここには書きません。**✅は
+「この名前がcratesに実在する」ことだけを言います**（4-440の
+`check_doc_claims.py`が、ここに載った名前を実際にcratesから
+探します——4-782で古いアーキテクチャ表を削ったとき、この門の
+入力そのものを消してしまい`当てた名前0件`で赤くなりました。4-787
+で見つけて直しています）。
 
-| 階層 | 主な場所 |
-| :--- | :--- |
-| 数値幾何・自由曲面（NURBS、曲率、SSI、トリム曲面） | `zenith_geom` |
-| B-Rep トポロジー（Vertex/Edge/Wire/Face/Shell/Solid） | `zenith_topo` |
-| 形状生成・フィーチャー（押し出し・回転・ロフト・スイープ・フィレット・ブーリアン） | `zenith_algo`（`PrimitiveBuilder`・`ExtrudeBuilder`・`RevolveBuilder`・`LoftBuilder`・`SweepBuilder`・`FilletBuilder`・`BooleanEngine` など） |
-| ダイレクトモデリング（面の計測・Push-Pull・Taper・最近傍点） | `zenith_algo::DirectModeling`、`zenith_geom::ExtremumEngine` |
-| 評価・物性・メッシュ化（発散定理による体積・内外判定・テッセレーション） | `zenith_algo::MassCalculator`・`zenith_algo::exact_inside`・`zenith_tess` |
-| データ交換（STEP/STL/OBJ/glTF/IGES、Blender連携） | `zenith_io`（各 Exporter/Importer）、`zenith_py` |
-| 2D スケッチ（拘束解き・輪の抽出） | `zenith_algo::sketch_solver`・`sketch_region` |
+| ✅ 実在 | 階層 | 主な場所 |
+| :---: | :--- | :--- |
+| ✅ | 数値幾何・自由曲面（NURBS、曲率、SSI、トリム曲面） | `zenith_geom`・`zenith_geom::ExtremumEngine` |
+| ✅ | B-Rep トポロジー（Vertex/Edge/Wire/Face/Shell/Solid） | `zenith_topo`・`zenith_topo::Solid` |
+| ✅ | 形状生成・フィーチャー（押し出し・回転・ロフト・スイープ・フィレット・ブーリアン） | `zenith_algo::PrimitiveBuilder`・`zenith_algo::ExtrudeBuilder`・`zenith_algo::RevolveBuilder`・`zenith_algo::LoftBuilder`・`zenith_algo::SweepBuilder`・`zenith_algo::FilletBuilder`・`zenith_algo::BooleanEngine` |
+| ✅ | ダイレクトモデリング（面の計測・Push-Pull・Taper・最近傍点） | `zenith_algo::DirectModeling` |
+| ✅ | 評価・物性・メッシュ化（発散定理による体積・内外判定・テッセレーション） | `zenith_algo::MassCalculator`・`zenith_tess::surface_tess` |
+| ✅ | データ交換（STEP/STL/OBJ/glTF/IGES、Blender連携） | `zenith_io::StepExporter`・`zenith_io::StepImporter`・`zenith_py` |
+| ✅ | 2D スケッチ（拘束解き・輪の抽出） | `zenith_algo::sketch_solver`・`zenith_algo::sketch_region` |
 
 ---
 *最新の状態は [`README.md`](README.md)、履歴は [`HANDOVER.md`](HANDOVER.md) にあります。*

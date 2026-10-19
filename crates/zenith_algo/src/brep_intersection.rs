@@ -257,7 +257,15 @@ impl BrepIntersectionBuilder {
         // 同じ番地・同じ指紋を持てば、古い答えを誤って当たり扱いする
         // 余地が残ります。**既定オフの間は誰も見ていませんでした**
         // ——プールの全スレッドを掃除します。
-        if std::env::var_os("ZENITH_PARALLEL_SPLIT").is_some() {
+        //
+        // **`ZENITH_PARALLEL_CANDIDATES`（4-785）も同じ穴を持つ**——
+        // 「面の組を選ぶ」段自体が`polygon_at`（トリムの内外判定）を
+        // 経由して`trim_polygon_cache`を読み書きするため、実際に
+        // `parallel_candidates_probe`で1e-11〜1e-12のずれが出て見つかった
+        // （`ZENITH_PARALLEL_SPLIT`と同じ機構）。
+        if std::env::var_os("ZENITH_PARALLEL_SPLIT").is_some()
+            || std::env::var_os("ZENITH_PARALLEL_CANDIDATES").is_some()
+        {
             rayon::broadcast(|_| {
                 if trim_polygon_cache::on() {
                     trim_polygon_cache::clear();
@@ -290,6 +298,32 @@ impl BrepIntersectionBuilder {
         // **押す所も測る所も走りません。**
         let mut pair_times: Option<Vec<(std::time::Duration, usize, usize)>> =
             std::env::var_os("ZENITH_BOOLEAN_TIME").is_some().then(Vec::new);
+
+        // **面の組を選ぶ段の並列化**（ROADMAP 柱②の次の一手2。既定オフ、
+        // `ZENITH_PARALLEL_CANDIDATES=1`）。組ごとの時計・`ZENITH_PAIR_WHY`／
+        // `ZENITH_PAIR_TRACE`の1行ずつの出力は、**共有の集計変数に書くので
+        // 並列化できません**——ROADMAP が指摘していたとおりです。測るための
+        // 口が立っているときは、安全に素の逐次経路へ戻します。
+        //
+        // ⚠ **まだ安全だと確認できていません**（4-785）。`parallel_candidates_probe`
+        // で測ると、`trim_polygon_cache`の掃除漏れ（4-775で直したのと同じ型）
+        // を直した後も、**並列経路どうしを2回独立に実行しただけで最後の
+        // 数桁が揺れます**（逐次経路は何度回しても完全に同一）——
+        // `Edge::new`の`EDGE_ID_GEN`（グローバルなatomic）が並列に呼ばれると
+        // 割り当てる番号が実行ごとに変わるのが疑わしい（まだ確証はない）。
+        // **この口を既定に上げてはいけません**——`parallel_candidates_probe`
+        // が赤であることがその証拠です。直すなら、並列map→集約reduceの
+        // 間に挟んで、逐次経路と同じ順でEdge idを振り直す仕組みが要る。
+        let use_parallel_candidates = std::env::var_os("ZENITH_PARALLEL_CANDIDATES").is_some()
+            && !pair_why
+            && !outside_timing
+            && std::env::var_os("ZENITH_PAIR_TRACE").is_none();
+
+        if use_parallel_candidates {
+            candidates = Self::collect_face_pair_candidates_parallel(
+                faces_a, faces_b, &bboxes_a, &bboxes_b, tol,
+            );
+        } else {
         for (face_a_index, face_a) in faces_a.iter().enumerate() {
             for (face_b_index, face_b) in faces_b.iter().enumerate() {
                 if !face_bboxes_intersect(
@@ -498,6 +532,7 @@ impl BrepIntersectionBuilder {
                 }
             }
         }
+        }
 
         // **相手のいない端から、隣の組を辿り直します。** 組を独立に辿ると、
         // 隣の升に入るぶんの弧が短いときに抜けます（4-62）。
@@ -590,6 +625,70 @@ impl BrepIntersectionBuilder {
             }
         }
         candidates
+    }
+
+    /// `collect_face_pair_candidates`の主ループを並列にした版
+    /// （ROADMAP柱②の次の一手2。`ZENITH_PARALLEL_CANDIDATES=1`で入る）。
+    ///
+    /// **組ごとの時計・`ZENITH_PAIR_WHY`／`ZENITH_PAIR_TRACE`は、ここには
+    /// 無い**——呼び出し側がそれらの口が立っているときはこの経路を使わない
+    /// ように切り分けている（4-785）。この関数が作る`candidates`は、
+    /// **逐次版と同じ並び**（`face_a_index`→`face_b_index`の昇順）に
+    /// 揃える——後段（`trace_from_loose_ends_into`・`rebuild_tangent_joints`）
+    /// が候補の並びに依存していないかを確かめていない以上、**並びを変えずに
+    /// 渡すのが唯一の安全な前提**。
+    fn collect_face_pair_candidates_parallel(
+        faces_a: &[Face],
+        faces_b: &[Face],
+        bboxes_a: &[Option<BoundingBox3>],
+        bboxes_b: &[Option<BoundingBox3>],
+        tol: &Tolerance,
+    ) -> Vec<FaceIntersectionCandidate> {
+        use rayon::prelude::*;
+        let mut pairs: Vec<(usize, usize)> = Vec::with_capacity(faces_a.len() * faces_b.len());
+        for face_a_index in 0..faces_a.len() {
+            for face_b_index in 0..faces_b.len() {
+                pairs.push((face_a_index, face_b_index));
+            }
+        }
+        let mut found: Vec<FaceIntersectionCandidate> = pairs
+            .into_par_iter()
+            .filter_map(|(face_a_index, face_b_index)| {
+                if !face_bboxes_intersect(
+                    bboxes_a[face_a_index].as_ref(),
+                    bboxes_b[face_b_index].as_ref(),
+                    tol,
+                ) {
+                    return None;
+                }
+                let face_a = &faces_a[face_a_index];
+                let face_b = &faces_b[face_b_index];
+                let clipped = intersect_face_supports(face_a, face_b, tol)
+                    .and_then(|(kind, analytic)| {
+                        clip_candidate_to_face_bboxes(
+                            kind,
+                            bboxes_a[face_a_index].as_ref(),
+                            bboxes_b[face_b_index].as_ref(),
+                            tol,
+                        )
+                        .map(|kind| (kind, analytic))
+                    })
+                    .and_then(|(kind, analytic)| {
+                        clip_candidate_to_planar_trims(kind, face_a, face_b, tol).map(|kind| {
+                            let split = split_candidate_at_trim_crossings(kind, face_a, face_b, tol);
+                            (split, analytic)
+                        })
+                    });
+                clipped.map(|(kind, analytic)| FaceIntersectionCandidate {
+                    face_a_index,
+                    face_b_index,
+                    kind,
+                    analytic,
+                })
+            })
+            .collect();
+        found.sort_by_key(|candidate| (candidate.face_a_index, candidate.face_b_index));
+        found
     }
 
     /// 辿って出した弧の端を、**隣の解析的な交線と、自分のもう一方の面との
