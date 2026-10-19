@@ -565,3 +565,79 @@ fn removing_an_already_removed_circle_returns_false_not_silently() {
         "既に消した円を、黙って「消せた」と言ってはいけない"
     );
 }
+
+// ROADMAP.md 柱④の次の一手（4-780・4-781の続き）。remove_point／
+// remove_line／remove_arc／remove_circleを1つの編集の流れでまとめて
+// 使い、複数回の下描き→やめる→本当に欲しい形を足す、を重ねても
+// `4-393`の理屈（経緯に関わらず同じ答えに解ける）が保てるかを見る。
+
+#[test]
+fn combining_all_four_remove_operations_across_several_edits_matches_building_fresh() {
+    let mut edited = SketchSolver::new();
+    let p0 = edited.add_fixed_point(0.0, 0.0);
+    let p1 = edited.add_point(10.0, 0.3);
+    edited.add_constraint(Constraint::Horizontal(p0, p1));
+    edited.solve(400, 1e-9).expect("solve with just the two points");
+
+    // 1回目の下描き：飾りの円を足したが、やめることにした。
+    let deco_center = edited.add_point(5.0, 5.0);
+    let deco_circle = edited.add_circle(deco_center, 2.0);
+    let deco_radius = edited.add_constraint(Constraint::Radius(deco_circle, 2.0));
+    edited.solve(400, 1e-9).expect("solve with the decoration circle");
+
+    assert!(
+        !edited.remove_circle(deco_circle),
+        "まだ Radius 拘束が指している円は消せないはず"
+    );
+    assert!(edited.remove_constraint(deco_radius));
+    assert!(edited.remove_circle(deco_circle));
+    assert!(
+        edited.remove_point(deco_center),
+        "円を先に消したので、その中心点も消せるはず"
+    );
+
+    // 2回目の下描き：角を丸める弧を足したが、これもやめることにした。
+    let arc_center = edited.add_point(9.0, 1.0);
+    let arc_start = edited.add_point(10.0, 1.0);
+    let arc_end = edited.add_point(9.0, 2.0);
+    let arc = edited.add_arc(arc_center, arc_start, arc_end, true);
+    edited.solve(400, 1e-9).expect("solve with the arc");
+
+    assert!(edited.remove_arc(arc));
+    assert!(edited.remove_point(arc_center));
+    assert!(edited.remove_point(arc_start));
+    assert!(edited.remove_point(arc_end));
+
+    // 3回目：本当に欲しかった線分と距離拘束を足す。
+    let line = edited.add_line(p0, p1);
+    assert!(
+        !edited.remove_point(p1),
+        "まだ線分が使っている点は消せないはず（ついでの確認）"
+    );
+    edited.add_constraint(Constraint::Distance(p0, p1, 10.0));
+    edited.solve(400, 1e-9).expect("solve the final shape");
+
+    let mut fresh = SketchSolver::new();
+    let q0 = fresh.add_fixed_point(0.0, 0.0);
+    let q1 = fresh.add_point(10.0, 0.3);
+    fresh.add_line(q0, q1);
+    fresh.add_constraint(Constraint::Horizontal(q0, q1));
+    fresh.add_constraint(Constraint::Distance(q0, q1, 10.0));
+    fresh.solve(400, 1e-9).expect("solve fresh");
+
+    let edited_p0 = edited.get_point(p0).expect("p0 still live");
+    let edited_p1 = edited.get_point(p1).expect("p1 still live");
+    let fresh_q0 = fresh.get_point(q0).expect("q0 still live");
+    let fresh_q1 = fresh.get_point(q1).expect("q1 still live");
+    assert!((edited_p0[0] - fresh_q0[0]).abs() < 1e-6);
+    assert!((edited_p0[1] - fresh_q0[1]).abs() < 1e-6);
+    assert!((edited_p1[0] - fresh_q1[0]).abs() < 1e-6, "x がずれました");
+    assert!((edited_p1[1] - fresh_q1[1]).abs() < 1e-6, "y がずれました");
+
+    // **残っている要素の数も、下描きの痕を1つも残さず一致するはず。**
+    assert_eq!(edited.active_point_count(), fresh.active_point_count());
+    assert_eq!(edited.active_line_count(), fresh.active_line_count());
+    assert_eq!(edited.active_arc_count(), fresh.active_arc_count());
+    assert_eq!(edited.active_circle_count(), fresh.active_circle_count());
+    let _ = line;
+}
