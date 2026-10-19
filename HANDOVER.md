@@ -29791,6 +29791,11 @@ march／ニュートン）の実測が**単発では2倍近く揺れる**（4-79
    では「速くなった」とも「変わらない」とも言えない。
 3. 既定への昇格は、もちろん持ち主の判断のまま。
 
+**門を通した（2026/10/20早朝）**: `cargo test --workspace --release`
+全緑、`py tools/build_pyd.py`成功、`tools/run_gates.sh --quick
+--no-tests`も緑（rc:0、個別ファイルに`FAILED`無し）。コード変更は
+コメント追加と`regularize.rs`の`ZENITH_PARALLEL_PROTECT`分岐のみ。
+
 ### 4-794. **柱②——4-793の訂正の、さらに訂正。2つの時計（`boolean.rs`の外側・`collect_boolean_shell_assembly`の内側）を確かめ、「整える」の中身は本当に別物だと分かった。そのうえで「整える」自身が、まだ並列化していない重さ（12.153秒、全体の約23%）だと判明した**（2026年10月19日）
 
 4-793の訂正で「A面33×B面1の5.439秒は`collect_face_pair_candidates`
