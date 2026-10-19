@@ -2113,3 +2113,190 @@ fn boundary_seeding_off() -> bool {
     static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *OFF.get_or_init(|| std::env::var_os("ZENITH_NO_BOUNDARY_SEED").is_some())
 }
+
+/// **`ZENITH_SUBDIV_THIRD`の理論上の危うさ（4-558・4-779・4-789）を、
+/// 実際に組み立てて確かめる**（ROADMAP柱①）。
+///
+/// これまでの測定（H8自身・90件クロス検体・41配置の恒等式・極端な
+/// 縦横比）は、**どれも「たまたま踏まなかった」のか「そもそも踏む配置が
+/// 存在しない」のかを区別できていなかった**。ここでは数式から逆算して
+/// 「踏む配置」を直接作る。
+///
+/// # 仕組み
+///
+/// `project_edge_to_nurbs_pcurve`の細分判定は、区間を1点（既定は中点、
+/// `SUBDIV_THIRD`なら1/3点）だけ見て「弦が辺から離れているか」を測る。
+/// **辺の、支持曲面からの外れ（z方向）を t の3次多項式**
+/// `p(t) = C・t・(t-1/3)・(t-1)` に選べば、`p`はちょうど t=0, 1/3, 1 で
+/// 0になる——**最初の細分（4区間: [0,.25][.25,.5][.5,.75][.75,1]）の
+/// うち、2番目の区間[.25,.5]は、その区間内の「1/3点」（局所分数1/3、
+/// 大域t=1/3）がちょうど`p`の根に乗る**。
+///
+/// 曲面は平面 z=0（解析的に正確、射影のぶれが入らない）、辺の x,y は
+/// tに線形（弦の線形補間と完全に一致するので、x,y方向のずれは0。
+/// ずれは z=p(t)だけ）。
+#[cfg(test)]
+mod subdiv_third_danger_tests {
+    use super::*;
+    use crate::edge::Edge;
+    use crate::vertex::Vertex;
+    use zenith_geom::{ControlPoint3, NurbsCurve3};
+
+    /// 4本の次数3Bezierを繋いだB-spline（内部ノット重複度3＝C0接続）。
+    /// 区間[0,.25]・[.5,.75]・[.75,1]はz=0のまま平坦——`project_edge_
+    /// to_nurbs_pcurve`が最初に作る4分割の荒い格子点（0・.25・.5・.75・1）
+    /// では、どの区間もちょうどz=0（辺は曲面に乗っている）。
+    ///
+    /// 区間[.25,.5]だけ、局所分数fでp(f)=C・f・(f-1/3)・(f-1)の
+    /// Bezier（z0=0・z1=C/9・z2=-2C/9・z3=0）——**局所1/3点（大域
+    /// t=1/3）がちょうど根に乗る**。中点(f=0.5)・四分点(f=0.25,0.75)は
+    /// 根ではなく、はっきりした値を持つ。
+    ///
+    /// 他の区間を厳密に0に保つことで、`max_distance`（「届かない目標は
+    /// 追わない」の床）が汚染されず、区間[.25,.5]自身の信号だけで
+    /// 判定が決まる。x(t)=t・y(t)=0.5は全区間で共通（各BezierのB制御点を
+    /// 等間隔の値に置くだけで線形・定数が正確に再現される）。
+    fn adversarial_edge(c: f64) -> OrientedEdge {
+        let breaks = [0.0, 0.25, 0.5, 0.75, 1.0];
+        // 区間[.25,.5]の局所Bezier z 制御点（セグメント1）。他は平坦(0)。
+        let bump_z = [0.0, c / 9.0, -2.0 * c / 9.0, 0.0];
+        let seg_z: [[f64; 4]; 4] = [[0.0; 4], bump_z, [0.0; 4], [0.0; 4]];
+
+        // 13個の制御点（4セグメント×4点、隣接セグメントは1点共有）。
+        let mut control_points: Vec<ControlPoint3> = Vec::with_capacity(13);
+        for seg in 0..4 {
+            let (a, b) = (breaks[seg], breaks[seg + 1]);
+            let start_index = if seg == 0 { 0 } else { 1 };
+            for k in start_index..4 {
+                let x = a + (b - a) * (k as f64 / 3.0);
+                let z = seg_z[seg][k];
+                control_points.push(ControlPoint3::unweighted(Point3::new(x, 0.5, z)));
+            }
+        }
+        assert_eq!(control_points.len(), 13, "4セグメント・共有点ぶんの制御点数");
+
+        // ノット: 端は重複度4（クランプ）、内部の3breakはそれぞれ重複度3
+        // （次数と同じ＝C0接続、各区間が独立したBezierとして評価される）。
+        let mut knots = vec![0.0; 4];
+        for &b in &breaks[1..4] {
+            knots.extend([b, b, b]);
+        }
+        knots.extend([1.0; 4]);
+        let knots = KnotVector::new(knots);
+        let curve = NurbsCurve3::new(3, control_points, knots).expect("valid bezier-spline");
+
+        let start_point = curve.evaluate(0.0);
+        let end_point = curve.evaluate(1.0);
+        let start_vertex = Vertex::new(start_point, 1e-6);
+        let end_vertex = Vertex::new(end_point, 1e-6);
+        let edge = Edge::new(curve, start_vertex, end_vertex, 1e-6);
+        OrientedEdge::new(edge, Orientation::Forward)
+    }
+
+    /// 平面 z=0（u,v∈[0,1]）を、次数1の2x2格子で作る。
+    fn plane_surface() -> NurbsSurface3 {
+        let row = |u: f64| {
+            vec![
+                ControlPoint3::unweighted(Point3::new(u, 0.0, 0.0)),
+                ControlPoint3::unweighted(Point3::new(u, 1.0, 0.0)),
+            ]
+        };
+        NurbsSurface3 {
+            degree_u: 1,
+            degree_v: 1,
+            control_points: vec![row(0.0), row(1.0)],
+            knots_u: KnotVector::clamped_uniform(2, 1),
+            knots_v: KnotVector::clamped_uniform(2, 1),
+        }
+    }
+
+    /// p-curveを細かく（1000点）走査し、実際の3次元でのずれの最大値を測る。
+    /// `project_edge_to_nurbs_pcurve`自身の判定（1点サンプル）を信じず、
+    /// 独立した密な標本で検算する。
+    fn worst_real_deviation(pcurve: &NurbsCurve2, edge: &OrientedEdge, surface: &NurbsSurface3) -> f64 {
+        let (t0, t1) = pcurve.param_range();
+        (0..=1000)
+            .map(|i| {
+                let t = t0 + (t1 - t0) * (i as f64 / 1000.0);
+                let uv = pcurve.evaluate(t);
+                let normalized = (t - t0) / (t1 - t0).max(1e-300);
+                let on_surface = surface.evaluate(uv.x, uv.y);
+                let on_edge = edge.evaluate_normalized(normalized);
+                (on_surface - on_edge).norm()
+            })
+            .fold(0.0_f64, f64::max)
+    }
+
+    /// 区間(0.25, 0.5)の中に、内部の分割点（ノット）が1本もできなかった
+    /// ことを確かめる——「割る価値がないと判定し続けた」ことの直接証拠。
+    fn has_internal_split_in(pcurve: &NurbsCurve2, lo: f64, hi: f64) -> bool {
+        pcurve
+            .knots
+            .knots
+            .iter()
+            .any(|&k| k > lo + 1e-9 && k < hi - 1e-9)
+    }
+
+    /// **本題**: 区間[0.25,0.5]の局所1/3点（大域t=1/3）がちょうど
+    /// `p(t)=C・t・(t-1/3)・(t-1)`の根に乗るよう仕込むと、
+    /// `ZENITH_SUBDIV_THIRD`は**最初の1回の判定から**この区間を
+    /// 「ずれ0」と見て、一度も割らない。既定（中点）・
+    /// `ZENITH_SUBDIV_QUARTERS`はどちらも最初の判定で「ずれが大きい」
+    /// と正しく見抜き、少なくとも1回は割る。
+    ///
+    /// （最終的な収束の質——何回割って、どこまでtolに近づくか——は
+    /// 別の仕組み「届かない目標は追わない」床の影響も受け、
+    /// この検体ではその床自体に別の課題がある可能性も見えた。
+    /// ここで確かめるのは、その手前の**最初の一手が割れたかどうか**
+    /// という、`SUBDIV_THIRD`固有の見落としだけに絞った主張。）
+    #[test]
+    fn subdiv_third_misses_a_real_stray_that_midpoint_and_quarters_catch() {
+        let c = 1.0;
+        let edge = adversarial_edge(c);
+        let surface = plane_surface();
+        let tol = Tolerance::default();
+
+        std::env::remove_var("ZENITH_SUBDIV_QUARTERS");
+        std::env::remove_var("ZENITH_SUBDIV_THIRD");
+        let default_pcurve =
+            project_edge_to_nurbs_pcurve(&edge, &surface, &tol, 4, 1.0).expect("default pcurve");
+        let default_worst = worst_real_deviation(&default_pcurve, &edge, &surface);
+
+        std::env::set_var("ZENITH_SUBDIV_QUARTERS", "1");
+        let quarters_pcurve =
+            project_edge_to_nurbs_pcurve(&edge, &surface, &tol, 4, 1.0).expect("quarters pcurve");
+        let quarters_worst = worst_real_deviation(&quarters_pcurve, &edge, &surface);
+        std::env::remove_var("ZENITH_SUBDIV_QUARTERS");
+
+        std::env::set_var("ZENITH_SUBDIV_THIRD", "1");
+        let third_pcurve =
+            project_edge_to_nurbs_pcurve(&edge, &surface, &tol, 4, 1.0).expect("third pcurve");
+        let third_worst = worst_real_deviation(&third_pcurve, &edge, &surface);
+        std::env::remove_var("ZENITH_SUBDIV_THIRD");
+
+        let default_split = has_internal_split_in(&default_pcurve, 0.25, 0.5);
+        let quarters_split = has_internal_split_in(&quarters_pcurve, 0.25, 0.5);
+        let third_split = has_internal_split_in(&third_pcurve, 0.25, 0.5);
+
+        eprintln!(
+            "SUBDIVTHIRDDANGER 区間(0.25,0.5)を割ったか: 既定={default_split}（最悪ずれ{default_worst:.6e}） \
+             QUARTERS={quarters_split}（最悪ずれ{quarters_worst:.6e}） \
+             THIRD={third_split}（最悪ずれ{third_worst:.6e}）"
+        );
+
+        assert!(
+            default_split,
+            "既定（中点）が区間(0.25,0.5)を一度も割らなかった——仕込みが効いていない可能性"
+        );
+        assert!(
+            quarters_split,
+            "QUARTERSが区間(0.25,0.5)を一度も割らなかった——仕込みが効いていない可能性"
+        );
+        // **本題の主張**: THIRDは、局所1/3点がちょうど根に乗るせいで、
+        // 最初の判定から「ずれ0」と見て、一度も割らない。
+        assert!(
+            !third_split,
+            "THIRDが区間(0.25,0.5)を割った——狙った見落としが起きていない"
+        );
+    }
+}
