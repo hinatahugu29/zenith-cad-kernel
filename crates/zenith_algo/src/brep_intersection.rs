@@ -1053,6 +1053,11 @@ impl BrepIntersectionBuilder {
         let mut edges_by_face_b: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
 
         // **交線が、どの面の組から出たか**（`ZENITH_CAND_WHY=1`。4-321）。
+        // **`ZENITH_CANDIDATE_WHY`とは役目が重なるが別物**（4-791追記）:
+        // こちらは`ZENITH_WELD_ENDS`適用後、`ZENITH_CANDIDATE_WHY`は
+        // 候補を集めた直後（溶接・公差調整より前）に出す。どちらかに
+        // 統合しない——**前後を突き合わせて何が変わったかを見る**のに
+        // 両方が要る（4-783で実際にこの使い分けをした）。
         //
         // 縫合の側から「相手のいない稜」を追うと、**同じ2点のあいだに弧と
         // ほぼ直線が並んでいる**ところまでは見えますが（4-320）、**それぞれを
@@ -1837,6 +1842,10 @@ impl BrepIntersectionBuilder {
 
         // **どの面の組が、どの交線を産んだかを出す**（4-776 の続き。
         // `ZENITH_CANDIDATE_WHY=1`、既定オフ）。
+        // **`ZENITH_CAND_WHY`（4-321）とは別物**（4-791追記）: あちらは
+        // `ZENITH_WELD_ENDS`適用後に出る。詳しい使い分けは
+        // `intersection_edge_candidates_from_face_pairs`呼び出し側の
+        // コメントを参照。
         if std::env::var_os("ZENITH_CANDIDATE_WHY").is_some() {
             for candidate in &edge_candidates {
                 let s = candidate.edge.start_vertex.point;
