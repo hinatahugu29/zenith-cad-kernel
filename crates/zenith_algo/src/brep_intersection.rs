@@ -305,15 +305,20 @@ impl BrepIntersectionBuilder {
         // 並列化できません**——ROADMAP が指摘していたとおりです。測るための
         // 口が立っているときは、安全に素の逐次経路へ戻します。
         //
-        // ⚠ **まだ安全だと確認できていません**（4-785）。`parallel_candidates_probe`
-        // で測ると、`trim_polygon_cache`の掃除漏れ（4-775で直したのと同じ型）
-        // を直した後も、**並列経路どうしを2回独立に実行しただけで最後の
-        // 数桁が揺れます**（逐次経路は何度回しても完全に同一）——
-        // `Edge::new`の`EDGE_ID_GEN`（グローバルなatomic）が並列に呼ばれると
-        // 割り当てる番号が実行ごとに変わるのが疑わしい（まだ確証はない）。
-        // **この口を既定に上げてはいけません**——`parallel_candidates_probe`
-        // が赤であることがその証拠です。直すなら、並列map→集約reduceの
-        // 間に挟んで、逐次経路と同じ順でEdge idを振り直す仕組みが要る。
+        // **最初は安全だと確認できていませんでした**（4-785）——
+        // `parallel_candidates_probe`で測ると、`trim_polygon_cache`の
+        // 掃除漏れ（4-775）を直した後も**並列経路どうしを2回独立に
+        // 実行しただけで最後の数桁が揺れました**（逐次経路は完全に
+        // 同一）。根は`Edge::new`の`EDGE_ID_GEN`（グローバルatomic）が
+        // 並列に呼ばれると割り当てる番号が実行ごとに変わること——
+        // `weld_piece_ends_by_edge_id`（既定オンの`ZENITH_ID_WELD`）が
+        // `edge.id`で稜を束ねるので、idがずれると束ね方自体が変わる。
+        // **`collect_face_pair_candidates_parallel`の末尾で、並列map
+        // の後にidを(face_a_index, face_b_index)昇順へ振り直して直し
+        // ました**（4-788）——既定の`ZENITH_ID_WELD`を立てたまま
+        // `parallel_candidates_probe`93件が0.000e0に戻ることを確認
+        // 済みです。**ただし既定へ上げるかは、持ち主の判断のまま
+        // 残します。**
         let use_parallel_candidates = std::env::var_os("ZENITH_PARALLEL_CANDIDATES").is_some()
             && !pair_why
             && !outside_timing
@@ -688,6 +693,26 @@ impl BrepIntersectionBuilder {
             })
             .collect();
         found.sort_by_key(|candidate| (candidate.face_a_index, candidate.face_b_index));
+        // **並べ直した後、idを逐次と同じ順に振り直します**（4-788）。
+        // `intersect_face_supports`等が並列に`Edge::new`を呼ぶと、
+        // 同じ論理的な稜でも実行ごとに違うidが付き、`edge.id`で束ねる
+        // 下流（`weld_piece_ends_by_edge_id`、既定オンの`ZENITH_ID_WELD`）
+        // の答えが揺れる（`parallel_candidates_probe`で実測。4-785）。
+        // ここで(face_a_index, face_b_index)昇順——実行ごとに同じ順——に
+        // 振り直せば、下流から見た時系列は逐次と揃う。
+        for candidate in &mut found {
+            match &mut candidate.kind {
+                FaceIntersectionKind::Curve { edge } => edge.id = Edge::fresh_id(),
+                FaceIntersectionKind::Curves { edges } => {
+                    for edge in edges {
+                        edge.id = Edge::fresh_id();
+                    }
+                }
+                FaceIntersectionKind::Line { .. }
+                | FaceIntersectionKind::Coincident
+                | FaceIntersectionKind::Unsupported => {}
+            }
+        }
         found
     }
 

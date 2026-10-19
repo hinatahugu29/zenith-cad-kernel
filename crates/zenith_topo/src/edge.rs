@@ -37,6 +37,14 @@ pub struct Edge {
 }
 
 impl Edge {
+    /// **新しい、他と重ならないidを1つだけ取る**（4-788。ROADMAP柱②）。
+    /// `Edge::new`と同じ`EDGE_ID_GEN`から取るので、既存のidと衝突しない。
+    /// 並列に求めた候補の後処理で、逐次と同じ順にidを振り直すために要る
+    /// ——`Edge::new`のように曲線・頂点を作り直さず、**idだけ**を取る。
+    pub fn fresh_id() -> u64 {
+        EDGE_ID_GEN.fetch_add(1, Ordering::Relaxed)
+    }
+
     pub fn new(
         curve: NurbsCurve3,
         start_vertex: Vertex,

@@ -200,11 +200,15 @@ B面1` 1 組だけで 5.439 秒）＋ シェルを組む 24.456 秒**でした�
    止めると並列経路の93件中90件（`linkrods`以外）が**ぴったり
    0.000e0**に戻り、`linkrods`の3件だけ（`enter_h8_ports`が
    `ID_WELD=1`を強制するため）元のずれが残るという、きれいな
-   対照実験で確認しました。**この口は既定に上げてはいけません**。
-   コードと門は残し、コメントに警告を書きました。**次に見る人への
-   引き渡し**: 並列mapのあとで逐次と同じ順にEdge idを振り直す
-   仕組みを足し、`ZENITH_ID_WELD`を既定に戻した状態でも
-   0.000e0に戻るかを確かめること。
+   対照実験で確認しました。
+   **直しました（同日。HANDOVER 4-788）**: `zenith_topo::Edge`に
+   `fresh_id()`を足し、`collect_face_pair_candidates_parallel`の
+   並び替え直後に`FaceIntersectionKind::Curve`／`Curves`の
+   Edge idを(face_a_index, face_b_index)昇順に振り直すようにしました。
+   `ZENITH_ID_WELD`を既定（オン）のまま`parallel_candidates_probe`
+   93件を測り直すと、**相対のいちばん大きなずれ 0.000e0**——
+   `ZENITH_PARALLEL_SPLIT`と同じ「答えを変えない」口になりました。
+   **既定へ上げるかどうかは、持ち主の判断のまま残します。**
 3. **直しました（2026/10/18。HANDOVER 4-775）**: `ZENITH_PARALLEL_SPLIT`
    が立っているときだけ、`rayon::broadcast` でプールの全ワーカー・
    スレッドの `trim_polygon_cache`／`area_memo` を掃除するようにしました。
