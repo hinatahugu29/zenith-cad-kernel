@@ -29849,6 +29849,11 @@ Edge idを振り直す仕組みを足し、`ZENITH_ID_WELD`を既定に戻した
 書き直した。**既定へ上げるかどうかは、持ち主の判断のまま残す**
 ——これは4-775（`ZENITH_PARALLEL_SPLIT`）のときと同じ扱い。
 
+**続けて測った**: `cargo test --release --workspace --exclude zenith_py`
+全数緑（rc=0）、`py tools/build_pyd.py`で包みを作り直し、`run_gates.sh
+--quick --no-tests`も**rc=0・緑**（飛ばしたのは既知の2つだけ）——
+`fresh_id()`の追加・並べ直し処理ともに、既存の全ての検証を通過した。
+
 #### この直しの射程
 
 `fresh_id()`は`zenith_topo`の公開APIに1つ足しただけで、他の呼び手
