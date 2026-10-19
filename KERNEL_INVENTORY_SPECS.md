@@ -14,6 +14,14 @@
 > なりましたが、実際には効いていないと分かりました**（4-769〜4-771。
 > 境界箱の一致では見分けられず、面積で発覚。原因は未発見）。
 
+> **2026-10-19 時点の最新実測**（[`HANDOVER.md`](HANDOVER.md)
+> 4-774〜4-791 が正）: 通しテスト **154 バイナリ / 772 件 / 失敗 0**。
+> 2Dスケッチ拘束に`remove_point`／`remove_line`／`remove_arc`／
+> `remove_circle`を足しました（4-780〜4-781、4-784）。並列化で
+> 見つかった`EDGE_ID_GEN`の競合を直しました（4-785、4-788）。
+> フィレット済み回転体のブーリアン断りの根（周方向4分割はOCCT
+> 互換性のための意図的な設計）が分かりました（4-783、4-790）。
+
 > **この文書は「何があるか」の棚卸しです。「どこまで測ったか」「何が
 > 足りないか」は別の場所にあります。**
 >
@@ -184,6 +192,12 @@ CAD の主要モデリング機能群。
   `ConstraintId` で安定した番号づけをし、消しても他の拘束の番号は動かない
   （墓標方式。`Vec<Option<Constraint>>`）。「1本足す・1本消す・解き直す」が
   順序に依存しないことをテストで確認済み。
+- **2026/10/19 に `remove_point`／`remove_line`／`remove_arc`／`remove_circle`
+  を足した**（HANDOVER 4-780〜4-781、4-784）——同じ墓標方式（`is_removed`
+  フラグ）。まだ参照が残っている点・線分・円は消せず、先に参照する側を
+  消す順番を強制する。4つを組み合わせた複数回の編集（下描き→やめる→
+  本当に欲しい形を足す）でも、最初から欲しい形だけを足した場合と座標・
+  残っている要素の本数まで完全に一致することを確認済み。
 
 #### 6. パラメトリック・フィーチャーツリー (`feature_tree.rs`)
 - 対応オペレーション: `CreateBox`, `CreateCylinder`, `CreateCone`, `CreateTorus`, `FilletEdge`, `ChamferEdge`, `HollowBox`, **`HollowThroughBox`**, `ExtrudeHollow`, `ExtrudeDraft`, `RevolveSolid`, `RevolvePartialSolid`, `LoftSolid`, `SweepWire`, `SweepHelix`, `MirrorSolid`, `PushPullFace`, `ThickenFace`, `DraftBlock`, `TriangularRib`, `HexPrism`, `HexNut`, `SocketHeadCapScrew`, `PlainWasher`, `FlangedHexBolt`, `CountersinkHole`, `CounterboredSlot`, `SpringWasher`, `RetainingRing`, `CountersunkSocketScrew`, `WeldNeckFlange`, `TaperPipePlug`, `StudBolt`, `BellevilleSpring`。
