@@ -42,6 +42,11 @@ Blender の中で通した記録がありませんでした**——`tools/blende
     板に面取りを掛けてから、2 回目のブーリアン（もう1つ穴を開ける）
     を積みます。既知の宿題（4-762）を避けた経路で、複数回のブーリアン
     を積めるかを測ります。
+11. **回転体を含む連鎖に、もう1回**（2026/10/19 追加）——9 段目の
+    `stacked`（フィレット無しの回転体を使った和）に 3 回目のブーリアン
+    を積みます。**体積が実際に動いたこと**まで確かめます（最初の
+    ドリル位置が既存の穴に重なり、何も削らずに「通って」いたのを
+    4-791 で見つけて直した教訓）。
 
 **赤にするのは**——どこかが断られる、閉じた式と食い違う、書き出した
 ファイルが無いか空、のいずれか。
@@ -298,6 +303,34 @@ def main():
                     wrong += 1
         except Exception as exc:
             print("10. さらに積む: **断られました**: %r" % (exc,))
+            wrong += 1
+
+    # 11. 回転体を含む連鎖に、3回目のブーリアンを積む。
+    #
+    # **9段目との違い**: 9段目は「板 + 回転体」の1回だけ。ここは
+    # **その結果（`stacked`。フィレット無しの回転体を使った和）に、
+    # もう1回ブーリアンを積む**——回転体が絡んだ結果を、さらに
+    # 別の操作へ渡せるかを見る。フィレットは絡めない（8・9段目の
+    # 既知の宿題を踏まないため）。
+    if stacked is not None:
+        try:
+            drill3 = z.Solid.cylinder(1.0, 30.0).translated(2.0, 5.0, -2.0)
+            chained = stacked.difference(drill3)
+            report4 = chained.validate()
+            print("11. 回転体を含む連鎖にもう1回: 体積 %.6f、検証 valid=%s"
+                  % (chained.volume, report4.get("valid")))
+            if not report4.get("valid", False):
+                wrong += 1
+            import tempfile as _tempfile3
+            out_dir4 = os.environ.get("ZENITH_WORKFLOW_OUT") or _tempfile3.gettempdir()
+            chained_path = os.path.join(out_dir4, "blender_workflow_chained.step")
+            chained.to_step(chained_path, "ZENITH_WORKFLOW_CHAINED")
+            size4 = os.path.getsize(chained_path)
+            print("    STEP 書き出し: %s（%d バイト）" % (chained_path, size4))
+            if size4 <= 0:
+                wrong += 1
+        except Exception as exc:
+            print("11. 回転体を含む連鎖にもう1回: **断られました**: %r" % (exc,))
             wrong += 1
 
     print()
