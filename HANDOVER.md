@@ -29862,6 +29862,17 @@ Edge idを振り直す仕組みを足し、`ZENITH_ID_WELD`を既定に戻した
 テンプレートになる**——4-785の「次の一手②」（他の並列化候補にも
 先に適用する価値がある）がそのまま残る。
 
+**③も確かめた（同日）**: `grep`で`zenith_algo`全体の`.edge.id`を
+洗い出すと、`merge_faces.rs`（`FaceMerger`。4-762の天面・底面併合が
+使う）・`sew.rs`（縫合）・`edge_blend.rs`／`direct_edit.rs`／
+`feature_tree.rs`（稜の選択・置き換え）にも`edge.id`で束ねる・探す
+処理があった。**今回の直しが要る理由は「並列にEdgeを作る経路の
+下流にあること」**で、これらは`revolve_wire_solid`・`make_*`・
+単発の編集操作など、**どれも逐次（1スレッド）でEdgeを作る経路の
+上にある**——いまのところ`weld_piece_ends_by_edge_id`以外に実害は
+無い。**将来これらの経路のどこかを並列化するときは、同じ
+`fresh_id()`振り直しが要ることを覚えておくこと。**
+
 ### 4-785. **柱②——`collect_face_pair_candidates`の並列化を試み、93件で測って既定には上げられないと分かった。並列経路は、逐次と違い自分自身とも再現しない**（2026年10月19日）
 
 ROADMAP柱②の次の一手2（「`collect_face_pair_candidates`の並列化は
