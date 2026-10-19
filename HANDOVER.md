@@ -29767,6 +29767,39 @@ real	0m38.788s
 方向、または`collect_face_pair_candidates`以外の箇所の並列化が、
 残り32.4秒を1桁に入れる次の候補。
 
+**内訳も測った（同日）**: `ZENITH_BOOLEAN_TIME=1`を同時に立てて
+中身を見た（この回だけ34.1秒——揺れの範囲内）。
+
+| 段 | 秒 | 備考 |
+| :--- | :--- | :--- |
+| 整える（regularize） | 8.892 | 中の「守る面を選ぶ」8.782秒が支配 |
+| シェルを組む（collect_boolean_shell_assembly） | 20.661 | 下記に分解 |
+| 　面の組を選ぶ | 8.624 | `ZENITH_PARALLEL_CANDIDATES`が効く段 |
+| 　面を割って片を選ぶ | 5.523 | 割る2.933／オペランド刻み直し1.242／片を選ぶ0.463 |
+| 　組み立てる | 5.197 | |
+
+**訂正（同日・測って数分後に自分で気付いた）**: 一度は「`整える`の中の
+`A面33×B面1`5.439秒は`collect_face_pair_candidates`とは別の呼び出し
+では」と書いたが、**これは誤り**だった。`regularize.rs`の「守る面を
+選ぶ」（`survives_losing_its_pcurves`）を実際に読むと、**面の組を跨ぐ
+処理は一切していない**——面1枚ごとに`MassCalculator::compute_face_integral`
+（トリム境界をテッセレーションして積む、pcurves有り無しの2回）を
+呼ぶだけで、`add_face`の実装（`mass_properties.rs`）にも交線・march・
+面の組の概念は出てこない。
+
+**`A面33×B面1`の行が「整える」の直後に出たのは、ログの並び＝呼び出し
+順ではなかった**から——`ZENITH_PARALLEL_SPLIT`＋`ZENITH_PARALLEL_CANDIDATES`
+を両方立てていたので、複数のrayonワーカースレッドが同時に走り、
+各スレッドのスレッドローカルな`eprintln`が到着順に混ざって見えた
+だけ（本当は別の段・別スレッドの出力）。**教訓**: `ZENITH_BOOLEAN_TIME`
+の行の並びから「どの段がどの重い処理を内包するか」を読むのは、
+並列の口を立てていないときだけ安全。並列の口を立てたまま読むと、
+今回のような誤った因果関係を作ってしまう。**次に見る人への引き渡し
+は撤回**——「整える」側に並列化の余地があるかは、まず
+`ZENITH_PARALLEL_SPLIT=0 ZENITH_PARALLEL_CANDIDATES=0`の逐次実行で
+`ZENITH_BOOLEAN_TIME`を取り直し、ログの順序を信用できる状態にして
+から確かめ直すこと。
+
 （余談・作業ログ）この測定中、Bashツールの`&`でバックグラウンド化
 した`run_gates.sh --quick --no-tests`が「完了」通知を返したにも
 関わらず実プロセス（`slice_robustness_probe`まで進行中）がまだ動いて
