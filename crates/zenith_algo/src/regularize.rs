@@ -158,11 +158,27 @@ impl Regularizer {
         // **3 つに割って測ります**（4-731。既定オフ）。
         let cost_on = regularize_cost::on();
         let protect_began = cost_on.then(std::time::Instant::now);
-        let protected: Vec<bool> = shell
-            .faces
-            .iter()
-            .map(|face| !Self::survives_losing_its_pcurves(face))
-            .collect();
+        // **4-794 の口**（`ZENITH_PARALLEL_PROTECT`。既定オフ）。**面ごとの
+        // `survives_losing_its_pcurves` は他の面を参照しない**ので、
+        // `ZENITH_PARALLEL_SPLIT`（4-757）と同じ型で並列に呼べるはず。
+        // **診断（`ZENITH_BOOLEAN_TIME`）はスレッドごとの集計になり、
+        // 並列のときは数が信用できません**——**答え（`protected`）そのものは
+        // 変わりません**（`work_counter` の各カウンタはグローバル atomic の
+        // 総和なので、順序に依らず合計は正しいまま）。
+        let protected: Vec<bool> = if std::env::var_os("ZENITH_PARALLEL_PROTECT").is_some() {
+            use rayon::prelude::*;
+            shell
+                .faces
+                .par_iter()
+                .map(|face| !Self::survives_losing_its_pcurves(face))
+                .collect()
+        } else {
+            shell
+                .faces
+                .iter()
+                .map(|face| !Self::survives_losing_its_pcurves(face))
+                .collect()
+        };
         report.faces_held_by_pcurves = protected.iter().filter(|held| **held).count();
         for (index, held) in protected.iter().enumerate() {
             if *held {
