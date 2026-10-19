@@ -1581,6 +1581,23 @@ fn project_edge_to_nurbs_pcurve(
             // ここが 0 に近い稜（自分で作った立体はほとんどそう）では、
             // `deflection` がそのまま効くので**何も変わりません**。
             let reachable = deflection.max(max_distance.get() * 1.05);
+            // **床（`max_distance`）が、本当は`deflection`を超えている
+            // ずれを見逃す回数を数える口**（4-799の副産物。
+            // `ZENITH_MAXDIST_FLOOR_WHY=1`、既定オフ、答えは変えない）。
+            //
+            // `strayed > deflection`（本来なら気になる大きさ）だが
+            // `strayed <= reachable`（床に救われて割らない）だった回数。
+            // **床がどれだけの頻度で「本来の許容」より緩い基準として
+            // 効いているか**を、実在の検体で測るための診断。
+            if std::env::var_os("ZENITH_MAXDIST_FLOOR_WHY").is_some()
+                && strayed > deflection
+                && strayed <= reachable
+            {
+                eprintln!(
+                    "MAXDISTFLOOR 稜 {} 区間 {index} t {t0:.6}..{t1:.6} strayed={strayed:.6e} deflection={deflection:.6e} reachable={reachable:.6e}（床に救われた）",
+                    edge.edge.id
+                );
+            }
             if strayed <= reachable || (t1 - t0) <= 1e-9 {
                 index += 1;
                 continue;
