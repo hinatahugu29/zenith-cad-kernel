@@ -37,6 +37,11 @@ Blender の中で通した記録がありませんでした**——`tools/blende
 8. **フィレット**——回転体の稜を 1 本丸めます。
 9. **積み重ねたブーリアン**——穴あき板とフィレット済みの回転体の和を
    取り、検証して STEP に書き出します（ここまでの操作を積む一連）。
+10. **さらに積む**（ROADMAP 柱③の次の一手③。2026/10/19 追加）——
+    8・9 段目のフィレット済み回転体とは別の組み合わせで、押し出した
+    板に面取りを掛けてから、2 回目のブーリアン（もう1つ穴を開ける）
+    を積みます。既知の宿題（4-762）を避けた経路で、複数回のブーリアン
+    を積めるかを測ります。
 
 **赤にするのは**——どこかが断られる、閉じた式と食い違う、書き出した
 ファイルが無いか空、のいずれか。
@@ -226,6 +231,7 @@ def main():
     # **`wrong` には数えません**（8 段目の「0 本」と同じ、見つけた
     # 事実の記録です）。
     stack_piece = filleted if filleted is not None else washer
+    stacked = None
     if stack_piece is not None:
         try:
             try:
@@ -252,6 +258,46 @@ def main():
                 wrong += 1
         except Exception as exc:
             print("9. 積み重ねたブーリアン: **断られました**: %r" % (exc,))
+            wrong += 1
+            stacked = None
+
+    # 10. さらに積む: 面取り + 2 回目のブーリアン（ROADMAP 柱③の
+    #     次の一手③）。
+    #
+    # **9 段目とは別の組み合わせを試します**——回転体のフィレット
+    # （4-762 の守備範囲の宿題）を避け、**押し出した板（`drilled`）の
+    # 直線稜に面取りを掛けてから、2 回目のブーリアン（小さい円柱で
+    # もう1つ穴を開ける）を積む**。「複数回のブーリアンをさらに積む」
+    # こと自体が通るかだけを見る——8・9段目の既知の宿題とは無関係な
+    # 経路で、新しい事実を測る。
+    if stacked is not None:
+        try:
+            edges10 = drilled.blendable_edges()
+            if not edges10:
+                print("10. さらに積む: **面取りできる稜が0本**（想定外、記録のみ）")
+            else:
+                edge10 = edges10[0]
+                distance10 = min(0.5, edge10.get("max_chamfer_distance", 0.5) * 0.5)
+                chamfered = drilled.chamfer_edge(edge10["edge_id"], distance10)
+                print("10. さらに積む: 稜 %d を距離 %.3f で面取り、体積 %.6f → %.6f"
+                      % (edge10["edge_id"], distance10, drilled.volume, chamfered.volume))
+                drill2 = z.Solid.cylinder(1.0, 10.0).translated(16.0, 5.0, -2.5)
+                twice = chamfered.difference(drill2)
+                report3 = twice.validate()
+                print("    2回目のブーリアン: 体積 %.6f、検証 valid=%s"
+                      % (twice.volume, report3.get("valid")))
+                if not report3.get("valid", False):
+                    wrong += 1
+                import tempfile as _tempfile2
+                out_dir3 = os.environ.get("ZENITH_WORKFLOW_OUT") or _tempfile2.gettempdir()
+                twice_path = os.path.join(out_dir3, "blender_workflow_twice.step")
+                twice.to_step(twice_path, "ZENITH_WORKFLOW_TWICE")
+                size3 = os.path.getsize(twice_path)
+                print("    STEP 書き出し: %s（%d バイト）" % (twice_path, size3))
+                if size3 <= 0:
+                    wrong += 1
+        except Exception as exc:
+            print("10. さらに積む: **断られました**: %r" % (exc,))
             wrong += 1
 
     print()
