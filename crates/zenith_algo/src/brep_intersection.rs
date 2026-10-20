@@ -1478,9 +1478,28 @@ impl BrepIntersectionBuilder {
             Self::batch_splits_from_candidates(&faces_a, &faces_b, candidates.clone(), tol);
         let split_secs = split_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
         // **オペランドを 2 つとも刻み直します。** **既定の刻みで**です。
+        //
+        // **試して、外れた口**（`ZENITH_PARALLEL_OPERAND_TESS`。4-803。
+        // 既定オフ、答えは変わらないことは93件で確認済みだが、速くは
+        // ならない）。`solid_a`・`solid_b` の刻み直しは互いに参照しない
+        // 独立な2本の呼び出し——`ZENITH_PARALLEL_SPLIT`（4-757）・
+        // `ZENITH_PARALLEL_PROTECT`（4-795）と同じ型で試したが、
+        // **H8のA-Bが39.4秒→42.6秒（約8%悪化）**——この段自体が軽い
+        // （2本合計1.9秒ほど）ので、`rayon::join`の立ち上げ費用が
+        // 節約分を上回る。**次にここを触る人へ**: 同じ「2本を並列に」
+        // という型を、もっと重い段以外には当てはめないこと。
         let tess_began = stage_timing.then(std::time::Instant::now);
-        let mesh_a = tessellate_solid(solid_a, &TessellationParams::default());
-        let mesh_b = tessellate_solid(solid_b, &TessellationParams::default());
+        let (mesh_a, mesh_b) = if std::env::var_os("ZENITH_PARALLEL_OPERAND_TESS").is_some() {
+            rayon::join(
+                || tessellate_solid(solid_a, &TessellationParams::default()),
+                || tessellate_solid(solid_b, &TessellationParams::default()),
+            )
+        } else {
+            (
+                tessellate_solid(solid_a, &TessellationParams::default()),
+                tessellate_solid(solid_b, &TessellationParams::default()),
+            )
+        };
         let tess_secs = tess_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
 
         let mut selected_face_pieces = Vec::new();
