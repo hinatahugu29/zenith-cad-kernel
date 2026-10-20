@@ -1580,7 +1580,20 @@ fn project_edge_to_nurbs_pcurve(
             //
             // ここが 0 に近い稜（自分で作った立体はほとんどそう）では、
             // `deflection` がそのまま効くので**何も変わりません**。
-            let reachable = deflection.max(max_distance.get() * 1.05);
+            // **床（`max_distance`）を無効にして測る口**（4-800の
+            // 「次に見る人への引き渡し②」。`ZENITH_NO_MAXDIST_FLOOR=1`、
+            // 既定オフ）。**実測済み（4-802）**: この口を立てると、
+            // H8の`A−B`が175秒後に断られる（縫合で未対合の稜7本）
+            // ——**床は、今は実際に正しさを支えている**。**これより
+            // 先の実装変更（床を区間ごとにする等）に進むなら、まず
+            // この断りの中身（どの稜が、どちらの食い違いで対合に
+            // 失敗しているか）を読むことから**。この口は診断専用
+            // として残し、既定には決して入れない。
+            let reachable = if std::env::var_os("ZENITH_NO_MAXDIST_FLOOR").is_some() {
+                deflection
+            } else {
+                deflection.max(max_distance.get() * 1.05)
+            };
             // **床（`max_distance`）が、本当は`deflection`を超えている
             // ずれを見逃す回数を数える口**（4-799の副産物。
             // `ZENITH_MAXDIST_FLOOR_WHY=1`、既定オフ、答えは変えない）。
