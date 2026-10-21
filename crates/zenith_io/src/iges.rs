@@ -142,7 +142,13 @@ impl IgesExporter {
 
                 if let Some(pcurves) = &face.pcurves {
                     let before = writer.entities.len();
-                    Self::write_trimmed_face(&mut writer, surface_de, pcurves);
+                    let edge_curves: std::collections::HashMap<u64, zenith_geom::NurbsCurve3> =
+                        std::iter::once(&face.outer_wire)
+                            .chain(face.inner_wires.iter())
+                            .flat_map(|wire| wire.edges.iter())
+                            .map(|oriented| (oriented.edge.id, oriented.edge.curve.clone()))
+                            .collect();
+                    Self::write_trimmed_face(&mut writer, surface_de, pcurves, &edge_curves);
                     if std::env::var_os("ZENITH_IGES_WHY").is_some() {
                         eprintln!(
                             "IGESWHY face{face_index} trim entities {}..{}",
@@ -297,15 +303,23 @@ impl IgesExporter {
     /// Entity 102（複合曲線）で束ねる**——どちらも IGES 5.3 の Entity 144 が
     /// 受け取れる形だが、1本で済む所に複合曲線を被せると読み手によっては
     /// 退化した複合曲線を嫌う。
-    fn write_trimmed_face(writer: &mut EntityWriter, surface_de: usize, pcurves: &zenith_topo::FacePcurves) {
-        let Some(outer_de) = Self::write_boundary_loop(writer, surface_de, &pcurves.outer_loop)
+    fn write_trimmed_face(
+        writer: &mut EntityWriter,
+        surface_de: usize,
+        pcurves: &zenith_topo::FacePcurves,
+        edge_curves: &std::collections::HashMap<u64, zenith_geom::NurbsCurve3>,
+    ) {
+        let Some(outer_de) =
+            Self::write_boundary_loop(writer, surface_de, &pcurves.outer_loop, edge_curves)
         else {
             return;
         };
         let inner_des: Vec<usize> = pcurves
             .inner_loops
             .iter()
-            .filter_map(|loop_| Self::write_boundary_loop(writer, surface_de, loop_))
+            .filter_map(|loop_| {
+                Self::write_boundary_loop(writer, surface_de, loop_, edge_curves)
+            })
             .collect();
 
         let mut fields = vec!["144".to_string(), format!("{surface_de}"), "1".to_string()];
@@ -323,31 +337,87 @@ impl IgesExporter {
         writer: &mut EntityWriter,
         surface_de: usize,
         loop_: &FacePcurveLoop,
+        edge_curves: &std::collections::HashMap<u64, zenith_geom::NurbsCurve3>,
     ) -> Option<usize> {
         if loop_.segments.is_empty() {
             return None;
         }
+        // **4-787 の次の一手②**: OCCT 自身が書く参照ファイルは BPTR=0・
+        // CPTR優先・PREF=2（CRTN も含めて5パラメータ）で書いている
+        // ——こちらの既定（BPTR優先・PREF=1・4パラメータ）とは逆の戦略。
+        // `ZENITH_IGES_CPTR_PRIMARY`（既定オフ・診断用）はその逆の戦略を
+        // 試すための口で、3D側の composite curve（実稜線そのもの）を
+        // CPTR に渡す。既定の書き方は変えていない。
+        let cptr_primary = std::env::var_os("ZENITH_IGES_CPTR_PRIMARY").is_some();
+        let cptr_de = if cptr_primary {
+            Self::write_boundary_loop_3d(writer, loop_, edge_curves)
+        } else {
+            None
+        };
+
         let segment_des: Vec<usize> = loop_
             .segments
             .iter()
             .map(|segment| {
                 let curve_de = writer.push(126, 0, Self::entity_126_parameters(&segment.curve));
-                // CRTN=0（未指定）、CPTR=0（3Dの複合曲線は渡さない）、
-                // PREF=1（パラメータ空間側の表現を優先する、と宣言する）。
-                writer.push(
-                    142,
-                    0,
-                    pack_fields(&[
-                        "142".to_string(),
-                        format!("{surface_de}"),
-                        format!("{curve_de}"),
-                        "0".to_string(),
-                        "1".to_string(),
-                    ]),
-                )
+                if let Some(cptr_de) = cptr_de {
+                    // CRTN=0、SPTR=surface_de、BPTR=0（パラメータ空間側は
+                    // 渡さない）、CPTR=cptr_de（3D composite curve 優先）、
+                    // PREF=2（CPTR 側の表現を優先する、と宣言する）。
+                    writer.push(
+                        142,
+                        0,
+                        pack_fields(&[
+                            "142".to_string(),
+                            "0".to_string(),
+                            format!("{surface_de}"),
+                            "0".to_string(),
+                            format!("{cptr_de}"),
+                            "2".to_string(),
+                        ]),
+                    )
+                } else {
+                    // CRTN=0（未指定）、CPTR=0（3Dの複合曲線は渡さない）、
+                    // PREF=1（パラメータ空間側の表現を優先する、と宣言する）。
+                    writer.push(
+                        142,
+                        0,
+                        pack_fields(&[
+                            "142".to_string(),
+                            format!("{surface_de}"),
+                            format!("{curve_de}"),
+                            "0".to_string(),
+                            "1".to_string(),
+                        ]),
+                    )
+                }
             })
             .collect();
 
+        if segment_des.len() == 1 {
+            return Some(segment_des[0]);
+        }
+        let mut fields = vec!["102".to_string(), segment_des.len().to_string()];
+        for id in &segment_des {
+            fields.push(format!("{id}"));
+        }
+        Some(writer.push(102, 0, pack_fields(&fields)))
+    }
+
+    /// `ZENITH_IGES_CPTR_PRIMARY` 用: 1つの輪の実稜線（3D）を Entity 126
+    /// （3D曲線）の並びとして書き、2区間以上なら Entity 102 で束ねた
+    /// DE ポインタを返す。`edge_id` が見つからない区間はこの輪全体を
+    /// 諦める（CPTR を半端に渡すよりは、BPTR 側の既定経路に任せる）。
+    fn write_boundary_loop_3d(
+        writer: &mut EntityWriter,
+        loop_: &FacePcurveLoop,
+        edge_curves: &std::collections::HashMap<u64, zenith_geom::NurbsCurve3>,
+    ) -> Option<usize> {
+        let mut segment_des = Vec::with_capacity(loop_.segments.len());
+        for segment in &loop_.segments {
+            let curve = edge_curves.get(&segment.edge_id)?;
+            segment_des.push(writer.push(126, 0, Self::entity_126_parameters_3d(curve)));
+        }
         if segment_des.len() == 1 {
             return Some(segment_des[0]);
         }
@@ -561,6 +631,49 @@ impl IgesExporter {
         fields.push(real(0.0));
         fields.push(real(0.0));
         fields.push(real(1.0));
+
+        pack_fields(&fields)
+    }
+
+    /// Entity 126（有理Bスプライン曲線）のパラメータデータ。実稜線（3D）版。
+    ///
+    /// `ZENITH_IGES_CPTR_PRIMARY` 専用: 法線は添えない（平面とは限らない
+    /// ので PROP1=0）。並びは2D版と同じ骨組み。
+    fn entity_126_parameters_3d(curve: &zenith_geom::NurbsCurve3) -> Vec<String> {
+        let k = curve.control_points.len();
+
+        let closed = (curve.control_points[0].point - curve.control_points[k - 1].point).norm()
+            <= 1e-9;
+        let polynomial = curve
+            .control_points
+            .iter()
+            .all(|cp| (cp.weight - 1.0).abs() <= 1e-12);
+
+        let mut fields: Vec<String> = vec!["126".to_string()];
+        for value in [
+            k as i32 - 1,
+            curve.degree as i32,
+            0, // PROP1: 平面とは限らない
+            closed as i32,
+            polynomial as i32,
+            0, // PROP4: 周期的ではない
+        ] {
+            fields.push(value.to_string());
+        }
+        for knot in &curve.knots.knots {
+            fields.push(real(*knot));
+        }
+        for cp in &curve.control_points {
+            fields.push(real(cp.weight));
+        }
+        for cp in &curve.control_points {
+            fields.push(real(cp.point.x));
+            fields.push(real(cp.point.y));
+            fields.push(real(cp.point.z));
+        }
+        let (t_min, t_max) = curve.param_range();
+        fields.push(real(t_min));
+        fields.push(real(t_max));
 
         pack_fields(&fields)
     }
