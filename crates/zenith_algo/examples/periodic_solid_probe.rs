@@ -11,7 +11,7 @@ use std::f64::consts::FRAC_1_SQRT_2;
 use std::fs;
 use std::path::PathBuf;
 
-use zenith_algo::MassCalculator;
+use zenith_algo::{EdgeBlender, MassCalculator};
 use zenith_geom::{nurbs_curve::ControlPoint3, nurbs_curve::NurbsCurve3, KnotVector, NurbsSurface3, PlaneSurface3};
 use zenith_io::StepExporter;
 use zenith_math::{Point3, Tolerance, Vec3};
@@ -101,6 +101,7 @@ fn main() {
     let top_curve = NurbsCurve3::new(2, top_points, knots_u).unwrap();
 
     let bottom_edge = Edge::new(bottom_curve, v_bottom.clone(), v_bottom.clone(), tol.linear);
+    let bottom_edge_id = bottom_edge.id;
     let top_edge = Edge::new(top_curve, v_top.clone(), v_top.clone(), tol.linear);
     let seam_edge = Edge::line_between(v_bottom.clone(), v_top.clone())
         .expect("seam edge construction failed");
@@ -213,5 +214,36 @@ fn main() {
             non_manifold,
             if open == 0 && non_manifold == 0 { "閉じている" } else { "開いている" }
         );
+    }
+
+    // **実際のパイプラインでフィレット認識器が周期1面ソリッドに対して
+    // 発火するか**（4-811は「コードを読んで仮定が無いことを確認した」
+    // だけだった——ここで実際に動かす）。
+    let blendable = EdgeBlender::blendable_edges(&solid);
+    println!("blendable_edges: {}本", blendable.len());
+    let bottom_rim = blendable.iter().find(|e| e.edge_id == bottom_edge_id);
+    match bottom_rim {
+        Some(edge) => println!(
+            "  底の円縁（id={bottom_edge_id}）はフィレット対象として認識された: 最大半径 {:.6}",
+            edge.max_fillet_radius
+        ),
+        None => println!("  底の円縁（id={bottom_edge_id}）はフィレット対象として認識されなかった"),
+    }
+
+    // **実際にフィレットを施す**（半径1.0、底の円縁）。
+    match EdgeBlender::fillet_edge(&solid, bottom_edge_id, 1.0) {
+        Ok(filleted) => {
+            let params = TessellationParams { u_divisions: 64, v_divisions: 64 };
+            let volume = MassCalculator::compute_volume_from_brep(&filleted, &params);
+            // **`PrimitiveBuilder::make_cylinder`（既定の4分割）に同じ半径1.0の
+            // フィレットを施した場合の除去体積は13.182646**（別途測定・確認済み）。
+            // ここと完全に一致するかを見る——周期1面化がフィレットの結果自体を
+            // 変えていないかの直接比較。
+            println!(
+                "  フィレット後の体積（分割64）= {:.6}（除去 {:.6}。4分割版と同じ半径で同じ除去体積13.182646になるはず）",
+                volume, exact - volume
+            );
+        }
+        Err(err) => println!("  フィレットが断られた: {err}"),
     }
 }
