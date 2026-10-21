@@ -11,9 +11,11 @@ use std::f64::consts::FRAC_1_SQRT_2;
 use std::fs;
 use std::path::PathBuf;
 
+use zenith_algo::MassCalculator;
 use zenith_geom::{nurbs_curve::ControlPoint3, nurbs_curve::NurbsCurve3, KnotVector, NurbsSurface3, PlaneSurface3};
 use zenith_io::StepExporter;
 use zenith_math::{Point3, Tolerance, Vec3};
+use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Vertex, Wire};
 
 fn closed_circle_points(radius: f64, z: f64) -> Vec<ControlPoint3> {
@@ -138,9 +140,24 @@ fn main() {
         .expect("STEP export failed");
 
     println!("wrote {}", out_path.display());
-    println!(
-        "閉じた式の体積（πr²h）= {:.6}",
-        std::f64::consts::PI * radius * radius * height
-    );
+    let exact = std::f64::consts::PI * radius * radius * height;
+    println!("閉じた式の体積（πr²h）= {:.6}", exact);
+
+    // **zenith自身の体積積分**（FreeCADとは独立な測り方。divergence定理、
+    // 発散定理に基づく自前の`MassCalculator`）でも測る——FreeCADの体積が
+    // ずれていたとき、「このソリッド自体が歪んでいる」のか「FreeCAD側の
+    // 数値積分の精度」なのかを切り分けるため。
+    for divisions in [24usize, 64, 128] {
+        let params = TessellationParams {
+            u_divisions: divisions,
+            v_divisions: divisions,
+        };
+        let measured = MassCalculator::compute_volume_from_brep(&solid, &params);
+        let relative = (measured - exact).abs() / exact;
+        println!(
+            "  zenith自身の体積（分割{divisions}）= {:.6}（相対差 {:.3e}）",
+            measured, relative
+        );
+    }
     println!("次は FreeCAD でこのファイルを読み、Volume を見ること。");
 }

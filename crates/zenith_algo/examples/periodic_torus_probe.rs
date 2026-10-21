@@ -17,9 +17,11 @@ use std::f64::consts::FRAC_1_SQRT_2;
 use std::fs;
 use std::path::PathBuf;
 
+use zenith_algo::MassCalculator;
 use zenith_geom::{nurbs_curve::ControlPoint3, nurbs_curve::NurbsCurve3, KnotVector, NurbsSurface3};
 use zenith_io::StepExporter;
 use zenith_math::{Point3, Tolerance};
+use zenith_tess::TessellationParams;
 use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Vertex, Wire};
 
 /// 閉じた次数2有理円の制御点9個ぶんの重み（標準の4分割ベジエ束ね）。
@@ -150,9 +152,20 @@ fn main() {
         .expect("STEP export failed");
 
     println!("wrote {}", out_path.display());
-    println!(
-        "閉じた式の体積（2π²R r²）= {:.6}",
-        2.0 * std::f64::consts::PI.powi(2) * r_major * r_minor * r_minor
-    );
+    let exact = 2.0 * std::f64::consts::PI.powi(2) * r_major * r_minor * r_minor;
+    println!("閉じた式の体積（2π²R r²）= {:.6}", exact);
+
+    for divisions in [24usize, 64, 128] {
+        let params = TessellationParams {
+            u_divisions: divisions,
+            v_divisions: divisions,
+        };
+        let measured = MassCalculator::compute_volume_from_brep(&solid, &params);
+        let relative = (measured - exact).abs() / exact;
+        println!(
+            "  zenith自身の体積（分割{divisions}）= {:.6}（相対差 {:.3e}）",
+            measured, relative
+        );
+    }
     println!("次は FreeCAD でこのファイルを読み、Volume を見ること。");
 }
