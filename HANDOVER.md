@@ -29732,6 +29732,25 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 既定オフに残しています。
 
 
+### 4-805. **柱⑥——4-764の棚卸しをやり直した。`grep`で256本を拾い、HANDOVERに名前が出ていない41本を1本ずつ確認——全部プローブの選別用つまみか`_WHY`診断口で、答えを変える既定オフの口の見逃しは0本だった**（2026年10月22日）
+
+4-764（2026/08/17時点で246本）と同じ`grep`（`std::env::var(_os)?\("ZENITH_[A-Z0-9_]+"\)`を
+cratesから拾う）をやり直すと、いまは**256本**（4-785〜4-804で足した
+`ZENITH_PARALLEL_CANDIDATES`・`ZENITH_PARALLEL_PROTECT`・`ZENITH_NO_MAXDIST_FLOOR`・
+`ZENITH_IGES_CPTR_PRIMARY`なども含む）。HANDOVER.mdに名前が1度も出ていない
+41本を洗い出し、1本ずつ出どころを確認した。
+
+**内訳**: 大半（`ZENITH_TORUS_ONLY`・`ZENITH_CLOSURE_DENSITY`・
+`ZENITH_READ_CUT_DIVISIONS`など）は`crates/*/examples/*_probe.rs`に
+しかない、**検体を絞り込むためのプローブ側の選別つまみ**——カーネル本体
+（`src/`）の挙動は変えない。`src/`側にあった少数
+（`ZENITH_SELECT_UV`・`ZENITH_JOINT_WHY`・`ZENITH_POINT_TOUCH_WHY`・
+`ZENITH_REV_WHY`・`ZENITH_IGES_WHY`）は中身を見ると全部`eprintln!`だけの
+`_WHY`診断口で、立てても答え（体積・面数・交線）は1つも変えない。
+`ZENITH_SERVER_ADDR`はサーバーの待受アドレス設定で、既定オフの口という
+性質のものではない。**答えを変える既定オフの口の見逃しは0本**——
+4-764と同じ結論が、今回の256本でも成り立った。
+
 ### 4-804. **柱⑤——4-787の「次の一手②」（OCCTの参照ファイルに倣ってCPTR優先の書き方へ切り替える）を実行し、試して外れた。9検体とも0枚に悪化した——4-787で見た「CRTNを足すと3検体が0枚」と同じ壁に、別の角度から当たった形**（2026年10月21日）
 
 4-787で見つけたとおり、FreeCAD付属のOCCT 7.8自身が書くIGESは
