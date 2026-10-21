@@ -21,8 +21,38 @@ use zenith_algo::MassCalculator;
 use zenith_geom::{nurbs_curve::ControlPoint3, nurbs_curve::NurbsCurve3, KnotVector, NurbsSurface3};
 use zenith_io::StepExporter;
 use zenith_math::{Point3, Tolerance};
-use zenith_tess::TessellationParams;
+use zenith_tess::{TessellationParams, TriangleMesh};
 use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, Solid, Vertex, Wire};
+
+/// `mesh_watertight_probe`と同じ辺の使用回数の数え方。
+fn edge_use_counts(mesh: &TriangleMesh, tol: f64) -> std::collections::BTreeMap<(i64, i64, i64, i64, i64, i64), usize> {
+    let quantize = |p: Point3| {
+        let scale = 1.0 / tol;
+        (
+            (p.x * scale).round() as i64,
+            (p.y * scale).round() as i64,
+            (p.z * scale).round() as i64,
+        )
+    };
+    let mut counts = std::collections::BTreeMap::new();
+    for triangle in &mesh.indices {
+        let points: Vec<_> = triangle
+            .iter()
+            .map(|index| quantize(mesh.positions[*index as usize]))
+            .collect();
+        for corner in 0..3 {
+            let a = points[corner];
+            let b = points[(corner + 1) % 3];
+            let key = if a <= b {
+                (a.0, a.1, a.2, b.0, b.1, b.2)
+            } else {
+                (b.0, b.1, b.2, a.0, a.1, a.2)
+            };
+            *counts.entry(key).or_insert(0) += 1;
+        }
+    }
+    counts
+}
 
 /// 閉じた次数2有理円の制御点9個ぶんの重み（標準の4分割ベジエ束ね）。
 fn closed_circle_weights() -> [f64; 9] {
@@ -168,4 +198,25 @@ fn main() {
         );
     }
     println!("次は FreeCAD でこのファイルを読み、Volume を見ること。");
+
+    // 表示メッシュ側: u・v両方向の境界（2本のシーム）をまたいで正しく
+    // 閉じるか（4-811）。
+    for divisions in [8usize, 24, 64] {
+        let params = TessellationParams {
+            u_divisions: divisions,
+            v_divisions: divisions,
+        };
+        let mesh = zenith_tess::tessellate_solid(&solid, &params);
+        let counts = edge_use_counts(&mesh, 1e-6);
+        let open = counts.values().filter(|c| **c == 1).count();
+        let non_manifold = counts.values().filter(|c| **c > 2).count();
+        println!(
+            "  表示メッシュ（分割{divisions}）: {}三角形・{}辺・open{}・n-mani{}  {}",
+            mesh.indices.len(),
+            counts.len(),
+            open,
+            non_manifold,
+            if open == 0 && non_manifold == 0 { "閉じている" } else { "開いている" }
+        );
+    }
 }
