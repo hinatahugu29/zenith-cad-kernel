@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月22日（**4-413 〜 4-817 を足しました**）
+**最終更新**: 2026年10月22日（**4-413 〜 4-818 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29731,6 +29731,41 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 組の退行のため、1 本（`SUBDIV_THIRD`）は既存の既知の危うさのため**
 既定オフに残しています。
 
+
+### 4-818. **柱③——4-807〜4-817の`periodic_*_probe`は`cargo run --example`でしか動かず、`cargo test --workspace`では1本も走らなかった。核になる8つの確認（体積・位相の妥当性・ブーリアン等価・フィレット等価）を`crates/zenith_algo/tests/periodic_primitive_equivalence_test.rs`として恒久化し、8本とも1回目で通った**（2026年10月22日）
+
+4-807〜4-817は全部`crates/zenith_algo/examples/periodic_*.rs`という
+**使い捨ての検証スクリプト**だった——`cargo run --example`で手動で
+動かさない限り、何も見張ってくれない。**今後`zenith_geom`・
+`zenith_topo`・`zenith_algo`の内部が変わって、この等価性が静かに
+壊れても、誰にも気づかれない。**
+
+**`periodic_primitive_equivalence_test.rs`を足した**（`cargo test
+--workspace`で自動的に走る、通常の`#[test]`）。核になる8つを固定した:
+
+1. `cylinder_periodic_volume_matches_closed_form`
+2. `torus_periodic_volume_matches_closed_form`
+3. `cone_periodic_volume_matches_closed_form`
+4. `cylinder_periodic_is_topologically_valid`（`validate_closed`が
+   `is_valid()`）
+5. `torus_periodic_is_topologically_valid`
+6. `cone_periodic_is_topologically_valid`
+7. `cylinder_periodic_boolean_matches_standard`（箱×円柱の差で既定の
+   4分割版と体積・面数まで一致）
+8. `cylinder_periodic_fillet_matches_standard`（底縁フィレットの除去
+   体積が既定の4分割版と一致）
+
+**8本とも1回目で通った**（12.80秒）。トーラス・円錐のブーリアン・
+フィレット等価性は`periodic_*_boolean_probe`・`periodic_torus_cone_sanity_probe`
+に残したまま（恒久化は円柱の代表例だけに絞った——全パターンを恒久
+テストにすると`cargo test`の時間が伸びすぎる。広い網は`example`側の
+役割として残す判断）。
+
+**結論**: `PrimitiveBuilder::make_cylinder_periodic`・
+`make_torus_periodic`・`make_cone_periodic`（既定にはまだしていない
+並列の選択肢）の核となる等価性は、これで**自動化された門**になった
+——既定の`make_cylinder`等を正式に置き換えるかどうかの判断とは
+別の、独立した安全網。
 
 ### 4-817. **柱③——4-815・4-816は円柱・トーラス・円錐それぞれ1組の寸法でしか試していなかった。寸法を変えて13通り（細い/太い・短い/長い・主半径と管半径が近いトーラスなど）を箱とのブーリアン（差）1演算で広く浅く確かめると、12通りは体積が0.000e0〜1e-10の相対差・面数まで完全一致、残り1通り（R=5・r=4.9の「太い」トーラス）は4分割版・周期1面版の両方が同じエラーメッセージで断られた——周期1面化固有の崩れ方は1つも見つからなかった**（2026年10月22日）
 

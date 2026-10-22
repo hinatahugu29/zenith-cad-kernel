@@ -545,6 +545,14 @@ HANDOVER 4-817）**: 円柱5通り（細い/太い・短い/長い）・トー�
 4分割版・周期1面版の両方が同じエラーで断られました**——周期1面化
 固有の崩れ方は見つかっていません。
 
+**核になる確認を恒久テストにしました（2026/10/22。HANDOVER 4-818）**:
+これまでの`periodic_*_probe`は`cargo run --example`でしか動かず、
+`cargo test`では見張られていませんでした。`periodic_primitive_equivalence_test.rs`
+に8本の`#[test]`（体積・位相の妥当性・ブーリアン等価・フィレット等価）
+として固定し、8本とも1回目で通りました——**今後`zenith_geom`・
+`zenith_topo`・`zenith_algo`の内部が変わってこの等価性が壊れたら、
+`cargo test --workspace`が検知します。**
+
 **次の一手**: `make_cylinder`・`make_torus`・`make_cone`本体を
 正式に差し替えるかどうかの判断と、差し替える場合の
 `cargo test --workspace`・`tools/run_gates.sh`全数での最終確認——
