@@ -1034,6 +1034,183 @@ impl PrimitiveBuilder {
         crate::validated_solid(Shell::closed(faces))
     }
 
+    /// トーラスソリッドを、u・v両方向とも閉じた**1枚の周期曲面**として
+    /// 作る（ROADMAP柱③。`crates/zenith_algo/examples/periodic_torus_probe.rs`
+    /// で検証した構成——OCCT自身のSTEPエクスポータと同じ「1頂点・2本の
+    /// シーム稜、それぞれ向きを変えて2回ずつ使う」`EDGE_LOOP`。蓋は
+    /// 要らない）。
+    ///
+    /// **まだ`make_torus`を置き換えていない**——既定は変えず、比較・
+    /// 実験用に並べて持つだけ。`validate_closed`はエラー0・FreeCADで
+    /// 有効なソリッドとして読め（体積の相対差1e-12〜1e-14、`MassCalculator`
+    /// の発散定理積分で確認）（4-809・4-810・4-813）。
+    pub fn make_torus_periodic(r_major: f64, r_minor: f64) -> Result<Solid, String> {
+        if r_major <= r_minor || r_minor <= 1e-6 {
+            return Err("Major radius must be greater than minor radius and positive".to_string());
+        }
+
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let weights = [1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0];
+        let unit_xy: [(f64, f64); 9] = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ];
+        let knots = KnotVector::new(vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ]);
+
+        let mut grid: Vec<Vec<ControlPoint3>> = Vec::with_capacity(9);
+        for i in 0..9 {
+            let (lx, ly) = unit_xy[i];
+            let mut row = Vec::with_capacity(9);
+            for j in 0..9 {
+                let (dr, dz) = unit_xy[j];
+                let s = r_major + r_minor * dr;
+                let z = r_minor * dz;
+                let weight = weights[i] * weights[j];
+                row.push(ControlPoint3::new(Point3::new(s * lx, s * ly, z), weight));
+            }
+            grid.push(row);
+        }
+        let surface = NurbsSurface3::new(2, 2, grid, knots.clone(), knots.clone())?;
+
+        let shared_point = Point3::new(r_major + r_minor, 0.0, 0.0);
+        let vertex = Vertex::new(shared_point, 1e-6);
+
+        let u_seam_points: Vec<ControlPoint3> = (0..9)
+            .map(|i| {
+                let (lx, ly) = unit_xy[i];
+                let s = r_major + r_minor;
+                ControlPoint3::new(Point3::new(s * lx, s * ly, 0.0), weights[i])
+            })
+            .collect();
+        let u_seam_curve = NurbsCurve3::new(2, u_seam_points, knots.clone())?;
+        let u_seam_edge = Edge::new(u_seam_curve, vertex.clone(), vertex.clone(), 1e-6);
+
+        let v_seam_points: Vec<ControlPoint3> = (0..9)
+            .map(|j| {
+                let (dr, dz) = unit_xy[j];
+                let s = r_major + r_minor * dr;
+                let z = r_minor * dz;
+                ControlPoint3::new(Point3::new(s, 0.0, z), weights[j])
+            })
+            .collect();
+        let v_seam_curve = NurbsCurve3::new(2, v_seam_points, knots)?;
+        let v_seam_edge = Edge::new(v_seam_curve, vertex.clone(), vertex, 1e-6);
+
+        use zenith_topo::Orientation;
+        let wire = Wire::new(vec![
+            OrientedEdge::new(u_seam_edge.clone(), Orientation::Reversed),
+            OrientedEdge::new(v_seam_edge.clone(), Orientation::Reversed),
+            OrientedEdge::new(u_seam_edge, Orientation::Forward),
+            OrientedEdge::new(v_seam_edge, Orientation::Forward),
+        ]);
+
+        let face = Face::new(
+            FaceGeometry::Nurbs(surface),
+            wire,
+            Vec::new(),
+            Orientation::Forward,
+            1e-6,
+        );
+
+        crate::validated_solid(Shell::closed(vec![face]))
+    }
+
+    /// 円錐ソリッド（頂点付き）を、側面を4分割せず**1枚の周期曲面**として
+    /// 作る（ROADMAP柱③。`crates/zenith_algo/examples/periodic_cone_probe.rs`
+    /// で検証した構成）。
+    ///
+    /// **まだ`make_cone`を置き換えていない**——既定は変えず、比較・
+    /// 実験用に並べて持つだけ（4-812・4-813）。
+    pub fn make_cone_periodic(r_bottom: f64, height: f64) -> Result<Solid, String> {
+        if r_bottom <= 1e-6 || height <= 1e-6 {
+            return Err("Invalid cone parameters".to_string());
+        }
+
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let closed_circle_points = |radius: f64, z: f64| -> Vec<ControlPoint3> {
+            let p0 = Point3::new(radius, 0.0, z);
+            let c0 = Point3::new(radius, radius, z);
+            let p1 = Point3::new(0.0, radius, z);
+            let c1 = Point3::new(-radius, radius, z);
+            let p2 = Point3::new(-radius, 0.0, z);
+            let c2 = Point3::new(-radius, -radius, z);
+            let p3 = Point3::new(0.0, -radius, z);
+            let c3 = Point3::new(radius, -radius, z);
+            vec![
+                ControlPoint3::unweighted(p0),
+                ControlPoint3::new(c0, w),
+                ControlPoint3::unweighted(p1),
+                ControlPoint3::new(c1, w),
+                ControlPoint3::unweighted(p2),
+                ControlPoint3::new(c2, w),
+                ControlPoint3::unweighted(p3),
+                ControlPoint3::new(c3, w),
+                ControlPoint3::unweighted(p0),
+            ]
+        };
+        let weights = [1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0];
+        let knots_u = KnotVector::new(vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ]);
+        let apex = Point3::new(0.0, 0.0, height);
+
+        let bottom_points = closed_circle_points(r_bottom, 0.0);
+        let mut grid: Vec<Vec<ControlPoint3>> = Vec::with_capacity(9);
+        for i in 0..9 {
+            grid.push(vec![
+                bottom_points[i].clone(),
+                ControlPoint3::new(apex, weights[i]),
+            ]);
+        }
+        let surface = NurbsSurface3::new(
+            2,
+            1,
+            grid,
+            knots_u.clone(),
+            KnotVector::clamped_uniform(2, 1),
+        )?;
+
+        let v_bottom = Vertex::new(Point3::new(r_bottom, 0.0, 0.0), 1e-6);
+        let v_apex = Vertex::new(apex, 1e-6);
+        let bottom_curve = NurbsCurve3::new(2, bottom_points, knots_u)?;
+        let bottom_edge = Edge::new(bottom_curve, v_bottom.clone(), v_bottom.clone(), 1e-6);
+        let ruling_edge = Edge::line_between(v_bottom.clone(), v_apex)?;
+
+        use zenith_topo::Orientation;
+        let side_wire = Wire::new(vec![
+            OrientedEdge::new(ruling_edge.clone(), Orientation::Reversed),
+            OrientedEdge::new(bottom_edge.clone(), Orientation::Forward),
+            OrientedEdge::new(ruling_edge, Orientation::Forward),
+        ]);
+        let side_face = Face::new(
+            FaceGeometry::Nurbs(surface),
+            side_wire,
+            Vec::new(),
+            Orientation::Forward,
+            1e-6,
+        );
+
+        let p_bot = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .ok_or("plane bot")?;
+        let bottom_wire = Wire::new(vec![OrientedEdge::new(bottom_edge, Orientation::Reversed)]);
+        let bottom_face = Face::simple(FaceGeometry::Plane(p_bot), bottom_wire);
+
+        crate::validated_solid(Shell::closed(vec![side_face, bottom_face]))
+    }
+
     /// 正多角柱（正N角柱: 正六角柱、正八角柱など）ソリッドの生成
     ///
     /// `sides`: 角数（3以上）
