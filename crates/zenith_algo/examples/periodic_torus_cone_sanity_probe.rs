@@ -2,7 +2,7 @@
 //! （primitive.rsに追加した新しい並列の選択肢）が、単独でも正しい体積を
 //! 返すかの最小確認。
 
-use zenith_algo::{MassCalculator, PrimitiveBuilder};
+use zenith_algo::{EdgeBlender, MassCalculator, PrimitiveBuilder};
 use zenith_tess::TessellationParams;
 
 fn main() {
@@ -33,4 +33,30 @@ fn main() {
         cone_exact,
         (cone_measured - cone_exact).abs() / cone_exact
     );
+
+    // **円錐の底縁をフィレットし、4分割版と比較**（4-814と同じ型）。
+    let standard_cone = PrimitiveBuilder::make_cone(r_bottom, 0.0, height).unwrap();
+    let standard_blendable = EdgeBlender::blendable_edges(&standard_cone);
+    let periodic_blendable = EdgeBlender::blendable_edges(&cone);
+    println!(
+        "cone blendable edges: 4分割版={} 周期1面版={}",
+        standard_blendable.len(),
+        periodic_blendable.len()
+    );
+    if let (Some(sb), Some(pb)) = (standard_blendable.first(), periodic_blendable.first()) {
+        let standard_filleted = EdgeBlender::fillet_edge(&standard_cone, sb.edge_id, 1.0);
+        let periodic_filleted = EdgeBlender::fillet_edge(&cone, pb.edge_id, 1.0);
+        match (standard_filleted, periodic_filleted) {
+            (Ok(sa), Ok(pa)) => {
+                let va = MassCalculator::compute_volume_from_brep(&sa, &params);
+                let vb = MassCalculator::compute_volume_from_brep(&pa, &params);
+                println!(
+                    "cone fillet: 4分割版 体積={va:.6} / 周期1面版 体積={vb:.6} / 相対差={:.3e}",
+                    (va - vb).abs() / va.abs().max(1e-9)
+                );
+            }
+            (Err(e), _) => println!("4分割版のフィレットが断られた: {e}"),
+            (_, Err(e)) => println!("周期1面版のフィレットが断られた: {e}"),
+        }
+    }
 }
