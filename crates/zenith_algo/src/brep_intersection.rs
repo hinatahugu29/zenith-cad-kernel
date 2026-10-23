@@ -276,8 +276,8 @@ impl BrepIntersectionBuilder {
             });
         }
         let bbox_began = outside_timing.then(std::time::Instant::now);
-        let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_boundary_bbox).collect();
-        let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_boundary_bbox).collect();
+        let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_broad_phase_bbox).collect();
+        let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_broad_phase_bbox).collect();
         let bbox_secs = bbox_began.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
         let mut clip_secs = 0.0f64;
         let mut clip_calls = 0u32;
@@ -863,8 +863,8 @@ impl BrepIntersectionBuilder {
         faces_b: &[Face],
         tol: &Tolerance,
     ) -> bool {
-        let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_boundary_bbox).collect();
-        let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_boundary_bbox).collect();
+        let bboxes_a: Vec<Option<BoundingBox3>> = faces_a.iter().map(face_broad_phase_bbox).collect();
+        let bboxes_b: Vec<Option<BoundingBox3>> = faces_b.iter().map(face_broad_phase_bbox).collect();
 
         for (index_a, face_a) in faces_a.iter().enumerate() {
             for (index_b, face_b) in faces_b.iter().enumerate() {
@@ -9329,6 +9329,43 @@ fn distribute_inner_wires(
             )
         })
         .collect())
+}
+
+/// **`face_boundary_bbox`の広域版（4-823。`ZENITH_WIDE_FACE_BBOX`。
+/// 既定オフ・診断用）**。
+///
+/// `face_boundary_bbox`は面の**境界（輪）だけ**から箱を作る——ふつうの
+/// トリム面では、境界が実際に見える範囲をだいたい辿るので十分きつい。
+/// **ところが周期1面化（ROADMAP柱③。4-807〜）の球では、輪が同じシーム
+/// 稜（北極→南極の子午線1本）を2回使うだけで、他に境界が無い**——
+/// 子午線はy=0の1平面上にしか乗らないため、境界だけの箱はy方向に
+/// ほぼ幅0になり、球の実際の広がり（y方向にも±半径ぶん膨らむ）を
+/// 落とす。**実測（4-823）**: 周期1面化した球と立方体のブーリアンで、
+/// `ZENITH_PAIR_WHY=1`で見ると6面中3面が「囲み箱が交わらない」で
+/// 候補から落ちていた（`隔たり y 6.0`等）——これが「25個の相手のいない
+/// 辺」で断られる根だった。
+///
+/// この口は、面の支持曲面（NURBS面なら制御点そのものの凸包——
+/// 曲面を絶対にはみ出さない、広域の絞り込みには十分な箱）も合わせて
+/// 広げる。**広げる方向にしか効かない**——候補を見逃す側の間違いを
+/// なくすだけで、既存の密な検体ではほぼ境界箱と同じ広さのまま
+/// （ふつうのトリム面は境界が支持曲面の広がりに近いため）。
+fn face_broad_phase_bbox(face: &Face) -> Option<BoundingBox3> {
+    let boundary = face_boundary_bbox(face);
+    if std::env::var_os("ZENITH_WIDE_FACE_BBOX").is_none() {
+        return boundary;
+    }
+    let FaceGeometry::Nurbs(surface) = &face.geometry else {
+        return boundary;
+    };
+    let surface_bbox = surface.bounding_box();
+    match boundary {
+        Some(mut bbox) => {
+            bbox.extend_bbox(&surface_bbox);
+            Some(bbox)
+        }
+        None => Some(surface_bbox),
+    }
 }
 
 fn face_boundary_bbox(face: &Face) -> Option<BoundingBox3> {
