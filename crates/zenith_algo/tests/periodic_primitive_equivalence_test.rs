@@ -140,3 +140,78 @@ fn cylinder_periodic_fillet_matches_standard() {
         "standard {va} vs periodic {vb}"
     );
 }
+
+/// 球（v方向の両端で退化。4-819〜4-820）。自動導出p-curveを手で直した
+/// `make_sphere_periodic`が、単独で正しい体積を返すか。
+#[test]
+fn sphere_periodic_volume_matches_closed_form() {
+    let radius = 10.0;
+    let solid = PrimitiveBuilder::make_sphere_periodic(radius).unwrap();
+    let exact = 4.0 / 3.0 * std::f64::consts::PI * radius.powi(3);
+    let measured = MassCalculator::compute_volume_from_brep(&solid, &params());
+    assert!(
+        (measured - exact).abs() / exact < 1e-9,
+        "measured {measured} vs exact {exact}"
+    );
+}
+
+#[test]
+fn sphere_periodic_is_topologically_valid() {
+    let solid = PrimitiveBuilder::make_sphere_periodic(10.0).unwrap();
+    let tol = Tolerance::default();
+    let report = solid.outer_shell.validate_closed(&tol);
+    assert!(report.is_valid(), "errors: {:?}", report.errors);
+}
+
+/// 表示メッシュが水密になるか（4-820の直し——これが無いと
+/// `tessellate_solid`は0三角形を返していた）。
+#[test]
+fn sphere_periodic_mesh_is_watertight() {
+    let solid = PrimitiveBuilder::make_sphere_periodic(10.0).unwrap();
+    let mesh = zenith_tess::tessellate_solid(&solid, &params());
+    assert!(!mesh.indices.is_empty(), "mesh must not be empty");
+
+    let mut counts: std::collections::BTreeMap<(i64, i64, i64, i64, i64, i64), usize> =
+        std::collections::BTreeMap::new();
+    let quantize = |p: zenith_math::Point3| {
+        let scale = 1e6;
+        ((p.x * scale).round() as i64, (p.y * scale).round() as i64, (p.z * scale).round() as i64)
+    };
+    for triangle in &mesh.indices {
+        let points: Vec<_> = triangle.iter().map(|i| quantize(mesh.positions[*i as usize])).collect();
+        for corner in 0..3 {
+            let a = points[corner];
+            let b = points[(corner + 1) % 3];
+            let key = if a <= b { (a.0, a.1, a.2, b.0, b.1, b.2) } else { (b.0, b.1, b.2, a.0, a.1, a.2) };
+            *counts.entry(key).or_insert(0) += 1;
+        }
+    }
+    let open = counts.values().filter(|c| **c == 1).count();
+    let non_manifold = counts.values().filter(|c| **c > 2).count();
+    assert_eq!(open, 0, "open edges found");
+    assert_eq!(non_manifold, 0, "non-manifold edges found");
+}
+
+/// **既知の限界（4-820）**: 球の周期1面版は、ブーリアンではまだ既定の
+/// 4分割版と等価にならない——交線で割った面片の縫い直しが「25個の
+/// 相手のいない辺」で断られる。この門は、その限界が直ったらテストが
+/// 「想定外に通った」ことで気づけるように、**現在の既知の失敗**を
+/// 明示的に固定する（1ビットも動かない等価性ではなく、失敗することを
+/// 確認する側のテスト）。
+#[test]
+fn sphere_periodic_boolean_known_limitation() {
+    let tol = Tolerance::default();
+    let periodic = PrimitiveBuilder::make_sphere_periodic(10.0).unwrap();
+    let box_solid = PrimitiveBuilder::make_box(12.0, 12.0, 12.0).unwrap();
+    let box_centered = BrepTransform::translate_solid(&box_solid, Vec3::new(-6.0, -6.0, -6.0));
+    let result = BooleanEngine::boolean_solids_exact(
+        &box_centered,
+        &periodic,
+        BooleanOpType::Union,
+        &tol,
+    );
+    assert!(
+        result.is_err(),
+        "sphere_periodic boolean started working — update ROADMAP/HANDOVER and this test"
+    );
+}

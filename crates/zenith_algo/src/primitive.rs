@@ -586,6 +586,117 @@ impl PrimitiveBuilder {
         crate::validated_solid(Shell::closed(faces))
     }
 
+    /// 球ソリッドを、v方向の両端（北極・南極）で退化する**1枚の周期曲面**
+    /// として作る（ROADMAP柱③。`crates/zenith_algo/examples/periodic_sphere_probe.rs`
+    /// で検証した構成）。
+    ///
+    /// 円柱・トーラス・円錐（4-807〜4-818）と違い、球は**自動導出された
+    /// p-curveがそのままでは使えない**——子午線（境界の稜線）を向きを
+    /// 変えて2回使う輪を自動導出すると、どちらの出現も同じu値（u=0）に
+    /// 落ちてしまい、トリムされた2D領域の面積が0になる（4-819）。
+    /// **稜線の2回目の出現だけ、手でu=1へ移した`FacePcurves`に上書き**
+    /// することで、`tessellate_solid`が正しく三角形を作れるようになった
+    /// （4-820）。
+    ///
+    /// **まだ`make_sphere`を置き換えていない**——既定は変えず、比較・
+    /// 実験用に並べて持つだけ。
+    pub fn make_sphere_periodic(radius: f64) -> Result<Solid, String> {
+        if radius <= 1e-6 {
+            return Err("Radius must be positive".to_string());
+        }
+
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let unit_xy: [(f64, f64); 9] = [
+            (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (-1.0, 1.0), (-1.0, 0.0),
+            (-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (1.0, 0.0),
+        ];
+        let longitude_weights = [1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0];
+        let knots_u = KnotVector::new(vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ]);
+
+        let latitude_rows: [(f64, f64); 5] = [
+            (0.0, radius),
+            (radius, radius),
+            (radius, 0.0),
+            (radius, -radius),
+            (0.0, -radius),
+        ];
+        let latitude_weights = [1.0, w, 1.0, w, 1.0];
+        let knots_v = KnotVector::new(vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0]);
+
+        let mut grid: Vec<Vec<ControlPoint3>> = Vec::with_capacity(9);
+        for i in 0..9 {
+            let (lx, ly) = unit_xy[i];
+            let mut row = Vec::with_capacity(5);
+            for j in 0..5 {
+                let (radial, z) = latitude_rows[j];
+                let point = if radial == 0.0 {
+                    Point3::new(0.0, 0.0, z)
+                } else {
+                    Point3::new(radial * lx, radial * ly, z)
+                };
+                let weight = longitude_weights[i] * latitude_weights[j];
+                row.push(ControlPoint3::new(point, weight));
+            }
+            grid.push(row);
+        }
+        let surface = NurbsSurface3::new(2, 2, grid, knots_u, knots_v.clone())?;
+
+        let north = Point3::new(0.0, 0.0, radius);
+        let south = Point3::new(0.0, 0.0, -radius);
+        let meridian_points = vec![
+            ControlPoint3::unweighted(north),
+            ControlPoint3::new(Point3::new(radius, 0.0, radius), w),
+            ControlPoint3::unweighted(Point3::new(radius, 0.0, 0.0)),
+            ControlPoint3::new(Point3::new(radius, 0.0, -radius), w),
+            ControlPoint3::unweighted(south),
+        ];
+        let v_north = Vertex::new(north, 1e-6);
+        let v_south = Vertex::new(south, 1e-6);
+        let meridian_curve = NurbsCurve3::new(2, meridian_points, knots_v)?;
+        let meridian_edge = Edge::new(meridian_curve, v_north.clone(), v_south.clone(), 1e-6);
+
+        use zenith_topo::Orientation;
+        let wire = Wire::new(vec![
+            OrientedEdge::new(meridian_edge.clone(), Orientation::Reversed),
+            OrientedEdge::new(meridian_edge, Orientation::Forward),
+        ]);
+        let mut face = Face::new(
+            FaceGeometry::Nurbs(surface),
+            wire,
+            Vec::new(),
+            Orientation::Reversed,
+            1e-6,
+        );
+
+        // **4-820の直し**: 自動導出p-curveの2本目（南へ戻る側）を、手で
+        // u=1へ移す。これがないと、2本とも同じu値（u=0）に落ちて
+        // トリムされた2D領域の面積が0になる（4-819）。
+        if let Some(pcurves) = &mut face.pcurves {
+            if let Some(second) = pcurves.outer_loop.segments.get_mut(1) {
+                let shifted_points: Vec<zenith_geom::nurbs_curve_2d::ControlPoint2> = second
+                    .curve
+                    .control_points
+                    .iter()
+                    .map(|cp| {
+                        zenith_geom::nurbs_curve_2d::ControlPoint2::new(
+                            zenith_math::Point2::new(1.0, cp.point.y),
+                            cp.weight,
+                        )
+                    })
+                    .collect();
+                second.curve = zenith_geom::nurbs_curve_2d::NurbsCurve2::new(
+                    second.curve.degree,
+                    shifted_points,
+                    second.curve.knots.clone(),
+                )?;
+            }
+        }
+
+        crate::validated_solid(Shell::closed(vec![face]))
+    }
+
     /// 円錐 / 円錐台（Cone / Frustum: 底面半径 r_bottom, 天面半径 r_top, 高さ h）の生成
     pub fn make_cone(r_bottom: f64, r_top: f64, height: f64) -> Result<Solid, String> {
         if r_bottom <= 1e-6 || height <= 1e-6 || r_top < 0.0 {

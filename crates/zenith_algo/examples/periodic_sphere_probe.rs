@@ -113,7 +113,28 @@ fn main() {
         OrientedEdge::new(meridian_edge.clone(), Orientation::Reversed),
         OrientedEdge::new(meridian_edge, Orientation::Forward),
     ]);
-    let face = Face::new(FaceGeometry::Nurbs(surface), wire, Vec::new(), Orientation::Reversed, tol.linear);
+    let mut face = Face::new(FaceGeometry::Nurbs(surface), wire, Vec::new(), Orientation::Reversed, tol.linear);
+
+    // **4-819の宿題への第一歩**: 自動導出p-curveは両方の出現をu=0に
+    // 落とすため、2本目（南へ戻る側）を手でu=1へ移す。
+    if let Some(pcurves) = &mut face.pcurves {
+        if let Some(second) = pcurves.outer_loop.segments.get_mut(1) {
+            use zenith_geom::nurbs_curve_2d::ControlPoint2;
+            use zenith_math::Point2;
+            let shifted_points: Vec<ControlPoint2> = second
+                .curve
+                .control_points
+                .iter()
+                .map(|cp| ControlPoint2::new(Point2::new(1.0, cp.point.y), cp.weight))
+                .collect();
+            second.curve = zenith_geom::nurbs_curve_2d::NurbsCurve2::new(
+                second.curve.degree,
+                shifted_points,
+                second.curve.knots.clone(),
+            )
+            .unwrap();
+        }
+    }
 
     println!("face.pcurves is_some = {}", face.pcurves.is_some());
     if let Some(pcurves) = &face.pcurves {
