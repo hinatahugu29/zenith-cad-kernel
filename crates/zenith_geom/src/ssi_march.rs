@@ -2075,6 +2075,15 @@ impl IntersectionMarcher {
             //
             // 予測した刻みには 1.5 の安全率を掛ける。外しても次の回で
             // 測り直すので、外れ方は費用にしか出ない。
+            // **「縮めても落ちない」ケースがどれだけあるかを数える口**
+            // （4-821。`ZENITH_SSI_PLATEAU_WHY=1`、既定オフ・診断専用、
+            // 挙動は変えない）。H8の`A面33×B面1`の149回のやり直しが
+            // 「刻みを縮めれば届く」のか「刻んでも残差が落ちない、
+            // 既にその種の限界に達している」のかを、実在の検体で
+            // 切り分けるための測定。
+            let plateau_why = std::env::var_os("ZENITH_SSI_PLATEAU_WHY").is_some();
+            let mut deviation_history: Vec<f64> = Vec::new();
+            let mut seed_succeeded = false;
             let mut step = first_step;
             let mut previous: Option<(f64, f64)> = None;
             for attempt in 0..8 {
@@ -2102,6 +2111,9 @@ impl IntersectionMarcher {
                     step *= 0.5;
                     continue;
                 };
+                if plateau_why {
+                    deviation_history.push(deviation);
+                }
                 if deviation <= deviation_limit {
                     // **「辿ったあとで、同じ曲線かどうかを見る」も試しました**
                     // （4-412）。**ほとんど効きません**——種 40 個で交線
@@ -2123,6 +2135,7 @@ impl IntersectionMarcher {
                         }
                     }
                     found.push((curve, marched, deviation));
+                    seed_succeeded = true;
                     break;
                 }
                 // 点の上限に当たったら、これ以上刻んでも曲線は伸びない。
@@ -2152,6 +2165,20 @@ impl IntersectionMarcher {
                 previous = Some((step, deviation));
                 step = next;
                 let _ = attempt;
+            }
+            if plateau_why && !seed_succeeded && !deviation_history.is_empty() {
+                let first = deviation_history[0];
+                let last = *deviation_history.last().unwrap();
+                let best = deviation_history.iter().cloned().fold(f64::INFINITY, f64::min);
+                // **「縮めても落ちない」**: 最後の試行が最初の試行から
+                // 2倍未満しか縮んでいない（刻みを縮める効果が薄い）。
+                let plateaued = last > first * 0.5;
+                eprintln!(
+                    "SSIPLATEAU 種({seed_u:.4},{seed_v:.4}) {}回試行・限界{deviation_limit:.3e}: 履歴{:?}・最良{best:.3e}・{}",
+                    deviation_history.len(),
+                    deviation_history,
+                    if plateaued { "縮めても落ちない（床の可能性）" } else { "縮めれば落ちている（刻み不足の可能性）" }
+                );
             }
         }
         }
