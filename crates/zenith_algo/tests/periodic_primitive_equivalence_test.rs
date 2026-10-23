@@ -141,6 +141,87 @@ fn cylinder_periodic_fillet_matches_standard() {
     );
 }
 
+/// トーラスのブーリアン等価性（4-816は`example`だけで確かめていた）。
+/// 箱がトーラスの一部を貫く配置で、既定の4分割版と体積・面数まで
+/// 一致するか。
+#[test]
+fn torus_periodic_boolean_matches_standard() {
+    let tol = Tolerance::default();
+    let r_major = 12.0;
+    let r_minor = 4.0;
+    let standard = PrimitiveBuilder::make_torus(r_major, r_minor).unwrap();
+    let periodic = PrimitiveBuilder::make_torus_periodic(r_major, r_minor).unwrap();
+    let box_solid = PrimitiveBuilder::make_box(10.0, 10.0, 10.0).unwrap();
+    let box_placed =
+        BrepTransform::translate_solid(&box_solid, Vec3::new(r_major - 5.0, -5.0, -5.0));
+
+    let a = BooleanEngine::boolean_solids_exact(&box_placed, &standard, BooleanOpType::Difference, &tol)
+        .unwrap();
+    let b = BooleanEngine::boolean_solids_exact(&box_placed, &periodic, BooleanOpType::Difference, &tol)
+        .unwrap();
+
+    assert_eq!(a.outer_shell.faces.len(), b.outer_shell.faces.len());
+    let va = MassCalculator::compute_volume_from_brep(&a, &params());
+    let vb = MassCalculator::compute_volume_from_brep(&b, &params());
+    assert!(
+        (va - vb).abs() / va.abs() < 1e-8,
+        "standard {va} vs periodic {vb}"
+    );
+}
+
+/// 円錐のブーリアン等価性（4-816は`example`だけで確かめていた）。
+#[test]
+fn cone_periodic_boolean_matches_standard() {
+    let tol = Tolerance::default();
+    let r_bottom = 10.0;
+    let height = 20.0;
+    let standard = PrimitiveBuilder::make_cone(r_bottom, 0.0, height).unwrap();
+    let periodic = PrimitiveBuilder::make_cone_periodic(r_bottom, height).unwrap();
+    let box_solid = PrimitiveBuilder::make_box(30.0, 30.0, 30.0).unwrap();
+    let box_placed = BrepTransform::translate_solid(&box_solid, Vec3::new(-15.0, -15.0, 5.0));
+
+    let a = BooleanEngine::boolean_solids_exact(&box_placed, &standard, BooleanOpType::Difference, &tol)
+        .unwrap();
+    let b = BooleanEngine::boolean_solids_exact(&box_placed, &periodic, BooleanOpType::Difference, &tol)
+        .unwrap();
+
+    assert_eq!(a.outer_shell.faces.len(), b.outer_shell.faces.len());
+    let va = MassCalculator::compute_volume_from_brep(&a, &params());
+    let vb = MassCalculator::compute_volume_from_brep(&b, &params());
+    assert!(
+        (va - vb).abs() / va.abs() < 1e-8,
+        "standard {va} vs periodic {vb}"
+    );
+}
+
+/// 円錐のフィレット等価性（4-816は`example`だけで確かめていた）。
+#[test]
+fn cone_periodic_fillet_matches_standard() {
+    let r_bottom = 10.0;
+    let height = 20.0;
+    let standard = PrimitiveBuilder::make_cone(r_bottom, 0.0, height).unwrap();
+    let periodic = PrimitiveBuilder::make_cone_periodic(r_bottom, height).unwrap();
+
+    let standard_edge = EdgeBlender::blendable_edges(&standard)
+        .first()
+        .expect("standard cone should have a blendable rim")
+        .edge_id;
+    let periodic_edge = EdgeBlender::blendable_edges(&periodic)
+        .first()
+        .expect("periodic cone should have a blendable rim")
+        .edge_id;
+
+    let a = EdgeBlender::fillet_edge(&standard, standard_edge, 1.0).unwrap();
+    let b = EdgeBlender::fillet_edge(&periodic, periodic_edge, 1.0).unwrap();
+
+    let va = MassCalculator::compute_volume_from_brep(&a, &params());
+    let vb = MassCalculator::compute_volume_from_brep(&b, &params());
+    assert!(
+        (va - vb).abs() / va.abs() < 1e-9,
+        "standard {va} vs periodic {vb}"
+    );
+}
+
 /// 球（v方向の両端で退化。4-819〜4-820）。自動導出p-curveを手で直した
 /// `make_sphere_periodic`が、単独で正しい体積を返すか。
 #[test]
