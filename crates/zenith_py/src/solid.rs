@@ -153,6 +153,41 @@ impl PySolid {
             .map_err(invalid)
     }
 
+    /// **3D の経路（点列）に沿って円形断面を掃引したパイプ**（ROADMAP柱③）。
+    ///
+    /// # なぜ要るのか
+    ///
+    /// `zenith_py::modeling::make_sweep_pipe`は既にあったが、**表示用の
+    /// メッシュ（`Mesh`）しか返さなかった**——`z.Solid`が持つ
+    /// `validate()`・`volume`・`to_step()`・`fillet_edge()`等が使えず、
+    /// `tools/blender_workflow_test.py`の既存の確認パターン（動かして、
+    /// 測って、壊れた所を直す）に乗せられなかった。**ここでは`Solid`を
+    /// 直接返す**——`SweepBuilder::sweep_circle_along_curve`自体は
+    /// 既に`Solid`を作っているので、そのまま包むだけでよい。
+    ///
+    /// `path_points`は3点以上必要（次数は`(点数-1)`と3の小さい方）。
+    #[staticmethod]
+    pub fn sweep_pipe(
+        path_points: Vec<[f64; 3]>,
+        radius: f64,
+        num_sections: usize,
+    ) -> PyResult<Self> {
+        let n = path_points.len();
+        if n < 2 {
+            return Err(invalid("経路の点は2つ以上要ります"));
+        }
+        let degree = (n - 1).min(3);
+        let ctrl_pts: Vec<zenith_geom::ControlPoint3> = path_points
+            .into_iter()
+            .map(|p| zenith_geom::ControlPoint3::unweighted(Point3::new(p[0], p[1], p[2])))
+            .collect();
+        let knots = zenith_geom::KnotVector::clamped_uniform(n, degree);
+        let path = zenith_geom::NurbsCurve3::new(degree, ctrl_pts, knots).map_err(invalid)?;
+        zenith_algo::SweepBuilder::sweep_circle_along_curve(&path, radius, num_sections)
+            .map(Self::wrap)
+            .map_err(invalid)
+    }
+
     /// **スケッチから押し出す**（4-400）。
     ///
     /// # なぜ要るのか

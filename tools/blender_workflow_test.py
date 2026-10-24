@@ -47,6 +47,13 @@ Blender の中で通した記録がありませんでした**——`tools/blende
     を積みます。**体積が実際に動いたこと**まで確かめます（最初の
     ドリル位置が既存の穴に重なり、何も削らずに「通って」いたのを
     4-791 で見つけて直した教訓）。
+12. **スイープパイプ**（ROADMAP 柱③。2026/10/24 追加）——これまでの
+    11 段はスケッチ（押し出し・回転）とブーリアンだけで、スイープ・
+    ロフトは一度も通していませんでした。`z.Solid.sweep_pipe`
+    （HANDOVER 4-825。以前は`make_sweep_pipe`が表示用メッシュしか
+    返さず、`validate()`・`to_step()`が使えなかった）を足し、直線
+    経路のパイプを閉じた式（πr²h）・`validate()`・STEP書き出しで
+    確かめます。
 
 **赤にするのは**——どこかが断られる、閉じた式と食い違う、書き出した
 ファイルが無いか空、のいずれか。
@@ -332,6 +339,36 @@ def main():
         except Exception as exc:
             print("11. 回転体を含む連鎖にもう1回: **断られました**: %r" % (exc,))
             wrong += 1
+
+    # 12. スイープパイプ（ROADMAP柱③。2026/10/24追加）——これまでの
+    # 10段はスケッチ（押し出し・回転）とブーリアンだけで、スイープ・
+    # ロフトは一度も通していなかった。既存の`z.Solid`の確認手筋
+    # （閉じた式・validate・STEP書き出し）に、新しく足した
+    # `Solid.sweep_pipe`（HANDOVER 4-825。以前はMeshしか返せなかった）
+    # を同じように当てる。直線経路（半径2・高さ20）なので、閉じた式
+    # πr²hと厳密に突き合わせられる。
+    try:
+        pipe = z.Solid.sweep_pipe([[0.0, 0.0, 0.0], [0.0, 0.0, 20.0]], 2.0, 16)
+        expected_pipe_volume = math.pi * 2.0 * 2.0 * 20.0
+        pipe_diff = abs(pipe.volume - expected_pipe_volume)
+        print("12. スイープパイプ: 体積 %.6f（閉じた式 %.6f、差 %.3e）"
+              % (pipe.volume, expected_pipe_volume, pipe_diff))
+        if pipe_diff > 1e-6:
+            wrong += 1
+        report5 = pipe.validate()
+        print("    検証 valid=%s" % report5.get("valid"))
+        if not report5.get("valid", False):
+            wrong += 1
+        out_dir5 = os.environ.get("ZENITH_WORKFLOW_OUT") or __import__("tempfile").gettempdir()
+        pipe_path = os.path.join(out_dir5, "blender_workflow_pipe.step")
+        pipe.to_step(pipe_path, "ZENITH_WORKFLOW_PIPE")
+        size5 = os.path.getsize(pipe_path)
+        print("    STEP 書き出し: %s（%d バイト）" % (pipe_path, size5))
+        if size5 <= 0:
+            wrong += 1
+    except Exception as exc:
+        print("12. スイープパイプ: **断られました**: %r" % (exc,))
+        wrong += 1
 
     print()
     print("誤答・断り %d 件" % wrong)
