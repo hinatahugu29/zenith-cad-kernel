@@ -85,6 +85,24 @@
 > 分かりました（4-823）。**`make_cylinder`・`make_torus`・
 > `make_cone`本体を正式に置き換えるかどうかは、持ち主の判断のまま**
 > ——新しい`make_cylinder_periodic`等は既定にはまだなっていません。
+> 球のブーリアン限界は4-824でさらに2段掘り下げ、浮動小数点の桁ずれ
+> という仮説を15桁精度で測って外し、球自身の分割（交線16本→鎖8本）
+> も箱の各面の専用分割も個別には成功していると確認——必要な弧は
+> 24本（8隅×3面）で、branches=16・seeds=64まで上げてapplied batch
+> splitsが予想の24に達しても相手のいない稜は依然24個残ることまで
+> 測り、「分割の数を揃えれば直る」という見立ても外しました。根は
+> まだ見つかっていません。
+>
+> **2026/10/24〜25の実測**（詳しくは HANDOVER 4-825〜4-827）: 柱③
+> ——`tools/blender_workflow_test.py`に12・13段目（スイープパイプ・
+> ロフトソリッド）を足しました。`make_sweep_pipe`・`make_loft_solid`
+> はPython APIとして既にあったが、表示用メッシュしか返せず
+> `validate()`・`to_step()`が使えなかった穴を、`Solid.sweep_pipe`・
+> `Solid.loft_solid`で塞ぎ、Blenderの中で全13段とも誤答・断り0件を
+> 確認しました。追加の途中で`check_python_arguments`を赤くする
+> 登録漏れを見つけて直し（4-826）、`LoftBuilder::loft_solid`の
+> `degree_v`が設計上常に1に潰れる引数だという発見も記録しました
+> （4-827）。
 >
 > 柱⑤では、IGES Type 142のBPTR優先→CPTR優先切り替え
 > （`ZENITH_IGES_CPTR_PRIMARY`）を試しましたが、9検体全部が面0枚に
