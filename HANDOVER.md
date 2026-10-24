@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月24日（**4-413 〜 4-826 を足しました**）
+**最終更新**: 2026年10月24日（**4-413 〜 4-827 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29731,6 +29731,44 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 組の退行のため、1 本（`SUBDIV_THIRD`）は既存の既知の危うさのため**
 既定オフに残しています。
 
+
+### 4-827. **柱③——4-825の次（ロフトソリッド）を実行した。`make_loft_solid`も`make_sweep_pipe`と同じ欠け方（表示用メッシュしか返せない）だったため、`Solid.loft_solid`を足し、`tools/blender_workflow_test.py`に13段目として追加した。底10x10・天8x8の台形筒をvalidate()・STEP書き出しで確かめ、Blenderの中で全13段とも誤答・断り0件を確認した。登録時に`degree_v`という、設計上常に1に潰れる引数も見つけて説明を足した**（2026年10月24日）
+
+4-825の末尾で「ロフト（`make_loft`）も同じ欠け方をしている可能性が
+高く、次に見る人が同じパターンで`Solid.loft`等を足すとよい」と
+引き渡していた。**同じ夜のうちに実行した。**
+
+**`crates/zenith_py/src/solid.rs`に`Solid.loft_solid(sections,
+degree_v)`を足した**。`LoftBuilder::loft_solid`は既に
+`zenith_topo::Solid`を作っているので、`make_loft_solid`
+（`PyMesh`を返す既存関数）と同じ断面→輪の組み立てをそのまま
+再利用し、`Self::wrap`で`Solid`として返すだけ——計算ロジックは
+1行も変えていない。
+
+**`check_python_arguments.py`の`CLASS_BASELINE`に登録する際、
+`degree_v`が「効かない引数」として検出された**。読み進めると
+`LoftBuilder::loft_solid`は**断面が何本あっても、隣り合う2断面
+ずつの柱面（pillar face）を順に組む**設計——各柱面は必ず2本の
+断面曲線だけを渡して`loft_curves`を呼ぶため、
+`effective_degree_v = degree_v.min(m-1).max(1)`の`m`が常に2になり、
+**`degree_v`は何を渡しても1（直線）に潰れる**。これは4-826の
+`ZENITH_SSI_PLATEAU_WHY`のような新しい挙動ではなく、**既存の
+`make_loft_solid`も同じ実装を共有しているので、最初から持っていた
+特性**——3断面を挟んでも変わらないことを実測で確認した上で、
+`EXPECTED_INERT`に説明を足した（`make_loft_solid`自身はなぜか
+この効果検査に引っかかっていなかったため、そちらへの追記は見送った）。
+
+**`tools/blender_workflow_test.py`に13段目として足した**。底10x10・
+天8x8（1だけ内側へ寄せた四角）、高さ12の台形筒——閉じた式は無いので
+（台形の側面積分が要る）、`validate()`の非多様体0本検査とSTEP
+書き出しで確かめる。Blender 4.4の中で実行し、**全13段とも誤答・
+断り0件**を確認した。
+
+**結論**: スイープ・ロフトの両方がPythonの入口から`Solid`として
+使えるようになった。新しいPython APIを足すたびに
+`check_python_arguments.py`の`CLASS_BASELINE`への登録を対で行う
+習慣（4-826で学んだ）が、ここでも`degree_v`の設計上の特性という
+新しい発見につながった。
 
 ### 4-826. **柱⑥——4-825で足した`Solid.sweep_pipe`がフル版`run_gates.sh`の`check_python_arguments`を赤くしていた。既定値だけでは呼べない口として検出され（`path_points`が`list[[f64;3]]`で既定値を持てない）、`CLASS_BASELINE`への登録漏れだった。登録すると、今度は直線経路では`num_sections`が「効かない引数」に見える二次被害が出たため、既存の曲がった経路`PATH`定数に差し替えて両方解消した**（2026年10月24日）
 

@@ -54,6 +54,10 @@ Blender の中で通した記録がありませんでした**——`tools/blende
     返さず、`validate()`・`to_step()`が使えなかった）を足し、直線
     経路のパイプを閉じた式（πr²h）・`validate()`・STEP書き出しで
     確かめます。
+13. **ロフトソリッド**（2026/10/24 追加。HANDOVER 4-826）——12 段目
+    と同じ空白。`z.Solid.loft_solid`を足し、底10x10・天8x8の台形筒
+    を`validate()`・STEP書き出しで確かめます（閉じた式は無いので、
+    非多様体0本の検査で正確さを担保）。
 
 **赤にするのは**——どこかが断られる、閉じた式と食い違う、書き出した
 ファイルが無いか空、のいずれか。
@@ -368,6 +372,35 @@ def main():
             wrong += 1
     except Exception as exc:
         print("12. スイープパイプ: **断られました**: %r" % (exc,))
+        wrong += 1
+
+    # 13. ロフトソリッド（ROADMAP柱③。2026/10/24追加。4-826）——12段目と
+    # 同じ型の空白。`make_loft_solid`も`make_sweep_pipe`と同じ欠け方
+    # （Meshしか返せない）だったため、`Solid.loft_solid`を足した。
+    # 底10x10・天8x8（1だけ内側へ寄せた四角）、高さ12の台形筒——
+    # 閉じた式は無い（台形の側面積分が要る）ので、`validate()`と
+    # STEP書き出しだけ確かめる（12段目までの「閉じた式」路線とは
+    # 違う確認の仕方だが、正確さはvalidate()の非多様体0本検査が担う）。
+    try:
+        bottom_square = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0],
+                         [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]]
+        top_square = [[1.0, 1.0, 12.0], [9.0, 1.0, 12.0],
+                      [9.0, 9.0, 12.0], [1.0, 9.0, 12.0]]
+        lofted = z.Solid.loft_solid([bottom_square, top_square], 2)
+        print("13. ロフトソリッド: 体積 %.6f" % lofted.volume)
+        report6 = lofted.validate()
+        print("    検証 valid=%s" % report6.get("valid"))
+        if not report6.get("valid", False):
+            wrong += 1
+        out_dir6 = os.environ.get("ZENITH_WORKFLOW_OUT") or __import__("tempfile").gettempdir()
+        loft_path = os.path.join(out_dir6, "blender_workflow_loft.step")
+        lofted.to_step(loft_path, "ZENITH_WORKFLOW_LOFT")
+        size6 = os.path.getsize(loft_path)
+        print("    STEP 書き出し: %s（%d バイト）" % (loft_path, size6))
+        if size6 <= 0:
+            wrong += 1
+    except Exception as exc:
+        print("13. ロフトソリッド: **断られました**: %r" % (exc,))
         wrong += 1
 
     print()

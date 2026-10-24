@@ -67,6 +67,14 @@ EXPECTED_INERT = {
     # **`dir_x` は効きます**（0 / 0.3 / 1.0 で 1809.557 / 1603.248 / 959.663）。
     ("Solid.from_sketch_revolved", "dir_y"):
         "向きの定数倍は同じ軸。dir_x のほうは効く（1809.557 → 959.663）",
+    # **`LoftBuilder::loft_solid`は、断面が何本あっても隣り合う2断面
+    # ずつの柱面（pillar face）を順に組む**——各柱面は必ず2本の断面
+    # 曲線だけを渡して`loft_curves`を呼ぶため、`effective_degree_v =
+    # degree_v.min(m-1).max(1)`の`m`は常に2になり、`degree_v`は
+    # 何を渡しても1（直線）に潰れる（4-826）。**曲がった中間断面を
+    # 挟んでも変わらない**——実測済み（3断面でも同じ体積）。
+    ("Solid.loft_solid", "degree_v"):
+        "各柱面は隣り合う2断面だけのloft_curves呼び出しで、degree_vは常に1に潰れる（設計上、断面の数に関わらず効かない）",
 }
 
 # **既定値だけでは呼べない口に、こちらから渡す引数。**
@@ -449,6 +457,10 @@ CLASS_BASELINE = {
     # 細かく刻んでも同じ形になるため。実測で踏んだ）。
     "Solid.sweep_pipe": lambda: dict(
         path_points=PATH, radius=2.0, num_sections=16),
+    # `make_loft_solid`（トップレベル関数）と同じ検体（4-825・4-826と
+    # 同じ型の抜け——新しいPython APIを足すたびに、ここへの登録を
+    # 対で行うこと）。
+    "Solid.loft_solid": lambda: dict(sections=[SQUARE, UPPER_SQUARE], degree_v=2),
 }
 
 # **番号を使う口**は、ここでは測りません（上の理由）。

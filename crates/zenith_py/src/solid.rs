@@ -30,7 +30,8 @@ use pyo3::types::{PyDict, PyList};
 
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, DirectModeling, EdgeBlender, EdgeKind, FaceMerger,
-    InterferenceChecker, MassCalculator, MirrorBuilder, PrimitiveBuilder, Sewer, StepInterop,
+    InterferenceChecker, LoftBuilder, MassCalculator, MirrorBuilder, PrimitiveBuilder, Sewer,
+    StepInterop,
 };
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -184,6 +185,46 @@ impl PySolid {
         let knots = zenith_geom::KnotVector::clamped_uniform(n, degree);
         let path = zenith_geom::NurbsCurve3::new(degree, ctrl_pts, knots).map_err(invalid)?;
         zenith_algo::SweepBuilder::sweep_circle_along_curve(&path, radius, num_sections)
+            .map(Self::wrap)
+            .map_err(invalid)
+    }
+
+    /// **閉じた断面ポリライン群から完全閉B-Repロフトソリッドを作る**
+    /// （ROADMAP柱③。4-825のスイープと同じ欠け方——`make_loft_solid`
+    /// は既にあったが`Mesh`しか返せなかったので、`Solid`を直接返す
+    /// 版をここに足す）。
+    ///
+    /// `sections`は2つ以上必要、各断面は3点以上（閉じた輪として
+    /// 自動で閉じる——最後の点から最初の点へ戻る辺を足す）。
+    #[staticmethod]
+    pub fn loft_solid(sections: Vec<Vec<[f64; 3]>>, degree_v: usize) -> PyResult<Self> {
+        if sections.len() < 2 {
+            return Err(invalid("断面は2つ以上要ります"));
+        }
+        let tol = Tolerance::default();
+        let mut wires = Vec::with_capacity(sections.len());
+        for sec in sections {
+            let n = sec.len();
+            if n < 3 {
+                return Err(invalid("各断面は3点以上要ります（閉じた輪になるため）"));
+            }
+            let vertices: Vec<zenith_topo::Vertex> = sec
+                .iter()
+                .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+                .collect();
+            let mut edges = Vec::with_capacity(n);
+            for i in 0..n {
+                let next_i = (i + 1) % n;
+                let edge = zenith_topo::Edge::line_between(
+                    vertices[i].clone(),
+                    vertices[next_i].clone(),
+                )
+                .map_err(invalid)?;
+                edges.push(zenith_topo::OrientedEdge::forward(edge));
+            }
+            wires.push(zenith_topo::Wire::new(edges));
+        }
+        LoftBuilder::loft_solid(&wires, degree_v, &tol)
             .map(Self::wrap)
             .map_err(invalid)
     }
