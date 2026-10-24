@@ -442,6 +442,13 @@ CLASS_BASELINE = {
         sketch_json='{"points": [[10,0],[14,0],[14,6],[10,6]],'
                     ' "lines": [[0,1],[1,2],[2,3],[3,0]]}',
         axis_x=0.0, axis_y=0.0, dir_x=0.0, dir_y=1.0),
+    # **`path_points` は `list[[f64;3]]`**——既定値では組めません
+    # （4-825）。`PATH`（既に`make_polyline_pipe`等で使っている、
+    # 曲がった経路）を使う——**直線だと`num_sections`を動かしても
+    # 面・体積が変わらず「効かない引数」に見える**（直線はどれだけ
+    # 細かく刻んでも同じ形になるため。実測で踏んだ）。
+    "Solid.sweep_pipe": lambda: dict(
+        path_points=PATH, radius=2.0, num_sections=16),
 }
 
 # **番号を使う口**は、ここでは測りません（上の理由）。
