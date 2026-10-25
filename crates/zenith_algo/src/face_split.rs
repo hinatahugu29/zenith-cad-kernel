@@ -404,6 +404,21 @@ fn compare_area_checks(label: &str, face: &Face, pieces: &[Face], check: &Parame
     } else {
         "pass"
     };
+    // **片ごとのパラメータ面積を直接見る口**（4-831。既定オフ、
+    // `ZENITH_AREA_CHECK_WHY`に相乗り）。この口で、球の周期1面を
+    // 2片に割ったとき「外側の片」の`outer`（元の外周ワイヤの面積）が
+    // 1.0ではなく0.0になっている（=外周ワイヤの継ぎ目2回出現のうち
+    // 片方がu=0に潰れている）ことを見つけた——根は
+    // `match_nurbs_outer_boundary_pcurve`の候補探索（本ファイルでは
+    // なく`zenith_topo::face`）が、周期曲面でu=0側とu=1側のどちらも
+    // 距離ほぼ0になる候補のうち、浮動小数点のごく僅かな差で勝つ方を
+    // 選んでいること（4-831に詳細）。
+    if std::env::var_os("ZENITH_AREA_CHECK_PIECES").is_some() {
+        eprintln!(
+            "AREAPIECES {label} 元 {:.6e} 片 {:?} 3d片 {:?}",
+            check.original, check.pieces, pieces_3d
+        );
+    }
     eprintln!(
         "AREACHECK {label:<22} pieces {:>2}  {} {:>10.3e} {:<6} {:<10}  3d {:>10.3e} {}",
         pieces.len(),
