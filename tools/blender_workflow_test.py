@@ -58,6 +58,10 @@ Blender の中で通した記録がありませんでした**——`tools/blende
     と同じ空白。`z.Solid.loft_solid`を足し、底10x10・天8x8の台形筒
     を`validate()`・STEP書き出しで確かめます（閉じた式は無いので、
     非多様体0本の検査で正確さを担保）。
+14. **螺旋ソリッド**（2026/10/25 追加。HANDOVER 4-828）——12・13段目
+    と同じ空白。`z.Solid.helix_solid`を足し、小さい断面を半径5・
+    ピッチ2・3周のZ軸螺旋で掃いた立体を`validate()`・STEP書き出しで
+    確かめます。
 
 **赤にするのは**——どこかが断られる、閉じた式と食い違う、書き出した
 ファイルが無いか空、のいずれか。
@@ -401,6 +405,32 @@ def main():
             wrong += 1
     except Exception as exc:
         print("13. ロフトソリッド: **断られました**: %r" % (exc,))
+        wrong += 1
+
+    # 14. 螺旋ソリッド（ROADMAP柱③。2026/10/25追加。4-828）——12・13段目
+    # と同じ空白。`make_helix_solid`も同じ欠け方（Meshしか返せない）
+    # だったため、`Solid.helix_solid`を足した。小さい正方形断面を
+    # 半径5・ピッチ2・3周のZ軸螺旋で掃く——閉じた式は無いので
+    # validate()とSTEP書き出しで確かめる。
+    try:
+        helix_profile = [[1.0, 0.0, 0.0], [1.5, 0.0, 0.0],
+                         [1.5, 0.5, 0.0], [1.0, 0.5, 0.0]]
+        helix = z.Solid.helix_solid(
+            helix_profile, 5.0, 2.0, 3.0, [0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 48)
+        print("14. 螺旋ソリッド: 体積 %.6f" % helix.volume)
+        report7 = helix.validate()
+        print("    検証 valid=%s" % report7.get("valid"))
+        if not report7.get("valid", False):
+            wrong += 1
+        out_dir7 = os.environ.get("ZENITH_WORKFLOW_OUT") or __import__("tempfile").gettempdir()
+        helix_path = os.path.join(out_dir7, "blender_workflow_helix.step")
+        helix.to_step(helix_path, "ZENITH_WORKFLOW_HELIX")
+        size7 = os.path.getsize(helix_path)
+        print("    STEP 書き出し: %s（%d バイト）" % (helix_path, size7))
+        if size7 <= 0:
+            wrong += 1
+    except Exception as exc:
+        print("14. 螺旋ソリッド: **断られました**: %r" % (exc,))
         wrong += 1
 
     print()

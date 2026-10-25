@@ -30,8 +30,8 @@ use pyo3::types::{PyDict, PyList};
 
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, DirectModeling, EdgeBlender, EdgeKind, FaceMerger,
-    InterferenceChecker, LoftBuilder, MassCalculator, MirrorBuilder, PrimitiveBuilder, Sewer,
-    StepInterop,
+    HelixBuilder, InterferenceChecker, LoftBuilder, MassCalculator, MirrorBuilder, PrimitiveBuilder,
+    Sewer, StepInterop,
 };
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -227,6 +227,50 @@ impl PySolid {
         LoftBuilder::loft_solid(&wires, degree_v, &tol)
             .map(Self::wrap)
             .map_err(invalid)
+    }
+
+    /// **断面（閉じた輪）を螺旋に沿って掃くソリッド**（ROADMAP柱③。
+    /// 4-825・4-827のスイープ・ロフトと同じ欠け方——`make_helix_solid`
+    /// は既にあったが`Mesh`しか返せず`validate()`・`to_step()`が
+    /// 使えなかった）。
+    #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    pub fn helix_solid(
+        profile: Vec<[f64; 3]>,
+        radius: f64,
+        pitch: f64,
+        turns: f64,
+        axis_origin: [f64; 3],
+        axis_dir: [f64; 3],
+        num_sections: usize,
+    ) -> PyResult<Self> {
+        let n = profile.len();
+        if n < 3 {
+            return Err(invalid("断面は3点以上要ります"));
+        }
+        let tol = Tolerance::default();
+        let vertices: Vec<zenith_topo::Vertex> = profile
+            .iter()
+            .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+            .collect();
+        let mut edges = Vec::with_capacity(n);
+        for i in 0..n {
+            let next_i = (i + 1) % n;
+            let edge = zenith_topo::Edge::line_between(
+                vertices[i].clone(),
+                vertices[next_i].clone(),
+            )
+            .map_err(invalid)?;
+            edges.push(zenith_topo::OrientedEdge::forward(edge));
+        }
+        let wire = zenith_topo::Wire::new(edges);
+        let orig = Point3::new(axis_origin[0], axis_origin[1], axis_origin[2]);
+        let dir = Vec3::new(axis_dir[0], axis_dir[1], axis_dir[2]);
+        HelixBuilder::sweep_wire_along_helix(
+            &wire, radius, pitch, turns, orig, dir, num_sections, &tol,
+        )
+        .map(Self::wrap)
+        .map_err(invalid)
     }
 
     /// **スケッチから押し出す**（4-400）。

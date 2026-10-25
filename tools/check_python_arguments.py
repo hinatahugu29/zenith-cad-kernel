@@ -461,6 +461,15 @@ CLASS_BASELINE = {
     # 同じ型の抜け——新しいPython APIを足すたびに、ここへの登録を
     # 対で行うこと）。
     "Solid.loft_solid": lambda: dict(sections=[SQUARE, UPPER_SQUARE], degree_v=2),
+    # `make_helix_solid`（トップレベル関数）と同じ検体（4-825・4-826・
+    # 4-827と同じ理由——新しいPython APIを足すたびに、ここへの登録を
+    # 対で行うこと）。
+    # **`num_sections`は`(turns * 64).ceil()`の下限に潰れる**
+    # （`helix.rs`）——`turns=3.0`なら下限192。**既定を400にして
+    # 下限より上から始める**ことで、動かしたときの効果が測れる。
+    "Solid.helix_solid": lambda: dict(
+        profile=SMALL_SQUARE, radius=5.0, pitch=2.0, turns=3.0,
+        axis_origin=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], num_sections=400),
 }
 
 # **番号を使う口**は、ここでは測りません（上の理由）。

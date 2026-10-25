@@ -702,6 +702,14 @@ FreeCAD側の数値積分誤差の桁）として読みました。`make_sphere_
 `loft_curves`呼び出しは常に2曲線しか渡さず、次数の上限が1に決まる
 構造です。
 
+**14段目（螺旋ソリッド）も足しました（2026/10/25。HANDOVER 4-828）**:
+`make_sweep_wire`・`make_helix_solid`・`make_guided_loft_solid`・
+`make_polyline_pipe`・`make_polyline_sweep`の5つとも同じ欠け方
+（`Mesh`しか返せない）だと確認し、系統的な空白だと分かりました。
+`make_helix_solid`から`Solid.helix_solid`を足し、**Blenderの中で
+全14段とも誤答・断り0件**を確認。残り4つも同じパターンで足せる
+見込みです。
+
 **正しさの検証と同じやり方——動かして、測って、壊れた所を直す
 ——を、入口にも当て続ける**のが柱③です。
 

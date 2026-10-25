@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月24日（**4-413 〜 4-827 を足しました**）
+**最終更新**: 2026年10月25日（**4-413 〜 4-828 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29731,6 +29731,37 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 組の退行のため、1 本（`SUBDIV_THIRD`）は既存の既知の危うさのため**
 既定オフに残しています。
 
+
+### 4-828. **柱③——`Solid.helix_solid`を足し、`tools/blender_workflow_test.py`に14段目（螺旋ソリッド）を追加した。`make_helix_solid`も同じ欠け方（表示用メッシュしか返せない）だったため塞いだ。登録時に`num_sections`が`(turns*64).ceil()`の下限（192）に潰れて「効かない引数」に見える問題を見つけ、既定値を400に上げて直した。Blenderの中で全14段とも誤答・断り0件を確認した**（2026年10月25日）
+
+4-825・4-827の「同じ欠け方の口がまだ残っている」という引き渡しを、
+同じ夜のうちに続けた。`crates/zenith_py/src/modeling.rs`を見ると
+`make_sweep_wire`・`make_helix_solid`・`make_guided_loft_solid`・
+`make_polyline_pipe`・`make_polyline_sweep`の**5つとも**同じ型
+（`Mesh`しか返せない）だと確認——系統的な空白だった。このうち
+`make_helix_solid`は`HelixBuilder::sweep_wire_along_helix`で既に
+`zenith_topo::Solid`を作っているので、同じパターンで
+`Solid.helix_solid`を`crates/zenith_py/src/solid.rs`に足した。
+
+**単体で確かめた**（小さい正方形断面、半径5・ピッチ2・3周）:
+`volume=25.816708913886806`、`validate()`は`valid=True`。
+
+**`check_python_arguments.py`への登録で、また新しい発見があった**:
+`num_sections=48`を渡しても「効かない引数」として検出された——
+`helix.rs`の`sections = num_sections.max((turns * 64.0).ceil() as
+usize)`により、`turns=3.0`なら下限が192で、48はそれより小さいため
+常に192に潰れる。**既定値を400（下限より上）に上げると、動かした
+ときの効果が正しく測れるようになった**——4-826の「直線経路だと
+num_sections が効かない」と同じ型の、既定値の選び方の教訓を
+もう一度踏んだ形。
+
+**`tools/blender_workflow_test.py`に14段目として足した**。Blender
+4.4の中で実行し、**全14段とも誤答・断り0件**を確認した。
+
+**結論**: スイープ・ロフト・螺旋の3種がPythonの入口から`Solid`として
+使えるようになった。残る2つ（`make_guided_loft_solid`・
+`make_polyline_pipe`・`make_polyline_sweep`）も同じパターンで
+足せる見込みだが、今夜はここまでとする。
 
 ### 4-827. **柱③——4-825の次（ロフトソリッド）を実行した。`make_loft_solid`も`make_sweep_pipe`と同じ欠け方（表示用メッシュしか返せない）だったため、`Solid.loft_solid`を足し、`tools/blender_workflow_test.py`に13段目として追加した。底10x10・天8x8の台形筒をvalidate()・STEP書き出しで確かめ、Blenderの中で全13段とも誤答・断り0件を確認した。登録時に`degree_v`という、設計上常に1に潰れる引数も見つけて説明を足した**（2026年10月24日）
 
