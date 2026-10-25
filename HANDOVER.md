@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月25日（**4-413 〜 4-828 を足しました**）
+**最終更新**: 2026年10月25日（**4-413 〜 4-829 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29731,6 +29731,71 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 組の退行のため、1 本（`SUBDIV_THIRD`）は既存の既知の危うさのため**
 既定オフに残しています。
 
+
+### 4-829. **柱③——残っていた`Solid.guided_loft_solid`・`Solid.polyline_pipe`・`Solid.polyline_sweep`を足し、作業中に見つけた7つ目の空白`Solid.sweep_wire`も足して、`tools/blender_workflow_test.py`に15〜18段目を追加した。これで4-825で見つけた「Mesh しか返せない」系統的な空白を全て塞いだ。ガイド付きロフトでは`degree_v`が側面Faceの次数に次数2が直接書かれていて設計上まったく使われないという、`Solid.loft_solid`の「常に1に潰れる」よりもさらに完全な無視を見つけた。Blenderの中で全18段とも誤答・断り0件を確認した**（2026年10月25日）
+
+4-828の最後に残していた宿題（5つのうち2つしか塞いでいない、という
+数え間違い——実際は3つ残っていた）を、同じ夜のうちに続けた。
+`make_guided_loft_solid`・`make_polyline_pipe`・`make_polyline_sweep`
+はいずれも内部で既に`zenith_topo::Solid`を組んでいたので、
+`sweep_pipe`・`loft_solid`・`helix_solid`と同じパターンで
+`crates/zenith_py/src/solid.rs`に3つのstaticmethodを足した
+（Rust側の計算ロジックは1行も変えていない——`LoftBuilder::loft_solid_guided`・
+`PolylineBuilder::sweep_pipe_polyline`・`PolylineBuilder::sweep_wire_polyline`
+をそのまま`Self::wrap`で包むだけ）。
+
+**単体で確かめた**: `guided_loft_solid`（底10x10・天8x8・ガイド1本）
+`volume=1626.6666666666783`、`polyline_pipe`（L字経路・角丸め5）
+`volume=700.0497964131887`、`polyline_sweep`（同じ経路・菱形断面）
+`volume=111.41597743025645`——いずれも`validate()`は`valid=True`。
+
+**`check_python_arguments.py`への登録で、またも新しい発見があった**:
+`Solid.guided_loft_solid`の`degree_v`を登録したところ「効かない
+引数」に出た。`crates/zenith_algo/src/loft.rs`の`loft_solid_guided`
+を読むと、ガイド曲線が1本以上ある経路では各側面Faceを
+`Self::loft_curves(&[c0, c_mid, c1], 2, tol)`（283行目）で組んでおり、
+**次数がソース上で`2`と直接書かれている**——`degree_v`パラメータは
+ガイド曲線が0本で`loft_solid`へ委譲する分岐でしか使われない。
+これは`Solid.loft_solid`の「常に1に潰れる」（4-827・`degree_v.min(m-1).max(1)`
+でm=2固定）とは別の、さらに完全な無視——計算して潰れるのではなく
+最初から参照されない。本物の、恒久的な設計上の性質と判断し、
+誤解を招くテスト検体を作るのではなく`EXPECTED_INERT`に
+`("Solid.guided_loft_solid", "degree_v")`として理由付きで登録した。
+`polyline_pipe`・`polyline_sweep`の方は、既存の`PATH`（曲がった経路）
+を再利用したので退化した「効かない引数」は出なかった。
+
+登録後に`py tools/check_python_arguments.py`を`ZENITH_ARGS_STEP`付きで
+再実行し、「測った口 61 個 / 引数 241 個 / 回せなかった口 0 個 /
+説明の付いていない「効かない引数」は 0 個です」を確認。
+`tools/check_python_surface.py`も確認済み（誤答 0 件、断りそこね 0 件）。
+
+`tools/blender_workflow_test.py`に15段目（ガイド付きロフト、底10x10・
+天8x8・ガイド1本）・16段目（ポリラインパイプ、L字経路・角丸め5）・
+17段目（ポリラインスイープ、同じ経路・菱形断面）を追加し、Blenderの
+中で実行して全17段とも「誤答・断り 0 件」を確認した。
+
+**ここで1つ、自分の数え間違いに気づいて直した**——書き始めは
+「`make_sweep_wire`は`make_sweep_pipe`と同じ道具立てで、既に
+`sweep_pipe`が塞いでいる」と書くつもりだったが、`modeling.rs`を
+読み直すと**別の関数**だった：`make_sweep_pipe`は円断面を
+`SweepBuilder::sweep_circle_along_curve`で掃くのに対し、
+`make_sweep_wire`は**任意の閉断面ワイヤ**を
+`SweepBuilder::sweep_wire_along_curve`で掃く——塞いでいない、
+本物の7つ目の空白だった。同じ夜のうちに`Solid.sweep_wire`を足し
+（菱形断面を12段目と同じ曲がった経路で掃いて単体確認：
+`volume=70.14512848581884`、`validate()`は`valid=True`）、
+`check_python_arguments.py`に`Solid.sweep_wire`を登録（`PATH`を
+再利用したので退化なし）、再実行して「測った口 62 個 / 引数 242 個 /
+回せなかった口 0 個 / 説明の付いていない「効かない引数」は 0 個です」
+を確認した。`tools/blender_workflow_test.py`に18段目（任意断面
+スイープ）を足し、Blenderの中で実行して全18段とも「誤答・断り 0 件」
+を確認した。
+
+これで4-825で見つけた「Python APIの口が表示用メッシュしか返せない」
+という系統的な空白は、`sweep_pipe`/`sweep_wire`/`loft_solid`/
+`helix_solid`/`guided_loft_solid`/`polyline_pipe`/`polyline_sweep`
+の**7つ全て**を塞いだ。`cargo build --workspace --examples`・
+`cargo test -p zenith_algo --lib`（18件・0失敗）はいずれも確認済み。
 
 ### 4-828. **柱③——`Solid.helix_solid`を足し、`tools/blender_workflow_test.py`に14段目（螺旋ソリッド）を追加した。`make_helix_solid`も同じ欠け方（表示用メッシュしか返せない）だったため塞いだ。登録時に`num_sections`が`(turns*64).ceil()`の下限（192）に潰れて「効かない引数」に見える問題を見つけ、既定値を400に上げて直した。Blenderの中で全14段とも誤答・断り0件を確認した**（2026年10月25日）
 

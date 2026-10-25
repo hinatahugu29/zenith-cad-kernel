@@ -75,6 +75,15 @@ EXPECTED_INERT = {
     # 挟んでも変わらない**——実測済み（3断面でも同じ体積）。
     ("Solid.loft_solid", "degree_v"):
         "各柱面は隣り合う2断面だけのloft_curves呼び出しで、degree_vは常に1に潰れる（設計上、断面の数に関わらず効かない）",
+    # **`LoftBuilder::loft_solid_guided`は、ガイド曲線が1本以上ある
+    # 経路では`degree_v`をまったく使わない**——各側面Faceを
+    # `loft_curves(&[c0, c_mid, c1], 2, tol)`で組む際、次数は
+    # ソース上で`2`と直接書かれている（`loft.rs`283行目）。
+    # `degree_v`が使われるのは、ガイド曲線が0本で`loft_solid`へ
+    # 委譲する分岐のみ（4-829。既存の`Solid.loft_solid`の`degree_v`
+    # 潰れとは別の、さらに完全な無視）。
+    ("Solid.guided_loft_solid", "degree_v"):
+        "ガイド曲線がある経路では側面Faceの次数が2に固定書きされ、degree_vはまったく参照されない（設計上、常に無視される）",
 }
 
 # **既定値だけでは呼べない口に、こちらから渡す引数。**
@@ -457,6 +466,13 @@ CLASS_BASELINE = {
     # 細かく刻んでも同じ形になるため。実測で踏んだ）。
     "Solid.sweep_pipe": lambda: dict(
         path_points=PATH, radius=2.0, num_sections=16),
+    # `make_sweep_wire`と同じ検体——円断面専用の`sweep_pipe`とは別の
+    # 関数で、任意の閉断面（ここでは菱形）を掃く。`PATH`は曲がった
+    # 経路なので`num_sections`も実測で効く（4-829）。
+    "Solid.sweep_wire": lambda: dict(
+        profile=[[1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+                 [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+        path_points=PATH, num_sections=16),
     # `make_loft_solid`（トップレベル関数）と同じ検体（4-825・4-826と
     # 同じ型の抜け——新しいPython APIを足すたびに、ここへの登録を
     # 対で行うこと）。
@@ -470,6 +486,22 @@ CLASS_BASELINE = {
     "Solid.helix_solid": lambda: dict(
         profile=SMALL_SQUARE, radius=5.0, pitch=2.0, turns=3.0,
         axis_origin=[0.0, 0.0, 0.0], axis_dir=[0.0, 0.0, 1.0], num_sections=400),
+    # `make_guided_loft_solid`（トップレベル関数）と同じ検体（4-825〜
+    # 4-828と同じ理由——新しいPython APIを足すたびに、ここへの登録を
+    # 対で行うこと。4-829）。**`degree_v`はガイド有りの経路では
+    # 全く使われない**（`loft.rs`の`loft_curves(&[c0,c_mid,c1], 2, tol)`
+    # が次数2を直接書いている）ので`EXPECTED_INERT`に登録する。
+    "Solid.guided_loft_solid": lambda: dict(
+        sections=[SQUARE, UPPER_SQUARE],
+        guide_curves=[[[0.0, 0.0, 0.0], [0.0, 0.0, 12.0]]],
+        degree_v=2),
+    # `make_polyline_pipe`と同じ検体——`PATH`は曲がった経路なので
+    # `pipe_radius`・`corner_radius`とも効く（4-829）。
+    "Solid.polyline_pipe": lambda: dict(
+        path_points=PATH, pipe_radius=2.0, corner_radius=5.0),
+    # `make_polyline_sweep`と同じ検体（4-829）。
+    "Solid.polyline_sweep": lambda: dict(
+        profile_points=SMALL_SQUARE, path_points=PATH, corner_radius=5.0),
 }
 
 # **番号を使う口**は、ここでは測りません（上の理由）。

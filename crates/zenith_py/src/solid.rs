@@ -30,8 +30,8 @@ use pyo3::types::{PyDict, PyList};
 
 use zenith_algo::{
     BooleanEngine, BooleanOpType, BrepTransform, DirectModeling, EdgeBlender, EdgeKind, FaceMerger,
-    HelixBuilder, InterferenceChecker, LoftBuilder, MassCalculator, MirrorBuilder, PrimitiveBuilder,
-    Sewer, StepInterop,
+    HelixBuilder, InterferenceChecker, LoftBuilder, MassCalculator, MirrorBuilder, PolylineBuilder,
+    PrimitiveBuilder, Sewer, StepInterop,
 };
 use zenith_io::StepImporter;
 use zenith_math::{Point3, Tolerance, Transform3, Vec3};
@@ -189,6 +189,58 @@ impl PySolid {
             .map_err(invalid)
     }
 
+    /// **任意の閉断面ワイヤを経路に沿って掃くソリッド**（ROADMAP柱③。
+    /// 4-829——`sweep_pipe`は円断面専用だが、`make_sweep_wire`は
+    /// 任意の閉断面を掃ける別の関数で、同じく`Mesh`しか返せなかった。
+    /// `SweepBuilder::sweep_wire_along_curve`自体は既に`Solid`を
+    /// 作っているので、そのまま包むだけでよい）。
+    ///
+    /// `profile`は3点以上（閉じた輪として自動で閉じる）、`path_points`
+    /// は2点以上必要（次数は`(点数-1)`と3の小さい方）。
+    #[staticmethod]
+    pub fn sweep_wire(
+        profile: Vec<[f64; 3]>,
+        path_points: Vec<[f64; 3]>,
+        num_sections: usize,
+    ) -> PyResult<Self> {
+        let k = profile.len();
+        if k < 3 {
+            return Err(invalid("断面は3点以上要ります"));
+        }
+        let n = path_points.len();
+        if n < 2 {
+            return Err(invalid("経路の点は2つ以上要ります"));
+        }
+        let tol = Tolerance::default();
+        let vertices: Vec<zenith_topo::Vertex> = profile
+            .iter()
+            .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+            .collect();
+        let mut edges = Vec::with_capacity(k);
+        for i in 0..k {
+            let next_i = (i + 1) % k;
+            let edge = zenith_topo::Edge::line_between(
+                vertices[i].clone(),
+                vertices[next_i].clone(),
+            )
+            .map_err(invalid)?;
+            edges.push(zenith_topo::OrientedEdge::forward(edge));
+        }
+        let profile_wire = zenith_topo::Wire::new(edges);
+
+        let degree = (n - 1).min(3);
+        let ctrl_pts: Vec<zenith_geom::ControlPoint3> = path_points
+            .into_iter()
+            .map(|p| zenith_geom::ControlPoint3::unweighted(Point3::new(p[0], p[1], p[2])))
+            .collect();
+        let knots = zenith_geom::KnotVector::clamped_uniform(n, degree);
+        let path = zenith_geom::NurbsCurve3::new(degree, ctrl_pts, knots).map_err(invalid)?;
+
+        zenith_algo::SweepBuilder::sweep_wire_along_curve(&profile_wire, &path, num_sections, &tol)
+            .map(Self::wrap)
+            .map_err(invalid)
+    }
+
     /// **閉じた断面ポリライン群から完全閉B-Repロフトソリッドを作る**
     /// （ROADMAP柱③。4-825のスイープと同じ欠け方——`make_loft_solid`
     /// は既にあったが`Mesh`しか返せなかったので、`Solid`を直接返す
@@ -271,6 +323,109 @@ impl PySolid {
         )
         .map(Self::wrap)
         .map_err(invalid)
+    }
+
+    /// **複数の案内曲線に沿った断面群から完全閉B-Repロフトソリッドを作る**
+    /// （ROADMAP柱③。4-825/4-827/4-828と同じ欠け方——`make_guided_loft_solid`
+    /// は既にあったが`Mesh`しか返せなかった。中では既に`Solid`を組んでいる
+    /// ので、そのまま包むだけでよい）。
+    #[staticmethod]
+    pub fn guided_loft_solid(
+        sections: Vec<Vec<[f64; 3]>>,
+        guide_curves: Vec<Vec<[f64; 3]>>,
+        degree_v: usize,
+    ) -> PyResult<Self> {
+        if sections.len() < 2 {
+            return Err(invalid("断面は2つ以上要ります"));
+        }
+        if guide_curves.is_empty() {
+            return Err(invalid("案内曲線は1つ以上要ります"));
+        }
+        let tol = Tolerance::default();
+        let mut section_wires = Vec::with_capacity(sections.len());
+        for sec in &sections {
+            let n = sec.len();
+            if n < 3 {
+                return Err(invalid("各断面は3点以上要ります（閉じた輪になるため）"));
+            }
+            let vertices: Vec<zenith_topo::Vertex> = sec
+                .iter()
+                .map(|p| zenith_topo::Vertex::from_point(Point3::new(p[0], p[1], p[2])))
+                .collect();
+            let mut edges = Vec::with_capacity(n);
+            for i in 0..n {
+                let next_i = (i + 1) % n;
+                let edge = zenith_topo::Edge::line_between(
+                    vertices[i].clone(),
+                    vertices[next_i].clone(),
+                )
+                .map_err(invalid)?;
+                edges.push(zenith_topo::OrientedEdge::forward(edge));
+            }
+            section_wires.push(zenith_topo::Wire::new(edges));
+        }
+
+        let mut guides = Vec::with_capacity(guide_curves.len());
+        for g_pts in &guide_curves {
+            let n = g_pts.len();
+            if n < 2 {
+                return Err(invalid("案内曲線は2点以上要ります"));
+            }
+            let degree = (n - 1).min(3);
+            let cps = g_pts
+                .iter()
+                .map(|p| zenith_geom::ControlPoint3::unweighted(Point3::new(p[0], p[1], p[2])))
+                .collect();
+            let knots = zenith_geom::KnotVector::clamped_uniform(n, degree);
+            let curve = zenith_geom::NurbsCurve3::new(degree, cps, knots).map_err(invalid)?;
+            guides.push(curve);
+        }
+
+        LoftBuilder::loft_solid_guided(&section_wires, &guides, degree_v, &tol)
+            .map(Self::wrap)
+            .map_err(invalid)
+    }
+
+    /// **3Dポリライン（角丸めフィレット付き）に沿った円形パイプソリッドを作る**
+    /// （ROADMAP柱③。4-825/4-827/4-828と同じ欠け方——`make_polyline_pipe`
+    /// は既にあったが`Mesh`しか返せなかった）。
+    #[staticmethod]
+    pub fn polyline_pipe(
+        path_points: Vec<[f64; 3]>,
+        pipe_radius: f64,
+        corner_radius: f64,
+    ) -> PyResult<Self> {
+        let tol = Tolerance::default();
+        let pts: Vec<Point3> = path_points
+            .into_iter()
+            .map(|p| Point3::new(p[0], p[1], p[2]))
+            .collect();
+        PolylineBuilder::sweep_pipe_polyline(&pts, pipe_radius, corner_radius, &tol)
+            .map(Self::wrap)
+            .map_err(invalid)
+    }
+
+    /// **3Dポリライン（角丸めフィレット付き）に沿った任意閉断面スイープ
+    /// ソリッドを作る**（ROADMAP柱③。4-825/4-827/4-828と同じ欠け方——
+    /// `make_polyline_sweep`は既にあったが`Mesh`しか返せなかった）。
+    #[staticmethod]
+    pub fn polyline_sweep(
+        profile_points: Vec<[f64; 3]>,
+        path_points: Vec<[f64; 3]>,
+        corner_radius: f64,
+    ) -> PyResult<Self> {
+        let tol = Tolerance::default();
+        let prof: Vec<Point3> = profile_points
+            .into_iter()
+            .map(|p| Point3::new(p[0], p[1], p[2]))
+            .collect();
+        let path: Vec<Point3> = path_points
+            .into_iter()
+            .map(|p| Point3::new(p[0], p[1], p[2]))
+            .collect();
+        PolylineBuilder::sweep_wire_polyline(&prof, &path, corner_radius, &tol)
+            .map(Self::wrap)
+            .map_err(invalid)
     }
 
     /// **スケッチから押し出す**（4-400）。

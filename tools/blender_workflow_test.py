@@ -62,6 +62,22 @@ Blender の中で通した記録がありませんでした**——`tools/blende
     と同じ空白。`z.Solid.helix_solid`を足し、小さい断面を半径5・
     ピッチ2・3周のZ軸螺旋で掃いた立体を`validate()`・STEP書き出しで
     確かめます。
+15. **ガイド付きロフトソリッド**（2026/10/25 追加。HANDOVER 4-829）——
+    12・13・14段目と同じ空白。`z.Solid.guided_loft_solid`を足し、
+    底10x10・天8x8を1本のガイド曲線で結んだ筒を`validate()`・
+    STEP書き出しで確かめます。
+16. **ポリラインパイプ**（2026/10/25 追加。HANDOVER 4-829）——同じ
+    空白。`z.Solid.polyline_pipe`を足し、L字に曲がる経路（角丸め）
+    を円形断面で掃いた立体を`validate()`・STEP書き出しで確かめます。
+17. **ポリラインスイープ**（2026/10/25 追加。HANDOVER 4-829）——同じ
+    空白。`z.Solid.polyline_sweep`を足し、16段目と同じ経路を円では
+    ない閉断面（菱形）で掃いた立体を`validate()`・STEP書き出しで
+    確かめます。
+18. **任意断面スイープ**（2026/10/25 追加。HANDOVER 4-829）——12段目
+    の`sweep_pipe`は円断面専用の別関数で、`make_sweep_wire`（任意の
+    閉断面を掃く）は塞いでいませんでした。`z.Solid.sweep_wire`を足し、
+    菱形断面を12段目と同じ曲がった経路で掃いた立体を`validate()`・
+    STEP書き出しで確かめます。
 
 **赤にするのは**——どこかが断られる、閉じた式と食い違う、書き出した
 ファイルが無いか空、のいずれか。
@@ -431,6 +447,110 @@ def main():
             wrong += 1
     except Exception as exc:
         print("14. 螺旋ソリッド: **断られました**: %r" % (exc,))
+        wrong += 1
+
+    # 15. ガイド付きロフトソリッド（ROADMAP柱③。2026/10/25追加。4-829）——
+    # 12・13・14段目と同じ空白。`make_guided_loft_solid`も同じ欠け方
+    # （Meshしか返せない）だったため、`Solid.guided_loft_solid`を足した。
+    # 底10x10・天（1だけ内側へ寄せた四角、高さ12）を1本のガイド曲線
+    # （原点から真上）で結ぶ——閉じた式は無いのでvalidate()とSTEP
+    # 書き出しで確かめる。
+    try:
+        guided_bottom = [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0],
+                         [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]]
+        guided_top = [[1.0, 1.0, 12.0], [9.0, 1.0, 12.0],
+                      [9.0, 9.0, 12.0], [1.0, 9.0, 12.0]]
+        guide = [[0.0, 0.0, 0.0], [0.0, 0.0, 12.0]]
+        guided = z.Solid.guided_loft_solid(
+            [guided_bottom, guided_top], [guide], 2)
+        print("15. ガイド付きロフトソリッド: 体積 %.6f" % guided.volume)
+        report8 = guided.validate()
+        print("    検証 valid=%s" % report8.get("valid"))
+        if not report8.get("valid", False):
+            wrong += 1
+        out_dir8 = os.environ.get("ZENITH_WORKFLOW_OUT") or __import__("tempfile").gettempdir()
+        guided_path = os.path.join(out_dir8, "blender_workflow_guided_loft.step")
+        guided.to_step(guided_path, "ZENITH_WORKFLOW_GUIDED_LOFT")
+        size8 = os.path.getsize(guided_path)
+        print("    STEP 書き出し: %s（%d バイト）" % (guided_path, size8))
+        if size8 <= 0:
+            wrong += 1
+    except Exception as exc:
+        print("15. ガイド付きロフトソリッド: **断られました**: %r" % (exc,))
+        wrong += 1
+
+    # 16. ポリラインパイプ（角丸め）（ROADMAP柱③。2026/10/25追加。4-829）
+    # ——`make_polyline_pipe`も同じ欠け方だったため、`Solid.polyline_pipe`
+    # を足した。L字に曲がる経路（角を丸める）を円形断面で掃く——
+    # 閉じた式は無いのでvalidate()とSTEP書き出しで確かめる。
+    try:
+        poly_path = [[0.0, 0.0, 0.0], [20.0, 0.0, 0.0],
+                     [20.0, 20.0, 0.0], [20.0, 20.0, 20.0]]
+        poly_pipe = z.Solid.polyline_pipe(poly_path, 2.0, 5.0)
+        print("16. ポリラインパイプ: 体積 %.6f" % poly_pipe.volume)
+        report9 = poly_pipe.validate()
+        print("    検証 valid=%s" % report9.get("valid"))
+        if not report9.get("valid", False):
+            wrong += 1
+        out_dir9 = os.environ.get("ZENITH_WORKFLOW_OUT") or __import__("tempfile").gettempdir()
+        poly_pipe_path = os.path.join(out_dir9, "blender_workflow_polyline_pipe.step")
+        poly_pipe.to_step(poly_pipe_path, "ZENITH_WORKFLOW_POLYLINE_PIPE")
+        size9 = os.path.getsize(poly_pipe_path)
+        print("    STEP 書き出し: %s（%d バイト）" % (poly_pipe_path, size9))
+        if size9 <= 0:
+            wrong += 1
+    except Exception as exc:
+        print("16. ポリラインパイプ: **断られました**: %r" % (exc,))
+        wrong += 1
+
+    # 17. ポリラインスイープ（角丸め・任意断面）（ROADMAP柱③。
+    # 2026/10/25追加。4-829）——`make_polyline_sweep`も同じ欠け方
+    # だったため、`Solid.polyline_sweep`を足した。16段目と同じL字
+    # 経路を、円ではない閉断面（菱形）で掃く。
+    try:
+        poly_profile = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+                        [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]
+        poly_sweep = z.Solid.polyline_sweep(poly_profile, poly_path, 5.0)
+        print("17. ポリラインスイープ: 体積 %.6f" % poly_sweep.volume)
+        report10 = poly_sweep.validate()
+        print("    検証 valid=%s" % report10.get("valid"))
+        if not report10.get("valid", False):
+            wrong += 1
+        out_dir10 = os.environ.get("ZENITH_WORKFLOW_OUT") or __import__("tempfile").gettempdir()
+        poly_sweep_path = os.path.join(out_dir10, "blender_workflow_polyline_sweep.step")
+        poly_sweep.to_step(poly_sweep_path, "ZENITH_WORKFLOW_POLYLINE_SWEEP")
+        size10 = os.path.getsize(poly_sweep_path)
+        print("    STEP 書き出し: %s（%d バイト）" % (poly_sweep_path, size10))
+        if size10 <= 0:
+            wrong += 1
+    except Exception as exc:
+        print("17. ポリラインスイープ: **断られました**: %r" % (exc,))
+        wrong += 1
+
+    # 18. 任意断面スイープ（曲がったNURBS経路）（ROADMAP柱③。
+    # 2026/10/25追加。4-829）——12段目の`sweep_pipe`は円断面専用の
+    # 別関数で、`make_sweep_wire`（任意の閉断面を掃く）は塞いで
+    # いなかった。見つけてすぐ`Solid.sweep_wire`を足した。菱形断面を
+    # 12段目と同じ曲がった経路で掃く。
+    try:
+        wire_profile = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0],
+                        [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]
+        wire_path = [[0.0, 0.0, 0.0], [0.0, 0.0, 20.0], [15.0, 0.0, 30.0]]
+        swept_wire = z.Solid.sweep_wire(wire_profile, wire_path, 16)
+        print("18. 任意断面スイープ: 体積 %.6f" % swept_wire.volume)
+        report11 = swept_wire.validate()
+        print("    検証 valid=%s" % report11.get("valid"))
+        if not report11.get("valid", False):
+            wrong += 1
+        out_dir11 = os.environ.get("ZENITH_WORKFLOW_OUT") or __import__("tempfile").gettempdir()
+        swept_wire_path = os.path.join(out_dir11, "blender_workflow_sweep_wire.step")
+        swept_wire.to_step(swept_wire_path, "ZENITH_WORKFLOW_SWEEP_WIRE")
+        size11 = os.path.getsize(swept_wire_path)
+        print("    STEP 書き出し: %s（%d バイト）" % (swept_wire_path, size11))
+        if size11 <= 0:
+            wrong += 1
+    except Exception as exc:
+        print("18. 任意断面スイープ: **断られました**: %r" % (exc,))
         wrong += 1
 
     print()
