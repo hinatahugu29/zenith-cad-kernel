@@ -473,8 +473,10 @@ impl FaceSplitter {
 
         let ordered = order_closed_loop(loop_edges, tol)?;
 
-        // **輪が、外周の箱の中にあるか**（4-537。`ZENITH_HOLE_BOX_GUARD=1`。
-        // **既定では走りません**）。
+        // **輪が、外周の箱の中にあるか**（4-537。`ZENITH_HOLE_BOX_GUARD`。
+        // **コメントはずっと「既定では走りません」だったが、実装は
+        // `h8_port_on`と同じ`unwrap_or(true)`形——実際には既定オン**
+        // （4-830で実測して気づいた食い違い。`=0`で止められる）。
         //
         // **下の検査は「曲面の上にあるか」しか見ていません。** **巻いている
         // 曲面では、裏側も「上」です**——実測（`linkrods`、積）: **A面819
@@ -1808,8 +1810,10 @@ fn hole_sits_inside(face: &Face, hole: &Wire, tol: &Tolerance) -> Option<bool> {
     // **穴の代表点**。1 点で足ります——**またいでいる穴は、呼び手が
     // 面積の突き合わせで捕まえます**（`checked_areas`）。
     let point = hole.sample_points(4).into_iter().next()?;
-    // **3D の箱でも確かめる口**（4-537。`ZENITH_HOLE_BOX_GUARD=1`。
-    // **既定では走りません**）。
+    // **3D の箱でも確かめる口**（4-537。`ZENITH_HOLE_BOX_GUARD`。
+    // **コメントはずっと「既定では走りません」だったが、実装は
+    // `h8_port_on`と同じ`unwrap_or(true)`形——実際には既定オン**
+    // （4-830）。
     //
     // **下の判定は uv だけです。** **巻いている曲面では、裏側の点も
     // 射影すれば中に落ちます**——実測（`linkrods`、積）: **A面819
