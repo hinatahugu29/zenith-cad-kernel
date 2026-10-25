@@ -311,6 +311,37 @@ fn residual_confirmed_in_3d(face: &Face, pieces: &[Face], check: &ParameterAreaC
     } else {
         (summed - original).abs()
     };
+    // ZENITH_AREA_CHECK_DENSITY_PROBE=<倍数>: 「3D確認の残差は、既定の
+    // 分割が粗いせいで膨らんでいるだけではないか」を切り分けるための、
+    // 診断専用の口（既定オフ・挙動は変えない）。残差は変えず、同じ残差を
+    // 指定倍の分割で測り直してログに出すだけ（4-830）。**実測で、球の
+    // 周期1面と箱の和の隅の三角形では、既定24x24でも4倍の96x96でも残差
+    // が1ビットも動かず3.316e-4のまま**だった——分割の粗さが原因では
+    // ないと確認済み（本物の幾何の不一致）。
+    if let Some(mul) = std::env::var("ZENITH_AREA_CHECK_DENSITY_PROBE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        let fine = TessellationParams {
+            u_divisions: params.u_divisions * mul,
+            v_divisions: params.v_divisions * mul,
+        };
+        let original_fine = original_area(face, &fine);
+        let summed_fine: f64 = pieces
+            .iter()
+            .map(|piece| area_cost_timed(piece, &fine))
+            .sum();
+        let residual_fine = if original_fine.abs() > 1e-12 {
+            (summed_fine - original_fine).abs() / original_fine.abs()
+        } else {
+            (summed_fine - original_fine).abs()
+        };
+        eprintln!(
+            "AREADENSITYPROBE 既定{}x{} 残差{:.3e} → {}倍密{}x{} 残差{:.3e}",
+            params.u_divisions, params.v_divisions, residual,
+            mul, fine.u_divisions, fine.v_divisions, residual_fine
+        );
+    }
     // 3D のほうが厳しければ、厳しいほうを返します。緩める方向にだけ効かせる
     // のではなく、**より忠実な物差しの答えを採る**ということです。
     residual
