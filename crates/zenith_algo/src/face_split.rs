@@ -607,13 +607,30 @@ impl FaceSplitter {
         );
         let mut outer_holes = vec![hole];
         outer_holes.extend(holes_outside);
-        let outside = Face::new(
+        let mut outside = Face::new(
             face.geometry.clone(),
             face.outer_wire.clone(),
             outer_holes,
             face.orientation,
             face.tolerance,
         );
+        // **外周ワイヤは`face.outer_wire.clone()`そのまま——`face`が既に
+        // 持っている外周のp-curveを、そのまま引き継ぎます**（4-832）。
+        //
+        // `Face::new`は常に自動導出をやり直すので、周期曲面（球の周期1面
+        // など）で継ぎ目を向きを変えて2回使う外周ワイヤを再構築すると、
+        // `match_nurbs_outer_boundary_pcurve`の候補選びが`u=min`側だけを
+        // 選び続け、2回の出現が同じu値に潰れて面積が0になる（本来、外周
+        // ワイヤ自体は変わっていないのに）。**元の`face`が既に正しい
+        // 外周p-curveを持っているなら（周期の継ぎ目を含め、構築時に
+        // 一度だけ正しく解決されている）、再導出せずそのまま使う**ことで、
+        // この潰れを起こさせない。穴（新しい内側の輪）のp-curveは、
+        // ここでは変えない——新しいワイヤなので、自動導出のままでよい。
+        if let Some(original_pcurves) = &face.pcurves {
+            if let Some(outside_pcurves) = outside.pcurves.as_mut() {
+                outside_pcurves.outer_loop = original_pcurves.outer_loop.clone();
+            }
+        }
 
         let pieces = vec![inside, outside];
         let check = Self::checked_areas("split_by_interior_loop", face, &pieces)?;
