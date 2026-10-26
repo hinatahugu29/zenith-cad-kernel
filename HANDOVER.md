@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年10月26日（**4-413 〜 4-834 を足しました**）
+**最終更新**: 2026年10月27日（**4-413 〜 4-835 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29731,6 +29731,54 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 組の退行のため、1 本（`SUBDIV_THIRD`）は既存の既知の危うさのため**
 既定オフに残しています。
 
+
+### 4-835. **柱③——4-834の続きで、再構築地点をもう1つ見つけて直そうとしたが、既存の円柱・円錐・トーラスの検体を壊すと分かり、即座に戻した。`build_solid_from_selected_face_pieces`内の`unify_coincident_edges`も`Face::new`で毎回再構築しており、8つの穴を持つ球面がここでも同じ罠に落ちていた——が、同じ「辺が変わっていなければ元のp-curveを引き継ぐ」直し方を当てたところ、`cone_torus_mesh_test`が「Face 14: outer loop has 5 edges but 7 p-curve segments」で落ちた。全ワークスペーステストを先に走らせてから気づき、`git checkout --`で完全に戻した**（2026年10月27日）
+
+4-834の「まだ根は見ていない」を追って、`split_by_interior_loop`の
+出力（確認済みで正しい、8穴・外周面積1.0）から最終的な
+`boolean_solids_exact_result_unverified`の出力（確認済みで誤り、
+外周面積0.0相当）までの間を、`ZENITH_SELECT_WHY`・一時的な専用の
+診断を足しながら1段ずつ辿った。**途中、`select_operand_faces_after_batch_split`
+の時点（分類直後）ではまだ正しい**（既存の`ZENITH_SELECT_WHY`診断で
+外周面積0.998126、穴8個と確認）ことを確かめ、`reverse_face_orientation`
+（`piece.reverse_orientation`はUnionでは常にfalせと確認）・
+`weld_piece_ends_by_edge_id`（頂点座標を直接書き換えるだけで
+`Face::new`は呼ばない、`pcurves`は触らないと確認）の2つを調べて
+**どちらも犯人ではない**と切り分けた。
+
+残る容疑は`unify_coincident_edges`（`build_solid_from_selected_face_pieces`
+内、他の面と辺を共有させるための最終組み立て）——**ここも`Face::new`で
+毎回全面再構築している**ため、4-833と全く同じ理由で球の面を再び
+壊しうる。4-833と同じ「辺の実体(id)・向きが変わっていなければ、
+古いp-curveをそのまま引き継ぐ」直し方（`wire_edges_unchanged`で
+判定）を実装し、ビルド・`cargo test -p zenith_algo --lib`（18件・
+0失敗）までは確認したが、**`cargo test --workspace`をフルで走らせた
+ところ`cone_torus_mesh_test::a_cone_meeting_a_torus_tessellates_into_a_manifold_mesh`
+が「Face 14: outer loop has 5 edges but 7 p-curve segments」という
+真新しい失敗で落ちた**——`wire_edges_unchanged`の判定に抜けがあり、
+辺の本数は変わっていないのに古いp-curveの区間数と食い違う面が
+生まれていた。**根本原因は未調査のまま、`git checkout --`で
+`brep_intersection.rs`を完全に元へ戻した**（face_split.rsの
+診断用eprintln削除だけは安全なクリーンアップとして残す）。
+
+**この経験から得た教訓**: `Face::new`の自動導出がどこで再び走るかは
+事前に全部は見通せない——**同じ安全な直し方（辺が変わっていなければ
+引き継ぐ）でも、別の関数に当てると別の壊れ方をする**。4-833の
+ときは`split_by_interior_loop`という**1箇所だけ**を直し、そこで
+`cargo test --workspace`フルを走らせてから確定させた。今回は
+`unify_coincident_edges`という**2箇所目**を直したが、**フルテストを
+省略せず走らせたおかげで、コミットする前に壊れを見つけられた**
+——「測ってから確定させる」習慣がそのまま効いた一例。
+
+**まだ未解決**: 4-834で見つけた「体積検証のずれ」（球の面が外周の
+広い範囲を覆いきれていない）の本当の再構築地点は、依然として
+未特定。`unify_coincident_edges`は候補の1つとして消せていない
+（直し方が不完全だっただけで、犯人である可能性自体は否定していない）
+——次に見る人は、`wire_edges_unchanged`の判定の抜けを先に直すか、
+`unify_coincident_edges`以外の場所を先に疑うか、どちらから入っても
+良い。4-834の診断（`sphere_pair_why_probe`・`ZENITH_WIDE_FACE_BBOX=1`・
+`ZENITH_SSI_BRANCHES=16`・`ZENITH_SSI_SEEDS=64`・
+`ZENITH_HOLE_BOX_GUARD=0`での再現手順）はそのまま使える。
 
 ### 4-834. **柱③——4-833の後に残った「体積検証がずれる」理由を切り分けた。確定した食い違いは全て`A=false B=true R=false`という同じパターンだけで、箱の外・球の内側の広い範囲（8隅の近くだけでなく、球の奥深くの点まで）に出る——縫合（4-832/4-833で直した側）とは無関係な、別の本物の未解決問題だと確認した。生のメッシュで直接レイキャストしても同じ点は「外」と出た——結果の面が、球の外周の大半を覆いきれていない疑いが強い。まだ根は見ていない**（2026年10月26日）
 
