@@ -29780,6 +29780,25 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 `ZENITH_SSI_BRANCHES=16`・`ZENITH_SSI_SEEDS=64`・
 `ZENITH_HOLE_BOX_GUARD=0`での再現手順）はそのまま使える。
 
+**壊れ方自体も、次に直す人への手がかりになる**: 断り文
+「Face 14: outer loop has 5 edges but 7 p-curve segments」——
+`derive_wire_nurbs_boundary_pcurves`は**1辺につきp-curve区間1本**
+しか作らない（`crates/zenith_topo/src/face.rs`の
+`derive_wire_nurbs_boundary_pcurves`、`for oriented_edge in &wire.edges`
+で1対1に積む）ので、**区間7本というのは「このp-curveが作られた
+ときの外周ワイヤは7辺あった」ことを意味する**。ところが
+`unify_coincident_edges`に渡ってきた時点の外周ワイヤは5辺——
+**`face.pcurves`が、現在の`face.outer_wire`とは辺の本数から
+食い違う、既に古い（stale）状態**でここに来ていたことになる。
+**これは`unify_coincident_edges`自体のバグではなく、もっと手前の
+どこかで「外周ワイヤを書き換えたのに`pcurves`を追従させていない」
+箇所がある**、という、今回の直し方とは別の、既存のより根深い
+問題を示唆している。`wire_edges_unchanged`（辺の実体id・向きの
+一致だけを見る）はこの食い違いを検知できない——**本数そのものが
+食い違っている以上、1本ずつの比較に入る前に「本数が一致するか」を
+先に見るべきだった**、という今回の実装の具体的な抜けも特定できた
+（直してはいない）。
+
 ### 4-834. **柱③——4-833の後に残った「体積検証がずれる」理由を切り分けた。確定した食い違いは全て`A=false B=true R=false`という同じパターンだけで、箱の外・球の内側の広い範囲（8隅の近くだけでなく、球の奥深くの点まで）に出る——縫合（4-832/4-833で直した側）とは無関係な、別の本物の未解決問題だと確認した。生のメッシュで直接レイキャストしても同じ点は「外」と出た——結果の面が、球の外周の大半を覆いきれていない疑いが強い。まだ根は見ていない**（2026年10月26日）
 
 4-833のBlenderテスト確認の後、`ZENITH_WIDE_FACE_BBOX=1`・
