@@ -395,7 +395,23 @@ impl BooleanResultVerifier {
             // 厳密に射影して訊き直します。
             match exact_membership(point, solid_a, solid_b, result, op, tol) {
                 // 厳密にも述語と合わない。これは形の誤りです。
-                Some(true) => report.membership_mismatch_count += 1,
+                //
+                // **確定した食い違いの点と、3つの厳密な内外判定を出す口**
+                // （4-833。`ZENITH_MEMBERSHIP_MISMATCH_WHY=1`。既定オフ・
+                // 挙動は変えない）。球の周期1面ブーリアンで使うと、
+                // `A=false B=true R=false`という同じ食い違いだけが
+                // 箱の外・球の内側（本来Unionに入るはず）の広い範囲で
+                // 繰り返し出る——縫合（4-832/4-833で直した側）とは別の、
+                // まだ未解決の問題だと切り分けるのに使った。
+                Some(true) => {
+                    if std::env::var_os("ZENITH_MEMBERSHIP_MISMATCH_WHY").is_some() {
+                        eprintln!(
+                            "MISMATCHWHY 点 ({:.4},{:.4},{:.4}) A={in_a} B={in_b} R={in_r}",
+                            point.x, point.y, point.z
+                        );
+                    }
+                    report.membership_mismatch_count += 1
+                }
                 // 厳密には合っている。メッシュの刻みを見ていただけでした。
                 Some(false) => report.exact_agreement_count += 1,
                 // 決められない（境界の上、または射影が採れない）。**メッシュの
