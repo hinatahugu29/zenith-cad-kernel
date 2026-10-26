@@ -741,6 +741,22 @@ Blender全18段0件で確認しました。**測った結果**: 球のブーリ�
 （既定オフ）。**次の一手**: 25枚の球の周期1面が持つ8つの穴の
 winding・UV領域を直接出し、意図した範囲だけを除いているか測ること
 （まだ手つかず）。
+
+**1段辿って、試した直し方を元に戻しました（2026/10/27。HANDOVER
+4-835）**: `split_by_interior_loop`の出力（確認済み正しい、外周面積
+1.0）から最終出力（確認済み誤り、外周面積0相当）までを1段ずつ辿り、
+`reverse_face_orientation`・`weld_piece_ends_by_edge_id`は犯人では
+ないと切り分けました。残る容疑`unify_coincident_edges`（最終組み立て
+の辺共有化、ここも`Face::new`で毎回全面再構築）に4-833と同じ「辺が
+変わっていなければ元のp-curveを引き継ぐ」直し方を当てたところ、
+**既存の`cone_torus_mesh_test`を壊す**（Face 14: 稜5本なのにp-curve
+区間7本、という新しい不整合）と`cargo test --workspace`フルで
+分かり、`git checkout --`で完全に戻しました。**`unify_coincident_edges`
+が犯人かどうかは、まだ否定できていません**——今回の直し方の実装に
+抜けがあっただけの可能性も残ります。**次に見る人**は、
+`wire_edges_unchanged`判定の抜けを先に直すか、`unify_coincident_edges`
+以外を先に疑うか、どちらからでも入れます。
+
 ②`repair_open_intersection_loops`の拡張を再挑戦する
 なら、4-445が壊した`cone_torus_mesh_test`を**最初の1手**として
 確認すること——0本だったのが今回も0本なら、別の切り口を探す。
