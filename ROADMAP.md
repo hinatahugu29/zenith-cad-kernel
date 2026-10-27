@@ -757,6 +757,28 @@ winding・UV領域を直接出し、意図した範囲だけを除いている�
 `wire_edges_unchanged`判定の抜けを先に直すか、`unify_coincident_edges`
 以外を先に疑うか、どちらからでも入れます。
 
+**本当の再構築地点を見つけて、安全に直しました（2026/10/27。HANDOVER
+4-836）**: 呼び出し順を辿り直し、`select_operand_faces_after_batch_split`
+（正しい）→`weld_piece_ends_by_edge_id`（`Face::new`を呼ばない、
+犯人ではない）→**`imprint_vertices_on_edges`**（相手の交点を境界へ
+刻み込む、ここも`Face::new`で丸ごと再構築）の順だと確認しました。
+**辺が1本も割られなかった面even`Face::new`していた**ので、4-835の
+反省（辺の本数が食い違う事故）を踏まえ、**「外周・内輪のどの辺も
+1本も割られなかったときだけ、元のp-curveを丸ごと引き継ぐ」**という
+より単純で確実な判定に直しました——割っていないなら辺の並びは
+文字通り同じなので、本数の食い違いは原理的に起こりません。
+`cargo test --workspace`（全テスト0失敗、`cone_torus_mesh_test`含む）・
+`tools/h8_ports.sh`（体積不動）・`run_gates.sh --quick`全数緑で
+確認済み、単独で安全に確定できる前進です。**ただし球の面自身は
+他の交線が実際に境界上に乗るため割られる対象になり、4-834の体積
+検証ずれ（箱の外・球の内側が結果に含まれない）はこの直しだけでは
+解消しません**（同じ`volume=4200.334028`のまま）。これで
+`weld_piece_ends_by_edge_id`・`imprint_vertices_on_edges`・
+`unify_coincident_edges`の3つは全て切り分け済み——**次に見る人は、
+`select_operand_faces_after_batch_split`より手前（交線候補そのものの
+数・配置を決める`collect_face_pair_candidates`・
+`batch_splits_from_candidates`あたり）を疑うこと**。
+
 ②`repair_open_intersection_loops`の拡張を再挑戦する
 なら、4-445が壊した`cone_torus_mesh_test`を**最初の1手**として
 確認すること——0本だったのが今回も0本なら、別の切り口を探す。

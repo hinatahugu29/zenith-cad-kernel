@@ -13570,11 +13570,16 @@ fn imprint_vertices_on_edges(
         }
     }
 
-    let rewrite_wire = |wire: &Wire| -> Wire {
+    // **どの辺も実際には割られなかったか**（4-836）。`rewrite_wire`は
+    // 割る点が無ければ`None`の枝で元の`OrientedEdge`をそのまま積むので、
+    // 辺の本数・id・向きが完全に一致すれば「割られていない」と言える。
+    let mut any_split = false;
+    let rewrite_wire = |wire: &Wire, any_split: &mut bool| -> Wire {
         let mut edges = Vec::with_capacity(wire.edges.len());
         for oriented in &wire.edges {
             match split_edge_at_interior_points(&oriented.edge, &points, tol) {
                 Some(pieces) => {
+                    *any_split = true;
                     let ordered: Vec<Edge> = if oriented.orientation.is_forward() {
                         pieces
                     } else {
@@ -13593,10 +13598,38 @@ fn imprint_vertices_on_edges(
     faces
         .iter()
         .map(|face| {
+            any_split = false;
+            let new_outer = rewrite_wire(&face.outer_wire, &mut any_split);
+            let new_inner: Vec<Wire> = face
+                .inner_wires
+                .iter()
+                .map(|w| rewrite_wire(w, &mut any_split))
+                .collect();
+            // **1本も割られていないなら、元のp-curveをそのまま引き継ぎます**
+            // （4-832/4-833と同じ理由——周期曲面の継ぎ目を向きを変えて
+            // 2回使う外周ワイヤを`Face::new`に自動導出させ直すと、
+            // どちらの出現も`u=min`側に潰れることがある。ここは辺が
+            // 本当に1本も変わっていないときだけ発動するので、4-835で
+            // `unify_coincident_edges`を壊した「辺の本数が食い違う」
+            // 事故は起きない——`any_split`が立った面は今までどおり
+            // 自動導出のままになる。**
+            if !any_split {
+                if let Some(pcurves) = face.pcurves.clone() {
+                    let mut rebuilt = Face::new(
+                        face.geometry.clone(),
+                        new_outer,
+                        new_inner,
+                        face.orientation,
+                        face.tolerance,
+                    );
+                    rebuilt.pcurves = Some(pcurves);
+                    return rebuilt;
+                }
+            }
             Face::new(
                 face.geometry.clone(),
-                rewrite_wire(&face.outer_wire),
-                face.inner_wires.iter().map(rewrite_wire).collect(),
+                new_outer,
+                new_inner,
                 face.orientation,
                 face.tolerance,
             )
