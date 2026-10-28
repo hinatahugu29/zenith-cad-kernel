@@ -503,7 +503,9 @@ impl FaceSplitter {
         // **`Face::bounding_box()` では見られません**——NURBS のとき
         // **曲面まるごと**（円柱の全周）を含めるので、いつも「中」です。
         // **外周の輪の箱**で見ます。
-        if h8_port_on("ZENITH_HOLE_BOX_GUARD") {
+        // **外周が継ぎ目の往復だけの面では箱を当てません**（4-839）——
+        // その箱は子午線1本ぶんの平たい箱で、曲面の広がりを表しません。
+        if h8_port_on("ZENITH_HOLE_BOX_GUARD") && !outer_wire_is_seam_only(face) {
             let box_of = face.outer_wire.bounding_box();
             let slack = tol.linear.max(face.tolerance) * 10.0;
             for piece in &ordered {
@@ -1854,7 +1856,7 @@ fn hole_sits_inside(face: &Face, hole: &Wire, tol: &Tolerance) -> Option<bool> {
     // 同じ稜が 3 回使われ、**非多様体 24 本**になります（4-535、4-536）。
     //
     // **箱は巻きません。**
-    if h8_port_on("ZENITH_HOLE_BOX_GUARD") {
+    if h8_port_on("ZENITH_HOLE_BOX_GUARD") && !outer_wire_is_seam_only(face) {
         // **外周の輪の箱で見ます。** `Face::bounding_box()` は NURBS のとき
         // **曲面まるごと**（円柱の全周）を含めるので、**いつも「中」**になります。
         let box_of = face.outer_wire.bounding_box();
@@ -2609,4 +2611,17 @@ fn area_cost_timed(face: &Face, params: &TessellationParams) -> f64 {
         area_cost::add(began.elapsed().as_secs_f64());
     }
     out
+}
+
+/// **外周が継ぎ目の往復だけでできているか**（4-839）。
+///
+/// どの稜も外周に2回ずつ（行きと帰り）現れる——周期1面化した球の形です。
+/// この外周の箱は子午線1本ぶんしか広がらないので、**外周の箱で何かを
+/// 判定する所は、この面では箱を信じてはいけません**。
+pub(crate) fn outer_wire_is_seam_only(face: &Face) -> bool {
+    let edges = &face.outer_wire.edges;
+    !edges.is_empty()
+        && edges
+            .iter()
+            .all(|edge| edges.iter().filter(|other| other.edge.id == edge.edge.id).count() == 2)
 }

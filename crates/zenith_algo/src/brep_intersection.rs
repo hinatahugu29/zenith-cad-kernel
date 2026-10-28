@@ -9331,8 +9331,8 @@ fn distribute_inner_wires(
         .collect())
 }
 
-/// **`face_boundary_bbox`の広域版（4-823。`ZENITH_WIDE_FACE_BBOX`。
-/// 既定オフ・診断用）**。
+/// **`face_boundary_bbox`の広域版（4-823。`ZENITH_WIDE_FACE_BBOX`で全面に。
+/// 外周が継ぎ目の往復だけの面には既定で効く——4-839）**。
 ///
 /// `face_boundary_bbox`は面の**境界（輪）だけ**から箱を作る——ふつうの
 /// トリム面では、境界が実際に見える範囲をだいたい辿るので十分きつい。
@@ -9352,7 +9352,12 @@ fn distribute_inner_wires(
 /// （ふつうのトリム面は境界が支持曲面の広がりに近いため）。
 fn face_broad_phase_bbox(face: &Face) -> Option<BoundingBox3> {
     let boundary = face_boundary_bbox(face);
-    if std::env::var_os("ZENITH_WIDE_FACE_BBOX").is_none() {
+    // **外周が継ぎ目の往復だけでできている面は、既定で広げます**（4-839）。
+    // どの稜も外周に2回ずつ現れる——境界が曲面の広がりを1本の子午線
+    // にしか写さない、まさにこの関数が要る形です。それ以外の面は
+    // 今までどおり境界の箱のままなので、既存の検体の候補は変わりません。
+    let seam_only_outer = crate::face_split::outer_wire_is_seam_only(face);
+    if !seam_only_outer && std::env::var_os("ZENITH_WIDE_FACE_BBOX").is_none() {
         return boundary;
     }
     let FaceGeometry::Nurbs(surface) = &face.geometry else {
@@ -11662,6 +11667,36 @@ fn planar_face_as_patch(face: &Face, plane: &zenith_geom::PlaneSurface3) -> Opti
 ///
 /// **要求した精度に届かなければ `Unsupported` を返す。** 近いところを通る
 /// もっともらしい曲線を渡すと、その先の分割と選別が静かに間違う。
+/// **交線の枝の上限**（`ZENITH_SSI_BRANCHES`。既定 2）。
+///
+/// **巻いている曲面（両端が同じ点に写る軸がある）を含む組は、既定 16**
+/// （4-839）。周期1面化した球と平面の交線は、四角い面に切られて弧4本、
+/// さらに継ぎ目・極で分かれて **8 本を超えます**——実測で上限 8 では
+/// 拾い切れず、16 で箱∪球が返りました。
+fn ssi_branch_cap(surface_a: &NurbsSurface3, surface_b: &NurbsSurface3) -> usize {
+    if let Some(cap) = std::env::var("ZENITH_SSI_BRANCHES")
+        .ok()
+        .and_then(|text| text.parse::<usize>().ok())
+    {
+        return cap;
+    }
+    if surface_wraps(surface_a) || surface_wraps(surface_b) {
+        16
+    } else {
+        2
+    }
+}
+
+/// どちらかの軸で、両端が同じ点に写るか（中央の断面1本で見ます）。
+fn surface_wraps(surface: &NurbsSurface3) -> bool {
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let (u_mid, v_mid) = ((u_min + u_max) * 0.5, (v_min + v_max) * 0.5);
+    let scale = surface_patch_extent(surface).max(1e-12);
+    let close = |a: Point3, b: Point3| (a - b).norm() <= scale * 1e-9;
+    close(surface.evaluate(u_min, v_mid), surface.evaluate(u_max, v_mid))
+        || close(surface.evaluate(u_mid, v_min), surface.evaluate(u_mid, v_max))
+}
+
 fn intersect_nurbs_patches(
     surface_a: &NurbsSurface3,
     surface_b: &NurbsSurface3,
@@ -11739,10 +11774,7 @@ fn intersect_nurbs_patches(
         // ため**、4-412 の「上限 2 → 6 で交線 14 → 15」は**種のほう**が
         // 起こしていました。**種を `ZENITH_SSI_SEEDS` で分けて測ると、
         // 種 20 までは上限 2 と 6 で交線も稜も 1 つも動きません。**
-        std::env::var("ZENITH_SSI_BRANCHES")
-            .ok()
-            .and_then(|text| text.parse::<usize>().ok())
-            .unwrap_or(2),
+        ssi_branch_cap(surface_a, surface_b),
         tol,
     );
     if let Some(began) = march_clock {
@@ -11814,10 +11846,7 @@ fn intersect_nurbs_patches(
             surface_b,
             first_step,
             relative_limit,
-            std::env::var("ZENITH_SSI_BRANCHES")
-                .ok()
-                .and_then(|text| text.parse::<usize>().ok())
-                .unwrap_or(2),
+            ssi_branch_cap(surface_a, surface_b),
             tol,
         );
         // **切れが直ったときだけ採ります。** 直っていないなら、
@@ -11844,10 +11873,7 @@ fn intersect_nurbs_patches(
             surface_b,
             first_step,
             deviation_limit * 10.0,
-            std::env::var("ZENITH_SSI_BRANCHES")
-                .ok()
-                .and_then(|text| text.parse::<usize>().ok())
-                .unwrap_or(2),
+            ssi_branch_cap(surface_a, surface_b),
             tol,
         );
         if std::env::var_os("ZENITH_SSI_WHY").is_some() {
@@ -11876,10 +11902,7 @@ fn intersect_nurbs_patches(
             );
         }
     }
-    let max_branches = std::env::var("ZENITH_SSI_BRANCHES")
-        .ok()
-        .and_then(|text| text.parse::<usize>().ok())
-        .unwrap_or(2);
+    let max_branches = ssi_branch_cap(surface_a, surface_b);
     let branches = if !branches.is_empty()
         && branches.len() < max_branches
         && h8_port_on("ZENITH_SSI_EXTRA_BRANCHES")

@@ -273,14 +273,11 @@ fn sphere_periodic_mesh_is_watertight() {
     assert_eq!(non_manifold, 0, "non-manifold edges found");
 }
 
-/// **既知の限界（4-820）**: 球の周期1面版は、ブーリアンではまだ既定の
-/// 4分割版と等価にならない——交線で割った面片の縫い直しが「25個の
-/// 相手のいない辺」で断られる。この門は、その限界が直ったらテストが
-/// 「想定外に通った」ことで気づけるように、**現在の既知の失敗**を
-/// 明示的に固定する（1ビットも動かない等価性ではなく、失敗することを
-/// 確認する側のテスト）。
+/// **限界が直った（4-820 → 4-838/4-839）**: 球の周期1面版と箱の和が、
+/// 検証付きの`boolean_solids_exact`で口を1本も立てずに返り、体積が
+/// 解析値（箱12∪球R10 = 4189.2213）と合うことを固定する。
 #[test]
-fn sphere_periodic_boolean_known_limitation() {
+fn sphere_periodic_boolean_matches_analytic_volume() {
     let tol = Tolerance::default();
     let periodic = PrimitiveBuilder::make_sphere_periodic(10.0).unwrap();
     let box_solid = PrimitiveBuilder::make_box(12.0, 12.0, 12.0).unwrap();
@@ -290,9 +287,11 @@ fn sphere_periodic_boolean_known_limitation() {
         &periodic,
         BooleanOpType::Union,
         &tol,
-    );
+    )
+    .expect("sphere_periodic ∪ box must succeed");
+    let volume = zenith_algo::MassCalculator::compute_volume_from_brep(&result, &params());
     assert!(
-        result.is_err(),
-        "sphere_periodic boolean started working — update ROADMAP/HANDOVER and this test"
+        (volume - 4189.2213).abs() < 0.05,
+        "volume {volume} should match analytic 4189.2213"
     );
 }

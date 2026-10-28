@@ -798,6 +798,19 @@ p-curveやブーリアンの選別の話ではなく、**`zenith_tess::stitched`
 あり、今夜の範囲を超えます。**次の一手**: 8穴の面がどの分岐（共有
 する経路／共有しない経路）を通るかを直接出す診断を足すこと。
 
+**直しました（2026/10/28。HANDOVER 4-838）**: 根はテッセレーション
+ではなく、その1段手前——穴あき周期球の**外周p-curveが継ぎ目の往復
+（uvで面積0・幅0）に潰れていた**ことでした。`zenith_topo::face::
+spread_seam_only_outer_loop`で行きと帰りの区間を周期の両端へ振り分け、
+**箱12∪球R10が検証付きの`boolean_solids_exact`で初めて返り、体積
+4189.221430（解析値4189.221268）**。全テスト799件0失敗・H8体積不動・
+門緑。**残り**: この再現には今も`ZENITH_WIDE_FACE_BBOX=1`・
+`ZENITH_SSI_BRANCHES=16`・`ZENITH_SSI_SEEDS=64`・
+`ZENITH_HOLE_BOX_GUARD=0`の4本の口が要る。
+**→ 口ゼロにしました（2026/10/28。HANDOVER 4-839）**: 箱∪球は既定のまま
+検証付きで返ります。次は、枝の上限16が重い検体の時間を増やして
+いないかと、`contact_placement_probe`を測ること。
+
 ②`repair_open_intersection_loops`の拡張を再挑戦する
 なら、4-445が壊した`cone_torus_mesh_test`を**最初の1手**として
 確認すること——0本だったのが今回も0本なら、別の切り口を探す。
