@@ -18,7 +18,7 @@
 # 使い方
 # ------
 #     bash tools/run_gates.sh          # 全部
-#     bash tools/run_gates.sh --quick  # 4 分かかる contact_placement を外す
+#     bash tools/run_gates.sh --quick  # 15 分前後かかる contact_placement を外す（実測 853〜1,242 秒。4-839）
 #
 # 読み方
 # ------
