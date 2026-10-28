@@ -21,5 +21,9 @@ fn main() {
     let box_solid = PrimitiveBuilder::make_box(12.0, 12.0, 12.0).unwrap();
     let box_centered = BrepTransform::translate_solid(&box_solid, Vec3::new(-6.0, -6.0, -6.0));
     let result = BooleanEngine::boolean_solids_exact(&box_centered, &periodic, BooleanOpType::Union, &tol);
+    if let Ok(s) = &result {
+        let v = zenith_algo::MassCalculator::compute_volume_from_brep(s, &zenith_tess::TessellationParams::default());
+        println!("volume {v:.6}");
+    }
     println!("{:?}", result.map(|s| s.outer_shell.faces.len()));
 }

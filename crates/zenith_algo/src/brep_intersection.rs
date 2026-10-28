@@ -13613,17 +13613,30 @@ fn imprint_vertices_on_edges(
             // `unify_coincident_edges`を壊した「辺の本数が食い違う」
             // 事故は起きない——`any_split`が立った面は今までどおり
             // 自動導出のままになる。**
+            // **引き継ぐ前に、古い`pcurves`が今の辺の本数と本当に合っている
+            // かも確かめます**（4-838。`unify_coincident_edges`で実際に
+            // 踏んだ「この関数より手前で既に古くなっていたpcurves」の
+            // 事故を、ここでも同じ理由で防ぐ）。
             if !any_split {
                 if let Some(pcurves) = face.pcurves.clone() {
-                    let mut rebuilt = Face::new(
-                        face.geometry.clone(),
-                        new_outer,
-                        new_inner,
-                        face.orientation,
-                        face.tolerance,
-                    );
-                    rebuilt.pcurves = Some(pcurves);
-                    return rebuilt;
+                    let outer_ok = pcurves.outer_loop.segments.len() == new_outer.edges.len();
+                    let inner_ok = pcurves.inner_loops.len() == new_inner.len()
+                        && pcurves
+                            .inner_loops
+                            .iter()
+                            .zip(new_inner.iter())
+                            .all(|(loop_, wire)| loop_.segments.len() == wire.edges.len());
+                    if outer_ok && inner_ok {
+                        let mut rebuilt = Face::new(
+                            face.geometry.clone(),
+                            new_outer,
+                            new_inner,
+                            face.orientation,
+                            face.tolerance,
+                        );
+                        rebuilt.pcurves = Some(pcurves);
+                        return rebuilt;
+                    }
                 }
             }
             Face::new(

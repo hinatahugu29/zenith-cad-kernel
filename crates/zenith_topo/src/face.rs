@@ -366,6 +366,8 @@ impl Face {
                 accept,
             )?);
         }
+        let mut outer_loop = outer_loop;
+        spread_seam_only_outer_loop(&mut outer_loop, &inner_loops, surface, tol);
 
         Ok(FacePcurves {
             outer_loop,
@@ -980,6 +982,115 @@ fn settle_seam_segment_axis(
                 control.point.y = nearer;
             }
         }
+    }
+}
+
+/// **継ぎ目だけでできた外周を、周期の両端へ振り分ける**（4-839）。
+///
+/// 周期1面の球に穴をあけると、外周は「継ぎ目を行って戻る」2区間だけに
+/// なります。`settle_seam_segment_axis` は**全区間が曖昧なときは何も
+/// しない**ので、2区間とも u=0 に落ちたまま、**uv で面積0・幅0の輪**が
+/// 残ります。穴の無い面なら `has_seam_only_boundary` が拾いますが、
+/// 穴があるとそこを通らず、テッセレーションは**外周が何も囲まない**と
+/// 読んで三角形を1枚も出しません（4-837。箱∪球の球面が丸ごと消え、
+/// 体積検証がずれていた根）。
+///
+/// 行きの区間を片方の端、帰りの区間を反対の端へ置き、**穴の輪と逆の
+/// 符号**になる向きを選びます——面の向きの約束事に頼らず、同じ面の
+/// 穴が決めた向きに合わせます。穴が無い面・外周が継ぎ目だけでない面・
+/// 既に面積を持つ外周には触りません。
+fn spread_seam_only_outer_loop(
+    outer: &mut FacePcurveLoop,
+    inner_loops: &[FacePcurveLoop],
+    surface: &NurbsSurface3,
+    tol: &Tolerance,
+) {
+    if inner_loops.is_empty() || outer.segments.len() < 2 || outer.segments.len() % 2 != 0 {
+        return;
+    }
+    let loop_area = |segments: &[FacePcurveSegment]| -> f64 {
+        let mut points: Vec<Point2> = Vec::new();
+        for (index, segment) in segments.iter().enumerate() {
+            let sampled = segment.curve.sample_points(16);
+            points.extend(sampled.into_iter().skip(usize::from(index > 0)));
+        }
+        let mut area = 0.0;
+        for i in 0..points.len() {
+            let (a, b) = (points[i], points[(i + 1) % points.len()]);
+            area += a.x * b.y - b.x * a.y;
+        }
+        area * 0.5
+    };
+    let inner_sum: f64 = inner_loops.iter().map(|l| loop_area(&l.segments)).sum();
+    if inner_sum == 0.0 {
+        return;
+    }
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    let domain = (u_max - u_min).abs() * (v_max - v_min).abs();
+    if domain <= 0.0 || loop_area(&outer.segments).abs() > domain * 1e-6 {
+        return;
+    }
+
+    for along_u in [true, false] {
+        let (min, max) = if along_u { (u_min, u_max) } else { (v_min, v_max) };
+        let span = max - min;
+        if span <= 0.0 {
+            continue;
+        }
+        let middle = if along_u { (v_min + v_max) * 0.5 } else { (u_min + u_max) * 0.5 };
+        let (low, high) = if along_u {
+            (surface.evaluate(min, middle), surface.evaluate(max, middle))
+        } else {
+            (surface.evaluate(middle, min), surface.evaluate(middle, max))
+        };
+        if (high - low).norm() > tol.linear.max(1e-9) {
+            continue;
+        }
+        let edge_of_domain = span * 1e-6;
+        let coordinate = |p: &Point2| if along_u { p.x } else { p.y };
+        let other = |p: &Point2| if along_u { p.y } else { p.x };
+        // どの区間も、この軸ではどちらかの端に張り付いていること。
+        let pinned = outer.segments.iter().all(|segment| {
+            segment.curve.control_points.iter().all(|c| {
+                let value = coordinate(&c.point);
+                (value - min).abs() <= edge_of_domain || (value - max).abs() <= edge_of_domain
+            })
+        });
+        if !pinned {
+            continue;
+        }
+        // 行き（もう一方の軸が増える）と帰りに分ける。
+        let rising: Vec<bool> = outer
+            .segments
+            .iter()
+            .map(|segment| {
+                let (t0, t1) = segment.curve.param_range();
+                other(&segment.curve.evaluate(t1)) > other(&segment.curve.evaluate(t0))
+            })
+            .collect();
+        let assign = |outer: &mut FacePcurveLoop, rising_end: f64, falling_end: f64| {
+            for (segment, up) in outer.segments.iter_mut().zip(&rising) {
+                let target = if *up { rising_end } else { falling_end };
+                for control in &mut segment.curve.control_points {
+                    if along_u {
+                        control.point.x = target;
+                    } else {
+                        control.point.y = target;
+                    }
+                }
+            }
+        };
+        let original = outer.clone();
+        assign(outer, max, min);
+        let area = loop_area(&outer.segments);
+        if area.abs() <= domain * 1e-6 {
+            *outer = original;
+            continue;
+        }
+        if area.signum() == inner_sum.signum() {
+            assign(outer, min, max);
+        }
+        return;
     }
 }
 
