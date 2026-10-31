@@ -649,10 +649,72 @@ impl SurfaceIntegral {
                 Err(_) => return false,
             },
         };
-        let Some(patch) = recognise_revolution_patch(surface) else {
-            return false;
-        };
-        let Some(mut moments) = loop_revolution_moments(&pcurves.outer_loop, surface, &patch)
+        // **認識は1回だけにします**（4-840）。ここで当てた `patch` をそのまま
+        // 下へ渡します——`add_revolution_loops` の中でもう1度当て直すと、
+        // 曲面を30点ほど読み直すぶんが面の数だけ積み上がるためです。
+        // **速くなったとは測れていません**: `contact_placement_probe` は
+        // 直す前が演算合計 1031.2 秒、直した後が 1450.4 秒、同じ日の HEAD が
+        // 1016.4 秒——**日によるばらつきの方が大きい**（4-839 当日は 470.7 秒）。
+        // 直す理由は、同じ計算を2回しないことそれ自体です。
+        let direct = recognise_revolution_patch(surface);
+        if direct.is_none() {
+            // **u と v を入れ替えると回転面になる面も、解析に乗せます**（4-840）。
+            //
+            // 認識器は「u が子午線、v が回転」の形しか知りません。周期1面化
+            // した球（`make_sphere_periodic`）は**逆**（u が経度、v が子午線）
+            // で、ここで落ちて三角形の求積に回り、トリム境界が折れ線になって
+            // いました——箱の角を差し込んだ和で、体積が**分割数を上げても
+            // 動かない 0.041 の上振れ**（解析値 5116.123204 に対し 5116.164633）。
+            // 入れ替えた見え方で同じ式を当てれば、4分割版と同じ厳密な経路です。
+            let swapped = Transposed(surface);
+            // **球（子午線の中心が軸の上）に限ります。** トーラスも入れ替えると
+            // 認識されますが、管の円を回す向きが合わず体積が狂いました
+            // （`torus_periodic_boolean_matches_standard` が 1189 対 1000 で赤）。
+            let patch = match recognise_revolution_patch(&swapped) {
+                Some(patch) if patch.meridian_offset.abs() <= patch.meridian_radius * 1e-9 => patch,
+                _ => return false,
+            };
+            let transpose = |l: &FacePcurveLoop| {
+                let mut l = l.clone();
+                for segment in &mut l.segments {
+                    for control in &mut segment.curve.control_points {
+                        control.point = Point2::new(control.point.y, control.point.x);
+                    }
+                }
+                l
+            };
+            let outer = transpose(&pcurves.outer_loop);
+            let inner: Vec<FacePcurveLoop> = pcurves.inner_loops.iter().map(transpose).collect();
+            if std::env::var_os("ZENITH_REV_WHY").is_some() {
+                eprintln!("REVWHY 入れ替え経路 向き符号={orientation_sign}");
+            }
+            // **入れ替えると面素ベクトルが裏返ります**（4-840）——`Transposed`
+            // の法線は元の面の逆向きなので、面の向きの符号も裏返して渡します。
+            return self.add_revolution_loops(&outer, &inner, &swapped, &patch, -orientation_sign);
+        }
+        if std::env::var_os("ZENITH_REV_WHY").is_some() {
+            eprintln!("REVWHY 直接経路 向き符号={orientation_sign}");
+        }
+        // **複製しません**（4-840）。入れ替える側だけが新しい輪を作ります。
+        let patch = direct.expect("直前に当てました");
+        self.add_revolution_loops(
+            &pcurves.outer_loop,
+            &pcurves.inner_loops,
+            surface,
+            &patch,
+            orientation_sign,
+        )
+    }
+
+    fn add_revolution_loops(
+        &mut self,
+        outer_loop: &FacePcurveLoop,
+        inner_loops: &[FacePcurveLoop],
+        surface: &impl Surface3,
+        patch: &RevolutionPatch,
+        orientation_sign: f64,
+    ) -> bool {
+        let Some(mut moments) = loop_revolution_moments(outer_loop, surface, patch)
         else {
             return false;
         };
@@ -660,8 +722,8 @@ impl SurfaceIntegral {
         if outer.abs() <= f64::EPSILON {
             return false;
         }
-        for hole in &pcurves.inner_loops {
-            let Some(part) = loop_revolution_moments(hole, surface, &patch) else {
+        for hole in inner_loops {
+            let Some(part) = loop_revolution_moments(hole, surface, patch) else {
                 return false;
             };
             let sign = if part[0].signum() == outer.signum() {
@@ -1114,7 +1176,16 @@ fn recognise_revolution_patch(surface: &impl Surface3) -> Option<RevolutionPatch
         return None;
     }
 
-    let axis = fitted[0].2.cross(&fitted[2].2).try_normalize_safe(1e-12)?;
+    // **全周の面では、両端の子午線が同じ平面に乗ります**（4-840）——経度
+    // 0° と 360° は同じ子午線なので、法線の外積が潰れます。そのときは
+    // 4分の1周の子午線と組みます。
+    let axis = match fitted[0].2.cross(&fitted[2].2).try_normalize_safe(1e-12) {
+        Some(axis) => axis,
+        None => {
+            let quarter = fit_circle(at(0.0, 0.25), at(0.5, 0.25), at(1.0, 0.25))?;
+            fitted[0].2.cross(&quarter.2).try_normalize_safe(1e-12)?
+        }
+    };
 
     let moved = (fitted[2].0 - fitted[0].0).norm();
     let (origin, meridian_offset) = if moved <= scale * 1e-9 {
@@ -1178,9 +1249,21 @@ fn recognise_revolution_patch(surface: &impl Surface3) -> Option<RevolutionPatch
         radial.dot(&e2).atan2(radial.dot(&e1))
     };
     let d_psi = psi_of(middle_u + step_u, middle_v) - psi_of(middle_u - step_u, middle_v);
-    let d_phi = phi_of(middle_v + step_v) - phi_of(middle_v - step_v);
+    // **回した角の差は、切れ目をまたぎます**（4-840）。全周の面では
+    // 真ん中の `v` がちょうど `atan2` の切れ目（φ=π）に当たり、差が
+    // 本当の +1.26e-5 ではなく **−2π** と出ていました——`jacobian_sign`
+    // が逆になり、球1個の体積の符号が反転します（OCC が書いた球で
+    // −4188.79）。2π の整数倍を取り除いて、真の差に戻します。
+    let raw_d_phi = phi_of(middle_v + step_v) - phi_of(middle_v - step_v);
+    let turn = std::f64::consts::TAU;
+    let d_phi = raw_d_phi - turn * (raw_d_phi / turn).round();
     if d_psi == 0.0 || d_phi == 0.0 {
         return None;
+    }
+    if std::env::var_os("ZENITH_REV_WHY").is_some() {
+        eprintln!(
+            "REVWHY 範囲 u[{u_min:.3},{u_max:.3}] v[{v_min:.3},{v_max:.3}] dpsi={d_psi:.3e} dphi={d_phi:.3e}（巻き戻す前 {raw_d_phi:.3e}） 基準u={reference_u:.3}"
+        );
     }
 
     Some(RevolutionPatch {
@@ -1214,6 +1297,11 @@ fn loop_revolution_moments(
 ) -> Option<[f64; 6]> {
     let mut moments = [0.0f64; 6];
     let mut previous_psi: Option<f64> = None;
+    // **隙間を埋める直線も、曲面のノットで分けて積みます**（4-840）。
+    // 全周の面では極の辺が v の全範囲（有理2次で4区間）をまたぎ、
+    // 1回のガウス則では回した角が区間の継ぎ目で折れて効かず、
+    // 球1個の体積が 0.5% 上振れしました（4210.21 対 4188.79）。
+    let breaks = surface.integration_breaks();
     let mut failed = false;
 
     // 1区間ぶんを積む。`uv_at` は媒介変数から `(u, v)`、`slope_at` はその微分。
@@ -1274,14 +1362,14 @@ fn loop_revolution_moments(
         }
         if let Some(previous) = cursor {
             if (start - previous).norm() > 1e-12 {
-                let gap_start = previous;
-                let gap_end = start;
-                let step = gap_end - gap_start;
-                integrate(
-                    &|t| Point2::from(gap_start.coords + step * t),
-                    &|_| Point2::from(step),
-                    &mut previous_psi,
-                );
+                for (a, c) in line_pieces(previous, start, &breaks) {
+                    let step = c - a;
+                    integrate(
+                        &|t| Point2::from(a.coords + step * t),
+                        &|_| Point2::from(step),
+                        &mut previous_psi,
+                    );
+                }
             }
         }
         for (span_start, span_end) in knot_spans(&segment.curve, t_min, t_max) {
@@ -1300,12 +1388,14 @@ fn loop_revolution_moments(
     // 最後から最初へ戻る辺。**ここが球の極の辺です。**
     if let (Some(start), Some(end)) = (first, cursor) {
         if (start - end).norm() > 1e-12 {
-            let step = start - end;
-            integrate(
-                &|t| Point2::from(end.coords + step * t),
-                &|_| Point2::from(step),
-                &mut previous_psi,
-            );
+            for (a, c) in line_pieces(end, start, &breaks) {
+                let step = c - a;
+                integrate(
+                    &|t| Point2::from(a.coords + step * t),
+                    &|_| Point2::from(step),
+                    &mut previous_psi,
+                );
+            }
         }
     }
 
@@ -1652,5 +1742,51 @@ fn knot_spans(curve: &zenith_geom::NurbsCurve2, t_min: f64, t_max: f64) -> Vec<(
     breaks
         .windows(2)
         .map(|window| (window[0], window[1]))
+        .collect()
+}
+
+/// **u と v を入れ替えて見せる曲面**（4-840。`add_revolution_face` 用）。
+#[derive(Debug)]
+struct Transposed<'a, S: Surface3>(&'a S);
+
+impl<S: Surface3> Surface3 for Transposed<'_, S> {
+    fn param_range(&self) -> ((f64, f64), (f64, f64)) {
+        let (u, v) = self.0.param_range();
+        (v, u)
+    }
+    fn evaluate(&self, u: f64, v: f64) -> Point3 {
+        self.0.evaluate(v, u)
+    }
+    fn normal(&self, u: f64, v: f64) -> Option<Vec3> {
+        self.0.normal(v, u).map(|n| -n)
+    }
+    fn integration_breaks(&self) -> (Vec<f64>, Vec<f64>) {
+        let (u, v) = self.0.integration_breaks();
+        (v, u)
+    }
+    fn evaluate_with_derivatives(&self, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
+        let (p, du, dv) = self.0.evaluate_with_derivatives(v, u);
+        (p, dv, du)
+    }
+}
+
+/// `a` から `b` への直線を、曲面のノット線（`breaks`）で切った断片に分ける（4-840）。
+fn line_pieces(a: Point2, b: Point2, breaks: &(Vec<f64>, Vec<f64>)) -> Vec<(Point2, Point2)> {
+    let step = b - a;
+    let mut cuts = vec![0.0f64, 1.0];
+    for (values, delta, origin) in [(&breaks.0, step.x, a.x), (&breaks.1, step.y, a.y)] {
+        if delta.abs() <= f64::EPSILON {
+            continue;
+        }
+        for value in values {
+            let t = (value - origin) / delta;
+            if t > 1e-12 && t < 1.0 - 1e-12 {
+                cuts.push(t);
+            }
+        }
+    }
+    cuts.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    cuts.windows(2)
+        .map(|w| (Point2::from(a.coords + step * w[0]), Point2::from(a.coords + step * w[1])))
         .collect()
 }

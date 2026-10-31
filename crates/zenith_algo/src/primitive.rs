@@ -615,12 +615,16 @@ impl PrimitiveBuilder {
             0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
         ]);
 
+        // **v は南→北**（4-840）。北→南だと ∂u×∂v が内向きになり、面を
+        // `Reversed` にするしかなかった——割った面片の p-curve の巻きが
+        // その向きと食い違い、平面で天辺を切るだけで検証に断られていた。
+        // トーラス・円錐の周期版と同じく `Forward` で組めるよう v を返す。
         let latitude_rows: [(f64, f64); 5] = [
-            (0.0, radius),
-            (radius, radius),
-            (radius, 0.0),
-            (radius, -radius),
             (0.0, -radius),
+            (radius, -radius),
+            (radius, 0.0),
+            (radius, radius),
+            (0.0, radius),
         ];
         let latitude_weights = [1.0, w, 1.0, w, 1.0];
         let knots_v = KnotVector::new(vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0]);
@@ -646,16 +650,16 @@ impl PrimitiveBuilder {
         let north = Point3::new(0.0, 0.0, radius);
         let south = Point3::new(0.0, 0.0, -radius);
         let meridian_points = vec![
-            ControlPoint3::unweighted(north),
-            ControlPoint3::new(Point3::new(radius, 0.0, radius), w),
-            ControlPoint3::unweighted(Point3::new(radius, 0.0, 0.0)),
-            ControlPoint3::new(Point3::new(radius, 0.0, -radius), w),
             ControlPoint3::unweighted(south),
+            ControlPoint3::new(Point3::new(radius, 0.0, -radius), w),
+            ControlPoint3::unweighted(Point3::new(radius, 0.0, 0.0)),
+            ControlPoint3::new(Point3::new(radius, 0.0, radius), w),
+            ControlPoint3::unweighted(north),
         ];
         let v_north = Vertex::new(north, 1e-6);
         let v_south = Vertex::new(south, 1e-6);
         let meridian_curve = NurbsCurve3::new(2, meridian_points, knots_v)?;
-        let meridian_edge = Edge::new(meridian_curve, v_north.clone(), v_south.clone(), 1e-6);
+        let meridian_edge = Edge::new(meridian_curve, v_south.clone(), v_north.clone(), 1e-6);
 
         use zenith_topo::Orientation;
         let wire = Wire::new(vec![
@@ -666,7 +670,7 @@ impl PrimitiveBuilder {
             FaceGeometry::Nurbs(surface),
             wire,
             Vec::new(),
-            Orientation::Reversed,
+            Orientation::Forward,
             1e-6,
         );
 
