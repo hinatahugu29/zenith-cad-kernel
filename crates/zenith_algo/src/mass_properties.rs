@@ -714,7 +714,7 @@ impl SurfaceIntegral {
         patch: &RevolutionPatch,
         orientation_sign: f64,
     ) -> bool {
-        let Some(mut moments) = loop_revolution_moments(outer_loop, surface, patch)
+        let Some(mut moments) = loop_revolution_moments(outer_loop, surface, patch, false)
         else {
             return false;
         };
@@ -723,7 +723,12 @@ impl SurfaceIntegral {
             return false;
         }
         for hole in inner_loops {
-            let Some(part) = loop_revolution_moments(hole, surface, patch) else {
+            let Some(part) = loop_revolution_moments(
+                hole,
+                surface,
+                patch,
+                std::env::var_os("ZENITH_BAND_HOLE_AS_CAP").is_some(),
+            ) else {
                 return false;
             };
             let sign = if part[0].signum() == outer.signum() {
@@ -1294,6 +1299,7 @@ fn loop_revolution_moments(
     pcurve_loop: &FacePcurveLoop,
     surface: &impl Surface3,
     patch: &RevolutionPatch,
+    encircling_hole_is_a_cap: bool,
 ) -> Option<[f64; 6]> {
     let mut moments = [0.0f64; 6];
     let mut previous_psi: Option<f64> = None;
@@ -1302,6 +1308,8 @@ fn loop_revolution_moments(
     // 1回のガウス則では回した角が区間の継ぎ目で折れて効かず、
     // 球1個の体積が 0.5% 上振れしました（4210.21 対 4188.79）。
     let breaks = surface.integration_breaks();
+    // 1周ぶんの定数項（4-842）。積み終わってから足します。
+    let mut cap = [0.0f64; 6];
     let mut failed = false;
 
     // 1区間ぶんを積む。`uv_at` は媒介変数から `(u, v)`、`slope_at` はその微分。
@@ -1361,7 +1369,50 @@ fn loop_revolution_moments(
             first = Some(start);
         }
         if let Some(previous) = cursor {
-            if (start - previous).norm() > 1e-12 {
+            // **軸を1周する穴は、キャップとして積みます**（4-842。
+            // `ZENITH_BAND_HOLE_AS_CAP`。**既定では走りません**）。
+            //
+            // 極を囲む窓の輪は、回る向きを1周して継ぎ目で v の端から端へ
+            // 飛びます（実測: (0.8642,0.0000) → (0.8642,1.0000)）。そこを
+            // **ψ 一定の直線で埋めると、囲むのが「v=0 から輪までの帯」**に
+            // なり、引ける面積が 15.408750 にしかなりません（本当は
+            // 67.864）。**埋めを落とすだけでは足りません**——落とすと
+            // 赤道から測った値（-560.454695）になり、**極まで**の
+            // キャップにするには **1周ぶんの定数項**が要ります。
+            // 実測で **628.318（= 2π·area_antiderivative(π/2)）− 560.455
+            // = 67.864** と、求める窓の面積にぴったり合いました。
+            let full_turn = encircling_hole_is_a_cap && {
+                let ((_, _), (v_min, v_max)) = surface.param_range();
+                let period = (v_max - v_min).abs();
+                period > 0.0
+                    && (start.y - previous.y).abs() >= period * (1.0 - 1e-6)
+                    && patch.meridian_offset.abs() <= patch.meridian_radius * 1e-9
+            };
+            if full_turn {
+                // 極は、輪と同じ側（ψ の符号が同じ側）にあります。
+                let psi_loop = patch.meridian_angle(surface.evaluate(previous.x, previous.y));
+                let psi_pole = psi_loop.signum() * std::f64::consts::FRAC_PI_2;
+                let ((_, _), (v_min, v_max)) = surface.param_range();
+                let period = v_max - v_min;
+                let phi_at = |v: f64| {
+                    let point = surface.evaluate(patch.reference_u, v);
+                    let offset = point - patch.origin;
+                    let radial = offset - patch.axis * offset.dot(&patch.axis);
+                    radial.dot(&patch.e2).atan2(radial.dot(&patch.e1))
+                };
+                let rising = phi_at(v_min + period * 0.26) - phi_at(v_min + period * 0.25);
+                let direction = if rising >= 0.0 { 1.0 } else { -1.0 };
+                let turn = std::f64::consts::TAU
+                    * ((start.y - previous.y) / period).signum()
+                    * direction;
+                // `integrate` が `moments` を借りているので、ここでは別に
+                // ためて、積み終わってから足します。
+                cap[0] += psi_pole * turn;
+                cap[1] += patch.area_antiderivative(psi_pole) * turn;
+                cap[2] += patch.volume_antiderivative(psi_pole) * turn;
+                // 1周ぶんの cosφ・sinφ の積分は 0 なので、[3]・[4] は 0 です。
+                cap[5] += patch.radial_antiderivative(psi_pole) * turn;
+            } else if (start - previous).norm() > 1e-12 {
                 for (a, c) in line_pieces(previous, start, &breaks) {
                     let step = c - a;
                     integrate(
@@ -1397,6 +1448,10 @@ fn loop_revolution_moments(
                 );
             }
         }
+    }
+
+    for (moment, term) in moments.iter_mut().zip(cap) {
+        *moment += term;
     }
 
     if failed {
