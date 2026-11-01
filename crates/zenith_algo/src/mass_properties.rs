@@ -714,7 +714,9 @@ impl SurfaceIntegral {
         patch: &RevolutionPatch,
         orientation_sign: f64,
     ) -> bool {
-        let Some(mut moments) = loop_revolution_moments(outer_loop, surface, patch, false)
+        let cap_port = std::env::var_os("ZENITH_BAND_HOLE_AS_CAP").is_some();
+        let Some(mut moments) =
+            loop_revolution_moments(outer_loop, surface, patch, cap_port)
         else {
             return false;
         };
@@ -723,12 +725,7 @@ impl SurfaceIntegral {
             return false;
         }
         for hole in inner_loops {
-            let Some(part) = loop_revolution_moments(
-                hole,
-                surface,
-                patch,
-                std::env::var_os("ZENITH_BAND_HOLE_AS_CAP").is_some(),
-            ) else {
+            let Some(part) = loop_revolution_moments(hole, surface, patch, cap_port) else {
                 return false;
             };
             let sign = if part[0].signum() == outer.signum() {
@@ -1382,9 +1379,21 @@ fn loop_revolution_moments(
             // 実測で **628.318（= 2π·area_antiderivative(π/2)）− 560.455
             // = 67.864** と、求める窓の面積にぴったり合いました。
             let full_turn = encircling_hole_is_a_cap && {
-                let ((_, _), (v_min, v_max)) = surface.param_range();
+                let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
                 let period = (v_max - v_min).abs();
+                // **輪が極に届いていないこと**（4-842）。素の周期球の外周は
+                // 極から極まで（子午線の全範囲）を通るので、そこに定数項を
+                // 足すと体積がちょうど半分（2094.395102）になります。
+                // キャップの輪は帯なので、どちらの極にも届きません。
+                let span_u = (u_max - u_min).abs();
+                let reaches_pole = pcurve_loop.segments.iter().any(|segment| {
+                    segment.curve.control_points.iter().any(|control| {
+                        (control.point.x - u_min).abs() <= span_u * 1e-6
+                            || (control.point.x - u_max).abs() <= span_u * 1e-6
+                    })
+                });
                 period > 0.0
+                    && !reaches_pole
                     && (start.y - previous.y).abs() >= period * (1.0 - 1e-6)
                     && patch.meridian_offset.abs() <= patch.meridian_radius * 1e-9
             };
