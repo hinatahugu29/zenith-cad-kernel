@@ -36,6 +36,15 @@ fn main() {
     );
     let (area, volume) = MassCalculator::compute_face_integral(face, &params);
     println!("  いまの面積 {area:.6}（正しくは 1188.773）体積寄与 {volume:.6}");
+    // **どちら側が材料か**（4-842 の直しが要る最後の情報）。帯より上（v が
+    // 大きい側）に極があり、そこが**落とされる**側なら、引く量は
+    // 「帯から v_max までのキャップ」です。
+    if let zenith_topo::FaceGeometry::Nurbs(surface) = &face.geometry {
+        for v in [0.70f64, 0.8057, 0.8642, 0.95, 1.0] {
+            let point = surface.evaluate(0.25, v);
+            println!("  v={v:.4} → z {:.4}（箱は z 5〜13 を覆う）", point.z);
+        }
+    }
     if let Ok(p) = face.pcurves(&tol) {
         for (which, l) in std::iter::once(("外周", &p.outer_loop))
             .chain(p.inner_loops.iter().map(|l| ("穴", l)))
