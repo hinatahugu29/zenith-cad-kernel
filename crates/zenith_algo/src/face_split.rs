@@ -2628,11 +2628,11 @@ fn area_cost_timed(face: &Face, params: &TessellationParams) -> f64 {
 /// この外周の箱は子午線1本ぶんしか広がらないので、**外周の箱で何かを
 /// 判定する所は、この面では箱を信じてはいけません**。
 /// 1周する輪で、継ぎ目の外周を**切り欠きに付け替えた**か（4-845。
-/// `ZENITH_SEAM_NOTCH=1` で入り、既定オフ）。
+/// **既定で走ります**——`ZENITH_SEAM_NOTCH=0` で止まります。4-846）。
 fn seam_notch_on() -> bool {
     std::env::var("ZENITH_SEAM_NOTCH")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 /// **継ぎ目の往復だけの外周を、1周する輪と繋いで1本の外周にします**
