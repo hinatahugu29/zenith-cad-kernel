@@ -295,3 +295,70 @@ fn sphere_periodic_boolean_matches_analytic_volume() {
         "volume {volume} should match analytic 4189.2213"
     );
 }
+
+/// **窓が継ぎ目をまたがなければ、周期1面の球は4分割版と同じ答えを返す**
+/// （4-842）。断るのは「またぐ」置き方だけだと固定する。
+#[test]
+fn sphere_periodic_window_away_from_the_seam_matches_the_quartered_sphere() {
+    let tol = Tolerance::default();
+    let standard = PrimitiveBuilder::make_sphere(10.0).unwrap();
+    let periodic = PrimitiveBuilder::make_sphere_periodic(10.0).unwrap();
+    // 継ぎ目は経度0°（x>0・y=0）。そこから離れた3つの置き方で測る。
+    for at in [
+        Vec3::new(-13.0, -4.0, -4.0),
+        Vec3::new(-4.0, 5.0, -4.0),
+        Vec3::new(-4.0, -13.0, -4.0),
+    ] {
+        let tool = BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_box(8.0, 8.0, 8.0).unwrap(),
+            at,
+        );
+        let volume = |sphere: &zenith_topo::Solid| {
+            let result =
+                BooleanEngine::boolean_solids_exact(sphere, &tool, BooleanOpType::Union, &tol)
+                    .unwrap_or_else(|e| panic!("union at {at:?} must succeed: {e}"));
+            zenith_algo::MassCalculator::compute_volume_from_brep(&result, &params())
+        };
+        let (quartered, wrapped) = (volume(&standard), volume(&periodic));
+        assert!(
+            (quartered - wrapped).abs() < 1e-6,
+            "at {at:?}: quartered {quartered} vs periodic {wrapped}"
+        );
+    }
+}
+
+/// **既知の限界（4-842。まだ直っていません）**: 窓が**極を囲む**と、
+/// 穴の p-curve が uv で「回る向きに1周ぶんの帯」になり閉じた輪に
+/// ならないため、**面ごとの積分が引く量を間違えます**（引けているのは
+/// 15.409、本当は 67.864）。**断られずに違う答えが返ります**——
+/// ∪ は 4591.176752（正しくは 4416.326468）、∩ は 109.613453
+/// （正しくは 284.463737）で、**どちらもちょうど 174.850284 ずれます**。
+/// 立体そのものは正しく、`tessellate_solid`のメッシュから測ると
+/// 4分割版と同じ値に収束します。
+///
+/// **直ったらこのテストは「想定外に通った」で落ちます。** そのときは
+/// 4分割版と一致することを確かめるテストへ書き換えてください
+/// （4-839 で`sphere_periodic_boolean_known_limitation`をそうしました）。
+#[test]
+fn sphere_periodic_window_around_the_pole_is_a_known_wrong_answer() {
+    let tol = Tolerance::default();
+    let periodic = PrimitiveBuilder::make_sphere_periodic(10.0).unwrap();
+    let tool = BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_box(8.0, 8.0, 8.0).unwrap(),
+        Vec3::new(-4.0, -4.0, 5.0),
+    );
+    let result = BooleanEngine::boolean_solids_exact(
+        &periodic,
+        &tool,
+        BooleanOpType::Union,
+        &tol,
+    )
+    .expect("the union still returns today (that is the problem)");
+    let volume = zenith_algo::MassCalculator::compute_volume_from_brep(&result, &params());
+    let correct = 4416.326468;
+    assert!(
+        (volume - 4591.176752).abs() < 1e-3,
+        "the known wrong volume moved: {volume}（正しくは {correct}。直ったなら
+         このテストを4分割版と一致させる形へ書き換えてください。4-842）"
+    );
+}
