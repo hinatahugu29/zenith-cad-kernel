@@ -15610,6 +15610,10 @@ fn drop_non_bounding_contact_curves(
 ) -> Vec<Edge> {
     let mut dropped: Vec<Edge> = Vec::new();
     let explain = std::env::var_os("ZENITH_CONTACT_CURVE_WHY").is_some();
+    // **測るための口**（既定オフ、4-850）。1本も落とさずに通します。
+    if std::env::var_os("ZENITH_KEEP_CONTACT_CURVES").is_some() {
+        return dropped;
+    }
     candidates.retain(|candidate| {
         let edges = candidate_edges_including_lines(&candidate.kind, tol);
         if edges.is_empty() {
