@@ -327,38 +327,34 @@ fn sphere_periodic_window_away_from_the_seam_matches_the_quartered_sphere() {
     }
 }
 
-/// **既知の限界（4-842。まだ直っていません）**: 窓が**極を囲む**と、
-/// 穴の p-curve が uv で「回る向きに1周ぶんの帯」になり閉じた輪に
-/// ならないため、**面ごとの積分が引く量を間違えます**（引けているのは
-/// 15.409、本当は 67.864）。**断られずに違う答えが返ります**——
-/// ∪ は 4591.176752（正しくは 4416.326468）、∩ は 109.613453
-/// （正しくは 284.463737）で、**どちらもちょうど 174.850284 ずれます**。
-/// 立体そのものは正しく、`tessellate_solid`のメッシュから測ると
-/// 4分割版と同じ値に収束します。
-///
-/// **直ったらこのテストは「想定外に通った」で落ちます。** そのときは
-/// 4分割版と一致することを確かめるテストへ書き換えてください
-/// （4-839 で`sphere_periodic_boolean_known_limitation`をそうしました）。
+/// **直りました（4-842）**: 窓が**極を囲む**と、穴の p-curve が uv で
+/// 「回る向きに1周ぶんの帯」になり閉じた輪にならないため、面ごとの
+/// 積分が引く量を間違えていました（引けていたのは 15.409、本当は
+/// 67.864）。**断られずに違う答えが返る**という、断りより悪い赤でした
+/// （∪ 4591.176752／∩ 109.613453。どちらもちょうど 174.850284 ずれる）。
+/// 軸を1周する輪には**1周ぶんの定数項**（極の ψ で評価した原始関数 × 2π）
+/// を足すことで直り、**∪・∩・＼とも4分割版と一致**します。
+/// ここでは∪と∩を固定します（＼は体積は合うものの、内外判定が
+/// 24/768 点ずれて検証に断られる別件が残っています）。
 #[test]
-fn sphere_periodic_window_around_the_pole_is_a_known_wrong_answer() {
+fn sphere_periodic_window_around_the_pole_matches_the_quartered_sphere() {
     let tol = Tolerance::default();
+    let standard = PrimitiveBuilder::make_sphere(10.0).unwrap();
     let periodic = PrimitiveBuilder::make_sphere_periodic(10.0).unwrap();
     let tool = BrepTransform::translate_solid(
         &PrimitiveBuilder::make_box(8.0, 8.0, 8.0).unwrap(),
         Vec3::new(-4.0, -4.0, 5.0),
     );
-    let result = BooleanEngine::boolean_solids_exact(
-        &periodic,
-        &tool,
-        BooleanOpType::Union,
-        &tol,
-    )
-    .expect("the union still returns today (that is the problem)");
-    let volume = zenith_algo::MassCalculator::compute_volume_from_brep(&result, &params());
-    let correct = 4416.326468;
-    assert!(
-        (volume - 4591.176752).abs() < 1e-3,
-        "the known wrong volume moved: {volume}（正しくは {correct}。直ったなら
-         このテストを4分割版と一致させる形へ書き換えてください。4-842）"
-    );
+    for op in [BooleanOpType::Union, BooleanOpType::Intersection] {
+        let volume = |sphere: &zenith_topo::Solid| {
+            let result = BooleanEngine::boolean_solids_exact(sphere, &tool, op, &tol)
+                .unwrap_or_else(|e| panic!("{op:?} must succeed: {e}"));
+            zenith_algo::MassCalculator::compute_volume_from_brep(&result, &params())
+        };
+        let (quartered, wrapped) = (volume(&standard), volume(&periodic));
+        assert!(
+            (quartered - wrapped).abs() < 1e-6,
+            "{op:?}: quartered {quartered} vs periodic {wrapped}"
+        );
+    }
 }

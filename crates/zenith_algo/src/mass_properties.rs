@@ -714,7 +714,11 @@ impl SurfaceIntegral {
         patch: &RevolutionPatch,
         orientation_sign: f64,
     ) -> bool {
-        let cap_port = std::env::var_os("ZENITH_BAND_HOLE_AS_CAP").is_some();
+        // **既定オン**（4-842。`ZENITH_BAND_HOLE_AS_CAP=0` で止まります）。
+        // 口を立てた状態で全テストを回し、**落ちたのは「既知の赤」を
+        // 固定していたテスト1本だけ**（設計どおり直ったので落ちた）でした
+        // ので、既定にしました。
+        let cap_port = cap_term_on();
         let Some(mut moments) =
             loop_revolution_moments(outer_loop, surface, patch, cap_port)
         else {
@@ -1367,7 +1371,7 @@ fn loop_revolution_moments(
         }
         if let Some(previous) = cursor {
             // **軸を1周する穴は、キャップとして積みます**（4-842。
-            // `ZENITH_BAND_HOLE_AS_CAP`。**既定では走りません**）。
+            // `ZENITH_BAND_HOLE_AS_CAP=0` で止まります。**既定オン**）。
             //
             // 極を囲む窓の輪は、回る向きを1周して継ぎ目で v の端から端へ
             // 飛びます（実測: (0.8642,0.0000) → (0.8642,1.0000)）。そこを
@@ -1832,6 +1836,13 @@ impl<S: Surface3> Surface3 for Transposed<'_, S> {
         let (p, du, dv) = self.0.evaluate_with_derivatives(v, u);
         (p, dv, du)
     }
+}
+
+/// 1周ぶんの定数項の口（4-842）。**既定オン**、`=0` で止まります。
+fn cap_term_on() -> bool {
+    std::env::var("ZENITH_BAND_HOLE_AS_CAP")
+        .map(|value| value != "0")
+        .unwrap_or(true)
 }
 
 /// `a` から `b` への直線を、曲面のノット線（`breaks`）で切った断片に分ける（4-840）。
