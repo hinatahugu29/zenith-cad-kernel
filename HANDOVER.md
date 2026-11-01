@@ -29778,8 +29778,19 @@ v_max までのキャップ）。縫合したメッシュ側は既に正しい�
 **メッシュが正解を持っている**状態です。**断られるより悪い（黙って
 違う答えを返す）ので、柱③では継ぎ目の件より先に直す価値があります。**
 
-**検体**: `sphere_seam_window_probe`・`sphere_pole_window_probe` を
-足しました（どちらも既定で何も変えません）。
+**検体**: `sphere_seam_window_probe`・`sphere_pole_window_probe`・
+`sphere_pole_identity_probe` を足しました（どれも既定で何も変えません）。
+
+**テストで固定しました**（`periodic_primitive_equivalence_test.rs`）:
+①`sphere_periodic_window_away_from_the_seam_matches_the_quartered_sphere`
+——継ぎ目から離れた3つの置き方で、周期版と4分割版が **1e-6 以内で
+一致**することを固定。
+②`sphere_periodic_window_around_the_pole_is_a_known_wrong_answer`
+——北極の窓を**既知の赤**として、いまの誤った 4591.176752 を固定。
+**直ったらこのテストが「想定外に通った」で落ちます**ので、そのときは
+4分割版と一致させる形へ書き換えてください（4-839 で
+`sphere_periodic_boolean_known_limitation` をそうしたのと同じ作法）。
+**全テスト158ターゲット・801件0失敗**で確認済み。
 
 ### 4-841. **柱③——4-840で残った「`box8 off-axis`だけ周期球が断る」の根を、切り分けだけ済ませた（まだ直していない）。断りの正体は、継ぎ目をまたぐ窓で面を割ると、**窓そのものが片として出てこない**こと。6本の交線がuv正方形を「窓（uv 0.054）とその外」ではなく「0.2337 と 0.7663」の2つに割っており、両方が`Outside`と判定されて採られるため、交線6本がどれも**3回使われる**（非多様体18件）**（2026年11月1日）
 
