@@ -368,6 +368,7 @@ impl Face {
         }
         let mut outer_loop = outer_loop;
         spread_seam_only_outer_loop(&mut outer_loop, &inner_loops, surface, tol);
+        settle_wrapping_seam_segment_by_area(&mut outer_loop, surface, self.orientation, tol);
 
         Ok(FacePcurves {
             outer_loop,
@@ -1092,6 +1093,145 @@ fn spread_seam_only_outer_loop(
         }
         return;
     }
+}
+
+/// **継ぎ目に乗った区間の行き先を、囲む面積で決めます**（4-847。
+/// `ZENITH_SEAM_SPREAD_BY_AREA=1` で入り、既定オフ）。
+///
+/// 継ぎ目をまたぐ窓で周期1面を割ると、残りの片の外周には
+/// **継ぎ目の区間が3本**混ざります——窓の上下の2本（窓の縁という曖昧でない
+/// 隣がいるので `settle_seam_segment_axis` が u=0 に寄せます）と、
+/// **反対側を丸ごと通る1本**です。最後の1本は**両隣も継ぎ目**なので
+/// 寄せる相手がおらず、u=0 に残ります。すると外周は幅0の帯になり、
+/// uv の符号つき面積が **−0.018989**（正しくは +0.937744）になって、
+/// 片の向きも領域も壊れます（4-841 の「窓が片として出てこない」の正体）。
+///
+/// **隣では決まりません**（両隣とも u=0 に寄っているので、隣に合わせると
+/// u=0 のまま）。決めるのは**どちらが面積を囲むか**です。片方の端へ
+/// 動かして囲む面積が**2倍以上**になるなら、そちらが本当の行き先です。
+fn settle_wrapping_seam_segment_by_area(
+    outer: &mut FacePcurveLoop,
+    surface: &NurbsSurface3,
+    orientation: crate::Orientation,
+    tol: &Tolerance,
+) {
+    if !seam_spread_by_area() || outer.segments.len() < 3 {
+        return;
+    }
+    let loop_area = |segments: &[FacePcurveSegment]| -> f64 {
+        let mut points: Vec<Point2> = Vec::new();
+        for (index, segment) in segments.iter().enumerate() {
+            let sampled = segment.curve.sample_points(16);
+            points.extend(sampled.into_iter().skip(usize::from(index > 0)));
+        }
+        let mut area = 0.0;
+        for i in 0..points.len() {
+            let (a, b) = (points[i], points[(i + 1) % points.len()]);
+            area += a.x * b.y - b.x * a.y;
+        }
+        area * 0.5
+    };
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+
+    for along_u in [true, false] {
+        let (min, max) = if along_u { (u_min, u_max) } else { (v_min, v_max) };
+        let span = max - min;
+        if span <= 0.0 {
+            continue;
+        }
+        // この軸で周期しているか（両端が同じ3次元の点になるか）。
+        let middle = if along_u {
+            (v_min + v_max) * 0.5
+        } else {
+            (u_min + u_max) * 0.5
+        };
+        let (low, high) = if along_u {
+            (surface.evaluate(min, middle), surface.evaluate(max, middle))
+        } else {
+            (surface.evaluate(middle, min), surface.evaluate(middle, max))
+        };
+        if (high - low).norm() > tol.linear.max(1e-9) {
+            continue;
+        }
+        let edge_of_domain = span * 1e-6;
+        let coordinate = |point: &Point2| if along_u { point.x } else { point.y };
+        // この軸の片端に丸ごと張り付いている区間だけが候補です。
+        let pinned: Vec<usize> = (0..outer.segments.len())
+            .filter(|index| {
+                let controls = &outer.segments[*index].curve.control_points;
+                controls
+                    .iter()
+                    .all(|c| (coordinate(&c.point) - min).abs() <= edge_of_domain)
+                    || controls
+                        .iter()
+                        .all(|c| (coordinate(&c.point) - max).abs() <= edge_of_domain)
+            })
+            .collect();
+        if pinned.is_empty() {
+            continue;
+        }
+        // **決めるのは符号です**（4-847）。大きさでは決まりません——
+        // 窓の片（正しくは +0.018989）も、継ぎ目の区間を反対側へ動かせば
+        // **面積が 13 倍の −0.252688** になります。**向きに合う符号**を
+        // 持つ方が本当の行き先で、**すでに合っているなら触りません**。
+        let wanted = match orientation {
+            crate::Orientation::Forward => 1.0,
+            crate::Orientation::Reversed => -1.0,
+        };
+        let current = loop_area(&outer.segments);
+        if current != 0.0 && current.signum() == wanted {
+            continue;
+        }
+        let mut best: Option<(f64, usize, f64)> = None;
+        for index in pinned {
+            for target in [min, max] {
+                let mut trial = outer.segments.clone();
+                for control in &mut trial[index].curve.control_points {
+                    if along_u {
+                        control.point.x = target;
+                    } else {
+                        control.point.y = target;
+                    }
+                }
+                let area = loop_area(&trial);
+                if area != 0.0
+                    && area.signum() == wanted
+                    && area.abs() > current.abs()
+                    && best.is_none_or(|(best_area, _, _)| area.abs() > best_area.abs())
+                {
+                    best = Some((area, index, target));
+                }
+            }
+        }
+        let Some((area, index, target)) = best else {
+            continue;
+        };
+        if seam_spread_why() {
+            println!(
+                "SEAMSPREADWHY {} の区間{index} を {target} へ: 囲む面積 {current:.6} → {area:.6}",
+                if along_u { "u" } else { "v" },
+                index = index,
+            );
+        }
+        for control in &mut outer.segments[index].curve.control_points {
+            if along_u {
+                control.point.x = target;
+            } else {
+                control.point.y = target;
+            }
+        }
+        return;
+    }
+}
+
+fn seam_spread_by_area() -> bool {
+    std::env::var("ZENITH_SEAM_SPREAD_BY_AREA")
+        .map(|value| value != "0")
+        .unwrap_or(false)
+}
+
+fn seam_spread_why() -> bool {
+    std::env::var_os("ZENITH_SEAM_SPREAD_WHY").is_some()
 }
 
 fn match_nurbs_boundary_pcurve(

@@ -2821,11 +2821,329 @@ impl BrepIntersectionBuilder {
         Ok(vec![inner_face, outer_face])
     }
 
+    /// **継ぎ目をまたぐ窓を、継ぎ目で2本に割った鎖で割ります**（4-847）。
+    ///
+    /// 入るのは「外周が継ぎ目の往復だけでできた NURBS の面」に「閉じた
+    /// 交線の鎖が1本」届いたときだけで、鎖は**継ぎ目に乗った頂点ちょうど
+    /// 2つ**で切れないといけません。**鎖の並べ直しは要りません**——
+    /// 継ぎ目に乗っていない頂点だけで繋いで連結成分を取れば、それが
+    /// そのまま2本の開いた鎖になります。
+    ///
+    /// **当てる片を間違えないための見張り**は、**子の uv の箱が親の uv の
+    /// 箱に収まっているか**です。面積では見張れません——継ぎ目をまたぐ
+    /// 片は解析求積が当たらず（実測: 補集合の面積が 1222.70 ではなく
+    /// 33.93 と出る）、`area_residual` も信用できません（正しい2段目で
+    /// 3.503e1）。間違った片に当てると、子の uv が親の外（実測:
+    /// 親 u 0.0000..0.0742 に対し子 u 0.9258..1.0000）へ出ます。
+    fn split_seam_window_face(
+        face: &Face,
+        split_edges: &[Edge],
+        tol: &Tolerance,
+    ) -> Option<PlanarFaceMultiSplitResult> {
+        let why = seam_window_why();
+        macro_rules! bail {
+            ($($arg:tt)*) => {{
+                if why {
+                    eprintln!("SEAMWINDOWWHY 見送り: {}", format!($($arg)*));
+                }
+                return None;
+            }};
+        }
+        if !matches!(face.geometry, FaceGeometry::Nurbs(_)) {
+            return None;
+        }
+        if !crate::face_split::outer_wire_is_seam_only(face) {
+            if why {
+                eprintln!(
+                    "SEAMWINDOWWHY 見送り: 外周が継ぎ目の往復だけではありません（{} 稜）",
+                    face.outer_wire.edges.len()
+                );
+            }
+            return None;
+        }
+        let edges = deduplicate_split_edges(split_edges, tol);
+        if edges.len() < 3 {
+            bail!("交線が {} 本（3本未満）", edges.len());
+        }
+        let near = tol.linear.max(1e-9) * 64.0;
+        let ends: Vec<(Point3, Point3)> = edges
+            .iter()
+            .map(|edge| (edge.start_vertex.point, edge.end_vertex.point))
+            .collect();
+        // どの端も、ちょうど2本に使われていること（＝閉じた鎖）。
+        let use_count = |point: Point3| -> usize {
+            ends.iter()
+                .map(|(start, end)| {
+                    usize::from((*start - point).norm() <= near)
+                        + usize::from((*end - point).norm() <= near)
+                })
+                .sum()
+        };
+        if ends
+            .iter()
+            .any(|(start, end)| use_count(*start) != 2 || use_count(*end) != 2)
+        {
+            bail!("鎖が閉じていません");
+        }
+        // 継ぎ目に乗っている端。
+        let on_seam = |point: Point3| point_on_outer_wire(face, point, tol);
+        let mut seam_points: Vec<Point3> = Vec::new();
+        for (start, end) in &ends {
+            for point in [*start, *end] {
+                if on_seam(point) && !seam_points.iter().any(|kept| (*kept - point).norm() <= near) {
+                    seam_points.push(point);
+                }
+            }
+        }
+        if seam_points.len() != 2 {
+            bail!("継ぎ目に乗った端が {} 個（2個でない）", seam_points.len());
+        }
+        // 継ぎ目に乗っていない端だけで繋いで、連結成分に分ける。
+        let mut group: Vec<usize> = (0..edges.len()).collect();
+        fn root(group: &mut Vec<usize>, index: usize) -> usize {
+            let mut index = index;
+            while group[index] != index {
+                index = group[index];
+            }
+            index
+        }
+        for left in 0..edges.len() {
+            for right in (left + 1)..edges.len() {
+                let shared = [ends[left].0, ends[left].1].iter().any(|point| {
+                    !on_seam(*point)
+                        && ((ends[right].0 - *point).norm() <= near
+                            || (ends[right].1 - *point).norm() <= near)
+                });
+                if shared {
+                    let (a, b) = (root(&mut group, left), root(&mut group, right));
+                    group[a] = b;
+                }
+            }
+        }
+        let mut chains: BTreeMap<usize, Vec<Edge>> = BTreeMap::new();
+        for index in 0..edges.len() {
+            let key = root(&mut group, index);
+            chains.entry(key).or_default().push(edges[index].clone());
+        }
+        if chains.len() != 2 {
+            bail!("継ぎ目で切った鎖が {} 本（2本でない）", chains.len());
+        }
+        if why {
+            for (key, chain) in &chains {
+                let middles: Vec<String> = chain
+                    .iter()
+                    .map(|edge| {
+                        let point = edge_midpoint(edge);
+                        format!("({:.3},{:.3},{:.3})", point.x, point.y, point.z)
+                    })
+                    .collect();
+                eprintln!(
+                    "SEAMWINDOWWHY   鎖{key}: {} 本 中点 {}",
+                    chain.len(),
+                    middles.join(" ")
+                );
+            }
+            for point in &seam_points {
+                eprintln!(
+                    "SEAMWINDOWWHY   継ぎ目の端 ({:.3},{:.3},{:.3})",
+                    point.x, point.y, point.z
+                );
+            }
+        }
+
+        let parent_area = signed_uv_area(face, tol);
+        let ordered: Vec<&Vec<Edge>> = chains.values().collect();
+
+        // **当てる順で結果が変わります**（4-847 の実測）。継ぎ目だけの外周は
+        // **u=0 に張り付いている**ので、u=1 の側に乗った鎖を先に当てると、
+        // 片が領域として噛み合いません（実測: 符号つき uv 面積の和が
+        // 0.6237——親の 0.9667 から 35% 欠けます。正しい順なら 0.9757 で
+        // 1% 以内）。**両方の順で当てて、uv の面積が親に合う方を採ります。**
+        let mut best: Option<(f64, Vec<Face>, usize)> = None;
+        for flip in [false, true] {
+            let order: Vec<&Vec<Edge>> = if flip {
+                ordered.iter().rev().copied().collect()
+            } else {
+                ordered.clone()
+            };
+            let mut pieces = vec![face.clone()];
+            let mut applied = 0usize;
+            for chain in order {
+                let mut next: Vec<Face> = Vec::new();
+                for piece in pieces {
+                    let piece_area = signed_uv_area(&piece, tol).or(parent_area);
+                    match crate::FaceSplitter::split_by_chain(&piece, chain, tol) {
+                        Ok((split, _)) if split.len() >= 2 => {
+                            // **当てる片を間違えないための見張り**は、
+                            // **uv の符号つき面積が保たれるか**です（4-847）。
+                            // uv の箱では見張れません——継ぎ目をまたぐ片の
+                            // 箱は u 0..1 いっぱいになり、正しい片まで
+                            // 落とします（実測で正しい2段目が落ちました）。
+                            // 関係の無い片に当てると、子の面積の和が親から
+                            // 大きく外れます。
+                            let child_sum: f64 = split
+                                .iter()
+                                .filter_map(|child| signed_uv_area(child, tol))
+                                .sum();
+                            // **和だけでは足りません**（4-847 の実測）。関係の
+                            // 無い片に当てると、子が **−0.233698 と +0.252688**
+                            // ——**和は親の 0.018989 ちょうど**になり、打ち
+                            // 消し合って通ってしまいます。**どの子も親と同じ
+                            // 符号**でなければ採りません。
+                            let kept = match piece_area {
+                                Some(area) if area.abs() > 0.0 => {
+                                    ((child_sum - area) / area).abs() <= 0.05
+                                        && split.iter().all(|child| {
+                                            signed_uv_area(child, tol).is_some_and(|child_area| {
+                                                child_area != 0.0
+                                                    && child_area.signum() == area.signum()
+                                            })
+                                        })
+                                }
+                                _ => false,
+                            };
+                            if why {
+                                eprintln!(
+                                    "SEAMWINDOWWHY   親 {piece_area:?} に子 {} 枚（和 {child_sum:.6}）→ {}",
+                                    split.len(),
+                                    if kept { "採る" } else { "採らない" }
+                                );
+                                for child in &split {
+                                    eprintln!(
+                                        "SEAMWINDOWWHY     子: 外周 {} 稜、uv 面積 {:?}",
+                                        child.outer_wire.edges.len(),
+                                        signed_uv_area(child, tol)
+                                    );
+                                }
+                            }
+                            if !kept {
+                                next.push(piece);
+                                continue;
+                            }
+                            applied += 1;
+                            // **親と同じ向きに揃えます**（4-847）。親の外周は
+                            // 継ぎ目の往復だけなので、**どちら側が内側かを
+                            // 決める手がかりが無く**、片の巻きが裏返って
+                            // 返ることがあります（実測: 補集合が箱の面と
+                            // **同じ向き**で縫合に断られ、同一向き12件）。
+                            let parent_sign = signed_uv_area(&piece, tol)
+                                .or(parent_area)
+                                .map(f64::signum);
+                            for child in split {
+                                let aligned = match (parent_sign, signed_uv_area(&child, tol)) {
+                                    (Some(parent), Some(area))
+                                        if area != 0.0 && area.signum() != parent =>
+                                    {
+                                        // **覚えてある p-curve を連れて行かせません**
+                                        // ——`Face::new` で組み直します。
+                                        Face::new(
+                                            child.geometry.clone(),
+                                            reversed_wire(&child.outer_wire),
+                                            child.inner_wires.iter().map(reversed_wire).collect(),
+                                            child.orientation,
+                                            child.tolerance,
+                                        )
+                                    }
+                                    _ => child,
+                                };
+                                next.push(aligned);
+                            }
+                        }
+                        other => {
+                            if why {
+                                match &other {
+                                    Ok((split, _)) => eprintln!(
+                                        "SEAMWINDOWWHY   片 {} 枚しか出ないので採りません",
+                                        split.len()
+                                    ),
+                                    Err(reason) => {
+                                        eprintln!("SEAMWINDOWWHY   断り: {}", why_text(reason))
+                                    }
+                                }
+                            }
+                            next.push(piece);
+                        }
+                    }
+                }
+                pieces = next;
+            }
+            let sum: f64 = pieces
+                .iter()
+                .filter_map(|piece| signed_uv_area(piece, tol))
+                .sum();
+            let residual = match parent_area {
+                Some(parent) if parent != 0.0 => ((sum - parent) / parent).abs(),
+                _ => f64::INFINITY,
+            };
+            if why {
+                eprintln!(
+                    "SEAMWINDOWWHY {} の順: 片 {} 枚、uv 面積の和 {sum:.6}（親 {:?}）食い違い {residual:.3e}",
+                    if flip { "逆" } else { "素" },
+                    pieces.len(),
+                    parent_area
+                );
+            }
+            if pieces.len() >= 3
+                && best
+                    .as_ref()
+                    .is_none_or(|(best_residual, _, _)| residual < *best_residual)
+            {
+                best = Some((residual, pieces, applied));
+            }
+        }
+        let Some((residual, pieces, applied)) = best else {
+            bail!("どちらの順でも片が3枚になりません");
+        };
+        // **uv の面積が親に合わない割り方は採りません**（4-847）。
+        if residual > 0.02 {
+            bail!("uv 面積の食い違いが {residual:.3e}（2% 超）");
+        }
+        if why {
+            for (index, piece) in pieces.iter().enumerate() {
+                eprintln!(
+                    "SEAMWINDOWWHY   片{index}: 外周 {} 稜、uv の箱 {:?}、符号つき uv 面積 {:?}",
+                    piece.outer_wire.edges.len(),
+                    piece_uv_box(piece, tol),
+                    signed_uv_area(piece, tol)
+                );
+            }
+            eprintln!(
+                "SEAMWINDOWWHY 継ぎ目で切った鎖 2 本で片 {} 枚（当たった {applied}）",
+                pieces.len()
+            );
+        }
+        Some(PlanarFaceMultiSplitResult {
+            faces: pieces,
+            applied_split_count: applied,
+            skipped_split_count: 0,
+        })
+    }
+
     pub fn split_face_by_edges(
         face: &Face,
         split_edges: &[Edge],
         tol: &Tolerance,
     ) -> Result<PlanarFaceMultiSplitResult, String> {
+        // **継ぎ目をまたぐ窓は、継ぎ目で2本に割ってから当てます**（4-847。
+        // `ZENITH_SEAM_WINDOW=1` で入り、**既定オフ**）。
+        //
+        // 周期1面の球に箱を軸から外して当てると、交線6本は uv で
+        // `u = -0.074 .. +0.074`・`v = 0.364 .. 0.636` の窓を作ります
+        // ——**継ぎ目（u=0/1）をまたぐので、1つの uv 領域として表せません**
+        // （4-841 の実測。1本ずつ当てる下の段では帯2枚に割れ、交線が3回
+        // 使われて非多様体18件）。
+        //
+        // ところが**継ぎ目に乗っている2つの頂点で鎖を切ると、開いた鎖が
+        // 2本**になり、**どちらも継ぎ目（＝この面の境界）から境界へ渡ります**
+        // ——`split_by_chain` がそのまま扱える形です。実測で窓の左右
+        // 33.931914 ずつと補集合 1188.773233、**合わせて 1256.637061＝球の
+        // 全面積**。
+        if seam_window_on() {
+            if let Some(result) = Self::split_seam_window_face(face, split_edges, tol) {
+                return Ok(result);
+            }
+        }
+
         // **この中を測ります**（4-724。`ZENITH_BOOLEAN_TIME` のみ、既定オフ）。
         //
         // 4-723 で**外から数えられる量のどれも、割る値段を説明しない**と
@@ -3828,6 +4146,72 @@ fn why_text(reason: &str) -> String {
 /// **鎖の段は `1e-6` のまま**——**同じ問いに 2 つの物差し**です。
 /// 実測（4-540、A面1）: 鎖 0 は残差 **6.953e-7** で通り、鎖 1 は **1.843e-6**
 /// で落ちます。**落ちた鎖が、積に足りない 1 枚**でした。
+/// **継ぎ目をまたぐ窓を、継ぎ目で切った2本の鎖で割る口**（4-847。
+/// `ZENITH_SEAM_WINDOW=1` で入り、既定オフ）。
+fn seam_window_on() -> bool {
+    std::env::var("ZENITH_SEAM_WINDOW")
+        .map(|value| value != "0")
+        .unwrap_or(false)
+}
+
+fn seam_window_why() -> bool {
+    std::env::var_os("ZENITH_SEAM_WINDOW_WHY").is_some()
+}
+
+/// 点が、継ぎ目だけでできた外周の上に乗っているか。
+///
+/// **標本の近さでは測れません**——継ぎ目は長さ 31 の子午線なので、64 点の
+/// 標本では刻みが 0.5 あり、乗っている点でも 0.25 離れて見えます（実測で
+/// 「継ぎ目に乗った端が 0 個」と出ました）。曲線への**最短距離**を取ります。
+fn point_on_outer_wire(face: &Face, point: Point3, tol: &Tolerance) -> bool {
+    let near = tol.linear.max(1e-9) * 10.0;
+    face.outer_wire.edges.iter().any(|oriented| {
+        zenith_geom::ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 32, tol.linear)
+            .map(|projection| projection.distance <= near)
+            .unwrap_or(false)
+    })
+}
+
+/// 片の uv の箱（外周 p-curve の制御点から）。
+fn piece_uv_box(face: &Face, tol: &Tolerance) -> Option<((f64, f64), (f64, f64))> {
+    let pcurves = face.pcurves(tol).ok()?;
+    let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+    for segment in &pcurves.outer_loop.segments {
+        for control in &segment.curve.control_points {
+            lo = (lo.0.min(control.point.x), lo.1.min(control.point.y));
+            hi = (hi.0.max(control.point.x), hi.1.max(control.point.y));
+        }
+    }
+    if lo.0 > hi.0 {
+        return None;
+    }
+    Some(((lo.0, hi.0), (lo.1, hi.1)))
+}
+
+/// 外周 p-curve の**符号つき** uv 面積（4-847）。
+///
+/// 割った片の向きは、**親と同じ符号**でなければなりません。継ぎ目を
+/// またぐ片でも測れます——継ぎ目の半分が u=0 と u=1 の両端に乗るので、
+/// 面積はちゃんと出ます（実測: 補集合 +0.937744、窓 +0.018989 ずつ、
+/// 親 +0.966667）。
+fn signed_uv_area(face: &Face, tol: &Tolerance) -> Option<f64> {
+    let pcurves = face.pcurves(tol).ok()?;
+    let mut points: Vec<Point2> = Vec::new();
+    for (index, segment) in pcurves.outer_loop.segments.iter().enumerate() {
+        let sampled = segment.curve.sample_points(16);
+        points.extend(sampled.into_iter().skip(usize::from(index > 0)));
+    }
+    if points.len() < 3 {
+        return None;
+    }
+    let mut area = 0.0;
+    for index in 0..points.len() {
+        let (a, b) = (points[index], points[(index + 1) % points.len()]);
+        area += a.x * b.y - b.x * a.y;
+    }
+    Some(area * 0.5)
+}
+
 fn chain_area_allowance(face: &Face) -> f64 {
     if !h8_port_on("ZENITH_CHAIN_AREA_TOL")
         || std::env::var_os("ZENITH_NO_AREA_TOL").is_some()
@@ -6415,6 +6799,22 @@ fn split_apex_patch_by_section_edge(
 /// 3-1 の規約——**接触は、それ自体では位相を作らない**——がそのまま実装に
 /// なります。
 fn collapse_there_and_back(face: &mut Face, tol: &Tolerance) {
+    // **周期の継ぎ目の対は、「行って戻る」ではありません**（4-847。
+    // `ZENITH_SEAM_WINDOW=1` のときだけ見ます）。
+    //
+    // 継ぎ目をまたぐ窓で周期1面を割ると、残りの片の外周は**継ぎ目を
+    // u=0 側と u=1 側の両方で使います**——3次元では同じ弧を逆に辿るので、
+    // この畳み込みが落としてしまいます（実測: 外周10稜が6稜になり、面積が
+    // 1188.773233 から 811.782115 へ、体積が 4416.33 ではなく 3159.69）。
+    // **素の周期1面が生き残るのは `count < 4` の番だけ**で、割った片は
+    // 稜が増えるのでそこを通りません。
+    //
+    // 見分け方は **p-curve がこの軸の反対の端に乗っているか**です。
+    let seam_ends: BTreeMap<u64, bool> = if seam_window_on() {
+        seam_end_by_edge_id(face, tol)
+    } else {
+        BTreeMap::new()
+    };
     let fold = |wire: &mut zenith_topo::Wire| {
         // 1周のうちに複数あることがあるので、変化が無くなるまで回します。
         loop {
@@ -6454,6 +6854,14 @@ fn collapse_there_and_back(face: &mut Face, tol: &Tolerance) {
                 if !points_same_3d(middle_here, middle_after, tol.linear * 10.0) {
                     continue;
                 }
+                // 周期の継ぎ目の対（反対の端に乗っている）は落としません。
+                match (
+                    seam_ends.get(&here.edge.id),
+                    seam_ends.get(&after.edge.id),
+                ) {
+                    (Some(left), Some(right)) if left != right => continue,
+                    _ => {}
+                }
                 dropped = Some((index, next));
                 break;
             }
@@ -6479,6 +6887,65 @@ fn collapse_there_and_back(face: &mut Face, tol: &Tolerance) {
     for wire in &mut face.inner_wires {
         fold(wire);
     }
+}
+
+/// 外周の各稜の p-curve が、周期する軸の**どちらの端**に乗っているか
+/// （`false` が min 側、`true` が max 側。乗っていない稜は入りません。4-847）。
+fn seam_end_by_edge_id(face: &Face, tol: &Tolerance) -> BTreeMap<u64, bool> {
+    let mut ends = BTreeMap::new();
+    let FaceGeometry::Nurbs(surface) = &face.geometry else {
+        return ends;
+    };
+    let Ok(pcurves) = face.pcurves(tol) else {
+        return ends;
+    };
+    if pcurves.outer_loop.segments.len() != face.outer_wire.edges.len() {
+        return ends;
+    }
+    let ((u_min, u_max), (v_min, v_max)) = surface.param_range();
+    for along_u in [true, false] {
+        let (min, max) = if along_u { (u_min, u_max) } else { (v_min, v_max) };
+        let span = max - min;
+        if span <= 0.0 {
+            continue;
+        }
+        let middle = if along_u {
+            (v_min + v_max) * 0.5
+        } else {
+            (u_min + u_max) * 0.5
+        };
+        let (low, high) = if along_u {
+            (surface.evaluate(min, middle), surface.evaluate(max, middle))
+        } else {
+            (surface.evaluate(middle, min), surface.evaluate(middle, max))
+        };
+        if (high - low).norm() > tol.linear.max(1e-9) {
+            continue;
+        }
+        let edge_of_domain = span * 1e-6;
+        for (oriented, segment) in face
+            .outer_wire
+            .edges
+            .iter()
+            .zip(&pcurves.outer_loop.segments)
+        {
+            let value = |point: &Point2| if along_u { point.x } else { point.y };
+            let at = |target: f64| {
+                segment
+                    .curve
+                    .control_points
+                    .iter()
+                    .all(|control| (value(&control.point) - target).abs() <= edge_of_domain)
+            };
+            if at(min) {
+                ends.insert(oriented.edge.id, false);
+            } else if at(max) {
+                ends.insert(oriented.edge.id, true);
+            }
+        }
+        return ends;
+    }
+    ends
 }
 
 fn remove_degenerate_wire_edges(face: &mut Face, tol: &Tolerance) {
