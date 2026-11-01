@@ -615,6 +615,7 @@ fn uv_is_inside_face(face: &zenith_topo::Face, uv: Point2) -> bool {
     let Ok(pcurves) = face.pcurves(&Tolerance::default()) else {
         return false;
     };
+    let ranges = support_param_range(face);
 
     // 境界のワイヤを1本も持たない面は、**トリムされていない**。支持曲面の
     // パラメータ領域そのものが面で、射影はその中に落ちる。
@@ -632,18 +633,177 @@ fn uv_is_inside_face(face: &zenith_topo::Face, uv: Point2) -> bool {
         return !pcurves
             .inner_loops
             .iter()
-            .any(|hole| point_in_loop(hole, uv));
+            .any(|hole| loop_contains(hole, uv, ranges, LoopRole::Hole));
     }
 
-    if !point_in_loop(&pcurves.outer_loop, uv) {
+    if !loop_contains(&pcurves.outer_loop, uv, ranges, LoopRole::Outer) {
         return false;
     }
     for hole in &pcurves.inner_loops {
-        if point_in_loop(hole, uv) {
+        if loop_contains(hole, uv, ranges, LoopRole::Hole) {
             return false;
         }
     }
     true
+}
+
+/// 支持曲面のパラメータ範囲。巻きの判定に、**周期の長さ**が要ります。
+fn support_param_range(face: &zenith_topo::Face) -> Option<((f64, f64), (f64, f64))> {
+    match &face.geometry {
+        zenith_topo::FaceGeometry::Nurbs(surface) => Some(surface.param_range()),
+        _ => None,
+    }
+}
+
+/// この輪が、面のどちら側を囲んでいるか。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoopRole {
+    /// 外側の輪。囲むのは**進む向きの左**（反時計回りに蓄える約束）。
+    Outer,
+    /// 穴の輪。外側と逆向きに蓄えるので、囲むのは**進む向きの右**。
+    Hole,
+}
+
+/// **uv を1周する輪には、内と外が「囲み」で決まりません**（4-843）。
+///
+/// `point_in_loop` は輪を折れ線にして偶奇で数えます。**切れ目で端から端へ
+/// 飛ぶ輪**（球の極を囲む窓の輪など）では、折れ線が**まっすぐな弦で閉じる**
+/// ので、囲まれるのは「v=0 からその輪までの帯」になり、**極の側が外**と
+/// 出ます。4-842 で面積の読み方を直したのと**同じ取り違え**で、こちらは
+/// **点の内外判定**に残っていました（実測: ＼の結果で、z>9.1652——球の
+/// 断面が箱の内に収まる高さ——の 24 点が、消えた帽子の中なのに「立体の中」
+/// と返っていました）。
+///
+/// 1周する輪は、**パラメータ領域を2つの帯に分けます**。どちらが内かは
+/// 囲みでは決まらず、**進む向きと輪の役**で決まります。
+fn loop_contains(
+    pcurve_loop: &zenith_topo::FacePcurveLoop,
+    uv: Point2,
+    ranges: Option<((f64, f64), (f64, f64))>,
+    role: LoopRole,
+) -> bool {
+    if wrapping_loop_side_on() {
+        if let Some(ranges) = ranges {
+            if let Some(inside) = wrapping_loop_contains(pcurve_loop, uv, ranges, role) {
+                return inside;
+            }
+        }
+    }
+    point_in_loop(pcurve_loop, uv)
+}
+
+/// **1周する輪を見つけたときだけ**答えます。そうでなければ `None` を返して、
+/// 従来の偶奇に任せます（4-843。`ZENITH_WRAPPING_LOOP_SIDE=0` で止まります）。
+fn wrapping_loop_contains(
+    pcurve_loop: &zenith_topo::FacePcurveLoop,
+    uv: Point2,
+    ((u_min, u_max), (v_min, v_max)): ((f64, f64), (f64, f64)),
+    role: LoopRole,
+) -> Option<bool> {
+    let period = u_max - u_min;
+    if !(period > 0.0) {
+        return None;
+    }
+    let mut polygon: Vec<Point2> = Vec::new();
+    for segment in &pcurve_loop.segments {
+        let (t_min, t_max) = segment.curve.param_range();
+        const SAMPLES: usize = 24;
+        for step in 0..SAMPLES {
+            let t = t_min + (t_max - t_min) * step as f64 / SAMPLES as f64;
+            polygon.push(segment.curve.evaluate(t));
+        }
+    }
+    if polygon.len() < 3 {
+        return None;
+    }
+
+    // **極に届く輪は、1周する輪ではありません**（4-842 と同じ場合分け）。
+    // 素の周期球の外周は極から極まで通るので、ここで扱ってはいけません。
+    let span_v = (v_max - v_min).abs();
+    let reaches_pole = polygon.iter().any(|point| {
+        (point.y - v_min).abs() <= span_v * 1e-6 || (point.y - v_max).abs() <= span_v * 1e-6
+    });
+    if reaches_pole {
+        return None;
+    }
+
+    // 切れ目の飛びを1つだけ持つ輪を探します。2つ以上あるなら、帯のような
+    // 穴（行きと帰りで2回またぐ）で、この場合分けでは決められません。
+    let mut jump: Option<usize> = None;
+    let mut net_du = 0.0;
+    for index in 0..polygon.len() {
+        let a = polygon[index];
+        let b = polygon[(index + 1) % polygon.len()];
+        let raw = b.x - a.x;
+        let unwrapped = raw - period * (raw / period).round();
+        net_du += unwrapped;
+        if (raw - unwrapped).abs() > period * 0.5 {
+            if jump.is_some() {
+                return None;
+            }
+            jump = Some(index);
+        }
+    }
+    let jump = jump?;
+    if net_du.abs() < period * (1.0 - 1e-6) {
+        return None;
+    }
+
+    // 飛びの直後から並べ直すと、輪は u の関数 v(u) になります。
+    let mut path: Vec<Point2> = Vec::with_capacity(polygon.len());
+    for step in 0..polygon.len() {
+        path.push(polygon[(jump + 1 + step) % polygon.len()]);
+    }
+
+    // 点の u に当たる所の、輪の v。u は周期なので、近い2点で挟みます。
+    let wrapped_u = u_min + (uv.x - u_min).rem_euclid(period);
+    let bracketed = path.windows(2).find_map(|window| {
+        let (a, b) = (window[0], window[1]);
+        let (lo, hi) = if a.x <= b.x { (a, b) } else { (b, a) };
+        if hi.x > lo.x && wrapped_u >= lo.x && wrapped_u <= hi.x {
+            Some(lo.y + (hi.y - lo.y) * (wrapped_u - lo.x) / (hi.x - lo.x))
+        } else {
+            None
+        }
+    });
+    let loop_v = match bracketed {
+        Some(v) => v,
+        // 挟めないときは、いちばん u が近い点の v で代えます。
+        None => {
+            let distance_in_u = |point: &Point2| {
+                let raw = (point.x - wrapped_u).abs();
+                raw.min(period - raw)
+            };
+            path.iter()
+                .min_by(|a, b| {
+                    distance_in_u(a)
+                        .partial_cmp(&distance_in_u(b))
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })?
+                .y
+        }
+    };
+
+    // **進む向きの右**は、u が減る向きに進むとき +v です（(x,y) を −90°
+    // 回すと (y,−x)。(−1,0) → (0,1)）。穴は右を、外側は左を囲みます。
+    let travels_backwards = net_du < 0.0;
+    let encloses_larger_v = match role {
+        LoopRole::Hole => travels_backwards,
+        LoopRole::Outer => !travels_backwards,
+    };
+    Some(if encloses_larger_v {
+        uv.y > loop_v
+    } else {
+        uv.y < loop_v
+    })
+}
+
+/// 1周する輪の側を、囲みではなく向きで決める口（4-843。既定オン、
+/// `ZENITH_WRAPPING_LOOP_SIDE=0` で止まります）。
+fn wrapping_loop_side_on() -> bool {
+    std::env::var("ZENITH_WRAPPING_LOOP_SIDE")
+        .map(|value| value != "0")
+        .unwrap_or(false)
 }
 
 fn point_in_loop(pcurve_loop: &zenith_topo::FacePcurveLoop, uv: Point2) -> bool {
