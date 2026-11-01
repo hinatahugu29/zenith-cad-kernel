@@ -15600,6 +15600,12 @@ fn candidate_end_points(kind: &FaceIntersectionKind) -> Vec<Point3> {
 ///    点を取り、**両側で内外が同じ**なら、その線は面を割っていません
 ///
 /// 片方でも外れたら落としません。
+/// **平面に曲面が線で接している組の接線を、落とさずに残すか**（4-851）。
+/// **既定オフ**です。`ZENITH_TANGENT_IMPRINT=1` で入ります。
+fn tangent_imprint_on() -> bool {
+    std::env::var_os("ZENITH_TANGENT_IMPRINT").is_some()
+}
+
 fn drop_non_bounding_contact_curves(
     solid_a: &Solid,
     solid_b: &Solid,
@@ -15632,6 +15638,30 @@ fn drop_non_bounding_contact_curves(
             if !contact_curve_is_not_bounding(
                 solid_a, solid_b, &patch_a, &patch_b, edge, tol, explain,
             ) {
+                return true;
+            }
+        }
+        // **平面に、曲面が線で接しているだけの組は落としません**
+        // （4-851。`ZENITH_TANGENT_IMPRINT`、既定オフ）。
+        //
+        // **体積の縁ではない、という上の判定は正しい**——けれど、
+        // **その線は、同一平面で重なる2面を揃えて割るための刻み線**
+        // です（4-850 で測りました。板の y=0 面にワッシャーの内縁を
+        // 刻む1本が、これで落ちていました）。
+        //
+        // **註が警告している「箱どうしを面で合わせた配置」とは別**です
+        // ——あちらは**平面と平面**が重なります。ここで残すのは
+        // **片方だけが平面**の組だけです。
+        if tangent_imprint_on() {
+            let planar_a = matches!(face_a.geometry, FaceGeometry::Plane(_));
+            let planar_b = matches!(face_b.geometry, FaceGeometry::Plane(_));
+            if planar_a != planar_b {
+                if explain {
+                    eprintln!(
+                        "CONTACTCURVE 残す（平面×曲面の接線） 面A {} 面B {}",
+                        candidate.face_a_index, candidate.face_b_index
+                    );
+                }
                 return true;
             }
         }
