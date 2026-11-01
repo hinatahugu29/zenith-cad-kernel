@@ -1227,7 +1227,7 @@ fn settle_wrapping_seam_segment_by_area(
 fn seam_spread_by_area() -> bool {
     std::env::var("ZENITH_SEAM_SPREAD_BY_AREA")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 fn seam_spread_why() -> bool {

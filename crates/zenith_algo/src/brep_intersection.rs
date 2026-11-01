@@ -4151,7 +4151,7 @@ fn why_text(reason: &str) -> String {
 fn seam_window_on() -> bool {
     std::env::var("ZENITH_SEAM_WINDOW")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 fn seam_window_why() -> bool {
