@@ -29791,6 +29791,14 @@ v_max までのキャップ。earcut へ渡す前に、外周の領域を帯の�
 
 **検体**: `sphere_seam_window_probe`・`sphere_pole_window_probe`・
 `sphere_pole_identity_probe` を足しました（どれも既定で何も変えません）。
+**直すときの最短の検体は `pole_hole_face_probe`** です（10秒。穴1枚の
+面を取り出して `face_uv_triangulation`・`face_parameter_area`・
+`compute_face_integral` を直接見ます）。**いまの値と目標値**——
+uv 面積の検算 **0.983693**（目標 **0.945986** ＝ 1188.773 ÷ 1256.637）、
+面の面積 **1241.228311**（目標 **1188.773**）。**引けているのは uv で
+0.016307 だけ、本当は 0.054014** です。穴の uv が
+`(0.0000,0.8057)-(1.0000,0.8642)` と u が1周ぶんの帯であることも
+この検体が1行で出します。
 
 **テストで固定しました**（`periodic_primitive_equivalence_test.rs`）:
 ①`sphere_periodic_window_away_from_the_seam_matches_the_quartered_sphere`
