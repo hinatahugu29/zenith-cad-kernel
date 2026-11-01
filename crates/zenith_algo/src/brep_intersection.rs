@@ -2047,6 +2047,23 @@ impl BrepIntersectionBuilder {
         // なく Shell として読む）。ここで実体を一本化する。
         let faces = unify_coincident_edges(faces, tol);
 
+        // **軸を1周する窓は、穴ではなく切り欠きです**（4-845）。
+        //
+        // 窓が極を囲むと、分割器は窓を**穴**として足しますが、外周に残る
+        // 継ぎ目は**窓の中を通り抜けます**（4-844 の実測: 稜149 が
+        // (4,0,9.1652) から北極まで、丸ごと箱の中にあるのに外周で2回
+        // 使われていた）。**継ぎ目が2本に割れるのはここ**——
+        // `unify_coincident_edges` が隣の面と端を合わせるために割ります。
+        // 分割器の中でも刻み込みの直後でも、継ぎ目はまだ1本です（実測:
+        // `継ぎ目の別々の稜が1本`）。
+        let faces: Vec<Face> = faces
+            .into_iter()
+            .map(|mut face| {
+                crate::face_split::merge_wrapping_hole_into_seam_outer(&mut face, tol);
+                face
+            })
+            .collect();
+
         // **検証を飛ばして組む口**（4-564。`ZENITH_SKIP_SOLID_VALIDATION=1`。
         // **既定では走りません**）。
         //

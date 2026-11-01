@@ -607,6 +607,15 @@ impl FaceSplitter {
                 })
                 .collect(),
         );
+        // **軸を1周する輪は、穴ではありません**（4-845）。
+        //
+        // 窓が極を囲むと、**窓は継ぎ目を切ります**。元の外周をそのまま
+        // 引き継ぐと、**切った継ぎ目の「窓の中にある半分」が外周に残った
+        // まま**になります（4-844 の実測: 稜149 が (4,0,9.1652) から北極
+        // まで、丸ごと箱の中にあるのに外周に2回使われていた）。その稜が
+        // 囲む領域が、そのまま**内外判定のずれ 24/768 点**でした。
+        // 正しい外周は「継ぎ目を**残る半分だけ**上がる → 窓の縁を回る →
+        // 同じ半分を下がる」で、**穴は1本も立ちません**。
         let mut outer_holes = vec![hole];
         outer_holes.extend(holes_outside);
         let mut outside = Face::new(
@@ -2618,6 +2627,179 @@ fn area_cost_timed(face: &Face, params: &TessellationParams) -> f64 {
 /// どの稜も外周に2回ずつ（行きと帰り）現れる——周期1面化した球の形です。
 /// この外周の箱は子午線1本ぶんしか広がらないので、**外周の箱で何かを
 /// 判定する所は、この面では箱を信じてはいけません**。
+/// 1周する輪で、継ぎ目の外周を**切り欠きに付け替えた**か（4-845。
+/// `ZENITH_SEAM_NOTCH=1` で入り、既定オフ）。
+fn seam_notch_on() -> bool {
+    std::env::var("ZENITH_SEAM_NOTCH")
+        .map(|value| value != "0")
+        .unwrap_or(false)
+}
+
+/// **継ぎ目の往復だけの外周を、1周する輪と繋いで1本の外周にします**
+/// （4-845）。
+///
+/// 周期1面の球に極を囲む窓を開けると、分割器は正しい所で継ぎ目を割ります
+/// が、**窓の中にある半分を捨てません**（4-844）。ここでは
+///
+/// - 外周が**継ぎ目の往復だけ**（`outer_wire_is_seam_only`）で、
+/// - その継ぎ目が**ちょうど2本**に割れており、
+/// - 輪が**その割れ目の頂点を通る**
+///
+/// ときだけ、**輪に囲まれる側へ伸びる半分を落として**、残る半分と輪を
+/// 繋いだ外周を返します。どれか1つでも満たさなければ `None` を返して、
+/// 従来の「輪を穴として足す」に任せます。
+///
+/// どちらの半分が囲まれる側かは、**輪の平均点に近い端**で決めます——
+/// 4-842・4-843 と同じ読み方です（窓は自分が囲む極の側にあります）。
+pub(crate) fn merge_wrapping_hole_into_seam_outer(face: &mut Face, tol: &Tolerance) -> bool {
+    if !seam_notch_on() {
+        return false;
+    }
+    for index in 0..face.inner_wires.len() {
+        let hole = face.inner_wires[index].edges.clone();
+        if let Some(outer) = seam_notch_outer_wire(face, &hole, tol) {
+            let mut holes = face.inner_wires.clone();
+            holes.remove(index);
+            *face = Face::new(
+                face.geometry.clone(),
+                outer,
+                holes,
+                face.orientation,
+                face.tolerance,
+            );
+            return true;
+        }
+    }
+    false
+}
+
+fn seam_notch_outer_wire(
+    face: &Face,
+    ordered: &[OrientedEdge],
+    tol: &Tolerance,
+) -> Option<Wire> {
+    if !seam_notch_on() {
+        return None;
+    }
+    let why = std::env::var_os("ZENITH_SEAM_NOTCH_WHY").is_some();
+    macro_rules! bail {
+        ($reason:expr) => {{
+            if why {
+                eprintln!("SEAMNOTCHWHY 見送り: {}", $reason);
+            }
+            return None;
+        }};
+    }
+    if !outer_wire_is_seam_only(face) {
+        bail!(format!("外周が継ぎ目の往復だけでない（{}稜）", face.outer_wire.edges.len()));
+    }
+    // 継ぎ目は、別々の稜がちょうど2本——上半分と下半分。
+    let mut distinct: Vec<&OrientedEdge> = Vec::new();
+    for oriented in &face.outer_wire.edges {
+        if !distinct.iter().any(|kept| kept.edge.id == oriented.edge.id) {
+            distinct.push(oriented);
+        }
+    }
+    if distinct.len() != 2 {
+        bail!(format!("継ぎ目の別々の稜が{}本", distinct.len()));
+    }
+
+    let near = tol.linear.max(face.tolerance) * 10.0;
+    let same = |a: Point3, b: Point3| (a - b).norm() <= near;
+
+    // 割れ目の頂点——2本が共有し、かつ輪も通る点。
+    let shared = [
+        distinct[0].edge.start_vertex.point,
+        distinct[0].edge.end_vertex.point,
+    ]
+    .into_iter()
+    .find(|candidate| {
+        [
+            distinct[1].edge.start_vertex.point,
+            distinct[1].edge.end_vertex.point,
+        ]
+        .iter()
+        .any(|other| same(*candidate, *other))
+            && ordered
+                .iter()
+                .any(|piece| same(piece.start_vertex().point, *candidate))
+    });
+    let Some(shared) = shared else {
+        bail!("割れ目の頂点が、輪の上に無い");
+    };
+
+    // 輪の平均点。囲まれる側は、ここに近い端です。
+    let mut centre = (0.0f64, 0.0f64, 0.0f64);
+    let mut count = 0.0;
+    for piece in ordered {
+        for step in 0..8 {
+            let point = piece.evaluate_normalized(step as f64 / 8.0);
+            centre = (centre.0 + point.x, centre.1 + point.y, centre.2 + point.z);
+            count += 1.0;
+        }
+    }
+    if count == 0.0 {
+        bail!("輪が空");
+    }
+    let centre = Point3::new(centre.0 / count, centre.1 / count, centre.2 / count);
+
+    let far_end = |oriented: &OrientedEdge| {
+        let (start, end) = (
+            oriented.edge.start_vertex.point,
+            oriented.edge.end_vertex.point,
+        );
+        if same(start, shared) {
+            end
+        } else {
+            start
+        }
+    };
+    let distance_of = |oriented: &OrientedEdge| (far_end(oriented) - centre).norm();
+    let (keep, drop) = if distance_of(distinct[0]) >= distance_of(distinct[1]) {
+        (distinct[0], distinct[1])
+    } else {
+        (distinct[1], distinct[0])
+    };
+    // 2本が同じくらい離れているなら、どちらが囲まれる側か決められません。
+    if (distance_of(drop) - distance_of(keep)).abs() <= near {
+        bail!("どちらの半分が囲まれる側か決められない");
+    }
+    // 落とす半分の遠い端が、残す半分の遠い端と同じなら、割れていません。
+    if same(far_end(drop), far_end(keep)) {
+        bail!("2本の遠い端が同じ（割れていない）");
+    }
+
+    // 残す半分を「遠い端 → 割れ目」の向きに置きます。
+    let up = if same(keep.edge.start_vertex.point, shared) {
+        OrientedEdge::reversed(keep.edge.clone())
+    } else {
+        OrientedEdge::forward(keep.edge.clone())
+    };
+    let down = OrientedEdge::new(up.edge.clone(), up.orientation.reversed());
+
+    // 輪を、割れ目の頂点から始まる並びに回します。
+    let Some(start_at) = ordered
+        .iter()
+        .position(|piece| same(piece.start_vertex().point, shared))
+    else {
+        bail!("輪を割れ目から始められない");
+    };
+    let mut edges = vec![up];
+    for step in 0..ordered.len() {
+        edges.push(ordered[(start_at + step) % ordered.len()].clone());
+    }
+    edges.push(down);
+    if why {
+        eprintln!(
+            "SEAMNOTCHWHY 付け替えた: 残す稜id{} 落とす稜id{} 外周{}稜",
+            keep.edge.id,
+            drop.edge.id,
+            edges.len()
+        );
+    }
+    Some(Wire::new(edges))
+}
+
 pub(crate) fn outer_wire_is_seam_only(face: &Face) -> bool {
     let edges = &face.outer_wire.edges;
     !edges.is_empty()
