@@ -1786,6 +1786,44 @@ fn distribute_holes(face: &Face, pieces: Vec<Face>, tol: &Tolerance) -> Result<V
     }
     let mut holes_for: Vec<Vec<Wire>> = vec![Vec::new(); pieces.len()];
     for hole in &face.inner_wires {
+        // **またいでいる穴を捕まえる口**（4-853。
+        // `ZENITH_HOLE_STRADDLE_GUARD`、既定オフ）。
+        //
+        // `hole_sits_inside` は**代表点1点**で決めます。その註は
+        // 「またいでいる穴は呼び手が面積の突き合わせで捕まえます
+        // （`checked_areas`）」と書いていますが、**`checked_areas` は
+        // 面積の和を見ません**（その註自身がそう書いてあります）。
+        // **穴は外周の後に配るので、取り違えてもどの検算にも出ません。**
+        //
+        // **実測**（`same_edge_chain_probe`）: 20x10 の天面を x 5.3..8・
+        // y 0..3 の切り込みで割ると、**(7,2)-(13,8) の 6x6 の穴が、
+        // 2.7x3 の片のほうへ丸ごと行きます**——穴のほうが片より大きい。
+        //
+        // ここでは**穴の標本を16点**取り、**2枚以上の片が別々の点を
+        // 自分の中だと言ったら**、またいでいるとして断ります。
+        if hole_straddle_guard_on() {
+            let mut claimed: Vec<usize> = Vec::new();
+            for point in hole.sample_points(16) {
+                for (index, piece) in pieces.iter().enumerate() {
+                    if hole_point_sits_inside(piece, point, tol) == Some(true)
+                        && !claimed.contains(&index)
+                    {
+                        claimed.push(index);
+                    }
+                }
+            }
+            if claimed.len() > 1 {
+                if std::env::var_os("ZENITH_HOLE_STRADDLE_WHY").is_some() {
+                    eprintln!(
+                        "STRADDLEWHY 穴が片 {:?} にまたがっています（標本16点）",
+                        claimed
+                    );
+                }
+                return Err(
+                    "a hole of this face straddles the cut; the cut crosses it".to_string()
+                );
+            }
+        }
         let mut owners: Vec<usize> = Vec::new();
         for (index, piece) in pieces.iter().enumerate() {
             match hole_sits_inside(piece, hole, tol) {
@@ -1839,7 +1877,20 @@ fn distribute_holes(face: &Face, pieces: Vec<Face>, tol: &Tolerance) -> Result<V
 /// **外周の p-curve で作った多角形**の内外を数えます。
 /// **落とせない・多角形が作れないときは `None`**——**測れないなら、
 /// 決めません**（呼び手はそこで断ります）。
+fn hole_straddle_guard_on() -> bool {
+    std::env::var_os("ZENITH_HOLE_STRADDLE_GUARD").is_some()
+}
+
 fn hole_sits_inside(face: &Face, hole: &Wire, tol: &Tolerance) -> Option<bool> {
+    // **穴の代表点**。1 点で足ります——**またいでいる穴は、呼び手が
+    // 面積の突き合わせで捕まえます**（`checked_areas`）……**という註は
+    // 違っていました**（4-853。`checked_areas` は面積の和を見ません）。
+    // またいでいる穴は `ZENITH_HOLE_STRADDLE_GUARD` が見ます。
+    let point = hole.sample_points(4).into_iter().next()?;
+    hole_point_sits_inside(face, point, tol)
+}
+
+fn hole_point_sits_inside(face: &Face, point: Point3, tol: &Tolerance) -> Option<bool> {
     let pcurves = face.pcurves(tol).ok()?;
     let mut polygon: Vec<(f64, f64)> = Vec::new();
     for segment in &pcurves.outer_loop.segments {
@@ -1850,9 +1901,6 @@ fn hole_sits_inside(face: &Face, hole: &Wire, tol: &Tolerance) -> Option<bool> {
     if polygon.len() < 3 {
         return None;
     }
-    // **穴の代表点**。1 点で足ります——**またいでいる穴は、呼び手が
-    // 面積の突き合わせで捕まえます**（`checked_areas`）。
-    let point = hole.sample_points(4).into_iter().next()?;
     // **3D の箱でも確かめる口**（4-537。`ZENITH_HOLE_BOX_GUARD`。
     // **コメントはずっと「既定では走りません」だったが、実装は
     // `h8_port_on`と同じ`unwrap_or(true)`形——実際には既定オン**
