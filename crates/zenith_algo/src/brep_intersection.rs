@@ -495,6 +495,35 @@ impl BrepIntersectionBuilder {
                 // **この段が 80%**（4-697）なので、**どの組が重いか**を見ます。
                 let pair_clock = pair_times.is_some().then(std::time::Instant::now);
                 let support = intersect_face_supports(face_a, face_b, tol);
+                // **重なっている平面の組に、重なりの境を作らせます**
+                // （4-870。`ZENITH_COINCIDENT_SPLIT`、既定オフ）。
+                //
+                // 4-869 で測ったとおり、`Coincident` は**稜を1本も
+                // 持ちません**——「重なっている」と分かった時点で終わりで、
+                // **どちらの面も相手の輪郭で割られません**。だから選ぶ段で
+                // **同じ平面を2枚で覆い**、境目の稜が4回使われます（4-866）。
+                //
+                // ここでは**両方の面の輪郭（外周と内輪）を、割る材料として
+                // 渡します**。**切るのは下の段がやります**——
+                // `clip_candidate_to_planar_trims` が**両方のトリムで切る**
+                // ので、残るのは**重なりの境**です。
+                let support = support.map(|(kind, analytic)| {
+                    if coincident_split_on()
+                        && matches!(kind, FaceIntersectionKind::Coincident)
+                    {
+                        let edges = coincident_outline_edges(face_a, face_b, tol);
+                        if !edges.is_empty() {
+                            if std::env::var_os("ZENITH_COINCIDENT_SPLIT_WHY").is_some() {
+                                eprintln!(
+                                    "COINSPLITWHY A面{face_a_index} x B面{face_b_index}: 重なりの境の材料 {} 本",
+                                    edges.len()
+                                );
+                            }
+                            return (FaceIntersectionKind::Curves { edges }, analytic);
+                        }
+                    }
+                    (kind, analytic)
+                });
                 if let (Some(times), Some(began)) = (pair_times.as_mut(), pair_clock) {
                     times.push((began.elapsed(), face_a_index, face_b_index));
                 }
@@ -15967,6 +15996,52 @@ fn other_lies_on_plane(face: &Face, plane: &zenith_geom::PlaneSurface3, tol: &To
 
 /// **平面に曲面が線で接している組の接線を、落とさずに残すか**（4-851）。
 /// **既定オフ**です。`ZENITH_TANGENT_IMPRINT=1` で入ります。
+/// **重なっている平面の組に、重なりの境を作らせるか**（4-870。既定オフ）。
+fn coincident_split_on() -> bool {
+    std::env::var_os("ZENITH_COINCIDENT_SPLIT").is_some()
+}
+
+/// 重なっている2枚の**輪郭をそのまま**、割る材料として集める（4-870）。
+///
+/// **切り詰めはしません。** 下の段（`clip_candidate_to_planar_trims`）が
+/// **両方のトリムで切る**ので、残るのは重なりの境です。
+fn coincident_outline_edges(face_a: &Face, face_b: &Face, tol: &Tolerance) -> Vec<Edge> {
+    let mut edges: Vec<Edge> = Vec::new();
+    for (face, other) in [(face_a, face_b), (face_b, face_a)] {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                // **相手の中に入っている分だけ**を渡します（4-870）。
+                //
+                // 自分の境界に乗っている稜をそのまま渡すと、
+                // **割る材料にならないものが混じります**。中点で見て、
+                // **相手のトリムの中にあるものだけ**渡します。
+                // **中点で見るのでは粗すぎました**（4-870）——
+                // 輪の円弧は長いので、**中点が相手の外にあるのに
+                // 一部は中を通る**ことがあります（12本が1本になりました）。
+                // **稜ごとに、両方のトリムで切ってから渡します。**
+                let _ = other;
+                let piece = FaceIntersectionKind::Curve {
+                    edge: oriented.edge.clone(),
+                };
+                match clip_candidate_to_planar_trims(piece, face_a, face_b, tol) {
+                    Some(FaceIntersectionKind::Curve { mut edge }) => {
+                        edge.id = Edge::fresh_id();
+                        edges.push(edge);
+                    }
+                    Some(FaceIntersectionKind::Curves { edges: clipped }) => {
+                        for mut edge in clipped {
+                            edge.id = Edge::fresh_id();
+                            edges.push(edge);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    edges
+}
+
 /// **同じ平面で覆われている境界の片を落とすか**（4-867。既定オフ）。
 fn covered_boundary_on() -> bool {
     std::env::var_os("ZENITH_COVERED_BOUNDARY").is_some()
