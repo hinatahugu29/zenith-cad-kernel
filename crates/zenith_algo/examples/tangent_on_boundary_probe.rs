@@ -98,7 +98,16 @@ fn main() {
     let mut refused = 0usize;
     let mut broken = 0usize;
     let mut worst = 0.0f64;
-    for (name, y) in cases {
+    // **1配置だけ回せるようにします**（`ZENITH_TOB_ONLY=2` など、
+    // 0 始まり）。説明の口を立てたとき、どの配置の行なのかを
+    // 混ぜないため。
+    let only: Option<usize> = std::env::var("ZENITH_TOB_ONLY")
+        .ok()
+        .and_then(|v| v.parse().ok());
+    for (index, (name, y)) in cases.into_iter().enumerate() {
+        if only.is_some_and(|want| want != index) {
+            continue;
+        }
         let stud = BrepTransform::translate_solid(
             &PrimitiveBuilder::make_cylinder(radius, 4.0).expect("cylinder"),
             Vec3::new(10.0, y, 5.0),
@@ -131,7 +140,7 @@ fn main() {
                     refused += 1;
                     notes.push(format!(
                         "{label} 断り（{}）",
-                        reason.chars().take(200).collect::<String>()
+                        reason.chars().take(400).collect::<String>()
                     ));
                     volumes.push(None);
                 }
