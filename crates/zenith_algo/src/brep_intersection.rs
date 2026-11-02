@@ -10715,6 +10715,48 @@ fn clip_candidate_to_face_bboxes(
             // 存在判定には公差ぶんの余裕を持たせるが、区間そのものは余裕なしの
             // 重なりで切る。余裕を残したままだと交線が面の外へわずかにはみ出し、
             // 後段のループ組み立てで端点が一致しなくなる。
+            // **4-859 のもう一方の形。これは間違いでした**（4-861。
+            // `ZENITH_TOUCH_SNAP`、**既定オフのまま置いてあります**——
+            // **同じ考えをもう一度試さないため**）。
+            //
+            // **測って落ちました**: `edge_blend_diagnostic_test` の
+            // `rectangular_boss_root_edges_report_concave_contract_without_mutation`
+            // と `hybrid_bosses_blendability_diagnostics` が、
+            // **根元の稜 4 本のはずが 0 本**になります。**角柱が板に
+            // 立っている形の根元の稜は、まさにこの「厚みのない重なり」から
+            // 立っています**——**広げた箱は、ここでは効いている**のです。
+            //
+            // 下の `or_else` は、**厚みのない重なり**（箱が面で触っている
+            // だけ）のときに**±公差に広げた箱**で切ります。4-859 で測った
+            // とおり、そこから**長さ 1e-6 の削片**が立ち、その端が刻み込まれて
+            // **1e-6 ずれた双子の稜**になります。
+            //
+            // **広げた箱は「見つける」ためには正しく、「作る」ためには
+            // 粗すぎる**のですから、**作らない**のが筋です: ごく小さな
+            // 余裕（1e-12）だけの重なりで切り、**それで長さが立たなければ
+            // 線は立てません**。4-860（端を刻み込みに渡さない）とは**別の
+            // 形**で、同じ根を潰します。**どちらが正しいかは測って決める**
+            // こと。
+            if std::env::var_os("ZENITH_TOUCH_SNAP").is_some() {
+                let tight = bbox_overlap(bbox_a, bbox_b, 1e-12)?;
+                let (t_min, t_max) =
+                    clip_line_to_bbox(point, direction, &tight, tol.linear)?;
+                if t_max - t_min <= tol.linear * 2.0 {
+                    if std::env::var_os("ZENITH_TOUCH_SNAP_WHY").is_some() {
+                        eprintln!(
+                            "TOUCHSNAP 触れているだけの重なりなので線を立てません（長さ {:.3e}）",
+                            t_max - t_min
+                        );
+                    }
+                    return None;
+                }
+                return Some(FaceIntersectionKind::Line {
+                    point,
+                    direction,
+                    segment_start: point + direction * t_min,
+                    segment_end: point + direction * t_max,
+                });
+            }
             let padded = bbox_overlap_where_needed(bbox_a, bbox_b, tol.linear)?;
             let exact = bbox_overlap(bbox_a, bbox_b, 0.0);
             let (t_min, t_max) = exact
