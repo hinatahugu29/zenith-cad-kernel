@@ -2019,7 +2019,7 @@ impl BrepIntersectionBuilder {
         let repaired = repair_open_intersection_loops(&faces_a, &faces_b, &mut edge_candidates, tol);
         let _ = repaired;
         clock.lap("　端を寄せる・輪を拾い直す");
-        let selection = Self::selected_face_pieces_from_candidates(
+        let mut selection = Self::selected_face_pieces_from_candidates(
             solid_a,
             solid_b,
             edge_candidates.clone(),
@@ -2027,6 +2027,33 @@ impl BrepIntersectionBuilder {
             tol,
         );
         clock.lap("　**面を割って片を選ぶ**");
+        // **縫う前に、同じ稜を一本化してみます。これは効きませんでした**
+        // （4-865。`ZENITH_UNIFY_BEFORE_STITCH`、**既定オフのまま置いて
+        // あります**——同じ見立てをもう一度試さないため）。
+        //
+        // **実測**: 配置1 の和は `0 unmatched・非多様体4` のまま、
+        // **1つも動きません**。**当たり前でした**——一本化は**実体を
+        // 1本にする**だけで、**使われた回数は 4 のまま**です。
+        // **4枚の面が本当にその稜で出会っている**のですから、
+        // **選ぶ段か割る段の話**です。
+        //
+        // 4-865 で測ったとおり、`notch_placement_probe` の配置1 の和の
+        // 欠陥は**稜1本だけ**で、**A が順逆で2回、B が順逆で2回**
+        // 使っています——**両方の立体が同じ稜を持っている**のです。
+        // それを一本化する `unify_coincident_edges` は、**立体を組む段**に
+        // あって、**縫い目を数える段より後**です。だから届きません
+        // （1725 行あたりの注記が `linkrods` について言っているのと同じ形）。
+        if std::env::var_os("ZENITH_UNIFY_BEFORE_STITCH").is_some() {
+            let faces: Vec<Face> = selection
+                .selected_face_pieces
+                .iter()
+                .map(|piece| piece.face.clone())
+                .collect();
+            let unified = unify_coincident_edges(faces, tol);
+            for (piece, face) in selection.selected_face_pieces.iter_mut().zip(unified) {
+                piece.face = face;
+            }
+        }
         let cap_generation = Self::build_planar_caps_grouped_by_planar_face(
             &edge_candidates,
             &faces_a,

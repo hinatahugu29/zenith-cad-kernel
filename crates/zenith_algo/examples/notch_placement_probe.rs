@@ -148,11 +148,24 @@ fn main() {
         let b = volume_of(&moved);
         let mut volumes: Vec<Option<f64>> = Vec::new();
         let mut notes: Vec<String> = Vec::new();
-        for (label, op) in [
+        // **1演算だけ回せるようにします**（`ZENITH_NP_OP=0/1/2`。4-865）。
+        // 説明の口（`ZENITH_STITCH_WHY` など）は**3演算ぶんが続けて
+        // 出る**ので、どの演算の行なのかを混ぜないため。
+        let only_op: Option<usize> = std::env::var("ZENITH_NP_OP")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        for (at, (label, op)) in [
             ("∪", BooleanOpType::Union),
             ("∩", BooleanOpType::Intersection),
             ("＼", BooleanOpType::Difference),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if only_op.is_some_and(|want| want != at) {
+                volumes.push(None);
+                continue;
+            }
             match BooleanEngine::boolean_solids_exact(&drilled, &moved, op, &tol) {
                 Ok(solid) => {
                     notes.push(format!(
