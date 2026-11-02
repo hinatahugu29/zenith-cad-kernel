@@ -1629,7 +1629,19 @@ impl BrepIntersectionBuilder {
         // （z=4.999999）が刻み込まれると、**天面と側面が 1e-6 ずれた
         // 同じ稜**になり、縫い目があぶれます。**削片は何も割りません**
         // （4-858）ので、**端を渡さなければ、ずれた双子は生まれません**。
-        let drop_slivers = std::env::var_os("ZENITH_SLIVER_NO_IMPRINT").is_some();
+        // **4-862 で既定オンに昇格**（`=0` で旧既定に戻せます）。
+        // 4-861 で、もう一方の形（`ZENITH_TOUCH_SNAP`）が通しテストで
+        // 落ちることを測り、**この形が正しい**と決まりました。昇格の前に
+        // 測ったもの: 通しテスト 158ターゲット 801件0失敗、
+        // `contact_placement_probe` REFUSED 7／ok 146（44配置で破れ0、
+        // 最悪 3.901e-8）、`foreign_cross_pair_probe` 破れ0（最悪 7.051e-10）、
+        // H8 の3体（1.551149・7.805801・2.295747、OCCとの面の差0）、
+        // `build_pyd.py`、門（`--quick --no-tests`）——**どれも既定と同じ数**。
+        // 効き目: `tangent_on_boundary_probe` の**断りが8件→1件**、
+        // 残った4配置の恒等式が全部閉じる（最悪 2.196e-13）。
+        let drop_slivers = std::env::var("ZENITH_SLIVER_NO_IMPRINT")
+            .map(|value| value != "0")
+            .unwrap_or(true);
         let mut dropped_slivers = 0usize;
         for candidate in &candidates {
             let start = candidate.edge.start_vertex.point;
