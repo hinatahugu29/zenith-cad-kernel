@@ -1620,9 +1620,51 @@ impl BrepIntersectionBuilder {
         // 縫合が合わない。相手が持つ頂点を境界辺へ刻み込んで対応させる。
         // 面の形は変わらず、境界に頂点が増えるだけ。
         let mut imprint_points = Vec::new();
+        // **公差より短い候補の端は、刻み込みに渡しません**（4-860。
+        // `ZENITH_SLIVER_NO_IMPRINT`、既定オフ）。
+        //
+        // 4-859 で測ったとおり、`bbox_overlap_where_needed` が
+        // **触れているだけの軸を ±公差に広げる**ので、箱が面で触って
+        // いるだけのところに**長さ 1e-6 の削片**が立ちます。その端
+        // （z=4.999999）が刻み込まれると、**天面と側面が 1e-6 ずれた
+        // 同じ稜**になり、縫い目があぶれます。**削片は何も割りません**
+        // （4-858）ので、**端を渡さなければ、ずれた双子は生まれません**。
+        let drop_slivers = std::env::var_os("ZENITH_SLIVER_NO_IMPRINT").is_some();
+        let mut dropped_slivers = 0usize;
         for candidate in &candidates {
-            imprint_points.push(candidate.edge.start_vertex.point);
-            imprint_points.push(candidate.edge.end_vertex.point);
+            let start = candidate.edge.start_vertex.point;
+            let end = candidate.edge.end_vertex.point;
+            if drop_slivers && (end - start).norm() <= tol.linear * 2.0 {
+                dropped_slivers += 1;
+                continue;
+            }
+            imprint_points.push(start);
+            imprint_points.push(end);
+        }
+        if std::env::var_os("ZENITH_SLIVER_DUMP").is_some() {
+            for candidate in &candidates {
+                let start = candidate.edge.start_vertex.point;
+                let end = candidate.edge.end_vertex.point;
+                eprintln!(
+                    "SLIVERDUMP 候補 稜{} ({:.9} {:.9} {:.9})->({:.9} {:.9} {:.9}) 長さ {:.3e}",
+                    candidate.edge.id, start.x, start.y, start.z, end.x, end.y, end.z,
+                    (end - start).norm()
+                );
+            }
+            for piece in selected_face_pieces.iter() {
+                for oriented in &piece.face.outer_wire.edges {
+                    let q = oriented.edge.start_vertex.point;
+                    if (q.z - 5.0).abs() > 1e-12 && (q.z - 5.0).abs() < 1e-4 {
+                        eprintln!(
+                            "SLIVERDUMP 刻み込みの手前 片の稜{} 端 ({:.9} {:.9} {:.9})",
+                            oriented.edge.id, q.x, q.y, q.z
+                        );
+                    }
+                }
+            }
+        }
+        if drop_slivers && std::env::var_os("ZENITH_SLIVER_WHY").is_some() {
+            eprintln!("SLIVERWHY 公差以下の候補 {dropped_slivers} 本の端を刻み込みに渡しませんでした");
         }
 
         report_holes_on_boundary(
