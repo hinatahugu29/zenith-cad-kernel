@@ -2019,7 +2019,7 @@ impl BrepIntersectionBuilder {
         let repaired = repair_open_intersection_loops(&faces_a, &faces_b, &mut edge_candidates, tol);
         let _ = repaired;
         clock.lap("　端を寄せる・輪を拾い直す");
-        let mut selection = Self::selected_face_pieces_from_candidates(
+        let selection = Self::selected_face_pieces_from_candidates(
             solid_a,
             solid_b,
             edge_candidates.clone(),
@@ -2043,58 +2043,7 @@ impl BrepIntersectionBuilder {
         // それを一本化する `unify_coincident_edges` は、**立体を組む段**に
         // あって、**縫い目を数える段より後**です。だから届きません
         // （1725 行あたりの注記が `linkrods` について言っているのと同じ形）。
-        // **同じ平面で覆われている境界の片は、片方だけ残します**
-        // （4-867。`ZENITH_COVERED_BOUNDARY`、既定オフ。説明は
-        // `ZENITH_COVERED_BOUNDARY_WHY`）。
-        //
-        // 4-866 で測った形: 板の穴の壁の平面（y=2）と、輪の端の輪っかの
-        // 平面が**同じ**で、**A の `Boundary` の三角を B の片が丸ごと
-        // 覆っています**。**同じ面積を2枚で覆うので、境目の稜が4回**
-        // 使われます。**4-850 の「境になっていない接触線は落とす」を、
-        // 線ではなく面でやる**ところです。
-        //
-        // **絞ります**（4-852 の罠）: **両方が平面**で、**同じ平面に
-        // 乗っていて**、**相手がこちらの代表点を含む**ときだけ。
-        if covered_boundary_on() {
-            let explain = std::env::var_os("ZENITH_COVERED_BOUNDARY_WHY").is_some();
-            let others: Vec<(BooleanOperand, Face)> = selection
-                .selected_face_pieces
-                .iter()
-                .map(|piece| (piece.operand, piece.face.clone()))
-                .collect();
-            let mut dropped = 0usize;
-            selection.selected_face_pieces.retain(|piece| {
-                if piece.location != FaceRegionLocation::Boundary {
-                    return true;
-                }
-                let FaceGeometry::Plane(plane) = &piece.face.geometry else {
-                    return true;
-                };
-                let here = representative_face_point(&piece.face);
-                let covered = others.iter().any(|(operand, other)| {
-                    if *operand == piece.operand {
-                        return false;
-                    }
-                    if !other_lies_on_plane(other, plane, tol) {
-                        return false;
-                    }
-                    point_inside_face_trim(other, here, tol).unwrap_or(false)
-                });
-                if covered {
-                    dropped += 1;
-                    if explain {
-                        eprintln!(
-                            "COVEREDWHY 面{} の境界の片を落とします（代表点 {:.6} {:.6} {:.6} を相手が覆っています）",
-                            piece.face.id, here.x, here.y, here.z
-                        );
-                    }
-                }
-                !covered
-            });
-            if explain {
-                eprintln!("COVEREDWHY 落とした境界の片 {dropped} 枚");
-            }
-        }
+        let mut selection = selection;
         if std::env::var_os("ZENITH_UNIFY_BEFORE_STITCH").is_some() {
             let faces: Vec<Face> = selection
                 .selected_face_pieces
@@ -14970,6 +14919,65 @@ fn resolve_coincident_face_pieces(pieces: &mut Vec<SelectedBooleanFacePiece>, to
                 drop_flags[right] = true;
             }
             break;
+        }
+    }
+
+    // **部分的に重なっている場合**（4-868。`ZENITH_COVERED_BOUNDARY`、
+    // 既定オフ。説明は `ZENITH_COVERED_BOUNDARY_WHY`）。
+    //
+    // 上の判定は `coincident_face_direction` で、**面全体の一致**
+    // （重心と広がり）を見ます。**部分的な重なりは捕まりません**——
+    // `ZENITH_OVERLAP_WHY` の註が 4-124 でそう書いていて、
+    // **残るメッシュ非多様体は全件この形**でした。
+    //
+    // 4-866 で測った形がそれです: **A の `Boundary` の三角が、B の
+    // 輪っかの一部に丸ごと覆われています**。**同じ面積を2枚で覆うので、
+    // 境目の稜が4回**使われます。**覆われている側（`Boundary`）を
+    // 落とします。**
+    //
+    // **絞ります**（4-852 の罠）: **両方が平面**で、**同じ平面に乗って
+    // いて**、**相手がこちらの代表点を含む**ときだけ。
+    if covered_boundary_on() {
+        let explain = std::env::var_os("ZENITH_COVERED_BOUNDARY_WHY").is_some();
+        let mut dropped = 0usize;
+        let mut covered_flags = vec![false; pieces.len()];
+        for left in 0..pieces.len() {
+            if drop_flags[left] || pieces[left].location != FaceRegionLocation::Boundary {
+                continue;
+            }
+            let FaceGeometry::Plane(plane) = &pieces[left].face.geometry else {
+                continue;
+            };
+            let here = representative_face_point(&pieces[left].face);
+            for right in 0..pieces.len() {
+                if right == left || drop_flags[right] || covered_flags[right] {
+                    continue;
+                }
+                if pieces[right].operand == pieces[left].operand {
+                    continue;
+                }
+                if !other_lies_on_plane(&pieces[right].face, plane, tol) {
+                    continue;
+                }
+                if !point_inside_face_trim(&pieces[right].face, here, tol).unwrap_or(false) {
+                    continue;
+                }
+                covered_flags[left] = true;
+                dropped += 1;
+                if explain {
+                    eprintln!(
+                        "COVEREDWHY 面{} の境界の片を落とします（代表点 {:.6} {:.6} {:.6} を面{}が覆っています）",
+                        pieces[left].face.id, here.x, here.y, here.z, pieces[right].face.id
+                    );
+                }
+                break;
+            }
+        }
+        for (flag, covered) in drop_flags.iter_mut().zip(covered_flags) {
+            *flag = *flag || covered;
+        }
+        if explain {
+            eprintln!("COVEREDWHY 落とした境界の片 {dropped} 枚");
         }
     }
 
