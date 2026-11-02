@@ -15600,6 +15600,17 @@ fn candidate_end_points(kind: &FaceIntersectionKind) -> Vec<Point3> {
 ///    点を取り、**両側で内外が同じ**なら、その線は面を割っていません
 ///
 /// 片方でも外れたら落としません。
+/// **その面が、この平面に丸ごと乗った平面の面か**（4-852）。
+fn other_lies_on_plane(face: &Face, plane: &zenith_geom::PlaneSurface3, tol: &Tolerance) -> bool {
+    let FaceGeometry::Plane(other) = &face.geometry else {
+        return false;
+    };
+    if other.normal.cross(&plane.normal).norm() > 1e-6 {
+        return false;
+    }
+    (other.origin - plane.origin).dot(&plane.normal).abs() <= tol.linear.max(1e-9) * 10.0
+}
+
 /// **平面に曲面が線で接している組の接線を、落とさずに残すか**（4-851）。
 /// **既定オフ**です。`ZENITH_TANGENT_IMPRINT=1` で入ります。
 fn tangent_imprint_on() -> bool {
@@ -15655,7 +15666,28 @@ fn drop_non_bounding_contact_curves(
         if tangent_imprint_on() {
             let planar_a = matches!(face_a.geometry, FaceGeometry::Plane(_));
             let planar_b = matches!(face_b.geometry, FaceGeometry::Plane(_));
-            if planar_a != planar_b {
+            // **相手の立体に、同じ平面に乗った面があるときだけ**残します
+            // （4-852）。**無条件に残すと `box x torus (top tangent plane)`
+            // の和が断られます**（4-851 で実測）——あちらは箱の天面に
+            // トーラスが接しているだけで、**同じ平面に乗った面が相手に
+            // ありません**。刻み線が要るのは、**重なる2面を揃えて割る**
+            // ときだけです。
+            let coplanar_partner = match (planar_a, planar_b) {
+                (true, false) => {
+                    let FaceGeometry::Plane(plane) = &face_a.geometry else {
+                        unreachable!()
+                    };
+                    faces_b.iter().any(|other| other_lies_on_plane(other, plane, tol))
+                }
+                (false, true) => {
+                    let FaceGeometry::Plane(plane) = &face_b.geometry else {
+                        unreachable!()
+                    };
+                    faces_a.iter().any(|other| other_lies_on_plane(other, plane, tol))
+                }
+                _ => false,
+            };
+            if coplanar_partner {
                 if explain {
                     eprintln!(
                         "CONTACTCURVE 残す（平面×曲面の接線） 面A {} 面B {}",
