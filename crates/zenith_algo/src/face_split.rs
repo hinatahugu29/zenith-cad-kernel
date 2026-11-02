@@ -1280,6 +1280,48 @@ impl FaceSplitter {
     ) -> Result<ParameterAreaCheck, String> {
         let check = parameter_area_check(face, pieces);
         compare_area_checks(label, face, pieces, &check);
+        // **穴が、その片の外周の上に乗っていないか**（4-854。
+        // `ZENITH_LOOP_ON_BOUNDARY_GUARD`、既定オフ）。
+        //
+        // **3つの道（境界から境界・内側の輪・穴から穴）が、どれも最後に
+        // ここを通ります**。**どの道で作ったかではなく、出来た片が
+        // 成り立っているか**を見ます——**同じ区間が外周と穴の両方に
+        // 出ている片は、縫えません**。
+        //
+        // **実測**（`ring_rim_probe`、4-852 の残り）: 板の天面の外側の片が
+        // 巻き **+2.000000000e2（20x10 丸ごと）**のまま、ワッシャーの足跡と
+        // ドリル穴を1つに繋いだ輪を穴として抱え、**y=0 の x 5.3..8 が
+        // 外周と穴の両方に出て**、**(8,0,5)-(5.3,0,5) が4回使われて
+        // 非多様体**になりました。**4-845 と同じ形**——**境界に届く輪は、
+        // 穴ではなく切り欠き**です。
+        if loop_on_boundary_guard_on() {
+            for (index, piece) in pieces.iter().enumerate() {
+                for (wire_index, hole) in piece.inner_wires.iter().enumerate() {
+                    for oriented in &hole.edges {
+                        let (t0, t1) = oriented.edge.curve.param_range();
+                        if !(t1 > t0) {
+                            continue;
+                        }
+                        let middle = oriented.edge.curve.evaluate((t0 + t1) * 0.5);
+                        let Some(gap) = distance_to_wire(&piece.outer_wire, middle) else {
+                            continue;
+                        };
+                        if gap <= tol_for(piece) {
+                            if std::env::var_os("ZENITH_LOOP_ON_BOUNDARY_WHY").is_some() {
+                                eprintln!(
+                                    "LOOPBOUNDWHY {label}: 片{index} の内輪{wire_index} が外周の上に乗っています ({:.4} {:.4} {:.4})、外れ {gap:.3e}",
+                                    middle.x, middle.y, middle.z
+                                );
+                            }
+                            return Err(format!(
+                                "{label}: piece {index} has a hole lying on its own outer boundary at ({:.4} {:.4} {:.4}); that loop is a notch, not a hole",
+                                middle.x, middle.y, middle.z
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         // **測れなかったなら、測れなかったと言います。**（4-214、4-215）
         //
         // ここを黙って通すと、受け皿の `compute_face_integral` が**トリムを
@@ -1877,6 +1919,32 @@ fn distribute_holes(face: &Face, pieces: Vec<Face>, tol: &Tolerance) -> Result<V
 /// **外周の p-curve で作った多角形**の内外を数えます。
 /// **落とせない・多角形が作れないときは `None`**——**測れないなら、
 /// 決めません**（呼び手はそこで断ります）。
+/// **その片で「外周の上」と言える隔たり**（4-854）。
+fn tol_for(piece: &Face) -> f64 {
+    piece.tolerance.max(1e-9) * 10.0
+}
+
+fn loop_on_boundary_guard_on() -> bool {
+    std::env::var_os("ZENITH_LOOP_ON_BOUNDARY_GUARD").is_some()
+}
+
+/// **その点から、この輪のいちばん近いところまでの隔たり**（4-854）。
+fn distance_to_wire(wire: &Wire, point: Point3) -> Option<f64> {
+    let mut best: Option<f64> = None;
+    for oriented in &wire.edges {
+        let (t0, t1) = oriented.edge.curve.param_range();
+        if !(t1 > t0) {
+            continue;
+        }
+        for step in 0..=32 {
+            let t = t0 + (t1 - t0) * step as f64 / 32.0;
+            let gap = (oriented.edge.curve.evaluate(t) - point).norm();
+            best = Some(best.map_or(gap, |b: f64| b.min(gap)));
+        }
+    }
+    best
+}
+
 fn hole_straddle_guard_on() -> bool {
     std::env::var_os("ZENITH_HOLE_STRADDLE_GUARD").is_some()
 }

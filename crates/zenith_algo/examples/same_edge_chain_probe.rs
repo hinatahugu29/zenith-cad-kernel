@@ -138,6 +138,51 @@ fn main() {
         Point3::new(20.0, 10.0, 5.0),
         Point3::new(0.0, 10.0, 5.0),
     ];
+    // **外周の上に乗った1本で割る**（4-854）。何も割れないのが正しい。
+    {
+        let tol = Tolerance::default();
+        let plane = PlaneSurface3::new(
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .expect("plane");
+        let face = Face::new(
+            FaceGeometry::Plane(plane),
+            wire(&plain),
+            Vec::new(),
+            Orientation::Forward,
+            tol.linear,
+        );
+        let on_boundary = Edge::line_between(
+            Vertex::from_point(Point3::new(5.3, 0.0, 5.0)),
+            Vertex::from_point(Point3::new(8.0, 0.0, 5.0)),
+        )
+        .unwrap();
+        println!("=== 外周の上に乗った1本で割る");
+        match FaceSplitter::split_by_chain(&face, &[on_boundary], &tol) {
+            Ok((pieces, _)) => {
+                println!("片 {} 枚", pieces.len());
+                for (index, piece) in pieces.iter().enumerate() {
+                    println!(
+                        "  片{index}: 外周 {} 本",
+                        piece.outer_wire.edges.len()
+                    );
+                    for oriented in &piece.outer_wire.edges {
+                        let (s, e) = (
+                            oriented.edge.start_vertex.point,
+                            oriented.edge.end_vertex.point,
+                        );
+                        println!(
+                            "    ({:.3},{:.3}) -> ({:.3},{:.3})",
+                            s.x, s.y, e.x, e.y
+                        );
+                    }
+                }
+            }
+            Err(reason) => println!("断り — {reason}"),
+        }
+    }
     run("1本の辺・穴なし", &plain, false);
     run("1本の辺・穴あり", &plain, true);
     run("刻まれた辺・穴なし", &imprinted, false);

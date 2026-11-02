@@ -169,6 +169,52 @@ impl Face {
             derived_pcurves: std::sync::OnceLock::new(),
         };
 
+        // **穴が外周の上に乗った面を、作った場所ごと捕まえる口**（4-854。
+        // `ZENITH_HOLE_ON_BOUNDARY_TRACE`、既定オフ。診断専用）。
+        //
+        // **中点だけでは足りません**——穴の長い稜が外周に**一部だけ**
+        // 重なる形を見落とすので、稜の上の7点で見ます。
+        if std::env::var_os("ZENITH_HOLE_ON_BOUNDARY_TRACE").is_some()
+            && !face.inner_wires.is_empty()
+        {
+            let slack = face.tolerance.max(1e-9) * 10.0;
+            let on_outer = |point: zenith_math::Point3| {
+                face.outer_wire.edges.iter().any(|other| {
+                    let (o0, o1) = other.edge.curve.param_range();
+                    o1 > o0
+                        && (0..=32).any(|step| {
+                            let t = o0 + (o1 - o0) * f64::from(step) / 32.0;
+                            (other.edge.curve.evaluate(t) - point).norm() <= slack
+                        })
+                })
+            };
+            'found: for hole in &face.inner_wires {
+                for oriented in &hole.edges {
+                    let (t0, t1) = oriented.edge.curve.param_range();
+                    if !(t1 > t0) {
+                        continue;
+                    }
+                    let hit = (1..8).any(|k| {
+                        on_outer(oriented.edge.curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 8.0))
+                    });
+                    if hit {
+                        let middle = oriented.edge.curve.evaluate((t0 + t1) * 0.5);
+                        eprintln!(
+                            "HOLEONBOUND 面{} 穴の稜{} の中点 ({:.4} {:.4} {:.4}) が外周の上です
+{}",
+                            face.id,
+                            oriented.edge.id,
+                            middle.x,
+                            middle.y,
+                            middle.z,
+                            std::backtrace::Backtrace::force_capture()
+                        );
+                        break 'found;
+                    }
+                }
+            }
+        }
+
         match &face.geometry {
             FaceGeometry::Plane(_) => {
                 if let Ok(pcurves) = face.derive_plane_pcurves() {

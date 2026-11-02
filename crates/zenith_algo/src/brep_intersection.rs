@@ -4387,6 +4387,38 @@ fn collect_batch_splits_for_faces(
                                 .map(|a| format!("{a:+.9e}"))
                                 .unwrap_or_else(|| "?".to_string())
                         );
+                        // **その片の外周をそのまま出す口**（4-854。
+                        // `ZENITH_BATCH_WIRE=1`、既定オフ）。巻きの数だけでは
+                        // **同じ辺を向きちがいで2回使っているか**が分かりません。
+                        if std::env::var_os("ZENITH_BATCH_WIRE").is_some() {
+                            for oriented in &piece.outer_wire.edges {
+                                let (start, end) = match oriented.orientation {
+                                    zenith_topo::Orientation::Forward => (
+                                        oriented.edge.start_vertex.point,
+                                        oriented.edge.end_vertex.point,
+                                    ),
+                                    zenith_topo::Orientation::Reversed => (
+                                        oriented.edge.end_vertex.point,
+                                        oriented.edge.start_vertex.point,
+                                    ),
+                                };
+                                eprintln!(
+                                    "BATCHWIRE {side}面{face_index} 片{at} 稜{}: ({:.4} {:.4} {:.4}) -> ({:.4} {:.4} {:.4})",
+                                    oriented.edge.id,
+                                    start.x, start.y, start.z,
+                                    end.x, end.y, end.z
+                                );
+                            }
+                            for (wi, hole) in piece.inner_wires.iter().enumerate() {
+                                for oriented in &hole.edges {
+                                    let point = oriented.edge.start_vertex.point;
+                                    eprintln!(
+                                        "BATCHWIRE {side}面{face_index} 片{at} 内輪{wi} 稜{}: ({:.4} {:.4} {:.4})",
+                                        oriented.edge.id, point.x, point.y, point.z
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -15282,6 +15314,56 @@ fn split_planar_face_across_holes(
             faces.len(),
             component_outlines.len()
         ));
+    }
+
+    // **穴が、その片の外周の上に乗っていないか**（4-854。
+    // `ZENITH_LOOP_ON_BOUNDARY_GUARD`、既定オフ）。
+    //
+    // **面積の和では捕まりません**——上の検算は通ります。穴が外周に
+    // 線で着いていても、面積は合うからです。**合っているのは面積だけ**で、
+    // **同じ区間が外周と穴の両方に出る片は縫えません**。
+    //
+    // **実測**（`ring_rim_probe`、4-852 の残り）: 板の天面の片が
+    // 巻き **+2.000000000e2（20x10 丸ごと）**のまま、ワッシャーの足跡と
+    // ドリル穴を1つに繋いだ輪を穴として抱え、**y=0 の x 5.3..8 が外周と
+    // 穴の両方に出て**、**(8,0,5)-(5.3,0,5) が4回使われて非多様体**に
+    // なりました。**4-845 と同じ形**——**境界に届く輪は、穴ではなく
+    // 切り欠き**です。
+    if std::env::var_os("ZENITH_LOOP_ON_BOUNDARY_GUARD").is_some() {
+        for (index, piece) in faces.iter().enumerate() {
+            for (wire_index, hole) in piece.inner_wires.iter().enumerate() {
+                for oriented in &hole.edges {
+                    let (t0, t1) = oriented.edge.curve.param_range();
+                    if !(t1 > t0) {
+                        continue;
+                    }
+                    let middle = oriented.edge.curve.evaluate((t0 + t1) * 0.5);
+                    let mut gap = f64::INFINITY;
+                    for other in &piece.outer_wire.edges {
+                        let (o0, o1) = other.edge.curve.param_range();
+                        if !(o1 > o0) {
+                            continue;
+                        }
+                        for step in 0..=32 {
+                            let t = o0 + (o1 - o0) * f64::from(step) / 32.0;
+                            gap = gap.min((other.edge.curve.evaluate(t) - middle).norm());
+                        }
+                    }
+                    if gap <= tol.linear.max(piece.tolerance) * 10.0 {
+                        if std::env::var_os("ZENITH_LOOP_ON_BOUNDARY_WHY").is_some() {
+                            eprintln!(
+                                "LOOPBOUNDWHY 穴を横切る割り: 片{index} の内輪{wire_index} が外周の上に乗っています ({:.4} {:.4} {:.4})、外れ {gap:.3e}",
+                                middle.x, middle.y, middle.z
+                            );
+                        }
+                        return Err(format!(
+                            "piece {index} has a hole lying on its own outer boundary at ({:.4} {:.4} {:.4}); that loop is a notch, not a hole",
+                            middle.x, middle.y, middle.z
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     Ok(faces)
