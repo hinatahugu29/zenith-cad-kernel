@@ -131,7 +131,7 @@ fn main() {
                     refused += 1;
                     notes.push(format!(
                         "{label} 断り（{}）",
-                        reason.chars().take(120).collect::<String>()
+                        reason.chars().take(200).collect::<String>()
                     ));
                     volumes.push(None);
                 }
