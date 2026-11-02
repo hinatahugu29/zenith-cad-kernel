@@ -178,14 +178,19 @@ impl Face {
             && !face.inner_wires.is_empty()
         {
             let slack = face.tolerance.max(1e-9) * 10.0;
+            // **標本では測りません**（4-855）。長さ 20 の稜を 33 点で
+            // 測ると刻みが 0.625 で、**乗っている点でも 0.3 離れて
+            // 見えます**。
             let on_outer = |point: zenith_math::Point3| {
                 face.outer_wire.edges.iter().any(|other| {
-                    let (o0, o1) = other.edge.curve.param_range();
-                    o1 > o0
-                        && (0..=32).any(|step| {
-                            let t = o0 + (o1 - o0) * f64::from(step) / 32.0;
-                            (other.edge.curve.evaluate(t) - point).norm() <= slack
-                        })
+                    zenith_geom::ExtremumEngine::point_to_curve(
+                        point,
+                        &other.edge.curve,
+                        32,
+                        1e-12,
+                    )
+                    .map(|found| found.distance <= slack)
+                    .unwrap_or(false)
                 })
             };
             'found: for hole in &face.inner_wires {

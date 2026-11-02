@@ -1928,7 +1928,15 @@ fn loop_on_boundary_guard_on() -> bool {
     std::env::var_os("ZENITH_LOOP_ON_BOUNDARY_GUARD").is_some()
 }
 
-/// **その点から、この輪のいちばん近いところまでの隔たり**（4-854）。
+/// **その点から、この輪のいちばん近いところまでの隔たり**（4-854、
+/// 4-855 で測り方を直した）。
+///
+/// **標本で測ってはいけません**（4-855）。長さ 20 の稜を 33 点で
+/// 測ると**刻みが 0.625**——**稜の上に乗っている点でも 0.3 以上
+/// 離れて見えます**。**実測: 板の天面の外周（稜69、(0,0,5)→(20,0,5)）に
+/// 乗っている穴の稜237 を、標本では「乗っていない」と読みました**
+/// ——4-854 の「刻み込みが作っている」は、**この物差しの粗さ**でした。
+/// **曲線への最短距離**で測ります。
 fn distance_to_wire(wire: &Wire, point: Point3) -> Option<f64> {
     let mut best: Option<f64> = None;
     for oriented in &wire.edges {
@@ -1936,10 +1944,10 @@ fn distance_to_wire(wire: &Wire, point: Point3) -> Option<f64> {
         if !(t1 > t0) {
             continue;
         }
-        for step in 0..=32 {
-            let t = t0 + (t1 - t0) * step as f64 / 32.0;
-            let gap = (oriented.edge.curve.evaluate(t) - point).norm();
-            best = Some(best.map_or(gap, |b: f64| b.min(gap)));
+        if let Ok(found) =
+            ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 32, 1e-12)
+        {
+            best = Some(best.map_or(found.distance, |b: f64| b.min(found.distance)));
         }
     }
     best

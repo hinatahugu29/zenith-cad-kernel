@@ -1625,6 +1625,10 @@ impl BrepIntersectionBuilder {
             imprint_points.push(candidate.edge.end_vertex.point);
         }
 
+        report_holes_on_boundary(
+            "刻み込みの手前",
+            selected_face_pieces.iter().map(|piece| &piece.face),
+        );
         let imprinted = imprint_vertices_on_edges(
             selected_face_pieces
                 .iter()
@@ -1644,9 +1648,17 @@ impl BrepIntersectionBuilder {
         //
         // **刻み込みの後に置きます。** 前に置くと、切れ目が刻み込みで
         // 2本に割れたあとの形（実測では7辺の輪）を見られません。
+        report_holes_on_boundary(
+            "刻み込みの後",
+            selected_face_pieces.iter().map(|piece| &piece.face),
+        );
         for piece in &mut selected_face_pieces {
             collapse_there_and_back(&mut piece.face, tol);
         }
+        report_holes_on_boundary(
+            "行って戻るを畳んだ後",
+            selected_face_pieces.iter().map(|piece| &piece.face),
+        );
         selected_face_pieces.retain(|piece| piece.face.outer_wire.edges.len() >= 2);
 
         // **含む／含まれる稜を刻みます**（4-356。**既定で走ります**。
@@ -14082,6 +14094,83 @@ fn intersect_ruling_plane_cylinder_patch(
 /// the shell will not stitch. Splitting the longer edge at the neighbour's
 /// vertex is what makes them match. The face keeps its shape; only its
 /// boundary gains a vertex.
+/// **その点から、この輪のいちばん近いところまでの隔たり**（4-855）。
+/// **標本ではなく、曲線への最短距離**で測ります。
+fn distance_to_wire_exact(wire: &zenith_topo::Wire, point: Point3) -> f64 {
+    let mut best = f64::INFINITY;
+    for oriented in &wire.edges {
+        let (t0, t1) = oriented.edge.curve.param_range();
+        if !(t1 > t0) {
+            continue;
+        }
+        if let Ok(found) = ExtremumEngine::point_to_curve(point, &oriented.edge.curve, 32, 1e-12) {
+            best = best.min(found.distance);
+        }
+    }
+    best
+}
+
+/// **穴が、その片の外周の上に乗っている片を、段ごとに出す**（4-855。
+/// `ZENITH_HOLE_ON_BOUNDARY_STAGE`、既定オフ、診断専用）。
+///
+/// **`Face::new` に置いた口（4-854 の `ZENITH_HOLE_ON_BOUNDARY_TRACE`）
+/// では分かりませんでした**——片は `face.inner_wires = ...` のように
+/// **作った後で書き換えられる**ので、`Face::new` を通らない形があります。
+/// **どの段で初めてこの形になるか**を見るには、段ごとに当てるしかありません。
+fn report_holes_on_boundary<'a>(label: &str, faces: impl Iterator<Item = &'a Face>) {
+    if std::env::var_os("ZENITH_HOLE_ON_BOUNDARY_STAGE").is_none() {
+        return;
+    }
+    let verbose = std::env::var("ZENITH_HOLE_ON_BOUNDARY_STAGE")
+        .map(|value| value == "2")
+        .unwrap_or(false);
+    for face in faces {
+        if face.inner_wires.is_empty() {
+            continue;
+        }
+        if verbose {
+            let ids = |wire: &Wire| -> String {
+                wire.edges
+                    .iter()
+                    .map(|oriented| {
+                        let start = oriented.edge.start_vertex.point;
+                        let end = oriented.edge.end_vertex.point;
+                        format!(
+                            "{}:({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2})",
+                            oriented.edge.id, start.x, start.y, start.z, end.x, end.y, end.z
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            eprintln!("HOLESTAGE [{label}] 面{} 外周 {}", face.id, ids(&face.outer_wire));
+            for (index, hole) in face.inner_wires.iter().enumerate() {
+                eprintln!("HOLESTAGE [{label}] 面{} 内輪{index} {}", face.id, ids(hole));
+            }
+        }
+        let slack = face.tolerance.max(1e-9) * 10.0;
+        let on_outer = |point: Point3| distance_to_wire_exact(&face.outer_wire, point) <= slack;
+        for hole in &face.inner_wires {
+            for oriented in &hole.edges {
+                let (t0, t1) = oriented.edge.curve.param_range();
+                if !(t1 > t0) {
+                    continue;
+                }
+                let hit = (1..8).any(|k| {
+                    on_outer(oriented.edge.curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 8.0))
+                });
+                if hit {
+                    let middle = oriented.edge.curve.evaluate((t0 + t1) * 0.5);
+                    eprintln!(
+                        "HOLESTAGE [{label}] 面{} 穴の稜{} 中点 ({:.4} {:.4} {:.4})",
+                        face.id, oriented.edge.id, middle.x, middle.y, middle.z
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn imprint_vertices_on_edges(
     faces: Vec<Face>,
     extra_points: &[Point3],
@@ -15338,17 +15427,10 @@ fn split_planar_face_across_holes(
                         continue;
                     }
                     let middle = oriented.edge.curve.evaluate((t0 + t1) * 0.5);
-                    let mut gap = f64::INFINITY;
-                    for other in &piece.outer_wire.edges {
-                        let (o0, o1) = other.edge.curve.param_range();
-                        if !(o1 > o0) {
-                            continue;
-                        }
-                        for step in 0..=32 {
-                            let t = o0 + (o1 - o0) * f64::from(step) / 32.0;
-                            gap = gap.min((other.edge.curve.evaluate(t) - middle).norm());
-                        }
-                    }
+                    // **標本では測りません**（4-855）。長さ 20 の稜を
+                    // 33 点で測ると刻みが 0.625 で、**乗っている点でも
+                    // 0.3 離れて見えます**。
+                    let gap = distance_to_wire_exact(&piece.outer_wire, middle);
                     if gap <= tol.linear.max(piece.tolerance) * 10.0 {
                         if std::env::var_os("ZENITH_LOOP_ON_BOUNDARY_WHY").is_some() {
                             eprintln!(
