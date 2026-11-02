@@ -483,6 +483,13 @@ impl BrepIntersectionBuilder {
                     if let Some(bbox) = bboxes_a[face_a_index].as_ref() {
                         eprintln!("PAIRTRACE   A の箱 z [{:.6}, {:.6}] x [{:.4}, {:.4}] y [{:.4}, {:.4}]", bbox.min.z, bbox.max.z, bbox.min.x, bbox.max.x, bbox.min.y, bbox.max.y);
                     }
+                    // **B の箱も出します**（4-864）。**片側だけでは、
+                    // 「箱で切れなかった」のか「箱が無かった」のかが
+                    // 分かりません**。
+                    match bboxes_b[face_b_index].as_ref() {
+                        Some(bbox) => eprintln!("PAIRTRACE   B の箱 z [{:.6}, {:.6}] x [{:.4}, {:.4}] y [{:.4}, {:.4}]", bbox.min.z, bbox.max.z, bbox.min.x, bbox.max.x, bbox.min.y, bbox.max.y),
+                        None => eprintln!("PAIRTRACE   B の箱 **無し**"),
+                    }
                 }
                 // **組ごとの時間**（4-698。`ZENITH_BOOLEAN_TIME=1` のときだけ）。
                 // **この段が 80%**（4-697）なので、**どの組が重いか**を見ます。
