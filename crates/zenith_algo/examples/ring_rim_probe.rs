@@ -145,4 +145,43 @@ fn main() {
         Ok(stacked) => println!("積み重ねたブーリアン: ok、面 {} 枚", stacked.outer_shell.faces.len()),
         Err(reason) => println!("積み重ねたブーリアン: 断り — {reason}"),
     }
+
+    // **3演算そろったら恒等式で採点します**（4-856）。
+    // ∪ ＋ ∩ ＝ A ＋ B。**返っただけでは、答えが合っているとは
+    // 言えません。**
+    let params = zenith_tess::TessellationParams::default();
+    let volume_of = |solid: &zenith_topo::Solid| {
+        zenith_algo::MassCalculator::compute_volume_from_brep(solid, &params).abs()
+    };
+    let a = volume_of(&drilled);
+    let b = volume_of(&washer_moved);
+    let mut volumes = Vec::new();
+    for (name, op) in [
+        ("∪", BooleanOpType::Union),
+        ("∩", BooleanOpType::Intersection),
+        ("＼", BooleanOpType::Difference),
+    ] {
+        match BooleanEngine::boolean_solids_exact(&drilled, &washer_moved, op, &tol) {
+            Ok(solid) => {
+                let volume = volume_of(&solid);
+                println!("  {name}: 体積 {volume:.6}、面 {} 枚", solid.outer_shell.faces.len());
+                volumes.push(Some(volume));
+            }
+            Err(reason) => {
+                println!("  {name}: 断り — {}", reason.chars().take(90).collect::<String>());
+                volumes.push(None);
+            }
+        }
+    }
+    println!("  A 体積 {a:.6}、B 体積 {b:.6}");
+    if let (Some(union), Some(intersection), Some(difference)) =
+        (volumes[0], volumes[1], volumes[2])
+    {
+        let identity = (union + intersection - a - b).abs() / (a + b);
+        let other = (difference + intersection - a).abs() / a;
+        println!(
+            "  **恒等式**: ∪＋∩−A−B の相対 {identity:.3e}、＼＋∩−A の相対 {other:.3e}"
+        );
+    }
+    println!("**これは診断です。何も直していません。**");
 }

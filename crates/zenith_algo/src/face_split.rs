@@ -1039,6 +1039,94 @@ impl FaceSplitter {
     /// **最初に通った組が正しいとは限りません**——4-523 で残差 0.714 の組を拾いました）。
     ///
     /// **両端が同じ穴に着かないときは `None`**（呼び手は元の理由で断ります）。
+    /// **境界に届く輪を、穴ではなく外周の切り欠きとして組み直す**（4-856）。
+    ///
+    /// `loop_edges` は閉じた輪です。そのうち**外周の上に乗っている区間**を
+    /// 取り除くと、**外周の2点を結ぶ開いた道**が残ります。外周をその2点で
+    /// 切り、**残りの道を外周に繋ぎ**ます。**穴は立てません。**
+    ///
+    /// 乗っている区間が1続きでない（2か所以上で外周に乗る）形は扱いません
+    /// ——**もっともらしい形を作るより、扱えないと言うほうが良い**。
+    fn spliced_notch(
+        face: &Face,
+        loop_edges: &[OrientedEdge],
+        hole_index: usize,
+        tol: &Tolerance,
+    ) -> Option<Face> {
+        let slack = tol.linear.max(face.tolerance) * 10.0;
+        let count = loop_edges.len();
+        if count < 3 {
+            return None;
+        }
+        let on_boundary: Vec<bool> = loop_edges
+            .iter()
+            .map(|oriented| {
+                let (t0, t1) = oriented.edge.curve.param_range();
+                if !(t1 > t0) {
+                    return false;
+                }
+                let middle = oriented.edge.curve.evaluate((t0 + t1) * 0.5);
+                distance_to_wire(&face.outer_wire, middle).is_some_and(|gap| gap <= slack)
+            })
+            .collect();
+        if !on_boundary.iter().any(|flag| *flag) || on_boundary.iter().all(|flag| *flag) {
+            return None;
+        }
+        // **乗っている区間の直後から始めます。**
+        let start = (0..count).find(|index| {
+            on_boundary[(index + count - 1) % count] && !on_boundary[*index]
+        })?;
+        let mut path: Vec<OrientedEdge> = Vec::new();
+        let mut position = start;
+        while !on_boundary[position] {
+            path.push(loop_edges[position].clone());
+            position = (position + 1) % count;
+            if position == start {
+                return None;
+            }
+        }
+        // **残りはぜんぶ乗っていること。** 2か所以上なら扱いません。
+        let mut check = position;
+        while check != start {
+            if !on_boundary[check] {
+                return None;
+            }
+            check = (check + 1) % count;
+        }
+        let from_point = path.first()?.start_vertex().point;
+        let to_point = path.last()?.end_vertex().point;
+        let (from, from_distance) = locate_on_wire(&face.outer_wire, from_point, tol)?;
+        let (to, to_distance) = locate_on_wire(&face.outer_wire, to_point, tol)?;
+        if from_distance.max(to_distance) > slack {
+            return None;
+        }
+        // **外周は、取り除く区間の**反対側**を歩きます。** 歩く向きは
+        // 2通りあるので、閉じるほうを採ります。
+        for (a, b) in [(to, from), (from, to)] {
+            let Ok(walked) = walk(&face.outer_wire.edges, a, b, tol) else {
+                continue;
+            };
+            let mut edges = walked;
+            edges.extend(path.iter().cloned());
+            let wire = Wire::new(edges);
+            if !wire.is_closed(tol) {
+                continue;
+            }
+            let mut holes = face.inner_wires.clone();
+            if hole_index < holes.len() {
+                holes.remove(hole_index);
+            }
+            return Some(Face::new(
+                face.geometry.clone(),
+                wire,
+                holes,
+                face.orientation,
+                face.tolerance,
+            ));
+        }
+        None
+    }
+
     fn split_hole_to_hole(
         face: &Face,
         cut: &[OrientedEdge],
@@ -1104,6 +1192,64 @@ impl FaceSplitter {
                 [arc_a.clone(), cut_backward.clone()].concat(),
             ),
         ];
+        // **切り込みが外周の上を通るなら、穴ではなく切り欠きにします**
+        // （4-856。`ZENITH_BOUNDARY_NOTCH`、既定オフ）。
+        //
+        // この道の「外側の片」は**もとの外周そのまま＋書き換えた穴**です。
+        // **切り込みが外周の上を通っていると、同じ区間が外周と穴の両方に
+        // 出て、縫えません**（4-855 で測りました。板の天面、
+        // (8,0,5)-(5.3,0,5) が4回）。**断るだけでは悪くなります**
+        // （あぶれた稜 0→6）——**その片は要る**ので、
+        // **輪を外周へ繋ぎ直します**。**4-845 と同じ形**です。
+        if boundary_notch_on() {
+            for (piece_loop, hole_loop) in loops.iter() {
+                let Some(rest) = Self::spliced_notch(face, hole_loop, hole_index, tol) else {
+                    continue;
+                };
+                for flip in [false, true] {
+                    let piece_edges = if flip {
+                        reversed(piece_loop)
+                    } else {
+                        piece_loop.clone()
+                    };
+                    let piece = Face::new(
+                        face.geometry.clone(),
+                        Wire::new(piece_edges),
+                        Vec::new(),
+                        face.orientation,
+                        face.tolerance,
+                    );
+                    let pieces = vec![piece, rest.clone()];
+                    if pieces.iter().any(|p| !p.outer_wire.is_closed(tol)) {
+                        continue;
+                    }
+                    if let Ok(check) = Self::checked_areas("split_hole_to_hole", face, &pieces) {
+                        let residual = residual_confirmed_in_3d(face, &pieces, &check);
+                        if residual <= 1e-6 {
+                            if std::env::var_os("ZENITH_BOUNDARY_NOTCH_WHY").is_some() {
+                                eprintln!(
+                                    "NOTCHWHY 外周へ繋ぎ直しました（残差 {residual:.3e}、反転 {flip}）"
+                                );
+                            }
+                            return Some(Ok((
+                                pieces,
+                                FaceSplitReport {
+                                    original_parameter_area: check.original,
+                                    piece_parameter_areas: check.pieces,
+                                    area_residual: residual,
+                                    curve_off_surface,
+                                    ends_off_boundary: landing,
+                                },
+                            )));
+                        }
+                    }
+                }
+            }
+            if std::env::var_os("ZENITH_BOUNDARY_NOTCH_WHY").is_some() {
+                eprintln!("NOTCHWHY 外周へ繋ぎ直せませんでした（もとの道へ）");
+            }
+        }
+
         let mut last_reason = String::from("no pairing was tried");
         let mut best: Option<(f64, Vec<Face>, ParameterAreaCheck)> = None;
         // **親の巻き方**（4-543。`ZENITH_HOLECUT_SIGN=1` のときだけ使います）。
@@ -1922,6 +2068,10 @@ fn distribute_holes(face: &Face, pieces: Vec<Face>, tol: &Tolerance) -> Result<V
 /// **その片で「外周の上」と言える隔たり**（4-854）。
 fn tol_for(piece: &Face) -> f64 {
     piece.tolerance.max(1e-9) * 10.0
+}
+
+fn boundary_notch_on() -> bool {
+    std::env::var_os("ZENITH_BOUNDARY_NOTCH").is_some()
 }
 
 fn loop_on_boundary_guard_on() -> bool {
