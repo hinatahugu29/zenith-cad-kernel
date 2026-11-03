@@ -76,30 +76,71 @@ fn main() {
     let volume_of =
         |solid: &Solid| zenith_algo::MassCalculator::compute_volume_from_brep(solid, &params).abs();
 
-    // 下の板はどの配置でも同じ: 20x10、z 0..5。天面は z=5。
+    // 下の板: 20x10、z 0..5。天面は z=5。
     let base = plate(0.0, 0.0, 20.0, 10.0, 0.0, 5.0, &tol);
+    // **穴あきの板**（4-875）。穴の壁の平面は y=2・y=8・x=7・x=13。
+    // **ここに食い込むと、割りの結果どうしが同一平面で部分的に
+    // 重なる**——4-874 が「届かない」と書いた形です。
+    let holed = {
+        let outer = make_wire(&[
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(20.0, 0.0, 0.0),
+            Point3::new(20.0, 10.0, 0.0),
+            Point3::new(0.0, 10.0, 0.0),
+        ]);
+        let hole = make_wire(&[
+            Point3::new(7.0, 2.0, 0.0),
+            Point3::new(13.0, 2.0, 0.0),
+            Point3::new(13.0, 8.0, 0.0),
+            Point3::new(7.0, 8.0, 0.0),
+        ]);
+        ExtrudeBuilder::extrude_face_with_holes(
+            &outer,
+            &[hole],
+            Vec3::new(0.0, 0.0, 5.0),
+            &tol,
+        )
+        .expect("extrude holed plate")
+    };
+    let laid = |radius: f64, height: f64, at: Vec3| -> Solid {
+        let rotation = zenith_math::Transform3::from_axis_angle(
+            &Vec3::new(1.0, 0.0, 0.0),
+            -std::f64::consts::FRAC_PI_2,
+        );
+        let turned = BrepTransform::transform_solid(
+            &PrimitiveBuilder::make_cylinder(radius, height).expect("cylinder"),
+            &rotation,
+        )
+        .expect("rotate cylinder");
+        BrepTransform::translate_solid(&turned, at)
+    };
 
     // 上に載せるものを変えます。**どれも天面 z=5 に面で接し、
     // 重なりは「一部だけ」**です。
-    let cases: Vec<(&str, Solid)> = vec![
+    let cases: Vec<(&str, &Solid, Solid)> = vec![
         (
             "箱が天面の端に半分だけ載る（x -5..5）",
+            &base,
             plate(-5.0, 2.0, 5.0, 8.0, 5.0, 4.0, &tol),
         ),
         (
             "箱が天面の角に四分の一だけ載る",
+            &base,
             plate(-5.0, -5.0, 5.0, 5.0, 5.0, 4.0, &tol),
         ),
         (
             "箱が天面の中に丸ごと入る（覆われるのは上の箱）",
+            &base,
             plate(6.0, 3.0, 12.0, 7.0, 5.0, 4.0, &tol),
         ),
         (
             "箱が天面より大きく、天面を丸ごと覆う",
+            &base,
             plate(-2.0, -2.0, 22.0, 12.0, 5.0, 4.0, &tol),
         ),
         (
             "円柱が天面の端に半分だけ載る",
+            &base,
             BrepTransform::translate_solid(
                 &PrimitiveBuilder::make_cylinder(4.0, 4.0).expect("cylinder"),
                 Vec3::new(0.0, 5.0, 5.0),
@@ -107,6 +148,7 @@ fn main() {
         ),
         (
             "円柱が天面の中に丸ごと載る",
+            &base,
             BrepTransform::translate_solid(
                 &PrimitiveBuilder::make_cylinder(3.0, 4.0).expect("cylinder"),
                 Vec3::new(10.0, 5.0, 5.0),
@@ -119,22 +161,27 @@ fn main() {
         // 壁だけが同じ平面に乗って一部重なる**配置です。
         (
             "箱が沈み込み、x=0 の壁が同じ平面に乗る（一部重なる）",
+            &base,
             plate(0.0, 2.0, 6.0, 8.0, 2.0, 7.0, &tol),
         ),
         (
             "箱が沈み込み、y=0 の壁が同じ平面に乗る（一部重なる）",
+            &base,
             plate(4.0, 0.0, 12.0, 6.0, 2.0, 7.0, &tol),
         ),
         (
             "箱が沈み込み、x=0 と y=0 の壁が両方同じ平面に乗る",
+            &base,
             plate(0.0, 0.0, 6.0, 6.0, 2.0, 7.0, &tol),
         ),
         (
             "箱が沈み込み、底面 z=0 だけが同じ平面に乗る",
+            &base,
             plate(4.0, 2.0, 12.0, 8.0, 0.0, 8.0, &tol),
         ),
         (
             "円柱が沈み込み、底面 z=0 だけが同じ平面に乗る",
+            &base,
             BrepTransform::translate_solid(
                 &PrimitiveBuilder::make_cylinder(3.0, 8.0).expect("cylinder"),
                 Vec3::new(10.0, 5.0, 0.0),
@@ -148,6 +195,7 @@ fn main() {
         // 乗せます**。
         (
             "横に倒した円柱の円盤が、y=0 の壁の平面に乗る",
+            &base,
             {
                 let rotation = zenith_math::Transform3::from_axis_angle(
                     &Vec3::new(1.0, 0.0, 0.0),
@@ -163,6 +211,7 @@ fn main() {
         ),
         (
             "横に倒した円柱の円盤が、y=0 の壁をはみ出す",
+            &base,
             {
                 let rotation = zenith_math::Transform3::from_axis_angle(
                     &Vec3::new(1.0, 0.0, 0.0),
@@ -176,10 +225,28 @@ fn main() {
                 BrepTransform::translate_solid(&laid, Vec3::new(10.0, 0.0, 2.0))
             },
         ),
+        // **4-874 が「これを集めろ」と書いた形**（4-875）。
+        // 穴あきの板の**穴の壁の平面**に、横に倒した円柱の
+        // **円盤を乗せて、板に食い込ませます**。
+        (
+            "穴あきの板、倒した円柱の円盤が穴の壁 y=2 に乗る",
+            &holed,
+            laid(4.0, 6.0, Vec3::new(10.0, 2.0, 4.0)),
+        ),
+        (
+            "穴あきの板、円盤が穴の壁 y=2 に全部入る（半径 2）",
+            &holed,
+            laid(2.0, 6.0, Vec3::new(10.0, 2.0, 3.0)),
+        ),
+        (
+            "穴あきの板、円盤が穴の壁 y=2 をはみ出す（半径 7）",
+            &holed,
+            laid(7.0, 6.0, Vec3::new(10.0, 2.0, 2.0)),
+        ),
     ];
 
-    let a = volume_of(&base);
-    println!("下の板: 体積 {a:.6}、面 {} 枚", base.outer_shell.faces.len());
+    println!("下の板: 体積 {:.6}、面 {} 枚", volume_of(&base), base.outer_shell.faces.len());
+    println!("穴あきの板: 体積 {:.6}、面 {} 枚", volume_of(&holed), holed.outer_shell.faces.len());
 
     let only: Option<usize> = std::env::var("ZENITH_CC_ONLY")
         .ok()
@@ -191,10 +258,11 @@ fn main() {
     let mut broken = 0usize;
     let mut bad = 0usize;
     let mut worst = 0.0f64;
-    for (index, (name, top)) in cases.into_iter().enumerate() {
+    for (index, (name, base, top)) in cases.into_iter().enumerate() {
         if only.is_some_and(|want| want != index) {
             continue;
         }
+        let a = volume_of(base);
         let b = volume_of(&top);
         let mut volumes: Vec<Option<f64>> = Vec::new();
         let mut notes: Vec<String> = Vec::new();
@@ -210,7 +278,7 @@ fn main() {
                 volumes.push(None);
                 continue;
             }
-            match BooleanEngine::boolean_solids_exact(&base, &top, op, &tol) {
+            match BooleanEngine::boolean_solids_exact(base, &top, op, &tol) {
                 Ok(solid) => {
                     let non_manifold = non_manifold_edges(&solid);
                     if non_manifold > 0 {
@@ -230,7 +298,7 @@ fn main() {
                     refused += 1;
                     notes.push(format!(
                         "{label} 断り（{}）",
-                        reason.chars().take(70).collect::<String>()
+                        reason.chars().take(400).collect::<String>()
                     ));
                     volumes.push(None);
                 }
@@ -255,7 +323,7 @@ fn main() {
         println!();
     }
     println!(
-        "**まとめ**: 13配置、断り {refused} 件、非多様体を返した演算 {bad} 件、恒等式が破れた配置 {broken} 件、残差の最悪 {worst:.3e}"
+        "**まとめ**: 16配置、断り {refused} 件、非多様体を返した演算 {bad} 件、恒等式が破れた配置 {broken} 件、残差の最悪 {worst:.3e}"
     );
     println!("**これは診断です。何も直していません。**");
 }
