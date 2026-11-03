@@ -11889,10 +11889,21 @@ fn clip_segment_to_planar_face_trim_all(
     current: &[(f64, f64)],
     tol: &Tolerance,
 ) -> Option<Vec<(f64, f64)>> {
+    // **どの素通しが起きたかを言う口**（4-879。
+    // `ZENITH_TRIM_CLIP_WHY`、既定オフ）。**3つある素通しの
+    // どれかを名指せないと、「切れていない」がどこから来たのか
+    // 分かりません**（4-878）。
+    let trim_why = std::env::var_os("ZENITH_TRIM_CLIP_WHY").is_some();
     let FaceGeometry::Plane(plane) = &face.geometry else {
+        if trim_why {
+            eprintln!("TRIMCLIPWHY 面{} は平面でないので素通し", face.id);
+        }
         return Some(current.to_vec());
     };
     let Ok(pcurves) = face.pcurves(tol) else {
+        if trim_why {
+            eprintln!("TRIMCLIPWHY 面{} の pcurve が取れないので素通し", face.id);
+        }
         return Some(current.to_vec());
     };
     let uv_start = project_to_plane_uv(segment_start, plane);
@@ -11901,9 +11912,29 @@ fn clip_segment_to_planar_face_trim_all(
     let Some(mut inside) =
         segment_inside_pcurve_loop_intervals(uv_start, uv_end, &pcurves.outer_loop, tol)
     else {
+        if trim_why {
+            eprintln!(
+                "TRIMCLIPWHY 面{} の外周の輪を評価できないので素通し（稜 {} 本）",
+                face.id,
+                pcurves.outer_loop.segments.len()
+            );
+        }
         return Some(current.to_vec());
     };
 
+    if trim_why {
+        eprintln!(
+            "TRIMCLIPWHY 面{} （平面、外周 {} 本、内輪 {} 個）: uv ({:.4} {:.4})->({:.4} {:.4}) の中は {:?}",
+            face.id,
+            pcurves.outer_loop.segments.len(),
+            pcurves.inner_loops.len(),
+            uv_start.x,
+            uv_start.y,
+            uv_end.x,
+            uv_end.y,
+            inside
+        );
+    }
     // 穴の中は面の外。
     for inner in &pcurves.inner_loops {
         let Some(hole) = segment_inside_pcurve_loop_intervals(uv_start, uv_end, inner, tol) else {
