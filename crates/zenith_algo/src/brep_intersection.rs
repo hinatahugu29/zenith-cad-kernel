@@ -14925,6 +14925,141 @@ fn resolve_coincident_face_pieces(pieces: &mut Vec<SelectedBooleanFacePiece>, to
         }
     }
 
+    // **覆っている側を、覆われている片の輪郭で割ります**
+    // （4-873。`ZENITH_COVERED_SPLIT`、既定オフ。説明は
+    // `ZENITH_COVERED_SPLIT_WHY`）。
+    //
+    // 4-872 の結論: **幾何は揃っている**ので、残っているのは
+    // **部分的に重なる同一平面の片を「併せる」道がない**ことです。
+    // **落とす**（4-867）は取り替えになり、**組の段で割る**
+    // （4-870）は効きませんでした。**ここは片の段**です——
+    // **覆っている片を、覆われている片の輪郭で割れば、
+    // 割った小片の1つが「面全体の一致」になる**ので、
+    // **すでにある `coincident_face_direction` が拾います**。
+    if std::env::var_os("ZENITH_COVERED_SPLIT").is_some() {
+        let explain = std::env::var_os("ZENITH_COVERED_SPLIT_WHY").is_some();
+        let mut extra: Vec<SelectedBooleanFacePiece> = Vec::new();
+        let mut split_flags = vec![false; pieces.len()];
+        for covered in 0..pieces.len() {
+            if drop_flags[covered] || pieces[covered].location != FaceRegionLocation::Boundary {
+                continue;
+            }
+            let FaceGeometry::Plane(plane) = &pieces[covered].face.geometry else {
+                continue;
+            };
+            let here = representative_face_point(&pieces[covered].face);
+            for cover in 0..pieces.len() {
+                if cover == covered || drop_flags[cover] || split_flags[cover] {
+                    continue;
+                }
+                if pieces[cover].operand == pieces[covered].operand {
+                    continue;
+                }
+                if !other_lies_on_plane(&pieces[cover].face, plane, tol) {
+                    continue;
+                }
+                if !point_inside_face_trim(&pieces[cover].face, here, tol).unwrap_or(false) {
+                    continue;
+                }
+                // **包含は片方向でなければいけません**（4-873）。
+                //
+                // 両方が互いの代表点を含むときは、**両方が互いを割り**、
+                // 2枚で足りるところが4枚になります。**実測**: この守りが
+                // ないと `thin_overlaps_between_parallel_cylinders_match_the_closed_form`
+                // で `面626 を 面641 の輪郭で` と `面641 を 面626 の輪郭で` が
+                // **両方出て**、非多樹体 16 本で断られました。
+                let cover_here = representative_face_point(&pieces[cover].face);
+                if point_inside_face_trim(&pieces[covered].face, cover_here, tol).unwrap_or(false) {
+                    if explain {
+                        eprintln!(
+                            "COVEREDSPLITWHY 面{} と 面{} は互いを含んでいます——割りません",
+                            pieces[cover].face.id, pieces[covered].face.id
+                        );
+                    }
+                    continue;
+                }
+                let cut: Vec<Edge> = pieces[covered]
+                    .face
+                    .outer_wire
+                    .edges
+                    .iter()
+                    .map(|oriented| oriented.edge.clone())
+                    .collect();
+                match BrepIntersectionBuilder::split_face_by_edges(
+                    &pieces[cover].face,
+                    &cut,
+                    tol,
+                ) {
+                    Ok(result) if result.faces.len() > 1 => {
+                        // **割った小片の1つが、覆われている片と
+                        // 「面全体として一致」するときだけ採ります**
+                        // （4-873）。**それがこの割りの目的**だからです
+                        // ——一致しなけら、あとの段は1枚に併せられず、
+                        // **割っただけ損をします**。
+                        //
+                        // **守らずに入れたときの実測**:
+                        // `thin_overlaps_between_parallel_cylinders_match_the_closed_form`
+                        // （食い込み 6e-4 の平行な円柱の和）が
+                        // **非多樹体 16 本で断られました**。
+                        let template = pieces[cover].clone();
+                        let candidates: Vec<SelectedBooleanFacePiece> = result
+                            .faces
+                            .into_iter()
+                            .map(|face| SelectedBooleanFacePiece {
+                                operand: template.operand,
+                                face,
+                                location: template.location,
+                                reverse_orientation: template.reverse_orientation,
+                            })
+                            .collect();
+                        let matched = candidates.iter().any(|candidate| {
+                            coincident_face_direction(&pieces[covered], candidate, tol).is_some()
+                        });
+                        if !matched {
+                            if explain {
+                                eprintln!(
+                                    "COVEREDSPLITWHY 面{} を割っても、面{} と一致する小片が出ません——割りません",
+                                    pieces[cover].face.id, pieces[covered].face.id
+                                );
+                            }
+                            break;
+                        }
+                        if explain {
+                            eprintln!(
+                                "COVEREDSPLITWHY 面{} を 面{} の輪郭で {} 片に割りました",
+                                pieces[cover].face.id,
+                                pieces[covered].face.id,
+                                candidates.len()
+                            );
+                        }
+                        split_flags[cover] = true;
+                        extra.extend(candidates);
+                    }
+                    Ok(_) => {}
+                    Err(reason) => {
+                        if explain {
+                            eprintln!(
+                                "COVEREDSPLITWHY 面{} を割れません——{reason}",
+                                pieces[cover].face.id
+                            );
+                        }
+                    }
+                }
+                break;
+            }
+        }
+        for (flag, split) in drop_flags.iter_mut().zip(split_flags) {
+            *flag = *flag || split;
+        }
+        if !extra.is_empty() {
+            // 割った小片は、落とす印を付けずに追加します。
+            for piece in extra {
+                pieces.push(piece);
+                drop_flags.push(false);
+            }
+        }
+    }
+
     for left in 0..pieces.len() {
         if drop_flags[left] {
             continue;
