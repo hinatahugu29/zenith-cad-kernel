@@ -1656,6 +1656,14 @@ impl BrepIntersectionBuilder {
         // 縫合が合わない。相手が持つ頂点を境界辺へ刻み込んで対応させる。
         // 面の形は変わらず、境界に頂点が増えるだけ。
         let mut imprint_points = Vec::new();
+        // **拾っておいた接点を、ここで渡します**（4-878）。
+        if tangency_points::on() {
+            let points = tangency_points::take();
+            if std::env::var_os("ZENITH_TANGENCY_POINT_WHY").is_some() {
+                eprintln!("TANGENCYPOINT 刻み込みに接点 {} 個を渡します", points.len());
+            }
+            imprint_points.extend(points);
+        }
         // **公差より短い候補の端は、刻み込みに渡しません**（4-860。
         // `ZENITH_SLIVER_NO_IMPRINT`、既定オフ）。
         //
@@ -10856,6 +10864,29 @@ fn clip_candidate_to_face_bboxes(
             // 稜が2本残り**ます。
             //
             // ここでは**箱で切った幅と、生の幅の重なり**を採ります。
+            // **接しているところは「点」です**（4-878。
+            // `ZENITH_TANGENCY_POINT`、既定オフ）。
+            //
+            // 4-877 の形: **生の幅が公差以下**なら、それは
+            // **接点**です。**線として立てるのは間違い**（箱で切り
+            // 直すと 8 の長さに膞らむ）ですが、**丸ごと捨てるのも
+            // 間違い**でした（4-877 の `ZENITH_LINE_KEEP_EXTENT` は
+            // あぶれた稜を増やしました）。
+            // **点は拾って、刻み込みに渡します。**
+            if tangency_points::on() {
+                let span = (raw_end - raw_start).norm();
+                if span <= tol.linear {
+                    let middle = Point3::from((raw_start.coords + raw_end.coords) * 0.5);
+                    tangency_points::add(middle);
+                    if std::env::var_os("ZENITH_TANGENCY_POINT_WHY").is_some() {
+                        eprintln!(
+                            "TANGENCYPOINT 生の幅 {span:.3e} なので線を立てず、点 ({:.6} {:.6} {:.6}) を拾いました",
+                            middle.x, middle.y, middle.z
+                        );
+                    }
+                    return None;
+                }
+            }
             if std::env::var_os("ZENITH_LINE_KEEP_EXTENT").is_some() {
                 let along = |p: Point3| (p - point).dot(&direction);
                 let (raw_lo, raw_hi) = {
@@ -11229,6 +11260,39 @@ fn clip_candidate_to_planar_trims(
 /// **曲面のほうは 1 本 × 1 枚で 128 点を標本し、境目を二分 40 段**詰めます。
 /// **どちらが重いかは、割るまで分かりません**——**4-704 から 4 度、
 /// 名前で推し量って外しました。**
+/// **接しているところの「点」を拾っておく入れ物**（4-878）。
+///
+/// 4-877 で測ったとおり、**接している答えの生の幅は1点**です。
+/// **線として立てるのは間違い**ですが、**丸ごと捨てるのも間違い**
+/// でした（あぶれた稜が増える）。**点は残して、刻み込みに渡します**。
+///
+/// 割る段と刻み込みの段は難れているので、`trim_polygon_cache` と
+/// 同じように**スレッドローカル**で渡します。
+pub(crate) mod tangency_points {
+    use zenith_math::Point3;
+
+    thread_local! {
+        static POINTS: std::cell::RefCell<Vec<Point3>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    pub(crate) fn on() -> bool {
+        std::env::var_os("ZENITH_TANGENCY_POINT").is_some()
+    }
+
+    pub(crate) fn clear() {
+        POINTS.with(|points| points.borrow_mut().clear());
+    }
+
+    pub(crate) fn add(point: Point3) {
+        POINTS.with(|points| points.borrow_mut().push(point));
+    }
+
+    pub(crate) fn take() -> Vec<Point3> {
+        POINTS.with(|points| std::mem::take(&mut *points.borrow_mut()))
+    }
+}
+
 pub(crate) mod trim_clip_cost {
     use std::cell::Cell;
 
