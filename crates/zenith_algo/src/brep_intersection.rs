@@ -12059,8 +12059,32 @@ fn segment_inside_pcurve_loop_intervals(
         if t1 - t0 <= cut_tol {
             continue;
         }
-        let mid = start + direction * ((t0 + t1) * 0.5);
-        if point_in_polygon_2d(mid, &polygon, tol.parametric) {
+        // **1点では足りません**（4-880。
+        // `ZENITH_TRIM_CLIP_SAMPLES`、既定オフ）。
+        //
+        // 4-879 で測った形: **円に接する弦**は、区間が全体
+        // （cuts が {0,1} だけ）になることがあり、**その中点が
+        // ちょうど接点**（= 折れ線の頂点）に落ちます。
+        // `point_in_polygon_2d` はそれを**中**と言うので、
+        // **円盤の外にある弦が丸ごと残ります**。
+        //
+        // **接する弦なら、1/4 と 3/4 の点はどちらも外**です
+        // （触るのは1点だけ）。**本当に横切る弦なら、3点の
+        // うち2点以上が中**です。だから**3点で多数を取ります**。
+        let inside_here = if std::env::var_os("ZENITH_TRIM_CLIP_SAMPLES").is_some() {
+            let mut votes = 0usize;
+            for fraction in [0.25, 0.5, 0.75] {
+                let at = start + direction * (t0 + (t1 - t0) * fraction);
+                if point_in_polygon_2d(at, &polygon, tol.parametric) {
+                    votes += 1;
+                }
+            }
+            votes >= 2
+        } else {
+            let mid = start + direction * ((t0 + t1) * 0.5);
+            point_in_polygon_2d(mid, &polygon, tol.parametric)
+        };
+        if inside_here {
             intervals.push((t0, t1));
         }
     }
