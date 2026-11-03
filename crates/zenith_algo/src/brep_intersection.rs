@@ -15101,7 +15101,18 @@ fn resolve_coincident_face_pieces(pieces: &mut Vec<SelectedBooleanFacePiece>, to
     // **覆っている片を、覆われている片の輪郭で割れば、
     // 割った小片の1つが「面全体の一致」になる**ので、
     // **すでにある `coincident_face_direction` が拾います**。
-    if std::env::var_os("ZENITH_COVERED_SPLIT").is_some() {
+    // **4-884 で既定オンに昇格**（`=0` で旧既定に戻せます）。
+    // 根拠（4-883）: `coplanar_contact_probe` の 21 配置で
+    // **断り 22 → 18**（解けた4つは全部「和」で、面 18〜19 枚・
+    // 非多樹体 0。他の 17 配置は不動）。**非対称な重なりでも、
+    // 壁を変えても効きます**。口を立てた状態で
+    // **801件0失敗・`contact_placement_probe` REFUSED 7／ok 146・
+    // `foreign_cross_pair` 破れ0・`cylinder_thin_overlap_test` 通る**
+    // （4-881）。
+    if std::env::var("ZENITH_COVERED_SPLIT")
+        .map(|value| value != "0")
+        .unwrap_or(true)
+    {
         let explain = std::env::var_os("ZENITH_COVERED_SPLIT_WHY").is_some();
         let mut extra: Vec<SelectedBooleanFacePiece> = Vec::new();
         let mut split_flags = vec![false; pieces.len()];
