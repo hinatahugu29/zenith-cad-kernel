@@ -16039,6 +16039,35 @@ fn coincident_outline_edges(face_a: &Face, face_b: &Face, tol: &Tolerance) -> Ve
             }
         }
     }
+    // **角を共有させます**（4-872）。
+    //
+    // 4-871 で測ったとおり、上の作り方は**同じ角を2回
+    // 計算します**（直線を円で切った答えと、円を直線で切った
+    // 答え）。**同じ点ですが、同じ数字にはなりません**
+    // （…654／…653／…652）。**そのまま渡すと、稜の実体が
+    // 別になるので縫えません。**
+    //
+    // ここで**公差の中の端を束ねて、代表の点に書き換えます**。
+    // **書き換える幅は 1e-9 程度**（測りました）で、公差の中です。
+    let mut representatives: Vec<Point3> = Vec::new();
+    let mut represent = |point: Point3, representatives: &mut Vec<Point3>| -> Point3 {
+        match representatives
+            .iter()
+            .find(|existing| (*existing - point).norm() <= tol.linear)
+        {
+            Some(existing) => *existing,
+            None => {
+                representatives.push(point);
+                point
+            }
+        }
+    };
+    for edge in &mut edges {
+        let start = represent(edge.start_vertex.point, &mut representatives);
+        let end = represent(edge.end_vertex.point, &mut representatives);
+        edge.start_vertex = Vertex::new(start, tol.linear);
+        edge.end_vertex = Vertex::new(end, tol.linear);
+    }
     edges
 }
 
