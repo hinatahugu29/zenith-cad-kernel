@@ -15133,11 +15133,21 @@ fn resolve_coincident_face_pieces(pieces: &mut Vec<SelectedBooleanFacePiece>, to
                 // ないと `thin_overlaps_between_parallel_cylinders_match_the_closed_form`
                 // で `面626 を 面641 の輪郭で` と `面641 を 面626 の輪郭で` が
                 // **両方出て**、非多樹体 16 本で断られました。
-                let cover_here = representative_face_point(&pieces[cover].face);
-                if point_inside_face_trim(&pieces[covered].face, cover_here, tol).unwrap_or(false) {
+                // **条件を絞り直しました**（4-881）。
+                //
+                // 最初は「**包含が片方向のときだけ**」にしていました
+                // （4-873）。それだと、**互いの代表点を含むが、どちらも
+                // 相手を丸ごと含んではいない**形（本当の部分重なり）を
+                // 落とします——4-881 の配置13 がそれでした。
+                //
+                // 本当に避けたいのは**面全体が一致している組**です
+                // （それは下のすでにある判定が1枚に併せます）。
+                // **平行な円柱の薄い食い込み**が壊れたのはこれでした
+                // （`thin_overlaps_between_parallel_cylinders...`。4-873）。
+                if coincident_face_direction(&pieces[covered], &pieces[cover], tol).is_some() {
                     if explain {
                         eprintln!(
-                            "COVEREDSPLITWHY 面{} と 面{} は互いを含んでいます——割りません",
+                            "COVEREDSPLITWHY 面{} と 面{} は面全体が一致しています——下の判定に任せます",
                             pieces[cover].face.id, pieces[covered].face.id
                         );
                     }
