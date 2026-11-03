@@ -243,6 +243,45 @@ fn main() {
             &holed,
             laid(7.0, 6.0, Vec3::new(10.0, 2.0, 2.0)),
         ),
+        // **この家系を振って増やします**（4-883）。
+        // 4-881 の口が効くと言えるのはまだ「配置13 の和」だけなので、
+        // **半径・乗せる壁・壁に沿ったずれ・穴の数**を振ります。
+        (
+            "穴あきの板、円盤（半径 3）が壁 y=2 の内側に收まる",
+            &holed,
+            laid(3.0, 6.0, Vec3::new(10.0, 2.0, 3.0)),
+        ),
+        (
+            "穴あきの板、円盤（半径 5）が壁 y=2 の上下にはみ出す",
+            &holed,
+            laid(5.0, 6.0, Vec3::new(10.0, 2.0, 2.5)),
+        ),
+        (
+            "穴あきの板、円盤を壁に沿って x=8 へずらす（非対称）",
+            &holed,
+            laid(4.0, 6.0, Vec3::new(8.0, 2.0, 4.0)),
+        ),
+        (
+            "穴あきの板、円盤を壁に沿って x=12 へずらす（非対称）",
+            &holed,
+            laid(4.0, 6.0, Vec3::new(12.0, 2.0, 4.0)),
+        ),
+        (
+            "穴あきの板、円盤を x=7 の壁に乗せる（軸を x へ）",
+            &holed,
+            {
+                let rotation = zenith_math::Transform3::from_axis_angle(
+                    &Vec3::new(0.0, 1.0, 0.0),
+                    std::f64::consts::FRAC_PI_2,
+                );
+                let turned = BrepTransform::transform_solid(
+                    &PrimitiveBuilder::make_cylinder(4.0, 6.0).expect("cylinder"),
+                    &rotation,
+                )
+                .expect("rotate cylinder");
+                BrepTransform::translate_solid(&turned, Vec3::new(7.0, 5.0, 4.0))
+            },
+        ),
     ];
 
     println!("下の板: 体積 {:.6}、面 {} 枚", volume_of(&base), base.outer_shell.faces.len());
@@ -323,7 +362,7 @@ fn main() {
         println!();
     }
     println!(
-        "**まとめ**: 16配置、断り {refused} 件、非多様体を返した演算 {bad} 件、恒等式が破れた配置 {broken} 件、残差の最悪 {worst:.3e}"
+        "**まとめ**: 21配置、断り {refused} 件、非多様体を返した演算 {bad} 件、恒等式が破れた配置 {broken} 件、残差の最悪 {worst:.3e}"
     );
     println!("**これは診断です。何も直していません。**");
 }
