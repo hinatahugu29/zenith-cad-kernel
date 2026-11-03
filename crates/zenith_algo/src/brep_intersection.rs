@@ -10784,7 +10784,10 @@ fn clip_candidate_to_face_bboxes(
 ) -> Option<FaceIntersectionKind> {
     match kind {
         FaceIntersectionKind::Line {
-            point, direction, ..
+            point,
+            direction,
+            segment_start: raw_start,
+            segment_end: raw_end,
         } => {
             let bbox_a = bbox_a?;
             let bbox_b = bbox_b?;
@@ -10840,6 +10843,49 @@ fn clip_candidate_to_face_bboxes(
                 .and_then(|overlap| clip_line_to_bbox(point, direction, overlap, tol.linear))
                 .filter(|(t_min, t_max)| t_max - t_min > tol.linear)
                 .or_else(|| clip_line_to_bbox(point, direction, &padded, tol.linear))?;
+            // **生の答えが持っていた幅を、捨てないでくどく**
+            // （4-877。`ZENITH_LINE_KEEP_EXTENT`、既定オフ）。
+            //
+            // 上の形は、**`segment_start` / `segment_end` を捨てて**
+            // （`Line { point, direction, .. }`）**無限の直線を箱で切り直します**。
+            // **接しているときにこれが効きます**——4-877 の実測:
+            // 円盤の平面と板の底面の交わりは、生では
+            // **1点**（`(-0 8 0)->(-0 8 0)`。円が z=0 に接する）なのに、
+            // 箱で切り直したところで **x 6..14 の 8 の長さに膞らみました**。
+            // そのあとの平面トリムでも死なず、**円盤の外側にある
+            // 稜が2本残り**ます。
+            //
+            // ここでは**箱で切った幅と、生の幅の重なり**を採ります。
+            if std::env::var_os("ZENITH_LINE_KEEP_EXTENT").is_some() {
+                let along = |p: Point3| (p - point).dot(&direction);
+                let (raw_lo, raw_hi) = {
+                    let (a, b) = (along(raw_start), along(raw_end));
+                    (a.min(b), a.max(b))
+                };
+                let lo = t_min.max(raw_lo);
+                let hi = t_max.min(raw_hi);
+                if hi - lo <= tol.linear {
+                    if std::env::var_os("ZENITH_LINE_KEEP_EXTENT_WHY").is_some() {
+                        eprintln!(
+                            "LINEEXTENT 生の幅 [{raw_lo:.6}, {raw_hi:.6}] と 箱 [{t_min:.6}, {t_max:.6}] の重なりが立ちません——線を立てません"
+                        );
+                    }
+                    return None;
+                }
+                if lo > t_min + tol.linear || hi < t_max - tol.linear {
+                    if std::env::var_os("ZENITH_LINE_KEEP_EXTENT_WHY").is_some() {
+                        eprintln!(
+                            "LINEEXTENT 箱 [{t_min:.6}, {t_max:.6}] を 生の幅で [{lo:.6}, {hi:.6}] に縮めました"
+                        );
+                    }
+                }
+                return Some(FaceIntersectionKind::Line {
+                    point,
+                    direction,
+                    segment_start: point + direction * lo,
+                    segment_end: point + direction * hi,
+                });
+            }
             Some(FaceIntersectionKind::Line {
                 point,
                 direction,
