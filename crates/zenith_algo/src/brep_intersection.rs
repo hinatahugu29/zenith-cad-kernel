@@ -5359,6 +5359,16 @@ fn select_operand_faces_after_batch_split(
                     location,
                     reverse_orientation: reverse_for_difference != from_inner_shell,
                 });
+            } else if std::env::var_os("ZENITH_DROP_PIECE_WHY").is_some() {
+                // **落ちた片を出す口**（4-882の「次の一手」。既定オフ）。
+                // `ZENITH_STITCH_WHY`は選ばれた片しか見せないので、
+                // 「稜を使うべき4枚のうち、どれが選ばれていないか」は
+                // ここでしか分からない。
+                let point = representative_face_point(face);
+                eprintln!(
+                    "DROPPIECE {operand:?} 面{face_index} 代表点 ({:.6} {:.6} {:.6}) location={location:?} op={op:?} → keep_piece=false で落とす",
+                    point.x, point.y, point.z
+                );
             }
         }
     }

@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年11月5日（**4-413 〜 4-887 を足しました**）
+**最終更新**: 2026年11月5日（**4-413 〜 4-888 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29732,6 +29732,36 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 既定オフに残しています。
 
 
+
+### 4-888. **柱③——4-882の「次の一手」どおり、落ちた片を出す口`ZENITH_DROP_PIECE_WHY`を`select_operand_faces_after_batch_split`に足し、配置13の積・差で`keep_piece`が実際に落としている片を直接見た。`keep_piece`は犯人ではなかった——不変量を破っている非多様体の座標（z=5、x=6.127/13.873、y=2/8）に当たる片は、落ちた片の一覧にも1枚も出てこない。足りない片は`keep_piece`より手前（分割そのもの）で既に存在していない**（2026年11月5日）
+
+4-882が挙げた「次の一手」（`keep_piece`の判定を、落とすときに
+印字する口が要る）をそのまま作った。`select_operand_faces_
+after_batch_split`（`crates/zenith_algo/src/brep_intersection.rs`）
+の`keep_piece(...)`が`false`を返す分岐へ、代表点・operand・
+locationを出す`eprintln!`を足した（`ZENITH_DROP_PIECE_WHY`、
+既定オフ）。
+
+**測った結果**: `coplanar_contact_probe`を`ZENITH_DROP_PIECE_WHY=1`
+で走らせ、「穴あきの板、倒した円柱の円盤が穴の壁 y=2 に乗る」
+配置の積（Intersection）で落ちた片を全部書き出した
+——12枚（A面0〜9の一部）＋4枚（B面0〜3）、**全部`location=Outside`
+で、これは`keep_piece`の規約どおり正しく落とされている**（積では
+Outsideは要らない）。**4-882が挙げた非多様体の座標
+（z=5、x=6.127008…/13.872983…、y=2 or 8）に一致する片は、
+落ちた片の一覧に1枚も現れなかった。**
+
+**これで「`keep_piece`が本来保つべき`Boundary`の片を間違って
+落としている」という4-882の見立てが外れたと分かった**——
+`keep_piece`に到達する前に、その座標を含む片がそもそも**存在して
+いない**（`select_operand_faces_after_batch_split`が受け取る
+`face_pieces`のリストにすら入っていない）ということになる。
+
+**次の一手**: `batch_splits_from_candidates`（割る段そのもの）を
+疑うこと——該当する箱の面・円柱の面が、その座標で本当に分割
+されているか（`applied_split_count`・`skipped_split_count`の内訳、
+`ZENITH_SPLIT_WHY`等の既存診断で、その面がどの鎖に当たり、
+どこで落ちたかを辿る）。
 
 ### 4-887. **柱③——`ZENITH_BOUNDARY_NOTCH` を既定オンに昇格した。4-886の引き継ぎどおり`boundary_notch_on()`を4-862/4-884と同じ形にし、既定の状態で測り直して4-885の数字と全部一致した**（2026年11月5日）
 
