@@ -2071,7 +2071,9 @@ fn tol_for(piece: &Face) -> f64 {
 }
 
 fn boundary_notch_on() -> bool {
-    std::env::var_os("ZENITH_BOUNDARY_NOTCH").is_some()
+    std::env::var("ZENITH_BOUNDARY_NOTCH")
+        .map(|value| value != "0")
+        .unwrap_or(true)
 }
 
 fn loop_on_boundary_guard_on() -> bool {

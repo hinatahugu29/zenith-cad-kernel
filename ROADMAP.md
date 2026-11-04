@@ -1377,15 +1377,17 @@ ring_rim にもあった**わけです。
 **次**: **4-856 の口2つの昇格を、もう一度測り直すこと**
 （ring_rim の印が変わったので、残り4本の正体も変わっている
 かもしれません）。
-**引き継ぎ（2026/11/3。HANDOVER 4-886）**:
-**`ZENITH_BOUNDARY_NOTCH` の昇格は「あと1回測るだけ」で止めて、
-変更は戻してあります**（既定オフのまま。作業木は綺麗）。
-口を立てた状態の測りは済んでいます——**801件0失敗・REFUSED 7／ok 146・
-cross_pair 破れ0・coplanar 21配置断り18・H8 据え置き**で、**効き目は
-ring_rim の∪と＼（面27枚）＋`notch_placement_probe` 7→6**。
-残りは `boundary_notch_on()` を 4-862／4-884 と同じ形にして、
-**既定の状態で**同じ一式＋pyd＋門を回すだけです
-（`=0` で旧既定に戻ることは確認済み）。
+**`ZENITH_BOUNDARY_NOTCH` を既定オンに昇格しました（2026/11/5。
+HANDOVER 4-887）**: 4-886の引き継ぎどおり`boundary_notch_on()`を
+4-862／4-884と同じ形にし、**既定の状態**で測り直すと4-885の数字
+（801件0失敗・REFUSED 7／ok 146・cross_pair 破れ0・coplanar 21配置
+断り18・H8据え置き・notch_placement_probe 7→6・ring_rim 面27枚）と
+**1ビットも変わりませんでした**。おまけに`contact_placement_probe`
+単独実行で見つけたメッシュ非多様体1件（cylinder×cylinder
+internally tangent）は、`=0`でも同じく出ることを確かめ、4-83に
+既に記録済みの古い問題（今回の昇格とは無関係）と切り分けました。
+**`ZENITH_SLIVER_NO_IMPRINT`・`ZENITH_COVERED_SPLIT`・
+`ZENITH_BOUNDARY_NOTCH`の3本が既定オンに揃いました。**
 **そのあとの的**: ①`coplanar_contact_probe` の残り18件（配置13 の積と
 差が手がかり。**3回＝足りない**ほう）②`ZENITH_TANGENT_IMPRINT` は
 効き目が ring_rim の積だけなので**昇格しない**③

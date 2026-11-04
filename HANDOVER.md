@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年11月3日（**4-413 〜 4-886 を足しました**）
+**最終更新**: 2026年11月5日（**4-413 〜 4-887 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -29732,6 +29732,38 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 既定オフに残しています。
 
 
+
+### 4-887. **柱③——`ZENITH_BOUNDARY_NOTCH` を既定オンに昇格した。4-886の引き継ぎどおり`boundary_notch_on()`を4-862/4-884と同じ形にし、既定の状態で測り直して4-885の数字と全部一致した**（2026年11月5日）
+
+4-886が書いた「残っている作業は1つだけ」をそのまま実行した。
+`crates/zenith_algo/src/face_split.rs`の`boundary_notch_on()`を
+`std::env::var("ZENITH_BOUNDARY_NOTCH").map(|v| v != "0").unwrap_or(true)`
+へ直し、**既定の状態**（`unset`）で4-885と同じ一式を測り直した。
+
+```
+cargo test --release --workspace   151ターゲット、passed=801 failed=0（4-885と同じ801）
+h8_ports.sh                        1.551149（面37）・7.805801（面49）・2.295747（面37）——1ビットも変わらず
+notch_placement_probe              4配置、断り6、恒等式破れ0、残差最悪4.875e-13
+foreign_cross_pair_probe           15組そろい、破れた組0、残差最悪7.051e-10
+coplanar_contact_probe             21配置、断り18、非多様体0、破れ0、残差最悪1.431e-11
+ring_rim                           ok、面27枚（∪1136.961589・＼770.010153、∩は断り）
+run_gates.sh --quick               全数緑（py tools/build_pyd.pyの指紋一致も含む）
+```
+
+**どれも4-885が既定オフのまま測った数と1ビットも変わらない**
+——予告どおり「昇格のための測りはもう済んでいる」が正しかった。
+
+**おまけに1つ、既存の問題を踏んで切り分けた**: `contact_placement_probe`
+を単独で走らせると「cylinder x cylinder (internally tangent, caps
+coplanar) union」でメッシュ非多様体12本（GATE ERROR、exit 1）に
+当たった——**最初は今回の昇格が原因かと疑った**が、
+`ZENITH_BOUNDARY_NOTCH=0`（旧既定）でも**同じ配置で同じ12本**が
+出ると確かめ、**既に4-83で記録済みの古い問題**（今回の昇格とは
+無関係）だと切り分けた。B-Rep非多様体0・恒等式破れ0・残差3.901e-8は
+4-885の数字とちゃんと一致している。
+
+**これで`ZENITH_BOUNDARY_NOTCH`・`ZENITH_SLIVER_NO_IMPRINT`（4-862）・
+`ZENITH_COVERED_SPLIT`（4-884）の3本が既定オンに揃った。**
 
 ### 4-886. **引き継ぎ——`ZENITH_BOUNDARY_NOTCH` の昇格は「あと1回測るだけ」で止めてあります（既定オフのまま。木は綺麗）**（2026年11月3日）
 
