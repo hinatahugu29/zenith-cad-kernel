@@ -29757,6 +29757,24 @@ AuB:  体積 7.805801、面 49 枚（36.6 秒）
 高い——**球の`ZENITH_HOLE_BOX_GUARD`の誤判定とは全く別の、
 候補の切り詰め漏れという根**。
 
+**候補の場所も絞った**: `resolve_coincident_face_pieces`内の
+`ZENITH_COVERED_SPLIT`実装（`crates/zenith_algo/src/brep_intersection.rs`、
+`fn resolve_coincident_face_pieces`の後半）を読むと、`covered`の
+代表点が`cover`のトリムの中にあるとき、`cut = pieces[covered]
+.face.outer_wire`（**covered側の、既に正しくトリムされた輪郭**）を
+使って`BrepIntersectionBuilder::split_face_by_edges(&pieces[cover]
+.face, &cut, tol)`——**coverの面をcoveredの輪郭で割る**という
+設計そのものは理にかなっている（coveredが小さい側で、その輪郭は
+正しくトリムされているはず）。**ただし、割った結果（`result.faces`）
+のうち「coveredと一致しない」側の小片**（B面4の円からA面4の矩形を
+抜いた残り——これ自体はB自身の範囲なのでz=8まで正しく届く）**が、
+`extra`としてそのまま候補に積まれ、後段の鎖の組み立てでA面4側の
+候補と混ざっている**可能性が高い——どちらの面に属する候補として
+扱われるべきかの帯分けが、この先のどこかで崩れている。**次に見る
+人**は、`split_face_by_edges`が返す複数の小片それぞれが、
+`extra`に積まれたあとどの面の交線候補として使われるかを
+`ZENITH_COVERED_SPLIT_WHY`と合わせて辿ること。
+
 **根の仕組みまで確定した**: `clip_chain_to_face_trim`
 （`crates/zenith_algo/src/brep_intersection.rs`）を読むと、**この
 関数は「鎖の中で他のどの辺とも端点を共有しない、自由端（開いた鎖）
