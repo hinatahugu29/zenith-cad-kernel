@@ -15227,6 +15227,27 @@ fn resolve_coincident_face_pieces(pieces: &mut Vec<SelectedBooleanFacePiece>, to
                                 pieces[covered].face.id,
                                 candidates.len()
                             );
+                            for candidate in &candidates {
+                                let rep = representative_face_point(&candidate.face);
+                                let zmax = candidate
+                                    .face
+                                    .outer_wire
+                                    .edges
+                                    .iter()
+                                    .map(|oe| oe.start_vertex().point.z)
+                                    .fold(f64::NEG_INFINITY, f64::max);
+                                let zmin = candidate
+                                    .face
+                                    .outer_wire
+                                    .edges
+                                    .iter()
+                                    .map(|oe| oe.start_vertex().point.z)
+                                    .fold(f64::INFINITY, f64::min);
+                                eprintln!(
+                                    "COVEREDSPLITWHY   小片 面id={} 代表点 ({:.4} {:.4} {:.4}) z範囲 [{:.4},{:.4}]",
+                                    candidate.face.id, rep.x, rep.y, rep.z, zmin, zmax
+                                );
+                            }
                         }
                         split_flags[cover] = true;
                         extra.extend(candidates);
