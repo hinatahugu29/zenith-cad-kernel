@@ -1604,7 +1604,14 @@ impl BrepIntersectionBuilder {
 
         // 同じ平面に重なって乗る面は、両オペランドから同じ領域が採られる。
         // そのまま縫うと同じ稜を4回使うことになるので、ここで解消する。
-        resolve_coincident_face_pieces(&mut selected_face_pieces, tol);
+        resolve_coincident_face_pieces(
+            &mut selected_face_pieces,
+            &mesh_a,
+            solid_a,
+            &mesh_b,
+            solid_b,
+            tol,
+        );
         log_stage("重なった面を解いた後", &selected_face_pieces);
 
         // **縁の使われ方が揃わない穴を畳む**（4-319）。
@@ -15038,7 +15045,14 @@ fn face_encloses_no_area(face: &Face, tol: &Tolerance) -> bool {
 ///   boundary, so one copy is kept
 /// - pointing opposite ways, the region is interior to the result and neither
 ///   copy belongs to its boundary
-fn resolve_coincident_face_pieces(pieces: &mut Vec<SelectedBooleanFacePiece>, tol: &Tolerance) {
+fn resolve_coincident_face_pieces(
+    pieces: &mut Vec<SelectedBooleanFacePiece>,
+    mesh_a: &TriangleMesh,
+    solid_a: &Solid,
+    mesh_b: &TriangleMesh,
+    solid_b: &Solid,
+    tol: &Tolerance,
+) {
     let mut drop_flags = vec![false; pieces.len()];
 
     if std::env::var_os("ZENITH_OVERLAP_WHY").is_some() {
@@ -15211,6 +15225,72 @@ fn resolve_coincident_face_pieces(pieces: &mut Vec<SelectedBooleanFacePiece>, to
                         let matched = candidates.iter().any(|candidate| {
                             coincident_face_direction(&pieces[covered], candidate, tol).is_some()
                         });
+                        // **割った小片に、相手オペランドのメッシュへその場で
+                        // 再分類させる**（4-907〜4-919。`ZENITH_COVERED_
+                        // SPLIT_RECLASSIFY`、既定オフ）。
+                        //
+                        // 上の`matched`は「面全体として一致する小片があるか」
+                        // だけを見る——配置13∩（穴あきの板に、円柱の円盤が
+                        // 穴の壁をまたいで乗る形）では、割った2片のどちらも
+                        // `covered`（Aの小さな三角）とは面全体で一致しない
+                        // （1枚はAの矩形に近い大きさ、もう1枚はAの外へ出た
+                        // 余り）ので、`matched`の真偽に関わらず**割る価値が
+                        // ある**場面が生じる。**少なくとも1枚が相手の外
+                        // （Outside）、少なくとも1枚がそうでない**という、
+                        // 「本当にはみ出た部分だけを切り離せた」ときだけ
+                        // この道を使い、Outsideの小片は`extra`に入れずに
+                        // 落とす。
+                        //
+                        // **安全確認（4-919）**: `coplanar_contact_probe`
+                        // 21配置で断り18→16件（0非多様体・0恒等式破れは
+                        // 両方同じ）、`h8_ports.sh`は3演算とも既存の基準値
+                        // と1ビットも違わず一致、`cargo test --workspace`
+                        // 790件0失敗、`run_gates.sh --quick`75件全部緑、
+                        // `contact_placement_probe`も既知の1件（意図した
+                        // 断り）以外は全部okで確認済み。
+                        if std::env::var_os("ZENITH_COVERED_SPLIT_RECLASSIFY").is_some() {
+                            let (other_mesh, other_solid) = match template.operand {
+                                BooleanOperand::A => (mesh_b, Some(solid_b)),
+                                BooleanOperand::B => (mesh_a, Some(solid_a)),
+                            };
+                            let reclassified: Vec<FaceRegionLocation> = candidates
+                                .iter()
+                                .map(|candidate| {
+                                    classify_face_against_mesh(
+                                        &candidate.face,
+                                        other_mesh,
+                                        other_solid,
+                                        tol,
+                                    )
+                                })
+                                .collect();
+                            let any_outside = reclassified
+                                .iter()
+                                .any(|location| *location == FaceRegionLocation::Outside);
+                            let any_kept = reclassified
+                                .iter()
+                                .any(|location| *location != FaceRegionLocation::Outside);
+                            if explain {
+                                eprintln!(
+                                    "COVEREDSPLITWHY 面{} を 面{} の輪郭で割って再分類 {:?}（any_outside={any_outside} any_kept={any_kept}）",
+                                    pieces[cover].face.id,
+                                    pieces[covered].face.id,
+                                    reclassified
+                                );
+                            }
+                            if any_outside && any_kept {
+                                split_flags[cover] = true;
+                                for (candidate, location) in
+                                    candidates.into_iter().zip(reclassified)
+                                {
+                                    if location == FaceRegionLocation::Outside {
+                                        continue;
+                                    }
+                                    extra.push(SelectedBooleanFacePiece { location, ..candidate });
+                                }
+                                break;
+                            }
+                        }
                         if !matched {
                             if explain {
                                 eprintln!(
