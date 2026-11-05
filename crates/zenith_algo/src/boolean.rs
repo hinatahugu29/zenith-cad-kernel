@@ -633,6 +633,33 @@ impl BooleanEngine {
             ));
         }
 
+        // **積（Intersection）で、採った片が蓋を含めても0枚なら、
+        // 答えは空**（4-923。`ZENITH_EMPTY_INTERSECTION_REFUGE`、
+        // 既定オフ）。
+        //
+        // `keep_piece`は積では`Inside`・`Boundary`だけを採る——採った
+        // 片が1枚も無いのは、「重なる体積が無い」という結論そのもの
+        // （蓋すら閉じる価値が無いと`closes_without_breaking`が
+        // 正しく判定した結果でもある）。これを「未実装」の一般断りに
+        // 落とすのは誤り——答えは空（体積0）で、エラーではない。
+        //
+        // 実測: 穴あきの板の穴に完全に収まる円盤（配置13の家系、
+        // 半径2）が、この形でちょうど引っかかっていた
+        // （0 selected face pieces, 2 cap faces だが`closes_without_
+        // breaking`で両方採らず）。
+        if matches!(op, BooleanOpType::Intersection)
+            && report.selected_face_piece_count == 0
+            && report.selected_with_caps_face_piece_count == 0
+            && std::env::var_os("ZENITH_EMPTY_INTERSECTION_REFUGE").is_some()
+        {
+            if std::env::var_os("ZENITH_REFUSE_WHY").is_some() {
+                eprintln!(
+                    "REFUSEWHY 積は空を返します: 蓋を含めても採った片が0枚でした"
+                );
+            }
+            return Ok(ExactBooleanResult::from_solids(Vec::new()));
+        }
+
         Err(format!(
             "Exact B-Rep boolean is not implemented yet; preparation reached {} face-pair candidates, {} intersection edges, {} planar split candidates, {} batch-split faces, {} applied batch splits, {} skipped batch splits, {} classified split candidates, {} selected face pieces, {} cap loops, and {} cap faces; selected face stitching has {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses; with caps it has {} face pieces, {} unmatched edge uses, {} non-manifold edge uses, and {} same-direction edge uses. Use boolean_solids_mesh_preview only for display/preview mesh results",
             report.face_pair_candidate_count,
