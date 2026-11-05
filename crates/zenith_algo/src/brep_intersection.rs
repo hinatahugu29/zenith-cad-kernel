@@ -1610,6 +1610,7 @@ impl BrepIntersectionBuilder {
             solid_a,
             &mesh_b,
             solid_b,
+            op,
             tol,
         );
         log_stage("重なった面を解いた後", &selected_face_pieces);
@@ -15051,6 +15052,7 @@ fn resolve_coincident_face_pieces(
     solid_a: &Solid,
     mesh_b: &TriangleMesh,
     solid_b: &Solid,
+    op: crate::BooleanOpType,
     tol: &Tolerance,
 ) {
     let mut drop_flags = vec![false; pieces.len()];
@@ -15264,26 +15266,33 @@ fn resolve_coincident_face_pieces(
                                     )
                                 })
                                 .collect();
-                            let any_outside = reclassified
+                            // **「落とすかどうか」は`Outside`固定ではなく、
+                            // 演算ごとの`keep_piece`と同じ規約で決める**
+                            // （4-921）。既定オフでの実測で、`Outside`を
+                            // 常に落とすと**和（Union）では`Outside`こそ
+                            // 残すべき側**なので、和が退行していた
+                            // （配置13など4つの配置で∪が成功→断りに
+                            // 変わった）。
+                            let keeps: Vec<bool> = reclassified
                                 .iter()
-                                .any(|location| *location == FaceRegionLocation::Outside);
-                            let any_kept = reclassified
-                                .iter()
-                                .any(|location| *location != FaceRegionLocation::Outside);
+                                .map(|location| keep_piece(template.operand, *location, op))
+                                .collect();
+                            let any_dropped = keeps.iter().any(|keep| !keep);
+                            let any_kept = keeps.iter().any(|keep| *keep);
                             if explain {
                                 eprintln!(
-                                    "COVEREDSPLITWHY 面{} を 面{} の輪郭で割って再分類 {:?}（any_outside={any_outside} any_kept={any_kept}）",
+                                    "COVEREDSPLITWHY 面{} を 面{} の輪郭で割って再分類 {:?}（any_dropped={any_dropped} any_kept={any_kept}）",
                                     pieces[cover].face.id,
                                     pieces[covered].face.id,
                                     reclassified
                                 );
                             }
-                            if any_outside && any_kept {
+                            if any_dropped && any_kept {
                                 split_flags[cover] = true;
-                                for (candidate, location) in
-                                    candidates.into_iter().zip(reclassified)
+                                for ((candidate, location), keep) in
+                                    candidates.into_iter().zip(reclassified).zip(keeps)
                                 {
-                                    if location == FaceRegionLocation::Outside {
+                                    if !keep {
                                         continue;
                                     }
                                     extra.push(SelectedBooleanFacePiece { location, ..candidate });
