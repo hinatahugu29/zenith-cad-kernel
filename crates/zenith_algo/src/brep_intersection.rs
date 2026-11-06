@@ -12227,6 +12227,16 @@ fn solve_linear_bernstein(b0: f64, b1: f64) -> Vec<f64> {
         return Vec::new();
     }
     let t = -b0 / slope;
+    // 輪の角をちょうど通る線は、丸めで t が [0,1] の1ulp外に落ちて交点を
+    // 失う（4-927。`ZENITH_CROSSING_ENDPOINT_SLACK`、既定オフ）。
+    if std::env::var_os("ZENITH_CROSSING_ENDPOINT_SLACK").is_some() {
+        const SLACK: f64 = 1e-9;
+        return (-SLACK..=1.0 + SLACK)
+            .contains(&t)
+            .then_some(t.clamp(0.0, 1.0))
+            .into_iter()
+            .collect();
+    }
     (0.0..=1.0).contains(&t).then_some(t).into_iter().collect()
 }
 
