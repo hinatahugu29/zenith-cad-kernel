@@ -15250,7 +15250,7 @@ fn resolve_coincident_face_pieces(
                         // 790件0失敗、`run_gates.sh --quick`75件全部緑、
                         // `contact_placement_probe`も既知の1件（意図した
                         // 断り）以外は全部okで確認済み。
-                        if std::env::var_os("ZENITH_COVERED_SPLIT_RECLASSIFY").is_some() {
+                        if std::env::var("ZENITH_COVERED_SPLIT_RECLASSIFY").map(|v| v != "0").unwrap_or(true) {
                             let (other_mesh, other_solid) = match template.operand {
                                 BooleanOperand::A => (mesh_b, Some(solid_b)),
                                 BooleanOperand::B => (mesh_a, Some(solid_a)),

@@ -650,7 +650,7 @@ impl BooleanEngine {
         if matches!(op, BooleanOpType::Intersection)
             && report.selected_face_piece_count == 0
             && report.selected_with_caps_face_piece_count == 0
-            && std::env::var_os("ZENITH_EMPTY_INTERSECTION_REFUGE").is_some()
+            && std::env::var("ZENITH_EMPTY_INTERSECTION_REFUGE").map(|v| v != "0").unwrap_or(true)
         {
             if std::env::var_os("ZENITH_REFUSE_WHY").is_some() {
                 eprintln!(

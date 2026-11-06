@@ -1538,6 +1538,11 @@ Outsideこそ残すべき側**なのに、演算の種類を見ずに一律で�
 `run_gates.sh --quick`全緑・`contact_placement_probe`既知の3件
 （規約どおりの断り）以外全部okを確認してコミット済み。
 
+**2つの口を既定オンにしました（2026/11/7。HANDOVER 4-926）**:
+`ZENITH_COVERED_SPLIT_RECLASSIFY`・`ZENITH_EMPTY_INTERSECTION_REFUGE`
+（`=0`で切れる）。H8ビット一致・テスト失敗0・quickゲート全緑・
+`contact_placement_probe`基準値と完全一致を確認済み。
+
 **残る断り11件を確認し、1件さらに直しました（2026/11/6。
 HANDOVER 4-922〜4-923）**: 残る断りの中身を確認——配置13等は
 「2個の独立した立体」（正しい答え、多立体APIで届く）、残りの
