@@ -1615,6 +1615,39 @@ impl BrepIntersectionBuilder {
         );
         log_stage("重なった面を解いた後", &selected_face_pieces);
 
+        // **積で、相手の無いまま残った `Boundary` の片を確かめる**（4-928。
+        // `ZENITH_ORPHAN_BOUNDARY_INTERSECT`、既定オフ）。重なりの相手の片が
+        // 代表点の都合で `Outside` と判定されて先に落ちると、解く相手がおらず
+        // `Boundary` の片が残る。積の面なら、その裏側はもう一方の立体の中のはず。
+        if matches!(op, crate::BooleanOpType::Intersection)
+            && std::env::var_os("ZENITH_ORPHAN_BOUNDARY_INTERSECT").is_some()
+        {
+            let why = std::env::var_os("ZENITH_REFUSE_WHY").is_some();
+            selected_face_pieces.retain(|piece| {
+                if piece.location != FaceRegionLocation::Boundary {
+                    return true;
+                }
+                let other = match piece.operand {
+                    BooleanOperand::A => solid_b,
+                    BooleanOperand::B => solid_a,
+                };
+                let sample = representative_face_point(&piece.face);
+                let Some(normal) = piece_normal_at(piece, sample, tol) else {
+                    return true;
+                };
+                let behind = sample - normal * 1e-3;
+                let keep = crate::boolean_validation::exact_inside(behind, other, tol) != Some(false);
+                if why && !keep {
+                    eprintln!(
+                        "ORPHANBOUNDARY 面{} の裏側 ({:.6} {:.6} {:.6}) が相手の外なので積から落とす",
+                        piece.face.id, behind.x, behind.y, behind.z
+                    );
+                }
+                keep
+            });
+            log_stage("積で相手の無い境界の片を確かめた後", &selected_face_pieces);
+        }
+
         // **縁の使われ方が揃わない穴を畳む**（4-319）。
         //
         // 4-306 が刻んだ穴のうち、**相手と噛み合っていないもの**がここで
