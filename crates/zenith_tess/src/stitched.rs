@@ -1481,6 +1481,12 @@ fn patch_mesh(
     // 3段の手当てがありましたが、内側には無く、黙って通っていました。
     repair_interior_t_junctions(&uvs, &ring_ranges, &mut triangles);
 
+    // **穴が外周に1点で接し、接点の両側の弦が一直線に重なるとき、幅 0 の
+    // 尖りを閉じます**（4-932。`ZENITH_TOUCH_SPIKE_CLOSE`、既定オン、"0"で切れる）。
+    if std::env::var("ZENITH_TOUCH_SPIKE_CLOSE").map(|v| v != "0").unwrap_or(true) {
+        close_touching_spikes(&uvs, &ring_ranges, &mut triangles);
+    }
+
     count_boundary_overuse(&triangles, "修復の段のあと");
     count_duplicate_triangles(&triangles, "修復の段のあと");
 
@@ -4019,6 +4025,105 @@ fn reinsert_dropped_boundary_points(
 
 /// earcutへ渡す境界を作る。外周に接する穴は、接点で外周へ縫い込んだ単一ring
 /// として試し、通常のhole入力より境界辺を多く保てた場合だけ採用する。
+/// 穴が外周に1点で接する面で、接点の両側に残る**幅 0 の尖り**を閉じる（4-932）。
+///
+/// 内接する2つの円を同じ角度の刻みで割ると、接点を中心とする相似で点が
+/// 対応するので、接点から出る外周の弦と穴の弦が**ちょうど一直線に重なる**。
+/// earcut は接点を共線として落とし、外周の弦 `x-u` と穴の弦 `x'-v`
+/// （`x` と `x'` は同じ位置）がどちらも三角形分割に現れない。隣の面
+/// （円筒の壁、穴をふさぐ円板）はそれぞれの弦を使うので、相手のいない稜になる。
+///
+/// `u-v` が1回だけ使われているとき、面積 0 の三角形 `x, u, v` を足すと、
+/// 3本とも2回ずつ使われてメッシュが閉じる。位置が同じ点は同じ点として
+/// 数える（溶接で1点になるため）。
+fn close_touching_spikes(
+    uvs: &[Point2],
+    ring_ranges: &[std::ops::Range<usize>],
+    triangles: &mut Vec<[usize; 3]>,
+) {
+    if ring_ranges.len() < 2 {
+        return;
+    }
+    let mut span = 0.0f64;
+    for range in ring_ranges {
+        for index in range.clone() {
+            span = span.max(uvs[index].x.abs()).max(uvs[index].y.abs());
+        }
+    }
+    let eps = span.max(1.0) * 1e-12;
+    let canonical: Vec<usize> = (0..uvs.len())
+        .map(|index| {
+            (0..index)
+                .find(|other| (uvs[*other] - uvs[index]).norm() <= eps)
+                .unwrap_or(index)
+        })
+        .collect();
+    let key = |a: usize, b: usize| {
+        let (a, b) = (canonical[a], canonical[b]);
+        if a < b { (a, b) } else { (b, a) }
+    };
+    let mut counts: std::collections::HashMap<(usize, usize), usize> = Default::default();
+    for triangle in triangles.iter() {
+        for corner in 0..3 {
+            *counts
+                .entry(key(triangle[corner], triangle[(corner + 1) % 3]))
+                .or_insert(0) += 1;
+        }
+    }
+    let mut missing: Vec<(usize, usize)> = Vec::new();
+    for range in ring_ranges {
+        for offset in 0..range.len() {
+            let a = range.start + offset;
+            let b = range.start + (offset + 1) % range.len();
+            if canonical[a] != canonical[b] && !counts.contains_key(&key(a, b)) {
+                missing.push((a, b));
+            }
+        }
+    }
+    let mut added: Vec<[usize; 3]> = Vec::new();
+    let mut taken = vec![false; missing.len()];
+    for first in 0..missing.len() {
+        for second in (first + 1)..missing.len() {
+            if taken[first] || taken[second] {
+                continue;
+            }
+            let (p, q) = missing[first];
+            let (r, s) = missing[second];
+            let shared = [(p, q, r, s), (p, q, s, r), (q, p, r, s), (q, p, s, r)]
+                .into_iter()
+                .find(|(x, _, y, _)| canonical[*x] == canonical[*y] && x != y);
+            let Some((x, u, _, v)) = shared else {
+                continue;
+            };
+            if canonical[u] == canonical[v] || counts.get(&key(u, v)).copied() != Some(1) {
+                continue;
+            }
+            // 既にある三角形が `u-v` を通る向きの逆で張る。
+            let Some(forward) = triangles.iter().find_map(|triangle| {
+                (0..3).find_map(|corner| {
+                    let (a, b) = (triangle[corner], triangle[(corner + 1) % 3]);
+                    if canonical[a] == canonical[u] && canonical[b] == canonical[v] {
+                        Some(true)
+                    } else if canonical[a] == canonical[v] && canonical[b] == canonical[u] {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                })
+            }) else {
+                continue;
+            };
+            added.push(if forward { [v, u, x] } else { [u, v, x] });
+            taken[first] = true;
+            taken[second] = true;
+        }
+    }
+    if std::env::var_os("ZENITH_TESS_WHY").is_some() && !added.is_empty() {
+        eprintln!("TESSWHY   接点の尖りを {} 枚の面積 0 の三角形で閉じた", added.len());
+    }
+    triangles.extend(added);
+}
+
 fn earcut_boundary_rings(
     uvs: &[Point2],
     ring_ranges: &[std::ops::Range<usize>],

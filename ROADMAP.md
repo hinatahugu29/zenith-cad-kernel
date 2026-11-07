@@ -1538,6 +1538,11 @@ Outsideこそ残すべき側**なのに、演算の種類を見ずに一律で�
 `run_gates.sh --quick`全緑・`contact_placement_probe`既知の3件
 （規約どおりの断り）以外全部okを確認してコミット済み。
 
+**`contact_placement_probe` のメッシュ非多様体を0にしました（2026/11/7。
+HANDOVER 4-932）**: 内接2円の蓋で、外周と穴の弦が一直線に重なって
+earcut が接点を落としていた。面積0の三角形で閉じる口
+`ZENITH_TOUCH_SPIKE_CLOSE`（既定オン）。プローブが初めて終了コード0。
+
 **面積の重心で一致を判定する口を既定オンにしました（2026/11/7。HANDOVER
 4-930〜4-931）**: `ZENITH_COINCIDENT_AREA_CENTROID`（`=0`で切れる）。
 21配置の断りは既定で5件、すべて正しい断りか多立体。全ゲート確認済み。
