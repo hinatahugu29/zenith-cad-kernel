@@ -148,6 +148,9 @@ impl EdgeBlender {
                                 solid, edge_id,
                             )
                         })
+                        .or_else(|| {
+                            crate::circular_fillet::prism_rim::prism_rim_blendable(solid, edge_id)
+                        })
                 {
                     Ok(edge)
                 } else {
@@ -267,6 +270,11 @@ impl EdgeBlender {
             )? {
                 return Ok(result);
             }
+            if let Some(result) =
+                crate::circular_fillet::prism_rim::try_fillet_prism_rim(solid, edge_id, radius)?
+            {
+                return Ok(result);
+            }
         }
         if let BlendKind::Chamfer { distance } = kind {
             if let Some(result) = crate::circular_fillet::hole_mouth::try_chamfer_hole_mouth(
@@ -307,6 +315,11 @@ impl EdgeBlender {
                 return Ok(result);
             }
             if let Some(result) = crate::circular_fillet::sphere_cap::try_chamfer_sphere_cap_rim(
+                solid, edge_id, distance,
+            )? {
+                return Ok(result);
+            }
+            if let Some(result) = crate::circular_fillet::prism_rim::try_chamfer_prism_rim(
                 solid, edge_id, distance,
             )? {
                 return Ok(result);

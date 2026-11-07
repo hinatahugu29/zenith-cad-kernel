@@ -5,14 +5,15 @@
 //! 丸めてみて**、通った件数と断り文を数えます。直す前に、何件が・どの
 //! 理由で断られるかを測るためのものです。
 //!
-//! 通った件は「体積が減ったか」も見ます（凸稜のフィレットは削る側）。
+//! 通った件は、削れた体積が演算の予測（閉形式）と相対 1e-6 で合うかも見ます。
+//! 合わなければ「誤答」と数えます。
 //!
 //! ```bash
 //! cargo run --release -p zenith_algo --example fillet_chain_probe
 //! ```
 
 use std::collections::BTreeMap;
-use zenith_algo::{EdgeBlender, MassCalculator, PrimitiveBuilder};
+use zenith_algo::{BlendKind, EdgeBlender, MassCalculator, PrimitiveBuilder};
 use zenith_tess::TessellationParams;
 use zenith_topo::{FaceGeometry, Solid};
 
@@ -117,15 +118,44 @@ fn cases() -> Vec<Case> {
         radius: 2.0,
     });
 
-    let four = base.clone().and_then(|solid| {
+    let four: Result<Solid, String> = base.clone().and_then(|solid| {
         let edges: Vec<(u64, f64)> = vertical_edges(&solid).into_iter().map(|id| (id, 3.0)).collect();
         EdgeBlender::fillet_edges(&solid, &edges)
     });
     out.push(Case {
         name: "box, 4 vertical edges filleted (r3)",
         why: "縦稜4本を丸めた直方体（角丸の角柱）。上下の縁（直線4本＋円弧4本）を丸める",
-        solid: four,
+        solid: four.clone(),
         radius: 2.0,
+    });
+
+    // 3段目: 角丸の角柱の上縁を丸めたあと、残りを丸める。上縁は直線の稜を
+    // 1本選べば全周へ伝わる（`ZENITH_PRISM_RIM_BLEND`）。
+    let rounded_top = four.clone().and_then(|solid| {
+        let top_z = 40.0;
+        let id = edge_ids(&solid)
+            .into_iter()
+            .find(|id| {
+                solid
+                    .outer_shell
+                    .faces
+                    .iter()
+                    .flat_map(|face| std::iter::once(&face.outer_wire))
+                    .flat_map(|wire| wire.edges.iter())
+                    .any(|oriented| {
+                        oriented.edge.id == *id
+                            && (oriented.edge.start_vertex.point.z - top_z).abs() < 1e-9
+                            && (oriented.edge.end_vertex.point.z - top_z).abs() < 1e-9
+                    })
+            })
+            .ok_or("no top edge")?;
+        EdgeBlender::fillet_edge(&solid, id, 2.0)
+    });
+    out.push(Case {
+        name: "box, 4 vertical (r3) then top rim (r2) filleted",
+        why: "角丸の角柱の上縁を全周丸めた立体。下の縁や、丸めた面どうしの稜を丸める",
+        solid: rounded_top,
+        radius: 1.5,
     });
 
     let chamfered = base.clone().and_then(|solid| {
@@ -140,6 +170,13 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "stepped shaft (r10 h12 + r7 h10)",
+        why: "段付き軸。両端の円い縁（1/4円4本のループ）と、肩の根元（凹稜）",
+        solid: zenith_algo::ShaftBuilder::make_stepped_shaft(&[(10.0, 12.0), (7.0, 10.0)]),
+        radius: 1.5,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,
@@ -149,6 +186,8 @@ fn cases() -> Vec<Case> {
 }
 
 fn main() {
+    // `ZENITH_FCP_CHAMFER=1` で面取りを当てる（既定はフィレット）。
+    let chamfer = std::env::var_os("ZENITH_FCP_CHAMFER").is_some();
     let mut total_ok = 0usize;
     let mut total_refused = 0usize;
     let mut total_wrong = 0usize;
@@ -167,17 +206,30 @@ fn main() {
         let mut wrong = 0usize;
         let mut reasons: BTreeMap<(String, String), usize> = BTreeMap::new();
         let mut ok_kinds: BTreeMap<String, usize> = BTreeMap::new();
+        let mut worst = 0.0f64;
         for id in edge_ids(&solid) {
             let kind = sides(&solid, id);
-            match EdgeBlender::fillet_edge(&solid, id, case.radius) {
-                Ok(result) => {
+            let kind_of_blend = if chamfer {
+                BlendKind::Chamfer { distance: case.radius }
+            } else {
+                BlendKind::Fillet { radius: case.radius }
+            };
+            match EdgeBlender::blend_edge(&solid, id, kind_of_blend) {
+                Ok((result, report)) => {
                     let after = volume(&result);
-                    if after < before - 1e-9 {
+                    let removed = before - after;
+                    let predicted = report.predicted_removed_volume;
+                    let error = (removed - predicted).abs() / predicted.abs().max(1e-12);
+                    // 凹稜（肩の根元など）は材料を足すので、削れ量も予測も負になる。
+                    if removed.abs() > 1e-9 && error <= 1e-6 {
                         ok += 1;
+                        worst = worst.max(error);
                         *ok_kinds.entry(kind).or_insert(0) += 1;
                     } else {
                         wrong += 1;
-                        println!("   WRONG 稜 {id}（{kind}）: 体積 {before:.6} -> {after:.6}");
+                        println!(
+                            "   WRONG 稜 {id}（{kind}）: 削れた {removed:.9}、予測 {predicted:.9}（相対差 {error:.3e}）"
+                        );
                     }
                 }
                 Err(err) => {
@@ -187,7 +239,7 @@ fn main() {
         }
         let refused: usize = reasons.values().sum();
         println!(
-            "   体積 {before:.6}、稜 {} 本: 通った {ok}、断り {refused}、体積が減らない {wrong}",
+            "   体積 {before:.6}、稜 {} 本: 通った {ok}（予測体積との相対差の最悪 {worst:.3e}）、断り {refused}、誤答 {wrong}",
             ok + refused + wrong
         );
         for (kind, count) in &ok_kinds {
@@ -200,5 +252,5 @@ fn main() {
         total_refused += refused;
         total_wrong += wrong;
     }
-    println!("合計: 通った {total_ok}、断り {total_refused}、体積が減らない {total_wrong}");
+    println!("合計: 通った {total_ok}、断り {total_refused}、誤答 {total_wrong}");
 }

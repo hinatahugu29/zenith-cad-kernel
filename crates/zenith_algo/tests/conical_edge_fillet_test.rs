@@ -450,17 +450,22 @@ fn conical_blends_survive_step_and_coarse_to_fine_meshes() {
 fn stepped_shaft_roots_are_not_misrecognized_as_one_pure_cone() {
     let shaft = zenith_algo::ShaftBuilder::make_stepped_shaft(&[(10.0, 12.0), (7.0, 10.0)])
         .expect("stepped shaft");
+    // 両端の円い縁（凸、90度）は、角柱の縁の経路（`ZENITH_PRISM_RIM_BLEND`、
+    // 4-934）で正しく丸められるので候補に出てよい。ここで見るのは、肩の根元
+    // （凹、270度）が1つの円錐と取り違えられず、4本で1つの場所になること。
     let candidates = EdgeBlender::blendable_edges(&shaft);
-    assert_eq!(
-        candidates.len(),
-        4,
-        "the four root arcs must propagate as one site"
-    );
-    assert!(candidates.iter().all(|edge| {
-        (edge.dihedral_angle_deg - 270.0).abs() < 1e-12
-            && edge.max_fillet_radius > 0.0
-            && edge.max_chamfer_distance > 0.0
-    }));
+    let roots: Vec<_> = candidates
+        .iter()
+        .filter(|edge| (edge.dihedral_angle_deg - 270.0).abs() < 1e-12)
+        .collect();
+    assert_eq!(roots.len(), 4, "the four root arcs must propagate as one site");
+    assert!(roots
+        .iter()
+        .all(|edge| edge.max_fillet_radius > 0.0 && edge.max_chamfer_distance > 0.0));
+    assert!(candidates
+        .iter()
+        .all(|edge| (edge.dihedral_angle_deg - 270.0).abs() < 1e-12
+            || (edge.dihedral_angle_deg - 90.0).abs() < 1e-12));
 }
 
 #[test]

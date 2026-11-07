@@ -111,7 +111,11 @@ fn one_root_arc_locally_fillets_the_complete_stepped_shaft_shoulder() {
         .iter()
         .cloned()
         .into_iter()
-        .filter(|edge| (edge.length - 2.0 * PI * 7.0).abs() < 1e-6)
+        .filter(|edge| {
+            // 小径の端の縁（凸、90度）も同じ長さなので、凹の根元だけを選ぶ（4-934）。
+            (edge.length - 2.0 * PI * 7.0).abs() < 1e-6
+                && (edge.dihedral_angle_deg - 270.0).abs() < 1e-9
+        })
         .collect();
     assert_eq!(
         candidates.len(),
@@ -165,7 +169,11 @@ fn one_root_arc_locally_chamfers_the_complete_stepped_shaft_shoulder() {
         ShaftBuilder::make_stepped_shaft(&[(10.0, 12.0), (7.0, 10.0)]).expect("two-step shaft");
     let candidates: Vec<_> = EdgeBlender::blendable_edges(&shaft)
         .into_iter()
-        .filter(|edge| (edge.length - 2.0 * PI * 7.0).abs() < 1e-6)
+        .filter(|edge| {
+            // 小径の端の縁（凸、90度）も同じ長さなので、凹の根元だけを選ぶ（4-934）。
+            (edge.length - 2.0 * PI * 7.0).abs() < 1e-6
+                && (edge.dihedral_angle_deg - 270.0).abs() < 1e-9
+        })
         .collect();
     assert_eq!(candidates.len(), 4);
 
