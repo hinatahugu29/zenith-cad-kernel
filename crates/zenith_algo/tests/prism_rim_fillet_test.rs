@@ -230,3 +230,61 @@ fn a_hole_close_to_the_rim_caps_the_radius() {
     assert!((removed - expected).abs() < 1e-9 * before, "removed {removed}, expected {expected}");
     assert_closed_mesh(&result, "holed chamfer");
 }
+
+/// 縦稜を1本だけ半径 3 で丸めた直方体。上縁は「直線・円弧・直線」の開いた鎖で、
+/// 両端は角（蓋は鎖の端と直交する側面）。
+fn one_corner_rounded() -> Solid {
+    let solid = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).expect("box");
+    let vertical = solid
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.edges.iter())
+        .find(|oriented| {
+            let a = oriented.edge.start_vertex.point;
+            let b = oriented.edge.end_vertex.point;
+            (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9
+        })
+        .map(|oriented| oriented.edge.id)
+        .expect("vertical");
+    EdgeBlender::fillet_edge(&solid, vertical, 3.0).expect("one fillet")
+}
+
+#[test]
+fn an_open_chain_stopping_at_square_corners_fillets_and_chamfers() {
+    enable();
+    std::env::set_var("ZENITH_PRISM_OPEN_CHAIN", "1");
+    let solid = one_corner_rounded();
+    let before = volume(&solid);
+    // 円弧の隣の直線（長さ 17 か 27）を選ぶ。鎖は 17 + 円弧 + 27。
+    let edge = solid
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.edges.iter())
+        .find(|oriented| {
+            let a = oriented.edge.start_vertex.point;
+            let b = oriented.edge.end_vertex.point;
+            let length = (b - a).norm();
+            (a.z - 40.0).abs() < 1e-9 && (b.z - 40.0).abs() < 1e-9 && ((length - 17.0).abs() < 1e-9 || (length - 27.0).abs() < 1e-9)
+        })
+        .map(|oriented| oriented.edge.id)
+        .expect("chain edge");
+    for r in [0.5, 2.0, 2.9] {
+        let (result, _) =
+            EdgeBlender::blend_edge(&solid, edge, BlendKind::Fillet { radius: r }).expect("fillet");
+        let expected = 44.0 * r * r * (1.0 - PI / 4.0)
+            + FRAC_PI_2 * ((3.0 - r) * r * r * (1.0 - PI / 4.0) + r.powi(3) / 6.0);
+        let removed = before - volume(&result);
+        assert!((removed - expected).abs() < 1e-9 * before, "r={r}: removed {removed}, expected {expected}");
+        assert_closed_mesh(&result, &format!("open fillet r={r}"));
+
+        let (result, _) =
+            EdgeBlender::blend_edge(&solid, edge, BlendKind::Chamfer { distance: r }).expect("chamfer");
+        let expected = 44.0 * r * r * 0.5 + FRAC_PI_2 * (3.0 * r * r * 0.5 - r.powi(3) / 6.0);
+        let removed = before - volume(&result);
+        assert!((removed - expected).abs() < 1e-9 * before, "d={r}: removed {removed}, expected {expected}");
+        assert_closed_mesh(&result, &format!("open chamfer d={r}"));
+    }
+    assert!(EdgeBlender::fillet_edge(&solid, edge, 3.0).is_err());
+}

@@ -166,6 +166,63 @@ struct PrismRim {
     narrowest: f64,
     /// 上面の穴（内側ワイヤ）と外側のループの最小の隔たり。穴が無ければ無限大
     hole_clearance: f64,
+    /// 角で止まる開いた鎖なら、その両端（4-937）。閉じたループなら None
+    open: Option<OpenEnds>,
+}
+
+/// 開いた鎖の両端。角の先の稜（直線）と、その側面（蓋）。
+struct OpenEnds {
+    /// 鎖の始点の角へ入ってくる稜と、終点の角から出ていく稜（上面のワイヤの向き）
+    prev: OrientedEdge,
+    next: OrientedEdge,
+    prev_len: f64,
+    next_len: f64,
+    cap_start: usize,
+    cap_end: usize,
+    /// `next` のあとから `prev` の手前までの、上面のワイヤの残りの稜
+    rest: Vec<OrientedEdge>,
+}
+
+pub(crate) fn open_chain_enabled() -> bool {
+    std::env::var("ZENITH_PRISM_OPEN_CHAIN")
+        .map(|value| value != "0")
+        .unwrap_or(false)
+}
+
+/// 上面のワイヤの稜を、直線か凸の円弧（中心角 180 度未満）として読む。
+fn classify(oriented: &OrientedEdge, normal: Vec3) -> Option<Segment> {
+    let start = oriented.start_vertex().point;
+    let end = oriented.end_vertex().point;
+    if let Some((center, radius, _)) = super::circle_from_edge(&oriented.edge) {
+        // 進行方向の左が上面の内側。凸の円弧は中心が左にある。
+        let chord = end - start;
+        let middle = (start.coords + end.coords) * 0.5;
+        let to_center = center.coords - middle;
+        if normal.cross(&chord).dot(&to_center) <= 0.0 {
+            return None;
+        }
+        let a = (start - center) / radius;
+        let b = (end - center) / radius;
+        let angle = a.dot(&b).clamp(-1.0, 1.0).acos();
+        if !(angle > 1e-6 && angle < PI - 1e-3) {
+            return None;
+        }
+        // 円弧が上面の平面に乗っている
+        if (center - start).dot(&normal).abs() > 1e-7 * radius.max(1.0) {
+            return None;
+        }
+        Some(Segment::Arc {
+            start,
+            end,
+            center,
+            radius,
+            angle,
+        })
+    } else if is_straight(&oriented.edge) {
+        Some(Segment::Line { start, end })
+    } else {
+        None
+    }
 }
 
 impl PrismRim {
@@ -189,62 +246,129 @@ impl PrismRim {
             return None;
         }
 
-        let mut segments = Vec::with_capacity(rim.edges.len());
-        let mut has_arc = false;
-        for oriented in &rim.edges {
-            let start = oriented.start_vertex().point;
-            let end = oriented.end_vertex().point;
-            if let Some((center, radius, _)) = super::circle_from_edge(&oriented.edge) {
-                // 進行方向の左が上面の内側。凸の円弧は中心が左にある。
-                let chord = end - start;
-                let middle = (start.coords + end.coords) * 0.5;
-                let to_center = center.coords - middle;
-                if normal.cross(&chord).dot(&to_center) <= 0.0 {
-                    return None;
-                }
-                let a = (start - center) / radius;
-                let b = (end - center) / radius;
-                let angle = a.dot(&b).clamp(-1.0, 1.0).acos();
-                if !(angle > 1e-6 && angle < PI - 1e-3) {
-                    return None;
-                }
-                // 円弧が上面の平面に乗っている
-                if (center - start).dot(&normal).abs() > 1e-7 * radius.max(1.0) {
-                    return None;
-                }
-                has_arc = true;
-                segments.push(Segment::Arc {
-                    start,
-                    end,
-                    center,
-                    radius,
-                    angle,
-                });
-            } else if is_straight(&oriented.edge) {
-                segments.push(Segment::Line { start, end });
-            } else {
+        // 外側ワイヤの稜を直線・凸の円弧に分類する（ほかの形は None）。
+        let classified: Vec<Option<Segment>> = rim
+            .edges
+            .iter()
+            .map(|oriented| classify(oriented, normal))
+            .collect();
+        let n_rim = rim.edges.len();
+        // 稜 i と i+1 が接線で繋がるか
+        let joint = |i: usize| -> bool {
+            let (Some(here), Some(next)) = (&classified[i], &classified[(i + 1) % n_rim]) else {
+                return false;
+            };
+            match (tangent_at(here, false, normal), tangent_at(next, true, normal)) {
+                (Some(out), Some(into)) => (out - into).norm() <= 1e-6,
+                _ => false,
+            }
+        };
+        let picked = rim.edges.iter().position(|oriented| oriented.edge.id == edge_id)?;
+        classified[picked].as_ref()?;
+        let closed = (0..n_rim).all(joint);
+        let chain: Vec<usize> = if closed {
+            (0..n_rim).collect()
+        } else {
+            if !open_chain_enabled() {
                 return None;
             }
-        }
-        // 角が無いこと（接線が繋がる）。角のある多角形は既存の経路が扱う。
-        if !has_arc {
+            // 選んだ稜から、接線で繋がる限り前後へ伸ばす。角で止まる。
+            let mut first = picked;
+            while joint((first + n_rim - 1) % n_rim) {
+                first = (first + n_rim - 1) % n_rim;
+            }
+            let mut chain = vec![first];
+            let mut at = first;
+            while joint(at) {
+                at = (at + 1) % n_rim;
+                chain.push(at);
+            }
+            chain
+        };
+        let segments: Vec<Segment> = chain
+            .iter()
+            .map(|index| classified[*index].clone())
+            .collect::<Option<Vec<_>>>()?;
+        // 円弧を含まない鎖（角のある多角形の稜1本）は既存の経路が扱う。
+        if !segments.iter().any(|segment| matches!(segment, Segment::Arc { .. })) {
             return None;
         }
         let count = segments.len();
-        for index in 0..count {
-            let here = &segments[index];
-            let next = &segments[(index + 1) % count];
-            let out = tangent_at(here, false, normal)?;
-            let into = tangent_at(next, true, normal)?;
-            if (out - into).norm() > 1e-6 {
+
+        // 開いた鎖の両端: 角の先の稜は直線で、角で直角に折れて上面の内側へ走る。
+        // その稜の側面（蓋）は平面で、鎖の端の接線と直交する。
+        let open = if closed {
+            None
+        } else {
+            let prev_pos = (chain[0] + n_rim - 1) % n_rim;
+            let next_pos = (chain[count - 1] + 1) % n_rim;
+            if prev_pos == next_pos || chain.contains(&prev_pos) || chain.contains(&next_pos) {
                 return None;
             }
-        }
+            let prev = rim.edges[prev_pos].clone();
+            let next = rim.edges[next_pos].clone();
+            let t_start = tangent_at(&segments[0], true, normal)?;
+            let t_end = tangent_at(&segments[count - 1], false, normal)?;
+            let inward_start = normal.cross(&t_start);
+            let inward_end = normal.cross(&t_end);
+            let direction = |oriented: &OrientedEdge| -> Option<(Vec3, f64)> {
+                if !is_straight(&oriented.edge) {
+                    return None;
+                }
+                let span = oriented.end_vertex().point - oriented.start_vertex().point;
+                let length = span.norm();
+                Some((span.try_normalize_safe(1e-12)?, length))
+            };
+            let (prev_dir, prev_len) = direction(&prev)?;
+            let (next_dir, next_len) = direction(&next)?;
+            if prev_dir.dot(&-inward_start) < 1.0 - 1e-9 || next_dir.dot(&inward_end) < 1.0 - 1e-9 {
+                return None;
+            }
+            let cap_of = |oriented: &OrientedEdge, tangent: Vec3| -> Option<usize> {
+                let users: Vec<usize> = faces
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, face)| {
+                        std::iter::once(&face.outer_wire)
+                            .chain(face.inner_wires.iter())
+                            .any(|wire| wire.edges.iter().any(|e| e.edge.id == oriented.edge.id))
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                if users.len() != 2 || !users.contains(&top_index) {
+                    return None;
+                }
+                let cap = *users.iter().find(|index| **index != top_index)?;
+                match &faces[cap].geometry {
+                    FaceGeometry::Plane(plane)
+                        if plane.normal.dot(&tangent).abs() >= 1.0 - 1e-9 =>
+                    {
+                        Some(cap)
+                    }
+                    _ => None,
+                }
+            };
+            let cap_start = cap_of(&prev, t_start)?;
+            let cap_end = cap_of(&next, t_end)?;
+            Some(OpenEnds {
+                prev,
+                next,
+                prev_len,
+                next_len,
+                cap_start,
+                cap_end,
+                rest: (0..n_rim)
+                    .map(|offset| (next_pos + 1 + offset) % n_rim)
+                    .take_while(|position| *position != prev_pos)
+                    .map(|position| rim.edges[position].clone())
+                    .collect(),
+            })
+        };
 
         // 側面: 稜ごとに1枚、4本で囲まれ、下の稜は上の稜の平行移動
         let mut side_indices = Vec::with_capacity(count);
         let mut height: Option<f64> = None;
-        for oriented in &rim.edges {
+        for oriented in chain.iter().map(|index| &rim.edges[*index]) {
             let users: Vec<usize> = faces
                 .iter()
                 .enumerate()
@@ -359,6 +483,7 @@ impl PrismRim {
         }
 
         Some(Self {
+            open,
             hole_clearance,
             top_index,
             side_indices,
@@ -387,6 +512,11 @@ impl PrismRim {
             .min(self.narrowest * 0.5)
             // 穴の稜は標本で測るので、少しだけ余裕を見る
             .min(self.hole_clearance * 0.98)
+            .min(
+                self.open
+                    .as_ref()
+                    .map_or(f64::INFINITY, |ends| ends.prev_len.min(ends.next_len)),
+            )
     }
 
     /// 削れる体積の閉形式（パップス・ギュルダン）。
@@ -411,6 +541,8 @@ impl PrismRim {
         let r = blend.setback();
         let n = self.normal;
         let count = self.segments.len();
+        // 頂点の数。開いた鎖は区間より1つ多い。
+        let nv = if self.open.is_some() { count + 1 } else { count };
         let down = |point: Point3, depth: f64| point - n * depth;
         // 内側へずらす向き（進行方向の左）
         let inward = |segment: &Segment, at_start: bool| -> Vec3 {
@@ -419,11 +551,21 @@ impl PrismRim {
         };
 
         // 頂点 i は区間 i の始点
-        let rim_points: Vec<Point3> = self.segments.iter().map(Segment::start).collect();
+        let mut rim_points: Vec<Point3> = self.segments.iter().map(Segment::start).collect();
+        if self.open.is_some() {
+            rim_points.push(self.segments[count - 1].end());
+        }
         let pb: Vec<Point3> = rim_points.iter().map(|p| down(*p, self.height)).collect();
         let pc: Vec<Point3> = rim_points.iter().map(|p| down(*p, r)).collect();
-        let pt: Vec<Point3> = (0..count)
-            .map(|i| rim_points[i] + inward(&self.segments[i], true) * r)
+        let pt: Vec<Point3> = (0..nv)
+            .map(|i| {
+                let step = if i < count {
+                    inward(&self.segments[i], true)
+                } else {
+                    inward(&self.segments[count - 1], false)
+                };
+                rim_points[i] + step * r
+            })
             .collect();
 
         let vb: Vec<Vertex> = pb.iter().map(|p| Vertex::from_point(*p)).collect();
@@ -432,9 +574,9 @@ impl PrismRim {
 
         let weight_profile = FRAC_1_SQRT_2;
 
-        let mut ev_lower = Vec::with_capacity(count);
-        let mut ev_blend = Vec::with_capacity(count);
-        for i in 0..count {
+        let mut ev_lower = Vec::with_capacity(nv);
+        let mut ev_blend = Vec::with_capacity(nv);
+        for i in 0..nv {
             ev_lower.push(Edge::line_between(vb[i].clone(), vc[i].clone())?);
             let edge = match blend {
                 Blend::Fillet(_) => Edge::new(
@@ -493,7 +635,7 @@ impl PrismRim {
 
         let mut copies = Vec::with_capacity(count);
         for i in 0..count {
-            let next = (i + 1) % count;
+            let next = (i + 1) % nv;
             let copy = match &self.segments[i] {
                 Segment::Line { .. } => Copy3 {
                     bottom: Edge::line_between(vb[i].clone(), vb[next].clone())?,
@@ -532,7 +674,7 @@ impl PrismRim {
 
         // 1. 短くした側面
         for i in 0..count {
-            let next = (i + 1) % count;
+            let next = (i + 1) % nv;
             let geometry = match &self.segments[i] {
                 Segment::Line { .. } => FaceGeometry::Plane(
                     PlaneSurface3::new(pb[i], pb[next] - pb[i], pc[i] - pb[i])
@@ -577,7 +719,7 @@ impl PrismRim {
 
         // 2. ブレンドの面
         for i in 0..count {
-            let next = (i + 1) % count;
+            let next = (i + 1) % nv;
             let (columns, column_weights): (Vec<[Point3; 3]>, Vec<f64>) = match &self.segments[i] {
                 Segment::Line { .. } => (
                     vec![
@@ -646,12 +788,49 @@ impl PrismRim {
         let u_axis = (pt[1] - pt[0]).normalize();
         let v_axis = n.cross(&u_axis);
         let plane = PlaneSurface3::new(pt[0], u_axis, v_axis).ok_or("Failed to create top plane")?;
-        let top_wire = Wire::new(
-            copies
-                .iter()
-                .map(|copy| OrientedEdge::forward(copy.top.clone()))
-                .collect(),
-        );
+        let mut top_edges: Vec<OrientedEdge> = copies
+            .iter()
+            .map(|copy| OrientedEdge::forward(copy.top.clone()))
+            .collect();
+        let mut cap_faces: Vec<(usize, Face)> = Vec::new();
+        if let Some(ends) = &self.open {
+            // 角の先の稜を、内側へずらした点まで詰める（上面のワイヤの向きで作る）
+            let next_trimmed = Edge::line_between(
+                vt[nv - 1].clone(),
+                Vertex::from_point(ends.next.end_vertex().point),
+            )?;
+            let prev_trimmed = Edge::line_between(
+                Vertex::from_point(ends.prev.start_vertex().point),
+                vt[0].clone(),
+            )?;
+            top_edges.push(OrientedEdge::forward(next_trimmed));
+            top_edges.extend(ends.rest.iter().cloned());
+            top_edges.push(OrientedEdge::forward(prev_trimmed));
+            let faces = &solid.outer_shell.faces;
+            cap_faces.push((
+                ends.cap_start,
+                rebuild_cap(
+                    &faces[ends.cap_start],
+                    rim_points[0],
+                    ends.prev.edge.id,
+                    pt[0],
+                    pc[0],
+                    &ev_blend[0],
+                )?,
+            ));
+            cap_faces.push((
+                ends.cap_end,
+                rebuild_cap(
+                    &faces[ends.cap_end],
+                    rim_points[nv - 1],
+                    ends.next.edge.id,
+                    pt[nv - 1],
+                    pc[nv - 1],
+                    &ev_blend[nv - 1],
+                )?,
+            ));
+        }
+        let top_wire = Wire::new(top_edges);
         let holes = solid.outer_shell.faces[self.top_index].inner_wires.clone();
         new_faces.push(Face::new(
             FaceGeometry::Plane(plane),
@@ -667,7 +846,12 @@ impl PrismRim {
             .iter()
             .enumerate()
             .filter(|(index, _)| *index != self.top_index && !self.side_indices.contains(index))
-            .map(|(_, face)| face.clone())
+            .map(|(index, face)| {
+                cap_faces
+                    .iter()
+                    .find(|(cap, _)| *cap == index)
+                    .map_or_else(|| face.clone(), |(_, rebuilt)| rebuilt.clone())
+            })
             .collect();
         final_faces.extend(new_faces);
         let raw = Solid::try_new(
@@ -680,6 +864,78 @@ impl PrismRim {
             .map_err(|error| format!("Prism-rim blend sewing failed: {error}"))?;
         Ok(sewn)
     }
+}
+
+/// 開いた鎖の端の蓋を作り直す。角 `corner` に集まる2本（上面と共有する稜
+/// `rim_edge_id` と、縦の稜）を、それぞれ `top_point`・`cut_point` まで詰め、
+/// できた隙間にブレンドの断面 `profile`（`cut_point` → `top_point`）を入れる。
+/// 新しい稜は作り直すので、隣の面とは最後の `Sewer` が縫い合わせる。
+fn rebuild_cap(
+    face: &Face,
+    corner: Point3,
+    rim_edge_id: u64,
+    top_point: Point3,
+    cut_point: Point3,
+    profile: &Edge,
+) -> Result<Face, String> {
+    let near = |a: Point3, b: Point3| (a - b).norm() <= 1e-9;
+    let mut pieces: Vec<OrientedEdge> = Vec::with_capacity(face.outer_wire.edges.len() + 1);
+    let mut replaced = 0usize;
+    for oriented in &face.outer_wire.edges {
+        let from = oriented.start_vertex().point;
+        let to = oriented.end_vertex().point;
+        if !near(from, corner) && !near(to, corner) {
+            pieces.push(oriented.clone());
+            continue;
+        }
+        if !is_straight(&oriented.edge) {
+            return Err("The cap face of an open prism-rim chain has a curved edge at its corner".into());
+        }
+        let moved = if oriented.edge.id == rim_edge_id {
+            top_point
+        } else {
+            cut_point
+        };
+        let (from, to) = if near(from, corner) {
+            (moved, to)
+        } else {
+            (from, moved)
+        };
+        pieces.push(OrientedEdge::forward(Edge::line_between(
+            Vertex::from_point(from),
+            Vertex::from_point(to),
+        )?));
+        replaced += 1;
+    }
+    if replaced != 2 {
+        return Err(format!(
+            "The cap face of an open prism-rim chain has {replaced} edges at its corner, expected 2"
+        ));
+    }
+    // 隙間を断面で埋める
+    let count = pieces.len();
+    let mut wire = Vec::with_capacity(count + 1);
+    for index in 0..count {
+        let here_end = pieces[index].end_vertex().point;
+        let next_start = pieces[(index + 1) % count].start_vertex().point;
+        wire.push(pieces[index].clone());
+        if !near(here_end, next_start) {
+            if near(here_end, cut_point) && near(next_start, top_point) {
+                wire.push(OrientedEdge::forward(profile.clone()));
+            } else if near(here_end, top_point) && near(next_start, cut_point) {
+                wire.push(OrientedEdge::reversed(profile.clone()));
+            } else {
+                return Err("The cap face of an open prism-rim chain did not close".into());
+            }
+        }
+    }
+    Ok(Face::new(
+        face.geometry.clone(),
+        Wire::new(wire),
+        face.inner_wires.clone(),
+        face.orientation,
+        face.tolerance,
+    ))
 }
 
 fn is_straight(edge: &Edge) -> bool {

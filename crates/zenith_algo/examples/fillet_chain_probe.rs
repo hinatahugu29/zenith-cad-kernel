@@ -248,7 +248,7 @@ fn cases() -> Vec<Case> {
 
 fn main() {
     // `ZENITH_FCP_CHAMFER=1` で面取りを当てる（既定はフィレット）。
-    let chamfer = std::env::var_os("ZENITH_FCP_CHAMFER").is_some();
+    let chamfer = std::env::var("ZENITH_FCP_CHAMFER").map_or(false, |v| !v.is_empty() && v != "0");
     let mut total_ok = 0usize;
     let mut total_refused = 0usize;
     let mut total_wrong = 0usize;
