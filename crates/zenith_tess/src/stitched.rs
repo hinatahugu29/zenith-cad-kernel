@@ -4933,6 +4933,62 @@ mod tests {
         assert_eq!(count(0, 2), 0);
     }
 
+    /// 内接する2円を同じ角度で刻むと、接点から出る弦が一直線に重なり、
+    /// 接点のまわりに幅 0 の尖りが残る（4-932）。面積 0 の三角形で閉じると、
+    /// 境界の辺が（同じ位置の点を1点として数えて）全部そろう。
+    #[test]
+    fn a_zero_width_spike_at_a_touching_hole_is_closed() {
+        let steps = 96usize;
+        let mut uvs = Vec::new();
+        for step in 0..steps {
+            let angle = std::f64::consts::TAU * step as f64 / steps as f64;
+            uvs.push(Point2::new(6.0 * angle.cos(), 6.0 * angle.sin()));
+        }
+        // 穴は逆回り。接点 (6,0) から始める。
+        for step in 0..steps {
+            let angle = -std::f64::consts::TAU * step as f64 / steps as f64;
+            uvs.push(Point2::new(4.0 + 2.0 * angle.cos(), 2.0 * angle.sin()));
+        }
+        let ranges = vec![0..steps, steps..2 * steps];
+        let flat = uvs.iter().flat_map(|uv| [uv.x, uv.y]).collect::<Vec<_>>();
+        let mut triangles = earcut_boundary_rings(&uvs, &ranges, &flat, &[steps]);
+        reinsert_dropped_boundary_points(&uvs, &ranges, &mut triangles);
+
+        // 接点の2つの index を同じ点として数える。
+        let same = |index: usize| if index == steps { 0 } else { index };
+        let missing = |triangles: &[[usize; 3]]| {
+            let mut edges: std::collections::HashSet<(usize, usize)> = Default::default();
+            for triangle in triangles {
+                for corner in 0..3 {
+                    let (a, b) = (same(triangle[corner]), same(triangle[(corner + 1) % 3]));
+                    edges.insert(if a < b { (a, b) } else { (b, a) });
+                }
+            }
+            ranges
+                .iter()
+                .flat_map(|range| {
+                    (0..range.len()).map(move |offset| {
+                        (range.start + offset, range.start + (offset + 1) % range.len())
+                    })
+                })
+                .filter(|(a, b)| {
+                    let (a, b) = (same(*a), same(*b));
+                    !edges.contains(&if a < b { (a, b) } else { (b, a) })
+                })
+                .count()
+        };
+        let before = missing(&triangles);
+        assert!(before > 0, "この配置で尖りが残らないなら、検体として意味が無い");
+        let count_before = triangles.len();
+        close_touching_spikes(&uvs, &ranges, &mut triangles);
+        assert_eq!(missing(&triangles), 0, "before {before}");
+        for triangle in &triangles[count_before..] {
+            let (a, b, c) = (uvs[triangle[0]], uvs[triangle[1]], uvs[triangle[2]]);
+            let area = ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)).abs() * 0.5;
+            assert!(area < 1e-9, "added triangle area {area}");
+        }
+    }
+
     #[test]
     fn a_hole_touching_the_outer_ring_is_bridged_into_the_earcut_input() {
         let uvs = vec![
