@@ -30970,7 +30970,7 @@ Bの境界の対応をどう揃えるか）が要り、今夜すでに長時間�
 
 21配置の残る5件は、4件が正しい多立体（∩）、1件が真の非多様体（半径3の ∪）。**この家系で直す対象は、口を既定オンにすれば残らない。**
 
-次の課題: この口をオンにして、テスト・`run_gates.sh --quick`・`contact_placement_probe` を通し、既定オンにする。
+次の課題: この口をオンにした `run_gates.sh --quick` と `contact_placement_probe` の結果を見て、既定オンにする。11:51に裏で回し始めた。結果は `target/area_verify/gates.log`（末尾が `GATE_EXIT=`）と `target/area_verify/contact.log` に出る。基準値は 146件が立体・7件が断り・B-Rep非多様体0・メッシュ非多様体1・恒等式の破れ0。
 
 ### 4-929. **柱③——4-927・4-928の2つの口を既定オンにした（`ZENITH_CROSSING_ENDPOINT_SLACK`・`ZENITH_ORPHAN_BOUNDARY_INTERSECT`。`=0`で切れる）**（2026年11月7日）
 
