@@ -49,6 +49,67 @@ fn sides(solid: &Solid, edge_id: u64) -> String {
     kinds.join("×")
 }
 
+/// 点 `point`（面の上にある前提）での面の単位法線。向きは問わない。
+/// NURBS は格子で一番近い点を探し、ガウス・ニュートンで詰める。
+fn normal_near(face: &zenith_topo::Face, point: zenith_math::Point3) -> Option<zenith_math::Vec3> {
+    match &face.geometry {
+        FaceGeometry::Plane(plane) => Some(plane.normal.normalize()),
+        FaceGeometry::Nurbs(surface) => {
+            let ((u0, u1), (v0, v1)) = surface.param_range();
+            let mut best = (f64::INFINITY, u0, v0);
+            for i in 0..=48 {
+                for j in 0..=48 {
+                    let u = u0 + (u1 - u0) * i as f64 / 48.0;
+                    let v = v0 + (v1 - v0) * j as f64 / 48.0;
+                    let d = (surface.evaluate(u, v) - point).norm();
+                    if d < best.0 {
+                        best = (d, u, v);
+                    }
+                }
+            }
+            let (_, mut u, mut v) = best;
+            for _ in 0..30 {
+                let (p, du, dv) = surface.evaluate_derivatives_1st(u, v);
+                let r = point - p;
+                let (a, b, c) = (du.dot(&du), du.dot(&dv), dv.dot(&dv));
+                let det = a * c - b * b;
+                if det.abs() < 1e-300 {
+                    break;
+                }
+                let (g1, g2) = (du.dot(&r), dv.dot(&r));
+                u = (u + (c * g1 - b * g2) / det).clamp(u0, u1);
+                v = (v + (a * g2 - b * g1) / det).clamp(v0, v1);
+            }
+            if (surface.evaluate(u, v) - point).norm() > 1e-7 {
+                return None;
+            }
+            surface.normal_or_limit(u, v).map(|n| n.normalize())
+        }
+        _ => None,
+    }
+}
+
+/// 両側の面が稜の中点で接している（G1、丸める角が無い）か。
+fn is_smooth(solid: &Solid, edge_id: u64) -> bool {
+    let mut normals = Vec::new();
+    let mut middle = None;
+    for face in &solid.outer_shell.faces {
+        let found = std::iter::once(&face.outer_wire)
+            .chain(face.inner_wires.iter())
+            .flat_map(|wire| wire.edges.iter())
+            .find(|oriented| oriented.edge.id == edge_id);
+        if let Some(oriented) = found {
+            let (t0, t1) = oriented.edge.curve.param_range();
+            let point = *middle.get_or_insert(oriented.edge.curve.evaluate((t0 + t1) * 0.5));
+            match normal_near(face, point) {
+                Some(n) => normals.push(n),
+                None => return false,
+            }
+        }
+    }
+    normals.len() == 2 && normals[0].cross(&normals[1]).norm() < 1e-6
+}
+
 fn volume(solid: &Solid) -> f64 {
     MassCalculator::compute_volume_from_brep(
         solid,
@@ -191,6 +252,7 @@ fn main() {
     let mut total_ok = 0usize;
     let mut total_refused = 0usize;
     let mut total_wrong = 0usize;
+    let mut total_smooth = 0usize;
     for case in cases() {
         println!("== {} ==", case.name);
         println!("   {}", case.why);
@@ -207,8 +269,15 @@ fn main() {
         let mut reasons: BTreeMap<(String, String), usize> = BTreeMap::new();
         let mut ok_kinds: BTreeMap<String, usize> = BTreeMap::new();
         let mut worst = 0.0f64;
+        let mut smooth = 0usize;
         for id in edge_ids(&solid) {
             let kind = sides(&solid, id);
+            // 接している稜（平面とフィレット面の継ぎ目など）には丸める角が無い。
+            // 断りとも通ったとも数えず、別に数える。
+            if is_smooth(&solid, id) {
+                smooth += 1;
+                continue;
+            }
             let kind_of_blend = if chamfer {
                 BlendKind::Chamfer { distance: case.radius }
             } else {
@@ -239,8 +308,8 @@ fn main() {
         }
         let refused: usize = reasons.values().sum();
         println!(
-            "   体積 {before:.6}、稜 {} 本: 通った {ok}（予測体積との相対差の最悪 {worst:.3e}）、断り {refused}、誤答 {wrong}",
-            ok + refused + wrong
+            "   体積 {before:.6}、稜 {} 本: 通った {ok}（予測体積との相対差の最悪 {worst:.3e}）、断り {refused}、誤答 {wrong}、接していて角の無い稜 {smooth}",
+            ok + refused + wrong + smooth
         );
         for (kind, count) in &ok_kinds {
             println!("     通った {count:>3}  [{kind}]");
@@ -251,6 +320,7 @@ fn main() {
         total_ok += ok;
         total_refused += refused;
         total_wrong += wrong;
+        total_smooth += smooth;
     }
-    println!("合計: 通った {total_ok}、断り {total_refused}、誤答 {total_wrong}");
+    println!("合計: 通った {total_ok}、断り {total_refused}、誤答 {total_wrong}、接していて角の無い稜 {total_smooth}");
 }

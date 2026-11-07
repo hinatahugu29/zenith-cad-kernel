@@ -344,7 +344,8 @@ impl EdgeBlender {
             dihedral_angle_deg: site.dihedral.to_degrees(),
             edge_length: site.length,
             setback,
-            predicted_removed_volume: kind.removed_section_area(site.dihedral) * site.length,
+            predicted_removed_volume: kind.removed_section_area(site.dihedral)
+                * site.centroid_length(kind),
         };
 
         let solid = site.apply(solid, kind, setback)?;
@@ -374,6 +375,9 @@ struct BlendSite {
     /// 端の面（始点側・終点側）
     cap_start: usize,
     cap_end: usize,
+    /// 斜めの端の面の外向き法線（直交する端なら None。`ZENITH_OBLIQUE_CAP`）
+    cap_start_normal: Option<Vec3>,
+    cap_end_normal: Option<Vec3>,
     /// 端を詰める隣接稜: (edge_id, その稜のどちら側の端点を動かすか, 方向 t)
     neighbours: Vec<NeighbourTrim>,
     /// 隣接稜が許す後退距離の上限
@@ -497,22 +501,30 @@ impl BlendSite {
 
         // 4. 端の面。稜と直交する平面でなければ、丸めた面の端を平面で
         //    閉じられないのでここで断る。
-        let cap_start = find_cap_face(faces, v_start, fa, fb, d, edge_id, "start")?;
-        let cap_end = find_cap_face(faces, v_end, fa, fb, d, edge_id, "end")?;
+        let (cap_start, cap_start_normal) =
+            find_cap_face(faces, v_start, fa, fb, d, edge_id, "start")?;
+        let (cap_end, cap_end_normal) = find_cap_face(faces, v_end, fa, fb, d, edge_id, "end")?;
 
         // 5. 端で詰める隣接稜
         let mut neighbours = Vec::new();
-        for (at_start, vertex) in [(true, v_start), (false, v_end)] {
+        for (at_start, vertex, cap_normal) in
+            [(true, v_start, cap_start_normal), (false, v_end, cap_end_normal)]
+        {
             for (on_face_a, face_index, dir) in [(true, fa, ta), (false, fb, tb)] {
-                let trim = find_neighbour(
+                // 斜めの端では、面の内側へ退いた点は稜に沿って端の面まで滑る。
+                // 後退距離 1 あたりの移動 k = t + d·λ。
+                let step = retreat_step(dir, d, cap_normal);
+                let scale = step.norm();
+                let mut trim = find_neighbour(
                     &faces[face_index],
                     edge_id,
                     vertex,
-                    dir,
+                    step / scale,
                     at_start,
                     on_face_a,
                     face_index,
                 )?;
+                trim.available /= scale;
                 neighbours.push(trim);
             }
         }
@@ -536,9 +548,41 @@ impl BlendSite {
             dihedral,
             cap_start,
             cap_end,
+            cap_start_normal,
+            cap_end_normal,
             neighbours,
             max_setback,
         })
+    }
+
+    /// 削れる断面の重心を通る、稜に平行な線の、両端の面に挟まれた長さ。
+    /// 角柱を2枚の平面で切った体積は「断面積 × 重心での軸方向の長さ」。
+    /// 端が両方とも直交なら稜の長さそのもの。
+    fn centroid_length(&self, kind: BlendKind) -> f64 {
+        if self.cap_start_normal.is_none() && self.cap_end_normal.is_none() {
+            return self.length;
+        }
+        let theta = self.dihedral;
+        let half = theta * 0.5;
+        let setback = kind.setback(theta);
+        // 二等分線（面の内側）に沿った重心の座標
+        let along = match kind {
+            BlendKind::Chamfer { .. } => 2.0 * setback * half.cos() / 3.0,
+            BlendKind::Fillet { radius } => {
+                let r = radius;
+                let centre = r / half.sin();
+                let alpha = (std::f64::consts::PI - theta) * 0.5;
+                let kite = setback * r;
+                let sector = r * r * alpha;
+                let kite_moment = kite * (setback * half.cos() + centre) / 3.0;
+                let sector_moment = sector * (centre - 2.0 * r * alpha.sin() / (3.0 * alpha));
+                (kite_moment - sector_moment) / (kite - sector)
+            }
+        };
+        let bisector = (self.t_a + self.t_b).normalize();
+        let g = bisector * along;
+        let shift = |normal: Option<Vec3>| normal.map_or(0.0, |n| -n.dot(&g) / n.dot(&self.d));
+        self.length + shift(self.cap_end_normal) - shift(self.cap_start_normal)
     }
 
     fn apply(&self, solid: &Solid, kind: BlendKind, setback: f64) -> Result<Solid, String> {
@@ -546,10 +590,11 @@ impl BlendSite {
         let faces = &solid.outer_shell.faces;
 
         // 新しい4頂点。稜の両端が、各面側へ setback だけ退いた点に割れる。
-        let a_start = Vertex::from_point(self.v_start + self.t_a * setback);
-        let a_end = Vertex::from_point(self.v_end + self.t_a * setback);
-        let b_start = Vertex::from_point(self.v_start + self.t_b * setback);
-        let b_end = Vertex::from_point(self.v_end + self.t_b * setback);
+        let (cs, ce) = (self.cap_start_normal, self.cap_end_normal);
+        let a_start = Vertex::from_point(self.v_start + retreat_step(self.t_a, self.d, cs) * setback);
+        let a_end = Vertex::from_point(self.v_end + retreat_step(self.t_a, self.d, ce) * setback);
+        let b_start = Vertex::from_point(self.v_start + retreat_step(self.t_b, self.d, cs) * setback);
+        let b_end = Vertex::from_point(self.v_end + retreat_step(self.t_b, self.d, ce) * setback);
 
         // 面 a / b に残る、稜を置き換える直線
         let line_a = Edge::line_between(a_start.clone(), a_end.clone())?;
@@ -782,7 +827,7 @@ fn find_cap_face(
     d: Vec3,
     edge_id: u64,
     which: &str,
-) -> Result<usize, String> {
+) -> Result<(usize, Option<Vec3>), String> {
     let mut found = Vec::new();
     for (index, face) in faces.iter().enumerate() {
         if index == face_a || index == face_b {
@@ -824,7 +869,30 @@ fn find_cap_face(
         })
         .collect();
     match caps.len() {
-        1 => Ok(caps[0]),
+        1 => Ok((caps[0], None)),
+        0 if oblique_cap_enabled() => {
+            // 斜めの平面の端（4-936）。ほかの面と取り違えないよう、1枚だけのときに限る。
+            let oblique: Vec<(usize, Vec3)> = found
+                .iter()
+                .filter_map(|index| match &faces[*index].geometry {
+                    FaceGeometry::Plane(plane) if plane.normal.dot(&d).abs() >= 0.1 => {
+                        let normal = if faces[*index].orientation.is_forward() {
+                            plane.normal
+                        } else {
+                            -plane.normal
+                        };
+                        Some((*index, normal.normalize()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            match oblique.as_slice() {
+                [(index, normal)] => Ok((*index, Some(*normal))),
+                _ => Err(format!(
+                    "The {which} of edge {edge_id} has no planar face perpendicular to it; the blend would need a trimmed end"
+                )),
+            }
+        }
         0 => Err(format!(
             "The {which} of edge {edge_id} has no planar face perpendicular to it; the blend would need a trimmed end"
         )),
@@ -833,6 +901,21 @@ fn find_cap_face(
         count => Err(format!(
             "The {which} of edge {edge_id} has {count} planar faces perpendicular to it; which one closes the blend is not decided"
         )),
+    }
+}
+
+fn oblique_cap_enabled() -> bool {
+    std::env::var("ZENITH_OBLIQUE_CAP")
+        .map(|value| value != "0")
+        .unwrap_or(false)
+}
+
+/// 面の内側へ後退距離 1 だけ退いたとき、端の点が動く量。直交する端では `t`
+/// そのもの。斜めの端では、退いた点を稜の向き `d` に沿って端の面まで滑らせる。
+fn retreat_step(t: Vec3, d: Vec3, cap_normal: Option<Vec3>) -> Vec3 {
+    match cap_normal {
+        None => t,
+        Some(n) => t - d * (n.dot(&t) / n.dot(&d)),
     }
 }
 
