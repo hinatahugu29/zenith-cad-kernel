@@ -12,7 +12,8 @@
 //!   直線と円弧になり、継ぎ目は G1 で閉じる
 //!
 //! 受け付ける形（どれか1つでも外れたら `None` を返し、ほかの経路に任せる）:
-//! - 上面が平面で、内側ワイヤが無い。選んだ稜がその外側ワイヤにある
+//! - 上面が平面で、選んだ稜がその外側ワイヤにある。内側ワイヤ（穴）はあってよい。
+//!   穴は縮めた上面にそのまま残し、穴と外側のループの隔たりを上限に加える
 //! - 外側ワイヤの稜は直線か円弧（中心角 180 度未満）で、隣どうしが接線で繋がる。
 //!   円弧は凸（中心が上面の内側）。角（接線が折れる頂点）が1つでもあれば対象外
 //!   ——その場合は既存の経路が稜を1本ずつ扱う
@@ -163,6 +164,8 @@ struct PrismRim {
     height: f64,
     /// 上面の中で、向かい合う境界どうしの最小の隔たり（の半分を上限に使う）
     narrowest: f64,
+    /// 上面の穴（内側ワイヤ）と外側のループの最小の隔たり。穴が無ければ無限大
+    hole_clearance: f64,
 }
 
 impl PrismRim {
@@ -173,7 +176,6 @@ impl PrismRim {
         let faces = &solid.outer_shell.faces;
         let top_index = faces.iter().position(|face| {
             matches!(face.geometry, FaceGeometry::Plane(_))
-                && face.inner_wires.is_empty()
                 && face
                     .outer_wire
                     .edges
@@ -338,7 +340,26 @@ impl PrismRim {
             }
         }
 
+        // 穴の境界の点から、外側のループの区間までの厳密な距離の最小。
+        // 穴の稜は細かく取る（ブレンドの帯に穴が掛からないための上限）。
+        let mut hole_clearance = f64::INFINITY;
+        for wire in &top.inner_wires {
+            for oriented in &wire.edges {
+                let (t0, t1) = oriented.edge.curve.param_range();
+                for step in 0..=64 {
+                    let point = oriented.edge.curve.evaluate(t0 + (t1 - t0) * step as f64 / 64.0);
+                    if (point - rim_point(&segments)).dot(&normal).abs() > 1e-6 {
+                        return None;
+                    }
+                    for segment in &segments {
+                        hole_clearance = hole_clearance.min(distance_to(segment, point, normal));
+                    }
+                }
+            }
+        }
+
         Some(Self {
+            hole_clearance,
             top_index,
             side_indices,
             normal,
@@ -364,6 +385,8 @@ impl PrismRim {
         smallest_radius
             .min(self.height)
             .min(self.narrowest * 0.5)
+            // 穴の稜は標本で測るので、少しだけ余裕を見る
+            .min(self.hole_clearance * 0.98)
     }
 
     /// 削れる体積の閉形式（パップス・ギュルダン）。
@@ -629,7 +652,14 @@ impl PrismRim {
                 .map(|copy| OrientedEdge::forward(copy.top.clone()))
                 .collect(),
         );
-        new_faces.push(Face::simple(FaceGeometry::Plane(plane), top_wire));
+        let holes = solid.outer_shell.faces[self.top_index].inner_wires.clone();
+        new_faces.push(Face::new(
+            FaceGeometry::Plane(plane),
+            top_wire,
+            holes,
+            zenith_topo::Orientation::Forward,
+            1e-6,
+        ));
 
         let mut final_faces: Vec<Face> = solid
             .outer_shell
@@ -680,6 +710,39 @@ fn tangent_at(segment: &Segment, at_start: bool, normal: Vec3) -> Option<Vec3> {
             let point = if at_start { *start } else { *end };
             // 凸の円弧は上面の法線まわりに反時計回り
             normal.cross(&(point - center)).try_normalize_safe(1e-12)
+        }
+    }
+}
+
+fn rim_point(segments: &[Segment]) -> Point3 {
+    segments[0].start()
+}
+
+/// 上面の平面内で、点から区間までの距離（点は平面に乗っている前提）。
+fn distance_to(segment: &Segment, point: Point3, normal: Vec3) -> f64 {
+    match segment {
+        Segment::Line { start, end } => {
+            let span = end - start;
+            let t = ((point - start).dot(&span) / span.norm_squared()).clamp(0.0, 1.0);
+            (point - (start + span * t)).norm()
+        }
+        Segment::Arc {
+            start,
+            end,
+            center,
+            radius,
+            angle,
+        } => {
+            let offset = point - center;
+            let flat = offset - normal * offset.dot(&normal);
+            let a = (start - center) / *radius;
+            let perpendicular = normal.cross(&a);
+            let phi = flat.dot(&perpendicular).atan2(flat.dot(&a));
+            if phi >= 0.0 && phi <= *angle && flat.norm() > 1e-12 {
+                (flat.norm() - radius).abs()
+            } else {
+                (point - start).norm().min((point - end).norm())
+            }
         }
     }
 }

@@ -183,3 +183,50 @@ fn a_sharp_cornered_box_rim_is_left_to_the_per_edge_path() {
     assert!((removed - report.predicted_removed_volume).abs() < 1e-9 * before);
     assert!(report.edge_length == 20.0 || report.edge_length == 30.0);
 }
+
+/// 角丸の角柱の中心に半径 `hole` の通し穴を開けた立体。
+fn holed_prism(hole: f64) -> Solid {
+    let drill = zenith_algo::BrepTransform::translate_solid(
+        &PrimitiveBuilder::make_cylinder(hole, 60.0).expect("cylinder"),
+        zenith_math::Vec3::new(10.0, 15.0, -10.0),
+    );
+    zenith_algo::BooleanEngine::boolean_solids_exact_result(
+        &rounded_prism(),
+        &drill,
+        zenith_algo::BooleanOpType::Difference,
+        &Tolerance::default(),
+    )
+    .expect("drill")
+    .solids[0]
+        .clone()
+}
+
+#[test]
+fn a_holed_top_face_keeps_its_hole_and_fillets_all_around() {
+    enable();
+    let prism = holed_prism(4.0);
+    let before = volume(&prism);
+    let edge = straight_rim_edge(&prism, 40.0);
+    let (result, _) =
+        EdgeBlender::blend_edge(&prism, edge, BlendKind::Fillet { radius: 2.0 }).expect("fillet");
+    let removed = before - volume(&result);
+    let expected = expected_fillet(2.0);
+    assert!((removed - expected).abs() < 1e-9 * before, "removed {removed}, expected {expected}");
+    assert_closed_mesh(&result, "holed fillet");
+}
+
+#[test]
+fn a_hole_close_to_the_rim_caps_the_radius() {
+    enable();
+    // 半径 8 の穴は x の側面まで 2。半径 2 以上は帯が穴に掛かるので断る。
+    let prism = holed_prism(8.0);
+    let before = volume(&prism);
+    let edge = straight_rim_edge(&prism, 40.0);
+    assert!(EdgeBlender::fillet_edge(&prism, edge, 2.5).is_err());
+    let (result, _) =
+        EdgeBlender::blend_edge(&prism, edge, BlendKind::Chamfer { distance: 1.5 }).expect("chamfer");
+    let removed = before - volume(&result);
+    let expected = expected_chamfer(1.5);
+    assert!((removed - expected).abs() < 1e-9 * before, "removed {removed}, expected {expected}");
+    assert_closed_mesh(&result, "holed chamfer");
+}
