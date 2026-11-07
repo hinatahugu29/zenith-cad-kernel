@@ -15562,7 +15562,7 @@ fn coincident_face_direction(
 
     // 稜ごとに等分した点の平均は、輪郭の割れ目の位置で動く。同じ領域でも
     // 頂点の置き方が違うと 0.45 ずれた（4-930。`ZENITH_COINCIDENT_AREA_CENTROID`、
-    // 既定オフ）。面積の重心なら割れ目に依らない。
+    // 既定オン、"0"で旧挙動）。面積の重心なら割れ目に依らない。
     let area_centroid = |points: &[Point3]| {
         let origin = points[0];
         let mut weighted = Vec3::zeros();
@@ -15578,7 +15578,7 @@ fn coincident_face_direction(
             Point3::from(weighted / total)
         }
     };
-    let use_area = std::env::var_os("ZENITH_COINCIDENT_AREA_CENTROID").is_some();
+    let use_area = std::env::var("ZENITH_COINCIDENT_AREA_CENTROID").map(|v| v != "0").unwrap_or(true);
     let left_centre = if use_area { area_centroid(&left_points) } else { centroid(&left_points) };
     let right_centre = if use_area { area_centroid(&right_points) } else { centroid(&right_points) };
     let left_extent = extent(&left_points, left_centre);
