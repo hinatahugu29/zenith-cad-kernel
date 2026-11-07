@@ -1538,6 +1538,13 @@ Outsideこそ残すべき側**なのに、演算の種類を見ずに一律で�
 `run_gates.sh --quick`全緑・`contact_placement_probe`既知の3件
 （規約どおりの断り）以外全部okを確認してコミット済み。
 
+**半径5・7の断りの根を2つ直し、既定オンにしました（2026/11/7。
+HANDOVER 4-927〜4-929）**: 1つ目は、輪の角をちょうど通る直線が丸めで
+交点を失っていた件（`ZENITH_CROSSING_ENDPOINT_SLACK`）。2つ目は、積で
+重なりの相手が先に落ちて、`Boundary` の壁が相手なしで残っていた件
+（`ZENITH_ORPHAN_BOUNDARY_INTERSECT`）。21配置の断りは11→6。全部の
+ゲートで確認済み。
+
 **2つの口を既定オンにしました（2026/11/7。HANDOVER 4-926）**:
 `ZENITH_COVERED_SPLIT_RECLASSIFY`・`ZENITH_EMPTY_INTERSECTION_REFUGE`
 （`=0`で切れる）。H8ビット一致・テスト失敗0・quickゲート全緑・

@@ -1620,7 +1620,7 @@ impl BrepIntersectionBuilder {
         // 代表点の都合で `Outside` と判定されて先に落ちると、解く相手がおらず
         // `Boundary` の片が残る。積の面なら、その裏側はもう一方の立体の中のはず。
         if matches!(op, crate::BooleanOpType::Intersection)
-            && std::env::var_os("ZENITH_ORPHAN_BOUNDARY_INTERSECT").is_some()
+            && std::env::var("ZENITH_ORPHAN_BOUNDARY_INTERSECT").map(|v| v != "0").unwrap_or(true)
         {
             let why = std::env::var_os("ZENITH_REFUSE_WHY").is_some();
             selected_face_pieces.retain(|piece| {
@@ -12262,7 +12262,7 @@ fn solve_linear_bernstein(b0: f64, b1: f64) -> Vec<f64> {
     let t = -b0 / slope;
     // 輪の角をちょうど通る線は、丸めで t が [0,1] の1ulp外に落ちて交点を
     // 失う（4-927。`ZENITH_CROSSING_ENDPOINT_SLACK`、既定オフ）。
-    if std::env::var_os("ZENITH_CROSSING_ENDPOINT_SLACK").is_some() {
+    if std::env::var("ZENITH_CROSSING_ENDPOINT_SLACK").map(|v| v != "0").unwrap_or(true) {
         const SLACK: f64 = 1e-9;
         return (-SLACK..=1.0 + SLACK)
             .contains(&t)
