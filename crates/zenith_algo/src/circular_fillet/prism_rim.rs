@@ -1,5 +1,5 @@
 //! 直線と円弧が**接線で繋がった**ループを上縁に持つ角柱の、上縁全周のブレンド
-//! （ROADMAP 柱⑦、HANDOVER 4-934。`ZENITH_PRISM_RIM_BLEND`）。
+//! （ROADMAP 柱⑦、HANDOVER 4-934。`ZENITH_PRISM_RIM_BLEND`、既定オン、`=0`で切れる）。
 //!
 //! 縦稜を丸めた直方体（角丸の角柱）の上縁は、直線4本と円弧4本が接線で繋がった
 //! 1本のループです。`slot_rim`（長円の柱、直線2本＋1/4円4本に決め打ち）と同じ
@@ -34,7 +34,7 @@ use crate::{BlendableEdge, EdgeBlendReport};
 pub(crate) fn enabled() -> bool {
     std::env::var("ZENITH_PRISM_RIM_BLEND")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 #[derive(Clone, Copy)]
