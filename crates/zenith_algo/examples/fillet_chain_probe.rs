@@ -237,6 +237,89 @@ fn cases() -> Vec<Case> {
         radius: 1.5,
     });
 
+    // 4-937 のあとに足した検体（柱⑦の手順3へ向けて）
+    let point_of = |solid: &Solid, id: u64| {
+        solid
+            .outer_shell
+            .faces
+            .iter()
+            .flat_map(|face| face.outer_wire.edges.iter())
+            .find(|oriented| oriented.edge.id == id)
+            .map(|oriented| oriented.edge.start_vertex.point)
+    };
+    let two = base.clone().and_then(|solid| {
+        let verticals = vertical_edges(&solid);
+        let first = verticals[0];
+        let p0 = point_of(&solid, first).ok_or("no point")?;
+        let second = verticals
+            .iter()
+            .copied()
+            .find(|id| {
+                *id != first
+                    && point_of(&solid, *id)
+                        .map(|p| (p.x - p0.x).abs() < 1e-9 || (p.y - p0.y).abs() < 1e-9)
+                        .unwrap_or(false)
+            })
+            .ok_or("no adjacent vertical")?;
+        EdgeBlender::fillet_edges(&solid, &[(first, 3.0), (second, 3.0)])
+    });
+    out.push(Case {
+        name: "box, 2 adjacent vertical edges filleted (r3)",
+        why: "隣り合う縦稜2本を丸めた直方体。上縁は「直線・円弧・直線・円弧・直線」の開いた鎖",
+        solid: two,
+        radius: 2.0,
+    });
+
+    let one_then_chain = base.clone().and_then(|solid| {
+        let first = vertical_edges(&solid)[0];
+        let rounded = EdgeBlender::fillet_edge(&solid, first, 3.0)?;
+        let arc = edge_ids(&rounded)
+            .into_iter()
+            .find(|id| {
+                rounded
+                    .outer_shell
+                    .faces
+                    .iter()
+                    .flat_map(|face| face.outer_wire.edges.iter())
+                    .any(|oriented| {
+                        let a = oriented.edge.start_vertex.point;
+                        let b = oriented.edge.end_vertex.point;
+                        oriented.edge.id == *id
+                            && (a.z - 40.0).abs() < 1e-9
+                            && (b.z - 40.0).abs() < 1e-9
+                            && (b - a).norm() < 5.0
+                    })
+            })
+            .ok_or("no top arc")?;
+        EdgeBlender::fillet_edge(&rounded, arc, 2.0)
+    });
+    out.push(Case {
+        name: "box, 1 vertical (r3) then its top chain (r2) filleted",
+        why: "縦稜1本と、その上の開いた鎖を丸めた立体。鎖の端の角に、丸めた面と素の稜が集まる（頂点ブレンドの入口）",
+        solid: one_then_chain,
+        radius: 1.5,
+    });
+
+    let l_shape = base.clone().and_then(|solid| {
+        let notch = zenith_algo::BrepTransform::translate_solid(
+            &PrimitiveBuilder::make_box(10.0, 15.0, 60.0)?,
+            zenith_math::Vec3::new(10.0, 15.0, -10.0),
+        );
+        let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+            &solid,
+            &notch,
+            zenith_algo::BooleanOpType::Difference,
+            &zenith_math::Tolerance::default(),
+        )?;
+        result.solids.first().cloned().ok_or_else(|| "no solid".to_string())
+    });
+    out.push(Case {
+        name: "L-shaped prism (box minus corner notch)",
+        why: "L字の角柱。凹の縦稜が1本ある（凹の鎖・凹の角の入口）",
+        solid: l_shape,
+        radius: 2.0,
+    });
+
     out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",

@@ -288,3 +288,32 @@ fn an_open_chain_stopping_at_square_corners_fillets_and_chamfers() {
     }
     assert!(EdgeBlender::fillet_edge(&solid, edge, 3.0).is_err());
 }
+
+#[test]
+fn an_open_chain_whose_two_ends_share_one_cap_face() {
+    enable();
+    std::env::set_var("ZENITH_PRISM_OPEN_CHAIN", "1");
+    // 縦稜を2本（x = 0 側の2本）丸める。上縁は「直線・円弧・直線・円弧・直線」で、
+    // 鎖の前後が同じ1本（y = 30 の稜）になり、蓋も同じ1枚。
+    let solid = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).expect("box");
+    let mut verticals = Vec::new();
+    for oriented in solid.outer_shell.faces.iter().flat_map(|face| face.outer_wire.edges.iter()) {
+        let a = oriented.edge.start_vertex.point;
+        let b = oriented.edge.end_vertex.point;
+        if (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9 && a.y.abs() < 1e-9 && !verticals.contains(&oriented.edge.id) {
+            verticals.push(oriented.edge.id);
+        }
+    }
+    assert_eq!(verticals.len(), 2);
+    let solid = EdgeBlender::fillet_edges(&solid, &[(verticals[0], 3.0), (verticals[1], 3.0)]).expect("two fillets");
+    let before = volume(&solid);
+    let edge = straight_rim_edge(&solid, 40.0);
+    let r = 2.0;
+    let (result, _) = EdgeBlender::blend_edge(&solid, edge, BlendKind::Fillet { radius: r }).expect("fillet");
+    // 鎖: 27 + 円弧 + 14 + 円弧 + 27
+    let expected = 68.0 * r * r * (1.0 - PI / 4.0)
+        + 2.0 * FRAC_PI_2 * ((3.0 - r) * r * r * (1.0 - PI / 4.0) + r.powi(3) / 6.0);
+    let removed = before - volume(&result);
+    assert!((removed - expected).abs() < 1e-9 * before, "removed {removed}, expected {expected}");
+    assert_closed_mesh(&result, "shared cap");
+}

@@ -302,7 +302,8 @@ impl PrismRim {
         } else {
             let prev_pos = (chain[0] + n_rim - 1) % n_rim;
             let next_pos = (chain[count - 1] + 1) % n_rim;
-            if prev_pos == next_pos || chain.contains(&prev_pos) || chain.contains(&next_pos) {
+            // 前後が同じ1本の稜（鎖がその1本以外を全部覆う）でもよい。その稜は両端を詰める。
+            if chain.contains(&prev_pos) || chain.contains(&next_pos) {
                 return None;
             }
             let prev = rim.edges[prev_pos].clone();
@@ -319,8 +320,13 @@ impl PrismRim {
                 let length = span.norm();
                 Some((span.try_normalize_safe(1e-12)?, length))
             };
-            let (prev_dir, prev_len) = direction(&prev)?;
-            let (next_dir, next_len) = direction(&next)?;
+            let (prev_dir, mut prev_len) = direction(&prev)?;
+            let (next_dir, mut next_len) = direction(&next)?;
+            if prev_pos == next_pos {
+                // 両端から詰めるので、使えるのは半分ずつ
+                prev_len *= 0.5;
+                next_len *= 0.5;
+            }
             if prev_dir.dot(&-inward_start) < 1.0 - 1e-9 || next_dir.dot(&inward_end) < 1.0 - 1e-9 {
                 return None;
             }
@@ -803,32 +809,36 @@ impl PrismRim {
                 Vertex::from_point(ends.prev.start_vertex().point),
                 vt[0].clone(),
             )?;
-            top_edges.push(OrientedEdge::forward(next_trimmed));
-            top_edges.extend(ends.rest.iter().cloned());
-            top_edges.push(OrientedEdge::forward(prev_trimmed));
             let faces = &solid.outer_shell.faces;
-            cap_faces.push((
-                ends.cap_start,
-                rebuild_cap(
-                    &faces[ends.cap_start],
-                    rim_points[0],
-                    ends.prev.edge.id,
-                    pt[0],
-                    pc[0],
-                    &ev_blend[0],
-                )?,
-            ));
-            cap_faces.push((
-                ends.cap_end,
-                rebuild_cap(
-                    &faces[ends.cap_end],
-                    rim_points[nv - 1],
-                    ends.next.edge.id,
-                    pt[nv - 1],
-                    pc[nv - 1],
-                    &ev_blend[nv - 1],
-                )?,
-            ));
+            let start_corner = (rim_points[0], pt[0], pc[0], &ev_blend[0]);
+            let end_corner = (rim_points[nv - 1], pt[nv - 1], pc[nv - 1], &ev_blend[nv - 1]);
+            if ends.prev.edge.id == ends.next.edge.id {
+                // 前後が同じ1本: 両端を詰めた1本にする。蓋も同じ1枚。
+                top_edges.push(OrientedEdge::forward(Edge::line_between(
+                    vt[nv - 1].clone(),
+                    vt[0].clone(),
+                )?));
+                cap_faces.push((
+                    ends.cap_start,
+                    rebuild_cap(
+                        &faces[ends.cap_start],
+                        ends.prev.edge.id,
+                        &[start_corner, end_corner],
+                    )?,
+                ));
+            } else {
+                top_edges.push(OrientedEdge::forward(next_trimmed));
+                top_edges.extend(ends.rest.iter().cloned());
+                top_edges.push(OrientedEdge::forward(prev_trimmed));
+                cap_faces.push((
+                    ends.cap_start,
+                    rebuild_cap(&faces[ends.cap_start], ends.prev.edge.id, &[start_corner])?,
+                ));
+                cap_faces.push((
+                    ends.cap_end,
+                    rebuild_cap(&faces[ends.cap_end], ends.next.edge.id, &[end_corner])?,
+                ));
+            }
         }
         let top_wire = Wire::new(top_edges);
         let holes = solid.outer_shell.faces[self.top_index].inner_wires.clone();
@@ -866,68 +876,76 @@ impl PrismRim {
     }
 }
 
-/// 開いた鎖の端の蓋を作り直す。角 `corner` に集まる2本（上面と共有する稜
-/// `rim_edge_id` と、縦の稜）を、それぞれ `top_point`・`cut_point` まで詰め、
-/// できた隙間にブレンドの断面 `profile`（`cut_point` → `top_point`）を入れる。
+/// 開いた鎖の端の蓋を作り直す。角ごとに `(角, 内側へずらした点, 切り口の点,
+/// 断面)` を受け取り、角に集まる2本（上面と共有する稜 `rim_edge_id` と縦の稜）を
+/// それぞれ内側の点・切り口の点まで詰め、できた隙間に断面（切り口 → 内側）を入れる。
 /// 新しい稜は作り直すので、隣の面とは最後の `Sewer` が縫い合わせる。
 fn rebuild_cap(
     face: &Face,
-    corner: Point3,
     rim_edge_id: u64,
-    top_point: Point3,
-    cut_point: Point3,
-    profile: &Edge,
+    corners: &[(Point3, Point3, Point3, &Edge)],
 ) -> Result<Face, String> {
     let near = |a: Point3, b: Point3| (a - b).norm() <= 1e-9;
-    let mut pieces: Vec<OrientedEdge> = Vec::with_capacity(face.outer_wire.edges.len() + 1);
+    let mut pieces: Vec<OrientedEdge> = Vec::with_capacity(face.outer_wire.edges.len() + 2);
     let mut replaced = 0usize;
     for oriented in &face.outer_wire.edges {
-        let from = oriented.start_vertex().point;
-        let to = oriented.end_vertex().point;
-        if !near(from, corner) && !near(to, corner) {
+        let mut from = oriented.start_vertex().point;
+        let mut to = oriented.end_vertex().point;
+        let mut touched = false;
+        for (corner, top_point, cut_point, _) in corners {
+            let moved = if oriented.edge.id == rim_edge_id {
+                *top_point
+            } else {
+                *cut_point
+            };
+            if near(from, *corner) {
+                from = moved;
+                touched = true;
+                replaced += 1;
+            } else if near(to, *corner) {
+                to = moved;
+                touched = true;
+                replaced += 1;
+            }
+        }
+        if !touched {
             pieces.push(oriented.clone());
             continue;
         }
         if !is_straight(&oriented.edge) {
             return Err("The cap face of an open prism-rim chain has a curved edge at its corner".into());
         }
-        let moved = if oriented.edge.id == rim_edge_id {
-            top_point
-        } else {
-            cut_point
-        };
-        let (from, to) = if near(from, corner) {
-            (moved, to)
-        } else {
-            (from, moved)
-        };
         pieces.push(OrientedEdge::forward(Edge::line_between(
             Vertex::from_point(from),
             Vertex::from_point(to),
         )?));
-        replaced += 1;
     }
-    if replaced != 2 {
+    if replaced != 2 * corners.len() {
         return Err(format!(
-            "The cap face of an open prism-rim chain has {replaced} edges at its corner, expected 2"
+            "The cap face of an open prism-rim chain moved {replaced} edge ends, expected {}",
+            2 * corners.len()
         ));
     }
     // 隙間を断面で埋める
     let count = pieces.len();
-    let mut wire = Vec::with_capacity(count + 1);
+    let mut wire = Vec::with_capacity(count + corners.len());
     for index in 0..count {
         let here_end = pieces[index].end_vertex().point;
         let next_start = pieces[(index + 1) % count].start_vertex().point;
         wire.push(pieces[index].clone());
-        if !near(here_end, next_start) {
-            if near(here_end, cut_point) && near(next_start, top_point) {
-                wire.push(OrientedEdge::forward(profile.clone()));
-            } else if near(here_end, top_point) && near(next_start, cut_point) {
-                wire.push(OrientedEdge::reversed(profile.clone()));
-            } else {
-                return Err("The cap face of an open prism-rim chain did not close".into());
-            }
+        if near(here_end, next_start) {
+            continue;
         }
+        let profile = corners.iter().find_map(|(_, top_point, cut_point, profile)| {
+            if near(here_end, *cut_point) && near(next_start, *top_point) {
+                Some(OrientedEdge::forward((*profile).clone()))
+            } else if near(here_end, *top_point) && near(next_start, *cut_point) {
+                Some(OrientedEdge::reversed((*profile).clone()))
+            } else {
+                None
+            }
+        });
+        wire.push(profile.ok_or("The cap face of an open prism-rim chain did not close")?);
     }
     Ok(Face::new(
         face.geometry.clone(),
