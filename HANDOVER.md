@@ -68711,3 +68711,6 @@ G1〜G5 は 8月29日に揃いました。そのあと 8月30日に**接触配�
 - `54_belleville_spring.step`（誤差 $2.70 \times 10^{-14}$）が完全ソリッドとして実証。
 
 
+
+### 4-938 追記: 既定オンは見送り
+`ZENITH_CONCAVE_LINE_BLEND` を既定オンにして回すと `edge_blend_diagnostic_test` の2件が赤（`rectangular_boss_root_edges_report_concave_contract_without_mutation`、`hybrid_bosses_blendability_diagnostics`）。凹んだ稜を「断る」と診断する契約と食い違う。H8 ビット一致、contact 探針は exit 0。既定オフのまま。**次**: 診断の契約を口に合わせて更新するか（凹んだ稜が通る場合を分ける）、ボスの根元の稜を探針で確かめてから決める。
