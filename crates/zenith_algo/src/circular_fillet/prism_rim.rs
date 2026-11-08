@@ -186,7 +186,7 @@ struct OpenEnds {
 pub(crate) fn open_chain_enabled() -> bool {
     std::env::var("ZENITH_PRISM_OPEN_CHAIN")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 /// 上面のワイヤの稜を、直線か凸の円弧（中心角 180 度未満）として読む。

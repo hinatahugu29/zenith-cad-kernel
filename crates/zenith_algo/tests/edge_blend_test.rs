@@ -148,8 +148,21 @@ fn a_hexagonal_prism_edge_is_blended_at_its_own_dihedral_angle() {
     let prism = PrimitiveBuilder::make_regular_prism(6, 10.0, 25.0).unwrap();
     let base = volume_of(&prism);
 
-    let edges = EdgeBlender::blendable_edges(&prism);
-    assert_eq!(edges.len(), 6, "only the six upright edges qualify");
+    // 上下の12本も、端が隣の側面（稜と60度）にぶつかる斜めの端として通る
+    // （4-936、`ZENITH_OBLIQUE_CAP`）。ここで測るのは120度の縦稜6本。
+    let all = EdgeBlender::blendable_edges(&prism);
+    let edges: Vec<_> = all
+        .iter()
+        .copied()
+        .filter(|edge| (edge.dihedral_angle_deg - 90.0).abs() > 1e-6)
+        .collect();
+    let rims = all.len() - edges.len();
+    if std::env::var("ZENITH_OBLIQUE_CAP").map_or(true, |v| v != "0") {
+        assert_eq!(rims, 12, "the twelve rim edges end on oblique side faces");
+    } else {
+        assert_eq!(rims, 0);
+    }
+    assert_eq!(edges.len(), 6, "six upright edges");
     for edge in &edges {
         assert!(
             (edge.dihedral_angle_deg - 120.0).abs() < 1e-9,

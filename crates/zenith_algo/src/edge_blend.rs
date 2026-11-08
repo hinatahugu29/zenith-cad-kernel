@@ -907,7 +907,7 @@ fn find_cap_face(
 fn oblique_cap_enabled() -> bool {
     std::env::var("ZENITH_OBLIQUE_CAP")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 /// 面の内側へ後退距離 1 だけ退いたとき、端の点が動く量。直交する端では `t`
