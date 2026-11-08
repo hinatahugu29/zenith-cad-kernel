@@ -300,24 +300,46 @@ fn cases() -> Vec<Case> {
         radius: 1.5,
     });
 
-    let l_shape = base.clone().and_then(|solid| {
-        let notch = zenith_algo::BrepTransform::translate_solid(
-            &PrimitiveBuilder::make_box(10.0, 15.0, 60.0)?,
-            zenith_math::Vec3::new(10.0, 15.0, -10.0),
-        );
-        let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
-            &solid,
-            &notch,
-            zenith_algo::BooleanOpType::Difference,
+    // L字の輪郭（20×30 から x 10..20, y 15..30 を欠いた形）をそのまま押し出す。
+    let l_shape = (|| -> Result<Solid, String> {
+        let corners = [
+            (0.0, 0.0),
+            (20.0, 0.0),
+            (20.0, 15.0),
+            (10.0, 15.0),
+            (10.0, 30.0),
+            (0.0, 30.0),
+        ];
+        let vertices: Vec<zenith_topo::Vertex> = corners
+            .iter()
+            .map(|(x, y)| zenith_topo::Vertex::from_point(zenith_math::Point3::new(*x, *y, 0.0)))
+            .collect();
+        let mut edges = Vec::new();
+        for index in 0..vertices.len() {
+            let next = (index + 1) % vertices.len();
+            edges.push(zenith_topo::OrientedEdge::forward(zenith_topo::Edge::line_between(
+                vertices[index].clone(),
+                vertices[next].clone(),
+            )?));
+        }
+        zenith_algo::ExtrudeBuilder::extrude_wire(
+            &zenith_topo::Wire::new(edges),
+            zenith_math::Vec3::new(0.0, 0.0, 40.0),
             &zenith_math::Tolerance::default(),
-        )?;
-        result.solids.first().cloned().ok_or_else(|| "no solid".to_string())
-    });
+        )
+    })();
     out.push(Case {
         name: "L-shaped prism (box minus corner notch)",
         why: "L字の角柱。凹の縦稜が1本ある（凹の鎖・凹の角の入口）",
         solid: l_shape,
         radius: 2.0,
+    });
+
+    out.push(Case {
+        name: "regular hexagonal prism (r10 h25)",
+        why: "正六角柱。上下の稜の端は隣の側面（稜と60度）にぶつかる（斜めの端、4-936）",
+        solid: PrimitiveBuilder::make_regular_prism(6, 10.0, 25.0),
+        radius: 1.5,
     });
 
     out.push(Case {

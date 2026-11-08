@@ -54,7 +54,8 @@ impl BlendKind {
     fn setback(&self, dihedral: f64) -> f64 {
         match self {
             // r * cot(θ/2)
-            BlendKind::Fillet { radius } => radius / (dihedral * 0.5).tan(),
+            // 凹の稜では cot が負になるので絶対値（4-938）。凸では値は変わらない。
+            BlendKind::Fillet { radius } => (radius / (dihedral * 0.5).tan()).abs(),
             BlendKind::Chamfer { distance } => *distance,
         }
     }
@@ -114,7 +115,7 @@ impl EdgeBlender {
                     edge_id,
                     length: site.length,
                     dihedral_angle_deg: site.dihedral.to_degrees(),
-                    max_fillet_radius: max_setback * half.tan(),
+                    max_fillet_radius: max_setback * half.tan().abs(),
                     max_chamfer_distance: max_setback,
                 })
             }
@@ -489,7 +490,13 @@ impl BlendSite {
         } else {
             std::f64::consts::TAU - raw
         };
-        if dihedral >= std::f64::consts::PI - 1e-9 {
+        // 凹の稜（4-938、`ZENITH_CONCAVE_LINE_BLEND`）: 断面の円弧の中間制御点は
+        // やはり元の稜の端点で、重み |sin(θ/2)|、後退距離 r |cot(θ/2)|。
+        // 削れる体積の式は符号付きのまま材料の追加（負）を出す。
+        let concave_ok = concave_line_blend_enabled()
+            && dihedral > std::f64::consts::PI + 1e-6
+            && dihedral < std::f64::consts::TAU - 1e-6;
+        if dihedral >= std::f64::consts::PI - 1e-9 && !concave_ok {
             return Err(format!(
                 "Edge {edge_id} has a {:.3} deg interior angle; only convex edges are blended",
                 dihedral.to_degrees()
@@ -504,6 +511,12 @@ impl BlendSite {
         let (cap_start, cap_start_normal) =
             find_cap_face(faces, v_start, fa, fb, d, edge_id, "start")?;
         let (cap_end, cap_end_normal) = find_cap_face(faces, v_end, fa, fb, d, edge_id, "end")?;
+
+        if dihedral > std::f64::consts::PI && (cap_start_normal.is_some() || cap_end_normal.is_some()) {
+            return Err(format!(
+                "Edge {edge_id} is concave and ends on an oblique face; that combination is not blended yet"
+            ));
+        }
 
         // 5. 端で詰める隣接稜
         let mut neighbours = Vec::new();
@@ -709,6 +722,19 @@ impl BlendSite {
             OrientedEdge::reversed(line_b.clone()),
             OrientedEdge::reversed(corner_start.clone()),
         ]);
+        // 凹の稜では、同じ並びの輪が外向き法線に対して逆回りになる（4-938）
+        let blend_wire = if self.dihedral > std::f64::consts::PI {
+            Wire::new(
+                blend_wire
+                    .edges
+                    .iter()
+                    .rev()
+                    .map(|oriented| OrientedEdge::new(oriented.edge.clone(), oriented.orientation.reversed()))
+                    .collect(),
+            )
+        } else {
+            blend_wire
+        };
         let geometry = self.blend_geometry(kind, setback, &a_start, &a_end, &b_start, &b_end)?;
         new_faces.push(Face::simple(geometry, blend_wire));
 
@@ -902,6 +928,12 @@ fn find_cap_face(
             "The {which} of edge {edge_id} has {count} planar faces perpendicular to it; which one closes the blend is not decided"
         )),
     }
+}
+
+fn concave_line_blend_enabled() -> bool {
+    std::env::var("ZENITH_CONCAVE_LINE_BLEND")
+        .map(|value| value != "0")
+        .unwrap_or(false)
 }
 
 fn oblique_cap_enabled() -> bool {
