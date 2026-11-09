@@ -1010,6 +1010,32 @@ fn find_neighbour(
             // 退く先が本当にこの稜の上に乗るか。乗らないなら、端の面が
             // 直交していないなど前提が崩れている。
             let along = span / available;
+            // 凹の角（面の内角が 180 度を超える頂点）では、隣の稜は退く向きと
+            // 逆に走る。端点を退いた点へ動かすと、詰めるのではなく同じ直線の
+            // まま延びる（4-940、`ZENITH_REFLEX_END`）。延ばす量に稜の長さの
+            // 上限は無い。
+            let extends = reflex_end_enabled() && along.dot(&dir) <= -(1.0 - 1e-7);
+            if extends {
+                let deviation = max_chord_deviation(
+                    &edge.curve,
+                    edge.start_vertex.point,
+                    along * if move_start { 1.0 } else { -1.0 },
+                    available,
+                );
+                if deviation > 1e-9 * available.max(1.0) {
+                    return Err(format!(
+                        "Neighbouring edge {} is not straight; it cannot be extended past the corner",
+                        edge.id
+                    ));
+                }
+                return Ok(NeighbourTrim {
+                    edge_id: edge.id,
+                    move_start,
+                    available: f64::INFINITY,
+                    at_start_of_target,
+                    on_face_a,
+                });
+            }
             if along.dot(&dir) < 1.0 - 1e-7 {
                 return Err(format!(
                     "Neighbouring edge {} on face {face_index} does not run in the direction the blend retreats",
@@ -1105,4 +1131,11 @@ fn max_chord_deviation(curve: &NurbsCurve3, origin: Point3, dir: Vec3, length: f
         worst = worst.max((offset - dir * along).norm());
     }
     worst
+}
+
+/// 凹の角で隣の稜を延ばす（4-940）。既定オフ。
+fn reflex_end_enabled() -> bool {
+    std::env::var("ZENITH_REFLEX_END")
+        .map(|value| value != "0")
+        .unwrap_or(false)
 }
