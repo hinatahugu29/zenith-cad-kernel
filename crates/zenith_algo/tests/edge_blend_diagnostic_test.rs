@@ -50,7 +50,8 @@ fn rectangular_boss_root_edges_report_concave_contract_without_mutation() {
         let error = EdgeBlender::blendability(&solid, edge.id).expect_err("concave root");
         assert!(
             error.contains("270.000 deg interior angle")
-                && error.contains("only convex edges are blended"),
+                && (error.contains("only convex edges are blended")
+                    || error.contains("concave edge cannot be blended where it ends")),
             "unexpected diagnostic for edge {}: {error}",
             edge.id
         );
@@ -239,7 +240,8 @@ fn hybrid_bosses_blendability_diagnostics() {
             .expect_err("rect boss root must be rejected with diagnostic");
         assert!(
             err.contains("270.000 deg interior angle")
-                && err.contains("only convex edges are blended"),
+                && (err.contains("only convex edges are blended")
+                    || err.contains("concave edge cannot be blended where it ends")),
             "unexpected error for rect root edge {}: {err}",
             edge.id
         );

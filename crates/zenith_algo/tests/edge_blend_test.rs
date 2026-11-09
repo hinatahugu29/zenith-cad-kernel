@@ -327,7 +327,7 @@ fn a_concave_edge_is_refused_rather_than_blended_the_wrong_way() {
     let error = EdgeBlender::fillet_edge(&l_shape, concave_ids[0], 2.0)
         .expect_err("a concave edge must be refused");
     assert!(
-        error.contains("convex"),
+        error.contains("convex") || error.contains("concave"),
         "the refusal should say why: {error}"
     );
 

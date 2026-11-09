@@ -508,9 +508,20 @@ impl BlendSite {
 
         // 4. 端の面。稜と直交する平面でなければ、丸めた面の端を平面で
         //    閉じられないのでここで断る。
+        let concave_end = |reason: String| {
+            if dihedral > std::f64::consts::PI {
+                format!(
+                    "Edge {edge_id} has a {:.3} deg interior angle; this concave edge cannot be blended where it ends: {reason}",
+                    dihedral.to_degrees()
+                )
+            } else {
+                reason
+            }
+        };
         let (cap_start, cap_start_normal) =
-            find_cap_face(faces, v_start, fa, fb, d, edge_id, "start")?;
-        let (cap_end, cap_end_normal) = find_cap_face(faces, v_end, fa, fb, d, edge_id, "end")?;
+            find_cap_face(faces, v_start, fa, fb, d, edge_id, "start").map_err(concave_end)?;
+        let (cap_end, cap_end_normal) =
+            find_cap_face(faces, v_end, fa, fb, d, edge_id, "end").map_err(concave_end)?;
 
         if dihedral > std::f64::consts::PI && (cap_start_normal.is_some() || cap_end_normal.is_some()) {
             return Err(format!(
@@ -536,7 +547,18 @@ impl BlendSite {
                     at_start,
                     on_face_a,
                     face_index,
-                )?;
+                )
+                .map_err(|reason| {
+                    if dihedral > std::f64::consts::PI {
+                        // 凹の稜の端が凹の角（隣の壁を延ばす必要がある）など
+                        format!(
+                            "Edge {edge_id} has a {:.3} deg interior angle; this concave edge cannot be blended where it ends: {reason}",
+                            dihedral.to_degrees()
+                        )
+                    } else {
+                        reason
+                    }
+                })?;
                 trim.available /= scale;
                 neighbours.push(trim);
             }
@@ -933,7 +955,7 @@ fn find_cap_face(
 fn concave_line_blend_enabled() -> bool {
     std::env::var("ZENITH_CONCAVE_LINE_BLEND")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 fn oblique_cap_enabled() -> bool {

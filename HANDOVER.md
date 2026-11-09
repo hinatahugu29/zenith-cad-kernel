@@ -1,6 +1,6 @@
 # 引継書 — Zenith CAD Kernel
 
-**最終更新**: 2026年11月8日（**4-413 〜 4-938 を足しました**）
+**最終更新**: 2026年11月9日（**4-413 〜 4-939 を足しました**）
 
 > ## ROADMAP 柱①「その先」——H8 の口 20 本のうち 19 本を既定オンに昇格しました（2026/10/14〜15）
 >
@@ -68714,3 +68714,11 @@ G1〜G5 は 8月29日に揃いました。そのあと 8月30日に**接触配�
 
 ### 4-938 追記: 既定オンは見送り
 `ZENITH_CONCAVE_LINE_BLEND` を既定オンにして回すと `edge_blend_diagnostic_test` の2件が赤（`rectangular_boss_root_edges_report_concave_contract_without_mutation`、`hybrid_bosses_blendability_diagnostics`）。凹んだ稜を「断る」と診断する契約と食い違う。H8 ビット一致、contact 探針は exit 0。既定オフのまま。**次**: 診断の契約を口に合わせて更新するか（凹んだ稜が通る場合を分ける）、ボスの根元の稜を探針で確かめてから決める。
+
+### 4-939. **`ZENITH_CONCAVE_LINE_BLEND` を既定オンに**（2026年11月9日）
+4-938 追記の赤2件は、**断り文の文言**のずれでした。測った: ボスの根元（凹の 270 度、端は凹の角）は口オンでも8件すべて断られ、誤答 0（`examples/boss_root_probe.rs`）。`blendability` も同じく断っていて、断り文が「隣の稜が退く向きに走らない」に変わっただけでした。
+- 凹の稜が端で断られるとき（端の面・隣の稜の判定）は、断り文に「`270.000 deg interior angle; this concave edge cannot be blended where it ends: <理由>`」と角度を入れるようにした。
+- テスト3件（`edge_blend_diagnostic_test` 2件、`edge_blend_test::a_concave_edge_is_refused_rather_than_blended_the_wrong_way`）は、この断り文も認めるように直した。断ること自体の確かめはそのまま。
+- 既定オンで: cargo test 赤 0、H8 ビット一致（1.551149 / 7.805801 / 2.295747）、contact 探針 146/7/0/0（exit 0）。quick ゲートは配る包みの指紋だけ赤（ソースを変えたので当然）→ `py tools/build_pyd.py` で作り直して回し直し、GATE 緑（rc 0。飛ばす contact 探針は別に 146/7/0/0）。
+
+**次の課題**: 凹の稜の端が凹の角に当たる場合（ボスの根元、L字の残り4本）。隣の壁を延ばして端を閉じる必要がある。
