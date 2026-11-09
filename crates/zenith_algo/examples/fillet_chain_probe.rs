@@ -407,6 +407,22 @@ fn main() {
                     }
                 }
                 Err(err) => {
+                    // ZENITH_FCP_WHY=1 なら断った稜の端点と理由を出す
+                    if std::env::var("ZENITH_FCP_WHY").is_ok_and(|v| v == "1") {
+                        let edge = solid
+                            .outer_shell
+                            .faces
+                            .iter()
+                            .flat_map(|face| face.outer_wire.edges.iter())
+                            .find(|oriented| oriented.edge.id == id);
+                        if let Some(oriented) = edge {
+                            let (a, b) = (oriented.edge.start_vertex.point, oriented.edge.end_vertex.point);
+                            println!(
+                                "   断り 稜 {id}（{kind}） ({:.3},{:.3},{:.3})→({:.3},{:.3},{:.3}): {err}",
+                                a.x, a.y, a.z, b.x, b.y, b.z
+                            );
+                        }
+                    }
                     *reasons.entry((kind, reason_key(&err))).or_insert(0) += 1;
                 }
             }

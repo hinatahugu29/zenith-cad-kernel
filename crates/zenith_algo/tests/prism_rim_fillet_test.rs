@@ -317,3 +317,71 @@ fn an_open_chain_whose_two_ends_share_one_cap_face() {
     assert!((removed - expected).abs() < 1e-9 * before, "removed {removed}, expected {expected}");
     assert_closed_mesh(&result, "shared cap");
 }
+
+/// 縦稜1本（r3）と、その上の開いた鎖（r2）を丸めた直方体（4-941）。
+/// 鎖の端の側壁では「縦稜・端の円弧・上の稜」が接線で繋がる開いた鎖になり、
+/// 上の稜の側面は大きな上面（4本の帯ではない一般の平面）。
+fn vertical_then_top_chain() -> Solid {
+    let solid = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).expect("box");
+    let vertical = solid
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.edges.iter())
+        .find(|oriented| {
+            let a = oriented.edge.start_vertex.point;
+            let b = oriented.edge.end_vertex.point;
+            (a.x - 20.0).abs() < 1e-9 && (b.x - 20.0).abs() < 1e-9 && a.y.abs() < 1e-9 && b.y.abs() < 1e-9
+        })
+        .map(|oriented| oriented.edge.id)
+        .expect("vertical edge at (20, 0)");
+    let rounded = EdgeBlender::fillet_edge(&solid, vertical, 3.0).expect("vertical fillet");
+    let arc = rounded
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.edges.iter())
+        .find(|oriented| {
+            let a = oriented.edge.start_vertex.point;
+            let b = oriented.edge.end_vertex.point;
+            (a.z - 40.0).abs() < 1e-9 && (b.z - 40.0).abs() < 1e-9 && (b - a).norm() < 5.0
+        })
+        .map(|oriented| oriented.edge.id)
+        .expect("top arc");
+    EdgeBlender::fillet_edge(&rounded, arc, 2.0).expect("top chain fillet")
+}
+
+#[test]
+fn chains_on_the_side_walls_at_the_ends_of_a_top_chain_blend() {
+    enable();
+    std::env::set_var("ZENITH_PRISM_OPEN_CHAIN", "1");
+    std::env::set_var("ZENITH_PRISM_GENERAL_SIDE", "1");
+    let solid = vertical_then_top_chain();
+    let before = volume(&solid);
+    let mut ids: Vec<u64> = Vec::new();
+    for face in &solid.outer_shell.faces {
+        for oriented in &face.outer_wire.edges {
+            if !ids.contains(&oriented.edge.id) {
+                ids.push(oriented.edge.id);
+            }
+        }
+    }
+    let mut passed = 0;
+    for id in ids {
+        for kind in [BlendKind::Fillet { radius: 1.5 }, BlendKind::Chamfer { distance: 1.5 }] {
+            let Ok((result, report)) = EdgeBlender::blend_edge(&solid, id, kind) else {
+                continue;
+            };
+            let removed = before - volume(&result);
+            let predicted = report.predicted_removed_volume;
+            assert!(
+                (removed - predicted).abs() <= 1e-6 * predicted.abs(),
+                "edge {id} {kind:?}: removed {removed}, predicted {predicted}"
+            );
+            assert_closed_mesh(&result, &format!("edge {id} {kind:?}"));
+            passed += 1;
+        }
+    }
+    // 角のある稜 12 本（接していて角の無い 10 本は数えない）を、フィレットと面取りで
+    assert_eq!(passed, 24, "every cornered edge blends both ways");
+}

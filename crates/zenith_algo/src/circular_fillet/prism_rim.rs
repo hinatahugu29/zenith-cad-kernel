@@ -168,6 +168,10 @@ struct PrismRim {
     hole_clearance: f64,
     /// 角で止まる開いた鎖なら、その両端（4-937）。閉じたループなら None
     open: Option<OpenEnds>,
+    /// 区間ごとに、側面が4本の帯か（false なら一般の平面、4-941）
+    strip: Vec<bool>,
+    /// 一般の平面の側面で、稜の両端から下りる稜の短い方
+    general_reach: f64,
 }
 
 /// 開いた鎖の両端。角の先の稜（直線）と、その側面（蓋）。
@@ -231,14 +235,30 @@ impl PrismRim {
             return None;
         }
         let faces = &solid.outer_shell.faces;
-        let top_index = faces.iter().position(|face| {
-            matches!(face.geometry, FaceGeometry::Plane(_))
-                && face
-                    .outer_wire
-                    .edges
-                    .iter()
-                    .any(|oriented| oriented.edge.id == edge_id)
-        })?;
+        let candidates: Vec<usize> = faces
+            .iter()
+            .enumerate()
+            .filter(|(_, face)| {
+                matches!(face.geometry, FaceGeometry::Plane(_))
+                    && face
+                        .outer_wire
+                        .edges
+                        .iter()
+                        .any(|oriented| oriented.edge.id == edge_id)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        // 稜の両側が平面なら、どちらを「上面」と読むかで鎖が変わる（4-941）。
+        // 先に見つかった方で読めなければ、もう一方も試す。
+        let tries = if general_side_enabled() { candidates.len() } else { 1 };
+        candidates
+            .into_iter()
+            .take(tries)
+            .find_map(|top_index| Self::recognize_on(solid, edge_id, top_index))
+    }
+
+    fn recognize_on(solid: &Solid, edge_id: u64, top_index: usize) -> Option<Self> {
+        let faces = &solid.outer_shell.faces;
         let top = &faces[top_index];
         let normal = super::effective_plane_normal(top).try_normalize_safe(1e-12)?;
         let rim = &top.outer_wire;
@@ -373,8 +393,10 @@ impl PrismRim {
 
         // 側面: 稜ごとに1枚、4本で囲まれ、下の稜は上の稜の平行移動
         let mut side_indices = Vec::with_capacity(count);
+        let mut strip: Vec<bool> = Vec::with_capacity(count);
+        let mut general_reach = f64::INFINITY;
         let mut height: Option<f64> = None;
-        for oriented in chain.iter().map(|index| &rim.edges[*index]) {
+        for (segment_index, oriented) in chain.iter().map(|index| &rim.edges[*index]).enumerate() {
             let users: Vec<usize> = faces
                 .iter()
                 .enumerate()
@@ -390,8 +412,21 @@ impl PrismRim {
             }
             let side_index = *users.iter().find(|index| **index != top_index)?;
             let side = &faces[side_index];
-            if !side.inner_wires.is_empty() || side.outer_wire.edges.len() != 4 {
-                return None;
+            let is_strip = side.inner_wires.is_empty() && side.outer_wire.edges.len() == 4;
+            if !is_strip {
+                // 一般の平面の側面（4-941）: 直線の区間だけ。稜の両端で隣り合う
+                // 2本が、上面の法線の逆向きに真っすぐ下りる。
+                if !general_side_enabled()
+                    || !matches!(segments[segment_index], Segment::Line { .. })
+                    || !matches!(side.geometry, FaceGeometry::Plane(_))
+                {
+                    return None;
+                }
+                let reach = general_side_reach(side, oriented.edge.id, normal)?;
+                general_reach = general_reach.min(reach);
+                side_indices.push(side_index);
+                strip.push(false);
+                continue;
             }
             let position = side
                 .outer_wire
@@ -430,6 +465,7 @@ impl PrismRim {
                 }
             }
             height = Some(h);
+            strip.push(true);
             // 下の稜は上の稜を下ろしたもの（中点で確かめる）
             let (t0, t1) = oriented.edge.curve.param_range();
             let (b0, b1) = bottom.edge.curve.param_range();
@@ -440,7 +476,17 @@ impl PrismRim {
             }
             side_indices.push(side_index);
         }
-        let height = height?;
+        // 帯が無ければ、底の写しは使わない。高さは一般の側面の届く長さにする。
+        let height = height.unwrap_or(general_reach);
+        if !height.is_finite() {
+            return None;
+        }
+        // 蓋と側面が同じ面なら作り直しがぶつかる
+        if let Some(ends) = &open {
+            if side_indices.contains(&ends.cap_start) || side_indices.contains(&ends.cap_end) {
+                return None;
+            }
+        }
 
         // 上面の幅: 内向きの法線が向かい合う（内積 < -0.9）境界の点どうしの
         // 最短距離。内側へずらしたループが潰れないよう、その半分を上限に使う。
@@ -489,6 +535,8 @@ impl PrismRim {
         }
 
         Some(Self {
+            strip,
+            general_reach,
             open,
             hole_clearance,
             top_index,
@@ -515,6 +563,7 @@ impl PrismRim {
             .fold(f64::INFINITY, f64::min);
         smallest_radius
             .min(self.height)
+            .min(self.general_reach)
             .min(self.narrowest * 0.5)
             // 穴の稜は標本で測るので、少しだけ余裕を見る
             .min(self.hole_clearance * 0.98)
@@ -681,6 +730,16 @@ impl PrismRim {
         // 1. 短くした側面
         for i in 0..count {
             let next = (i + 1) % nv;
+            if !self.strip[i] {
+                // 一般の平面（4-941）: 稜を切り口に替え、両端の2本を切り口まで詰める
+                let original = &solid.outer_shell.faces[self.side_indices[i]];
+                new_faces.push(rebuild_general_side(
+                    original,
+                    &copies[i].cut,
+                    [(rim_points[i], pc[i]), (rim_points[next], pc[next])],
+                )?);
+                continue;
+            }
             let geometry = match &self.segments[i] {
                 Segment::Line { .. } => FaceGeometry::Plane(
                     PlaneSurface3::new(pb[i], pb[next] - pb[i], pc[i] - pb[i])
@@ -946,6 +1005,92 @@ fn rebuild_cap(
             }
         });
         wire.push(profile.ok_or("The cap face of an open prism-rim chain did not close")?);
+    }
+    Ok(Face::new(
+        face.geometry.clone(),
+        Wire::new(wire),
+        face.inner_wires.clone(),
+        face.orientation,
+        face.tolerance,
+    ))
+}
+
+pub(crate) fn general_side_enabled() -> bool {
+    std::env::var("ZENITH_PRISM_GENERAL_SIDE")
+        .map(|value| value != "0")
+        .unwrap_or(false)
+}
+
+/// 一般の平面の側面で、稜 `rim_edge_id` の両端に隣り合う2本が、上面の法線
+/// `normal` の逆向きに真っすぐ下りるか。下りるなら短い方の長さ。
+fn general_side_reach(side: &Face, rim_edge_id: u64, normal: Vec3) -> Option<f64> {
+    if !side.inner_wires.is_empty() {
+        return None;
+    }
+    let edges = &side.outer_wire.edges;
+    let position = edges.iter().position(|e| e.edge.id == rim_edge_id)?;
+    let count = edges.len();
+    let rim = &edges[position];
+    let ends = [rim.start_vertex().point, rim.end_vertex().point];
+    let mut reach = f64::INFINITY;
+    for neighbour in [&edges[(position + count - 1) % count], &edges[(position + 1) % count]] {
+        if neighbour.edge.id == rim_edge_id || !is_straight(&neighbour.edge) {
+            return None;
+        }
+        let (a, b) = (neighbour.start_vertex().point, neighbour.end_vertex().point);
+        let (from, to) = if ends.iter().any(|p| (p - a).norm() <= 1e-9) {
+            (a, b)
+        } else if ends.iter().any(|p| (p - b).norm() <= 1e-9) {
+            (b, a)
+        } else {
+            return None;
+        };
+        let span = to - from;
+        let length = span.norm();
+        if length <= 1e-12 || (span / length).dot(&-normal) < 1.0 - 1e-9 {
+            return None;
+        }
+        reach = reach.min(length);
+    }
+    Some(reach)
+}
+
+/// 一般の平面の側面を作り直す: 稜を切り口 `cut`（上面のワイヤの向き）に替え、
+/// 稜の両端に触れる稜の端を、切り口の点へ動かす。
+fn rebuild_general_side(face: &Face, cut: &Edge, moves: [(Point3, Point3); 2]) -> Result<Face, String> {
+    let near = |a: Point3, b: Point3| (a - b).norm() <= 1e-9;
+    let rim_ends = [moves[0].0, moves[1].0];
+    let mut wire = Vec::with_capacity(face.outer_wire.edges.len());
+    for oriented in &face.outer_wire.edges {
+        let from = oriented.start_vertex().point;
+        let to = oriented.end_vertex().point;
+        let is_rim = rim_ends.iter().any(|p| near(*p, from)) && rim_ends.iter().any(|p| near(*p, to));
+        if is_rim {
+            wire.push(if near(from, moves[0].0) {
+                OrientedEdge::forward(cut.clone())
+            } else {
+                OrientedEdge::reversed(cut.clone())
+            });
+            continue;
+        }
+        let moved = |point: Point3| {
+            moves
+                .iter()
+                .find(|(old, _)| near(*old, point))
+                .map_or(point, |(_, new)| *new)
+        };
+        let (new_from, new_to) = (moved(from), moved(to));
+        if near(new_from, from) && near(new_to, to) {
+            wire.push(oriented.clone());
+            continue;
+        }
+        if !is_straight(&oriented.edge) {
+            return Err("A general side face of a prism-rim chain has a curved edge at the rim".into());
+        }
+        wire.push(OrientedEdge::forward(Edge::line_between(
+            Vertex::from_point(new_from),
+            Vertex::from_point(new_to),
+        )?));
     }
     Ok(Face::new(
         face.geometry.clone(),
