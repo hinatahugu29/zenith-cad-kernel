@@ -385,3 +385,100 @@ fn chains_on_the_side_walls_at_the_ends_of_a_top_chain_blend() {
     // 角のある稜 12 本（接していて角の無い 10 本は数えない）を、フィレットと面取りで
     assert_eq!(passed, 24, "every cornered edge blends both ways");
 }
+
+/// L字（20×30 から x 10..20, y 15..30 を欠く、高さ 40）の凹の縦稜を r3 で丸めた立体（4-942）。
+/// 上下の縁は「直線・凹の円弧・直線」の開いた鎖。
+fn l_with_concave_fillet() -> Solid {
+    use zenith_algo::ExtrudeBuilder;
+    use zenith_math::{Point3, Vec3};
+    use zenith_topo::{Edge, OrientedEdge, Vertex, Wire};
+    let corners = [(0.0, 0.0), (20.0, 0.0), (20.0, 15.0), (10.0, 15.0), (10.0, 30.0), (0.0, 30.0)];
+    let vertices: Vec<Vertex> = corners
+        .iter()
+        .map(|(x, y)| Vertex::from_point(Point3::new(*x, *y, 0.0)))
+        .collect();
+    let edges = (0..vertices.len())
+        .map(|i| {
+            OrientedEdge::forward(
+                Edge::line_between(vertices[i].clone(), vertices[(i + 1) % vertices.len()].clone()).unwrap(),
+            )
+        })
+        .collect();
+    let solid = ExtrudeBuilder::extrude_wire(&Wire::new(edges), Vec3::new(0.0, 0.0, 40.0), &Tolerance::default())
+        .expect("L prism");
+    let concave = solid
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.edges.iter())
+        .find(|oriented| {
+            let a = oriented.edge.start_vertex.point;
+            let b = oriented.edge.end_vertex.point;
+            (a.x - 10.0).abs() < 1e-9 && (a.y - 15.0).abs() < 1e-9 && (b.x - 10.0).abs() < 1e-9 && (b.y - 15.0).abs() < 1e-9
+        })
+        .map(|oriented| oriented.edge.id)
+        .expect("concave vertical");
+    EdgeBlender::fillet_edge(&solid, concave, 3.0).expect("concave fillet")
+}
+
+#[test]
+fn a_rim_chain_through_a_concave_arc_blends_with_the_closed_form_volume() {
+    enable();
+    std::env::set_var("ZENITH_PRISM_OPEN_CHAIN", "1");
+    std::env::set_var("ZENITH_PRISM_GENERAL_SIDE", "1");
+    std::env::set_var("ZENITH_PRISM_CONCAVE_ARC", "1");
+    let solid = l_with_concave_fillet();
+    let before = volume(&solid);
+    // 上の縁の直線 (20,15,40)→(13,15,40) を選ぶと、鎖は 直線7・凹の円弧（R3、90度）・直線12
+    let rim = solid
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.edges.iter())
+        .find(|oriented| {
+            let a = oriented.edge.start_vertex.point;
+            let b = oriented.edge.end_vertex.point;
+            (a.z - 40.0).abs() < 1e-9
+                && (b.z - 40.0).abs() < 1e-9
+                && (a.y - 15.0).abs() < 1e-9
+                && (b.y - 15.0).abs() < 1e-9
+        })
+        .map(|oriented| oriented.edge.id)
+        .expect("rim line");
+    let r: f64 = 1.5;
+    let straight = 7.0 + 12.0;
+    let expected = straight * r * r * (1.0 - PI / 4.0)
+        + FRAC_PI_2 * ((3.0 + r) * r * r * (1.0 - PI / 4.0) - r.powi(3) / 6.0);
+    let (result, report) = EdgeBlender::blend_edge(&solid, rim, BlendKind::Fillet { radius: r }).expect("fillet");
+    assert!((report.predicted_removed_volume - expected).abs() < 1e-9 * expected);
+    let removed = before - volume(&result);
+    assert!((removed - expected).abs() < 1e-9 * before, "removed {removed}, expected {expected}");
+    assert_closed_mesh(&result, "concave-arc chain fillet");
+
+    // ほかの角のある稜もすべて、フィレット・面取りとも閉じて体積が合う
+    let mut ids: Vec<u64> = Vec::new();
+    for face in &solid.outer_shell.faces {
+        for oriented in &face.outer_wire.edges {
+            if !ids.contains(&oriented.edge.id) {
+                ids.push(oriented.edge.id);
+            }
+        }
+    }
+    let mut passed = 0;
+    for id in ids {
+        for kind in [BlendKind::Fillet { radius: r }, BlendKind::Chamfer { distance: r }] {
+            let Ok((result, report)) = EdgeBlender::blend_edge(&solid, id, kind) else {
+                continue;
+            };
+            let removed = before - volume(&result);
+            let predicted = report.predicted_removed_volume;
+            assert!(
+                (removed - predicted).abs() <= 1e-6 * predicted.abs(),
+                "edge {id} {kind:?}: removed {removed}, predicted {predicted}"
+            );
+            assert_closed_mesh(&result, &format!("edge {id} {kind:?}"));
+            passed += 1;
+        }
+    }
+    assert_eq!(passed, 38, "19 cornered edges, fillet and chamfer");
+}

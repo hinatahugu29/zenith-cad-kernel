@@ -132,6 +132,8 @@ enum Segment {
         radius: f64,
         /// 中心角（0 < angle < π）
         angle: f64,
+        /// 凹の円弧（中心が上面の外側。4-942、`ZENITH_PRISM_CONCAVE_ARC`）
+        concave: bool,
     },
 }
 
@@ -202,7 +204,9 @@ fn classify(oriented: &OrientedEdge, normal: Vec3) -> Option<Segment> {
         let chord = end - start;
         let middle = (start.coords + end.coords) * 0.5;
         let to_center = center.coords - middle;
-        if normal.cross(&chord).dot(&to_center) <= 0.0 {
+        let side = normal.cross(&chord).dot(&to_center);
+        let concave = side < 0.0;
+        if side == 0.0 || (concave && !concave_arc_enabled()) {
             return None;
         }
         let a = (start - center) / radius;
@@ -221,6 +225,7 @@ fn classify(oriented: &OrientedEdge, normal: Vec3) -> Option<Segment> {
             center,
             radius,
             angle,
+            concave,
         })
     } else if is_straight(&oriented.edge) {
         Some(Segment::Line { start, end })
@@ -499,8 +504,9 @@ impl PrismRim {
                     let point = point_on(segment, fraction);
                     let tangent = match segment {
                         Segment::Line { start, end } => (end - start).try_normalize_safe(1e-12)?,
-                        Segment::Arc { center, .. } => {
-                            normal.cross(&(point - center)).try_normalize_safe(1e-12)?
+                        Segment::Arc { center, concave, .. } => {
+                            let sign = if *concave { -1.0 } else { 1.0 };
+                            (normal.cross(&(point - center)) * sign).try_normalize_safe(1e-12)?
                         }
                     };
                     Some((point, normal.cross(&tangent)))
@@ -557,7 +563,8 @@ impl PrismRim {
             .segments
             .iter()
             .filter_map(|segment| match segment {
-                Segment::Arc { radius, .. } => Some(*radius),
+                // 凹の円弧は内側へずらすと半径が増えるので、上限にならない
+                Segment::Arc { radius, concave, .. } => (!concave).then_some(*radius),
                 Segment::Line { .. } => None,
             })
             .fold(f64::INFINITY, f64::min);
@@ -581,11 +588,18 @@ impl PrismRim {
             total += match (segment, blend) {
                 (Segment::Line { .. }, Blend::Fillet(r)) => segment.length() * r * r * (1.0 - PI / 4.0),
                 (Segment::Line { .. }, Blend::Chamfer(d)) => segment.length() * d * d * 0.5,
-                (Segment::Arc { radius, angle, .. }, Blend::Fillet(r)) => {
+                // 断面の重心は稜から内側へ。凸は中心へ近づき、凹は遠ざかる。
+                (Segment::Arc { radius, angle, concave: false, .. }, Blend::Fillet(r)) => {
                     angle * ((radius - r) * r * r * (1.0 - PI / 4.0) + r.powi(3) / 6.0)
                 }
-                (Segment::Arc { radius, angle, .. }, Blend::Chamfer(d)) => {
+                (Segment::Arc { radius, angle, concave: false, .. }, Blend::Chamfer(d)) => {
                     angle * (radius * d * d * 0.5 - d.powi(3) / 6.0)
+                }
+                (Segment::Arc { radius, angle, concave: true, .. }, Blend::Fillet(r)) => {
+                    angle * ((radius + r) * r * r * (1.0 - PI / 4.0) - r.powi(3) / 6.0)
+                }
+                (Segment::Arc { radius, angle, concave: true, .. }, Blend::Chamfer(d)) => {
+                    angle * (radius * d * d * 0.5 + d.powi(3) / 6.0)
                 }
             };
         }
@@ -703,11 +717,12 @@ impl PrismRim {
                     center,
                     radius,
                     angle,
+                    concave,
                 } => {
                     let weight = (angle * 0.5).cos();
                     let middle = arc_middle(*center, *start, *end, *radius, *angle);
-                    let inner_middle =
-                        arc_middle(*center, *start, *end, radius - r, *angle);
+                    let inner_radius = if *concave { radius + r } else { radius - r };
+                    let inner_middle = arc_middle(*center, *start, *end, inner_radius, *angle);
                     Copy3 {
                         bottom: arc_edge(
                             pb[i],
@@ -751,6 +766,7 @@ impl PrismRim {
                     center,
                     radius,
                     angle,
+                    concave,
                 } => {
                     let weight = (angle * 0.5).cos();
                     let middle = arc_middle(*center, *start, *end, *radius, *angle);
@@ -799,10 +815,12 @@ impl PrismRim {
                     center,
                     radius,
                     angle,
+                    concave,
                 } => {
                     let weight = (angle * 0.5).cos();
                     let middle = arc_middle(*center, *start, *end, *radius, *angle);
-                    let inner_middle = arc_middle(*center, *start, *end, radius - r, *angle);
+                    let inner_radius = if *concave { radius + r } else { radius - r };
+                    let inner_middle = arc_middle(*center, *start, *end, inner_radius, *angle);
                     (
                         vec![
                             [pc[i], rim_points[i], pt[i]],
@@ -1015,6 +1033,12 @@ fn rebuild_cap(
     ))
 }
 
+pub(crate) fn concave_arc_enabled() -> bool {
+    std::env::var("ZENITH_PRISM_CONCAVE_ARC")
+        .map(|value| value != "0")
+        .unwrap_or(false)
+}
+
 pub(crate) fn general_side_enabled() -> bool {
     std::env::var("ZENITH_PRISM_GENERAL_SIDE")
         .map(|value| value != "0")
@@ -1124,11 +1148,16 @@ fn tangent_at(segment: &Segment, at_start: bool, normal: Vec3) -> Option<Vec3> {
     match segment {
         Segment::Line { start, end } => (end - start).try_normalize_safe(1e-12),
         Segment::Arc {
-            start, end, center, ..
+            start,
+            end,
+            center,
+            concave,
+            ..
         } => {
             let point = if at_start { *start } else { *end };
-            // 凸の円弧は上面の法線まわりに反時計回り
-            normal.cross(&(point - center)).try_normalize_safe(1e-12)
+            // 凸の円弧は上面の法線まわりに反時計回り、凹は時計回り
+            let sign = if *concave { -1.0 } else { 1.0 };
+            (normal.cross(&(point - center)) * sign).try_normalize_safe(1e-12)
         }
     }
 }
@@ -1151,11 +1180,14 @@ fn distance_to(segment: &Segment, point: Point3, normal: Vec3) -> f64 {
             center,
             radius,
             angle,
+            concave,
         } => {
             let offset = point - center;
             let flat = offset - normal * offset.dot(&normal);
             let a = (start - center) / *radius;
-            let perpendicular = normal.cross(&a);
+            let b = (end - center) / *radius;
+            // a から b へ回る向き（凹の円弧は逆回り）
+            let perpendicular = (b - a * a.dot(&b)).normalize();
             let phi = flat.dot(&perpendicular).atan2(flat.dot(&a));
             if phi >= 0.0 && phi <= *angle && flat.norm() > 1e-12 {
                 (flat.norm() - radius).abs()
@@ -1175,6 +1207,7 @@ fn point_on(segment: &Segment, fraction: f64) -> Point3 {
             center,
             radius,
             angle,
+            concave,
         } => {
             let a = (start - center) / *radius;
             let b = (end - center) / *radius;

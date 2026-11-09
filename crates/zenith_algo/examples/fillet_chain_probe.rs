@@ -263,6 +263,34 @@ fn cases() -> Vec<Case> {
             .ok_or("no adjacent vertical")?;
         EdgeBlender::fillet_edges(&solid, &[(first, 3.0), (second, 3.0)])
     });
+    // 4-941 のあと: 2本の縦稜の上の開いた鎖（直線・円弧・直線・円弧・直線）まで丸めた立体
+    let two_then_chain = two.clone().and_then(|rounded| {
+        let arc = edge_ids(&rounded)
+            .into_iter()
+            .find(|id| {
+                rounded
+                    .outer_shell
+                    .faces
+                    .iter()
+                    .flat_map(|face| face.outer_wire.edges.iter())
+                    .any(|oriented| {
+                        let a = oriented.edge.start_vertex.point;
+                        let b = oriented.edge.end_vertex.point;
+                        oriented.edge.id == *id
+                            && (a.z - 40.0).abs() < 1e-9
+                            && (b.z - 40.0).abs() < 1e-9
+                            && (b - a).norm() < 5.0
+                    })
+            })
+            .ok_or("no top arc")?;
+        EdgeBlender::fillet_edge(&rounded, arc, 2.0)
+    });
+    out.push(Case {
+        name: "box, 2 adjacent verticals (r3) then their top chain (r2) filleted",
+        why: "縦稜2本の上の開いた鎖を丸めた立体。鎖の両端の側壁に、縦稜・端の円弧・上の稜の鎖ができる",
+        solid: two_then_chain,
+        radius: 1.5,
+    });
     out.push(Case {
         name: "box, 2 adjacent vertical edges filleted (r3)",
         why: "隣り合う縦稜2本を丸めた直方体。上縁は「直線・円弧・直線・円弧・直線」の開いた鎖",
@@ -339,6 +367,94 @@ fn cases() -> Vec<Case> {
         name: "regular hexagonal prism (r10 h25)",
         why: "正六角柱。上下の稜の端は隣の側面（稜と60度）にぶつかる（斜めの端、4-936）",
         solid: PrimitiveBuilder::make_regular_prism(6, 10.0, 25.0),
+        radius: 1.5,
+    });
+
+    // 正六角柱の縦稜6本を r2 で丸めた立体。上縁は直線6本・60度の円弧6本の閉じたループ。
+    let rounded_hexagon = PrimitiveBuilder::make_regular_prism(6, 10.0, 25.0).and_then(|solid| {
+        let verticals: Vec<(u64, f64)> = vertical_edges(&solid).into_iter().map(|id| (id, 2.0)).collect();
+        EdgeBlender::fillet_edges(&solid, &verticals)
+    });
+    out.push(Case {
+        name: "hexagonal prism, 6 verticals filleted (r2)",
+        why: "角丸の正六角柱。上縁のループの円弧は中心角60度",
+        solid: rounded_hexagon,
+        radius: 1.0,
+    });
+
+    // 上の稜1本を丸めた・面取りした直方体。端の側壁で縦稜・断面・上の稜が集まる。
+    let top_edge = |solid: &Solid| {
+        edge_ids(solid).into_iter().find(|id| {
+            solid
+                .outer_shell
+                .faces
+                .iter()
+                .flat_map(|face| face.outer_wire.edges.iter())
+                .any(|oriented| {
+                    let a = oriented.edge.start_vertex.point;
+                    let b = oriented.edge.end_vertex.point;
+                    oriented.edge.id == *id && (a.z - 40.0).abs() < 1e-9 && (b.z - 40.0).abs() < 1e-9
+                })
+        })
+    };
+    out.push(Case {
+        name: "box, 1 top edge filleted (r2)",
+        why: "上の稜1本を丸めた直方体。両端の縦稜の上端は丸めた面の断面に当たる",
+        solid: base.clone().and_then(|solid| {
+            let id = top_edge(&solid).ok_or("no top edge")?;
+            EdgeBlender::fillet_edge(&solid, id, 2.0)
+        }),
+        radius: 1.5,
+    });
+    out.push(Case {
+        name: "box, 1 top edge chamfered (c2)",
+        why: "上の稜1本を面取りした直方体。両端の縦稜の上端は面取り面の断面に当たる",
+        solid: base.clone().and_then(|solid| {
+            let id = top_edge(&solid).ok_or("no top edge")?;
+            EdgeBlender::chamfer_edge(&solid, id, 2.0)
+        }),
+        radius: 1.5,
+    });
+    // L字の凹の縦稜を丸めた立体。上縁は凹の円弧を含む開いた鎖。
+    let l_rounded = (|| -> Result<Solid, String> {
+        let corners = [(0.0, 0.0), (20.0, 0.0), (20.0, 15.0), (10.0, 15.0), (10.0, 30.0), (0.0, 30.0)];
+        let vertices: Vec<zenith_topo::Vertex> = corners
+            .iter()
+            .map(|(x, y)| zenith_topo::Vertex::from_point(zenith_math::Point3::new(*x, *y, 0.0)))
+            .collect();
+        let mut edges = Vec::new();
+        for index in 0..vertices.len() {
+            let next = (index + 1) % vertices.len();
+            edges.push(zenith_topo::OrientedEdge::forward(zenith_topo::Edge::line_between(
+                vertices[index].clone(),
+                vertices[next].clone(),
+            )?));
+        }
+        let solid = zenith_algo::ExtrudeBuilder::extrude_wire(
+            &zenith_topo::Wire::new(edges),
+            zenith_math::Vec3::new(0.0, 0.0, 40.0),
+            &zenith_math::Tolerance::default(),
+        )?;
+        let concave = vertical_edges(&solid)
+            .into_iter()
+            .find(|id| {
+                solid
+                    .outer_shell
+                    .faces
+                    .iter()
+                    .flat_map(|face| face.outer_wire.edges.iter())
+                    .any(|oriented| {
+                        let a = oriented.edge.start_vertex.point;
+                        oriented.edge.id == *id && (a.x - 10.0).abs() < 1e-9 && (a.y - 15.0).abs() < 1e-9
+                    })
+            })
+            .ok_or("no concave vertical")?;
+        EdgeBlender::fillet_edge(&solid, concave, 3.0)
+    })();
+    out.push(Case {
+        name: "L-shaped prism, concave vertical filleted (r3)",
+        why: "L字の凹の縦稜を丸めた立体。上縁は凹の円弧を含む開いた鎖",
+        solid: l_rounded,
         radius: 1.5,
     });
 
