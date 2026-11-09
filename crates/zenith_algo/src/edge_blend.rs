@@ -1137,5 +1137,5 @@ fn max_chord_deviation(curve: &NurbsCurve3, origin: Point3, dir: Vec3, length: f
 fn reflex_end_enabled() -> bool {
     std::env::var("ZENITH_REFLEX_END")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }

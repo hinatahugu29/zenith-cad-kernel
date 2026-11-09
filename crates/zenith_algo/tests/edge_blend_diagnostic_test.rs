@@ -15,6 +15,14 @@ fn rectangular_boss() -> Solid {
         .expect("rectangular boss union")
 }
 
+/// 凹の角で隣の稜を延ばす口（4-940、`ZENITH_REFLEX_END`）。既定はオン。
+/// オンなら直方体のボスの根元も丸まる（端は隣の壁の平面で四角く止まる）。
+fn reflex_end_on() -> bool {
+    std::env::var("ZENITH_REFLEX_END")
+        .map(|value| value != "0")
+        .unwrap_or(true)
+}
+
 fn distinct_edges(solid: &Solid) -> BTreeMap<u64, zenith_topo::Edge> {
     let mut edges = BTreeMap::new();
     for face in &solid.outer_shell.faces {
@@ -46,6 +54,16 @@ fn rectangular_boss_root_edges_report_concave_contract_without_mutation() {
         .collect();
 
     assert_eq!(root_edges.len(), 4, "expected the four boss-root edges");
+    if reflex_end_on() {
+        for edge in &root_edges {
+            let diag = EdgeBlender::blendability(&solid, edge.id).expect("root blendable");
+            assert!((diag.dihedral_angle_deg - 270.0).abs() < 1e-6);
+            let out = EdgeBlender::chamfer_edge(&solid, edge.id, 1.0).expect("root chamfer");
+            assert!(out.outer_shell.validate_closed(&Tolerance::default()).is_valid());
+        }
+        assert_eq!(solid, before, "diagnostics must be non-mutating");
+        return;
+    }
     for edge in &root_edges {
         let error = EdgeBlender::blendability(&solid, edge.id).expect_err("concave root");
         assert!(
@@ -235,6 +253,16 @@ fn hybrid_bosses_blendability_diagnostics() {
         4,
         "rect boss root should have 4 edges"
     );
+    if reflex_end_on() {
+        let listed = EdgeBlender::blendable_edges(&solid);
+        for edge in &rect_root_edges {
+            let diag = EdgeBlender::blendability(&solid, edge.id).expect("rect root blendable");
+            assert!((diag.dihedral_angle_deg - 270.0).abs() < 1e-6);
+            assert!(listed.iter().any(|candidate| candidate.edge_id == edge.id));
+        }
+        assert_eq!(solid, before, "blendability must not mutate solid");
+        return;
+    }
     for edge in &rect_root_edges {
         let err = EdgeBlender::blendability(&solid, edge.id)
             .expect_err("rect boss root must be rejected with diagnostic");
