@@ -1018,7 +1018,7 @@ fn rebuild_cap(
 pub(crate) fn general_side_enabled() -> bool {
     std::env::var("ZENITH_PRISM_GENERAL_SIDE")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 /// 一般の平面の側面で、稜 `rim_edge_id` の両端に隣り合う2本が、上面の法線
