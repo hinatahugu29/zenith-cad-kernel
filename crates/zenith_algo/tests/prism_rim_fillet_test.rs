@@ -482,3 +482,37 @@ fn a_rim_chain_through_a_concave_arc_blends_with_the_closed_form_volume() {
     }
     assert_eq!(passed, 38, "19 cornered edges, fillet and chamfer");
 }
+
+/// 平座金（内径5・外径12・厚さ3）の穴の縁（上面の内側ワイヤの円、4-943）。
+#[test]
+fn the_hole_rim_of_a_washer_blends_with_the_closed_form_volume() {
+    enable();
+    std::env::set_var("ZENITH_PRISM_CONCAVE_ARC", "1");
+    std::env::set_var("ZENITH_PRISM_HOLE_RIM", "1");
+    let solid = zenith_algo::FastenerBuilder::make_plain_washer(5.0, 12.0, 3.0, &Tolerance::default()).expect("washer");
+    let before = volume(&solid);
+    // 上面（z=3）の内側ワイヤにある稜を1本選ぶ
+    let rim = solid
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.inner_wires.iter())
+        .flat_map(|wire| wire.edges.iter())
+        .find(|oriented| (oriented.edge.start_vertex.point.z - 3.0).abs() < 1e-9)
+        .map(|oriented| oriented.edge.id)
+        .expect("hole rim");
+    let (big_r, r, d): (f64, f64, f64) = (5.0, 0.8, 0.8);
+    let fillet = 2.0 * PI * ((big_r + r) * r * r * (1.0 - PI / 4.0) - r.powi(3) / 6.0);
+    let chamfer = 2.0 * PI * (big_r * d * d * 0.5 + d.powi(3) / 6.0);
+    for (kind, expected) in [(BlendKind::Fillet { radius: r }, fillet), (BlendKind::Chamfer { distance: d }, chamfer)] {
+        let (result, report) = EdgeBlender::blend_edge(&solid, rim, kind).expect("hole rim blend");
+        assert!(
+            (report.predicted_removed_volume - expected).abs() < 1e-9 * expected,
+            "{kind:?}: predicted {}, expected {expected}",
+            report.predicted_removed_volume
+        );
+        let removed = before - volume(&result);
+        assert!((removed - expected).abs() < 1e-6 * expected, "{kind:?}: removed {removed}, expected {expected}");
+        assert_closed_mesh(&result, &format!("washer hole rim {kind:?}"));
+    }
+}

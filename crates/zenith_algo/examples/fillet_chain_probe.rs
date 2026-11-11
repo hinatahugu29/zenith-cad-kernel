@@ -458,6 +458,68 @@ fn cases() -> Vec<Case> {
         radius: 1.5,
     });
 
+    // 4-942 のあとに足した検体（手順3の断りを探す）
+    out.push(Case {
+        name: "drilled box (20x30x40, hole r5)",
+        why: "貫通穴の直方体。穴の縁は平面×円柱の円い稜",
+        solid: zenith_algo::HoleBuilder::make_drilled_box(20.0, 30.0, 40.0, 5.0),
+        radius: 1.5,
+    });
+    out.push(Case {
+        name: "regular pentagonal prism (r10 h25)",
+        why: "正五角柱。上下の稜の端は隣の側面と108度",
+        solid: PrimitiveBuilder::make_regular_prism(5, 10.0, 25.0),
+        radius: 1.5,
+    });
+    out.push(Case {
+        name: "drafted block (20x30x40, 5 deg)",
+        why: "抜き勾配の付いたブロック。側面が傾いた平面",
+        solid: zenith_algo::DraftBuilder::make_drafted_block(
+            20.0,
+            30.0,
+            40.0,
+            5f64.to_radians(),
+            &zenith_math::Tolerance::default(),
+        ),
+        radius: 1.5,
+    });
+    out.push(Case {
+        name: "plain washer (ri 5, ro 12, t 3)",
+        why: "平座金。内外の円い縁",
+        solid: zenith_algo::FastenerBuilder::make_plain_washer(5.0, 12.0, 3.0, &zenith_math::Tolerance::default()),
+        radius: 0.8,
+    });
+    out.push(Case {
+        name: "box, 3 edges at one corner filleted (r3)",
+        why: "1つの角に集まる3本の稜をまとめて丸めた直方体（頂点ブレンド、手順3）",
+        solid: base.clone().and_then(|solid| {
+            let first = vertical_edges(&solid)[0];
+            let p = point_of(&solid, first).ok_or("no point")?;
+            let corner = if (p.z - 0.0).abs() < 1e-9 { p } else { zenith_math::Point3::new(p.x, p.y, 0.0) };
+            let at_corner: Vec<(u64, f64)> = edge_ids(&solid)
+                .into_iter()
+                .filter(|id| {
+                    solid
+                        .outer_shell
+                        .faces
+                        .iter()
+                        .flat_map(|face| face.outer_wire.edges.iter())
+                        .any(|o| {
+                            o.edge.id == *id
+                                && ((o.edge.start_vertex.point - corner).norm() < 1e-9
+                                    || (o.edge.end_vertex.point - corner).norm() < 1e-9)
+                        })
+                })
+                .map(|id| (id, 3.0))
+                .collect();
+            if at_corner.len() != 3 {
+                return Err(format!("corner has {} edges", at_corner.len()));
+            }
+            EdgeBlender::fillet_edges(&solid, &at_corner)
+        }),
+        radius: 1.5,
+    });
+
     out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",

@@ -174,6 +174,8 @@ struct PrismRim {
     strip: Vec<bool>,
     /// 一般の平面の側面で、稜の両端から下りる稜の短い方
     general_reach: f64,
+    /// 縁が上面の内側ワイヤ（穴の縁）なら、その番号（4-943）。外側なら None
+    rim_wire: Option<usize>,
 }
 
 /// 開いた鎖の両端。角の先の稜（直線）と、その側面（蓋）。
@@ -240,33 +242,38 @@ impl PrismRim {
             return None;
         }
         let faces = &solid.outer_shell.faces;
-        let candidates: Vec<usize> = faces
-            .iter()
-            .enumerate()
-            .filter(|(_, face)| {
-                matches!(face.geometry, FaceGeometry::Plane(_))
-                    && face
-                        .outer_wire
-                        .edges
-                        .iter()
-                        .any(|oriented| oriented.edge.id == edge_id)
-            })
-            .map(|(index, _)| index)
-            .collect();
+        let has = |wire: &Wire| wire.edges.iter().any(|oriented| oriented.edge.id == edge_id);
+        let mut candidates: Vec<(usize, Option<usize>)> = Vec::new();
+        for (index, face) in faces.iter().enumerate() {
+            if !matches!(face.geometry, FaceGeometry::Plane(_)) {
+                continue;
+            }
+            if has(&face.outer_wire) {
+                candidates.push((index, None));
+            } else if hole_rim_enabled() {
+                // 穴の縁（内側ワイヤ）にある稜（4-943）
+                if let Some(k) = face.inner_wires.iter().position(|wire| has(wire)) {
+                    candidates.push((index, Some(k)));
+                }
+            }
+        }
         // 稜の両側が平面なら、どちらを「上面」と読むかで鎖が変わる（4-941）。
         // 先に見つかった方で読めなければ、もう一方も試す。
         let tries = if general_side_enabled() { candidates.len() } else { 1 };
         candidates
             .into_iter()
             .take(tries)
-            .find_map(|top_index| Self::recognize_on(solid, edge_id, top_index))
+            .find_map(|(top_index, rim_wire)| Self::recognize_on(solid, edge_id, top_index, rim_wire))
     }
 
-    fn recognize_on(solid: &Solid, edge_id: u64, top_index: usize) -> Option<Self> {
+    fn recognize_on(solid: &Solid, edge_id: u64, top_index: usize, rim_wire: Option<usize>) -> Option<Self> {
         let faces = &solid.outer_shell.faces;
         let top = &faces[top_index];
         let normal = super::effective_plane_normal(top).try_normalize_safe(1e-12)?;
-        let rim = &top.outer_wire;
+        let rim = match rim_wire {
+            None => &top.outer_wire,
+            Some(k) => &top.inner_wires[k],
+        };
         if rim.edges.len() < 2 {
             return None;
         }
@@ -294,7 +301,8 @@ impl PrismRim {
         let chain: Vec<usize> = if closed {
             (0..n_rim).collect()
         } else {
-            if !open_chain_enabled() {
+            // 穴の縁は閉じたループだけ
+            if !open_chain_enabled() || rim_wire.is_some() {
                 return None;
             }
             // 選んだ稜から、接線で繋がる限り前後へ伸ばす。角で止まる。
@@ -514,6 +522,8 @@ impl PrismRim {
             })
             .collect();
         let mut narrowest = f64::INFINITY;
+        // 穴の縁は外へ広がるだけで潰れない。隔たりは下の hole_clearance が見る。
+        let samples = if rim_wire.is_some() { Vec::new() } else { samples };
         for (a, inward_a) in &samples {
             for (b, inward_b) in &samples {
                 if inward_a.dot(inward_b) < -0.9 {
@@ -525,7 +535,17 @@ impl PrismRim {
         // 穴の境界の点から、外側のループの区間までの厳密な距離の最小。
         // 穴の稜は細かく取る（ブレンドの帯に穴が掛からないための上限）。
         let mut hole_clearance = f64::INFINITY;
-        for wire in &top.inner_wires {
+        // 縁でないワイヤ（穴の縁なら、外側とほかの穴）
+        let others: Vec<&Wire> = std::iter::once(&top.outer_wire)
+            .chain(top.inner_wires.iter())
+            .enumerate()
+            .filter(|(position, _)| match rim_wire {
+                None => *position != 0,
+                Some(k) => *position != k + 1,
+            })
+            .map(|(_, wire)| wire)
+            .collect();
+        for wire in others {
             for oriented in &wire.edges {
                 let (t0, t1) = oriented.edge.curve.param_range();
                 for step in 0..=64 {
@@ -541,6 +561,7 @@ impl PrismRim {
         }
 
         Some(Self {
+            rim_wire,
             strip,
             general_reach,
             open,
@@ -766,7 +787,7 @@ impl PrismRim {
                     center,
                     radius,
                     angle,
-                    concave,
+                    concave: _,
                 } => {
                     let weight = (angle * 0.5).cos();
                     let middle = arc_middle(*center, *start, *end, *radius, *angle);
@@ -918,10 +939,19 @@ impl PrismRim {
             }
         }
         let top_wire = Wire::new(top_edges);
-        let holes = solid.outer_shell.faces[self.top_index].inner_wires.clone();
+        let original_top = &solid.outer_shell.faces[self.top_index];
+        let (outer, holes) = match self.rim_wire {
+            None => (top_wire, original_top.inner_wires.clone()),
+            Some(k) => {
+                // 穴の縁: 外側はそのまま、穴のワイヤだけ広げたループに替える
+                let mut holes = original_top.inner_wires.clone();
+                holes[k] = top_wire;
+                (original_top.outer_wire.clone(), holes)
+            }
+        };
         new_faces.push(Face::new(
             FaceGeometry::Plane(plane),
-            top_wire,
+            outer,
             holes,
             zenith_topo::Orientation::Forward,
             1e-6,
@@ -1031,6 +1061,12 @@ fn rebuild_cap(
         face.orientation,
         face.tolerance,
     ))
+}
+
+pub(crate) fn hole_rim_enabled() -> bool {
+    std::env::var("ZENITH_PRISM_HOLE_RIM")
+        .map(|value| value != "0")
+        .unwrap_or(false)
 }
 
 pub(crate) fn concave_arc_enabled() -> bool {
@@ -1180,7 +1216,7 @@ fn distance_to(segment: &Segment, point: Point3, normal: Vec3) -> f64 {
             center,
             radius,
             angle,
-            concave,
+            concave: _,
         } => {
             let offset = point - center;
             let flat = offset - normal * offset.dot(&normal);
@@ -1207,7 +1243,7 @@ fn point_on(segment: &Segment, fraction: f64) -> Point3 {
             center,
             radius,
             angle,
-            concave,
+            concave: _,
         } => {
             let a = (start - center) / *radius;
             let b = (end - center) / *radius;
