@@ -490,6 +490,12 @@ fn cases() -> Vec<Case> {
         radius: 0.8,
     });
     out.push(Case {
+        name: "counterbore hole box (40x40x20, r5 / cb r9 d6)",
+        why: "座ぐり穴の直方体。段の面と上面に穴の縁の円がある",
+        solid: zenith_algo::HoleBuilder::make_counterbore_hole_box(40.0, 40.0, 20.0, 5.0, 9.0, 6.0),
+        radius: 1.0,
+    });
+    out.push(Case {
         name: "box, 3 edges at one corner filleted (r3)",
         why: "1つの角に集まる3本の稜をまとめて丸めた直方体（頂点ブレンド、手順3）",
         solid: base.clone().and_then(|solid| {

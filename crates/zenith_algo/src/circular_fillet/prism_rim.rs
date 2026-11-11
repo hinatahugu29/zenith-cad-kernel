@@ -1066,7 +1066,7 @@ fn rebuild_cap(
 pub(crate) fn hole_rim_enabled() -> bool {
     std::env::var("ZENITH_PRISM_HOLE_RIM")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 pub(crate) fn concave_arc_enabled() -> bool {

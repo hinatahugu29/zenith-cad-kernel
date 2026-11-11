@@ -187,14 +187,35 @@ fn sectorised_and_stepped_holes_are_not_silently_approximated() {
 
     let counterbore = HoleBuilder::make_counterbore_hole_box(40.0, 40.0, 20.0, 5.0, 9.0, 6.0)
         .expect("counterbore fixture");
-    let curved_candidates = EdgeBlender::blendable_edges(&counterbore)
+    let curved: Vec<u64> = EdgeBlender::blendable_edges(&counterbore)
         .into_iter()
         .filter(|edge| edge_is_curved(&counterbore, edge.edge_id))
-        .count();
-    assert_eq!(
-        curved_candidates, 0,
-        "a stepped bore must not be presented as an unbroken through hole"
-    );
+        .map(|edge| edge.edge_id)
+        .collect();
+    if !hole_rim_on() {
+        assert_eq!(
+            curved.len(),
+            0,
+            "a stepped bore must not be presented as an unbroken through hole"
+        );
+        return;
+    }
+    // 穴の縁の閉じたループ（4-943）: 上面の座ぐりの縁（R9）・段の面の穴の縁（R5）・
+    // 底の穴の縁（R5）の12本は、穴を貫通穴と見なすのではなく、縁ごとに厳密に丸める。
+    // 段の根元（凹の円）は候補に出ない。
+    assert_eq!(curved.len(), 12, "three hole rims of four arcs each");
+    let before = MassCalculator::compute_from_brep(&counterbore, &params()).volume;
+    for id in curved {
+        let (rounded, report) =
+            EdgeBlender::blend_edge(&counterbore, id, zenith_algo::BlendKind::Fillet { radius: 1.0 })
+                .unwrap_or_else(|error| panic!("hole rim edge {id}: {error}"));
+        let removed = before - MassCalculator::compute_from_brep(&rounded, &params()).volume;
+        let predicted = report.predicted_removed_volume;
+        assert!(
+            (removed - predicted).abs() <= 1e-8 * predicted,
+            "edge {id}: removed {removed}, predicted {predicted}"
+        );
+    }
 }
 
 #[test]
@@ -503,4 +524,9 @@ fn one_of_three_external_holes_is_edited_without_rebuilding_the_other_two() {
         torus - removed_cap - removed_bore,
         5e-10,
     );
+}
+
+/// `ZENITH_PRISM_HOLE_RIM`（4-943）が立っているか（既定オン）
+fn hole_rim_on() -> bool {
+    std::env::var("ZENITH_PRISM_HOLE_RIM").map_or(true, |value| value != "0")
 }
