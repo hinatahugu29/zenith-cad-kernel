@@ -516,3 +516,49 @@ fn the_hole_rim_of_a_washer_blends_with_the_closed_form_volume() {
         assert_closed_mesh(&result, &format!("washer hole rim {kind:?}"));
     }
 }
+
+/// 座ぐりの段の根元（段の面と座ぐりの壁の凹の円、R9）。側面が上面から上へ
+/// 立つので、凸と同じ断面を同じ場所に足す（4-944、`ZENITH_PRISM_RAISED_SIDE`）。
+#[test]
+fn the_root_of_a_counterbore_step_blends_with_the_closed_form_volume() {
+    enable();
+    std::env::set_var("ZENITH_PRISM_CONCAVE_ARC", "1");
+    std::env::set_var("ZENITH_PRISM_HOLE_RIM", "1");
+    std::env::set_var("ZENITH_PRISM_RAISED_SIDE", "1");
+    let solid = zenith_algo::HoleBuilder::make_counterbore_hole_box(40.0, 40.0, 20.0, 5.0, 9.0, 6.0)
+        .expect("counterbore");
+    let before = volume(&solid);
+    // 段の面は z = 14。根元の円は中心 (20,20) から 9
+    let root = solid
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()))
+        .flat_map(|wire| wire.edges.iter())
+        .find(|oriented| {
+            let a = oriented.edge.start_vertex.point;
+            let b = oriented.edge.end_vertex.point;
+            (a.z - 14.0).abs() < 1e-9
+                && (b.z - 14.0).abs() < 1e-9
+                && (((a.x - 20.0).powi(2) + (a.y - 20.0).powi(2)).sqrt() - 9.0).abs() < 1e-9
+        })
+        .map(|oriented| oriented.edge.id)
+        .expect("step root");
+    let (big_r, r): (f64, f64) = (9.0, 1.0);
+    let fillet = -2.0 * PI * ((big_r - r) * r * r * (1.0 - PI / 4.0) + r.powi(3) / 6.0);
+    let chamfer = -2.0 * PI * (big_r * r * r * 0.5 - r.powi(3) / 6.0);
+    for (kind, expected) in [(BlendKind::Fillet { radius: r }, fillet), (BlendKind::Chamfer { distance: r }, chamfer)] {
+        let (result, report) = EdgeBlender::blend_edge(&solid, root, kind).expect("step root blend");
+        assert!(
+            (report.predicted_removed_volume - expected).abs() < 1e-9 * expected.abs(),
+            "{kind:?}: predicted {}, expected {expected}",
+            report.predicted_removed_volume
+        );
+        let removed = before - volume(&result);
+        assert!(
+            (removed - expected).abs() < 1e-6 * expected.abs(),
+            "{kind:?}: removed {removed}, expected {expected}"
+        );
+        assert_closed_mesh(&result, &format!("counterbore step root {kind:?}"));
+    }
+}

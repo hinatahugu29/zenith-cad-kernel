@@ -176,6 +176,9 @@ struct PrismRim {
     general_reach: f64,
     /// 縁が上面の内側ワイヤ（穴の縁）なら、その番号（4-943）。外側なら None
     rim_wire: Option<usize>,
+    /// 側面が上面から下りるなら 1（凸の稜、材料を削る）。上へ立つなら -1
+    /// （凹の稜、材料を足す。座ぐりの段の根元など、4-944）
+    sign: f64,
 }
 
 /// 開いた鎖の両端。角の先の稜（直線）と、その側面（蓋）。
@@ -409,6 +412,7 @@ impl PrismRim {
         let mut strip: Vec<bool> = Vec::with_capacity(count);
         let mut general_reach = f64::INFINITY;
         let mut height: Option<f64> = None;
+        let mut sign: Option<f64> = None;
         for (segment_index, oriented) in chain.iter().map(|index| &rim.edges[*index]).enumerate() {
             let users: Vec<usize> = faces
                 .iter()
@@ -430,6 +434,7 @@ impl PrismRim {
                 // 一般の平面の側面（4-941）: 直線の区間だけ。稜の両端で隣り合う
                 // 2本が、上面の法線の逆向きに真っすぐ下りる。
                 if !general_side_enabled()
+                    || sign == Some(-1.0)
                     || !matches!(segments[segment_index], Segment::Line { .. })
                     || !matches!(side.geometry, FaceGeometry::Plane(_))
                 {
@@ -462,12 +467,22 @@ impl PrismRim {
                         let offset = point - candidate;
                         let along = offset.dot(&normal);
                         ((offset - normal * along).norm() <= 1e-7 * along.abs().max(1.0)
-                            && along > 1e-9)
+                            && along.abs() > 1e-9)
                             .then_some(along)
                     })
             };
             let h_start = drop_at(start)?;
             let h_end = drop_at(end)?;
+            // 側面が上へ立つ（凹の稜、4-944）なら符号は -1
+            let here = if h_start > 0.0 { 1.0 } else { -1.0 };
+            if here < 0.0 && (!raised_side_enabled() || open.is_some() || !strip.iter().all(|s| *s)) {
+                return None;
+            }
+            if sign.is_some_and(|previous| previous != here) {
+                return None;
+            }
+            sign = Some(here);
+            let (h_start, h_end) = (h_start.abs(), h_end.abs());
             let h = h_start;
             if (h_end - h).abs() > 1e-7 * h.max(1.0) {
                 return None;
@@ -482,7 +497,7 @@ impl PrismRim {
             // 下の稜は上の稜を下ろしたもの（中点で確かめる）
             let (t0, t1) = oriented.edge.curve.param_range();
             let (b0, b1) = bottom.edge.curve.param_range();
-            let top_mid = oriented.edge.curve.evaluate((t0 + t1) * 0.5) - normal * h;
+            let top_mid = oriented.edge.curve.evaluate((t0 + t1) * 0.5) - normal * (h * here);
             let bottom_mid = bottom.edge.curve.evaluate((b0 + b1) * 0.5);
             if (top_mid - bottom_mid).norm() > 1e-6 * h.max(1.0) {
                 return None;
@@ -491,6 +506,10 @@ impl PrismRim {
         }
         // 帯が無ければ、底の写しは使わない。高さは一般の側面の届く長さにする。
         let height = height.unwrap_or(general_reach);
+        let sign = sign.unwrap_or(1.0);
+        if sign < 0.0 && strip.iter().any(|s| !*s) {
+            return None;
+        }
         if !height.is_finite() {
             return None;
         }
@@ -561,6 +580,7 @@ impl PrismRim {
         }
 
         Some(Self {
+            sign,
             rim_wire,
             strip,
             general_reach,
@@ -604,6 +624,11 @@ impl PrismRim {
 
     /// 削れる体積の閉形式（パップス・ギュルダン）。
     fn removed_volume(&self, blend: Blend) -> f64 {
+        // 凹の稜（側面が上へ立つ）は、凸と同じ断面を同じ場所に足す
+        self.sign * self.removed_volume_convex(blend)
+    }
+
+    fn removed_volume_convex(&self, blend: Blend) -> f64 {
         let mut total = 0.0;
         for segment in &self.segments {
             total += match (segment, blend) {
@@ -633,7 +658,9 @@ impl PrismRim {
         let count = self.segments.len();
         // 頂点の数。開いた鎖は区間より1つ多い。
         let nv = if self.open.is_some() { count + 1 } else { count };
-        let down = |point: Point3, depth: f64| point - n * depth;
+        // 側面の向き: 凸なら上面の法線の逆（下）へ、凹なら上へ
+        let sign = self.sign;
+        let down = |point: Point3, depth: f64| point - n * (depth * sign);
         // 内側へずらす向き（進行方向の左）
         let inward = |segment: &Segment, at_start: bool| -> Vec3 {
             let tangent = tangent_at(segment, at_start, n).unwrap_or_else(Vec3::zeros);
@@ -1061,6 +1088,12 @@ fn rebuild_cap(
         face.orientation,
         face.tolerance,
     ))
+}
+
+pub(crate) fn raised_side_enabled() -> bool {
+    std::env::var("ZENITH_PRISM_RAISED_SIDE")
+        .map(|value| value != "0")
+        .unwrap_or(false)
 }
 
 pub(crate) fn hole_rim_enabled() -> bool {
