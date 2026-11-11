@@ -1036,7 +1036,7 @@ fn rebuild_cap(
 pub(crate) fn concave_arc_enabled() -> bool {
     std::env::var("ZENITH_PRISM_CONCAVE_ARC")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 pub(crate) fn general_side_enabled() -> bool {
