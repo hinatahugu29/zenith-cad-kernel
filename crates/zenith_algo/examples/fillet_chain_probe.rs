@@ -490,6 +490,14 @@ fn cases() -> Vec<Case> {
         radius: 0.8,
     });
     out.push(Case {
+        name: "drilled box after merge_coplanar",
+        why: "貫通穴の直方体で、継ぎ目で割れた同じ平面の面を先に1枚にまとめた形",
+        solid: zenith_algo::HoleBuilder::make_drilled_box(20.0, 30.0, 40.0, 5.0).and_then(|solid| {
+            zenith_algo::FaceMerger::merge_coplanar(&solid, &zenith_math::Tolerance::default()).map(|(s, _)| s)
+        }),
+        radius: 1.5,
+    });
+    out.push(Case {
         name: "counterbore hole box (40x40x20, r5 / cb r9 d6)",
         why: "座ぐり穴の直方体。段の面と上面に穴の縁の円がある",
         solid: zenith_algo::HoleBuilder::make_counterbore_hole_box(40.0, 40.0, 20.0, 5.0, 9.0, 6.0),
