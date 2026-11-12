@@ -562,3 +562,52 @@ fn the_root_of_a_counterbore_step_blends_with_the_closed_form_volume() {
         assert_closed_mesh(&result, &format!("counterbore step root {kind:?}"));
     }
 }
+
+/// 直方体の角に集まる2本を順に丸める（4-945）。2本目の鎖には1本目の端の円弧が入る。
+/// 同じ半径だと円弧の内側が潰れるので断る（上限が丸めの誤差で 1 ulp 大きく出ても
+/// 通さない）。違う半径なら角の先の稜まで鎖で丸まり、体積は予測どおり。
+#[test]
+fn a_second_blend_at_a_corner_refuses_the_same_radius_and_takes_a_smaller_one() {
+    enable();
+    std::env::set_var("ZENITH_PRISM_OPEN_CHAIN", "1");
+    std::env::set_var("ZENITH_PRISM_GENERAL_SIDE", "1");
+    let solid = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).expect("box");
+    let at_origin = |solid: &Solid, along: zenith_math::Vec3| {
+        solid
+            .outer_shell
+            .faces
+            .iter()
+            .flat_map(|face| face.outer_wire.edges.iter())
+            .find(|oriented| {
+                let a = oriented.edge.start_vertex.point;
+                let b = oriented.edge.end_vertex.point;
+                let span = (b - a).normalize();
+                (a.coords.norm() < 1e-9 || b.coords.norm() < 1e-9 || a.coords.dot(&along).abs() > 0.0)
+                    && span.dot(&along).abs() > 1.0 - 1e-9
+                    && a.coords.cross(&along).norm() < 1e-9
+                    && b.coords.cross(&along).norm() < 1e-9
+            })
+            .map(|oriented| oriented.edge.id)
+    };
+    let along_y = zenith_math::Vec3::new(0.0, 1.0, 0.0);
+    let along_x = zenith_math::Vec3::new(1.0, 0.0, 0.0);
+    for first in [1.0, 2.0, 3.0] {
+        let rounded = EdgeBlender::fillet_edge(&solid, at_origin(&solid, along_y).expect("y edge"), first)
+            .expect("first fillet");
+        let second = at_origin(&rounded, along_x).expect("x edge");
+        let error = EdgeBlender::fillet_edge(&rounded, second, first).expect_err("same radius must be refused");
+        assert!(error.contains("must be smaller"), "r{first}: {error}");
+
+        let smaller = first * 0.5;
+        let before = volume(&rounded);
+        let (result, report) = EdgeBlender::blend_edge(&rounded, second, BlendKind::Fillet { radius: smaller })
+            .expect("smaller second fillet");
+        let removed = before - volume(&result);
+        let predicted = report.predicted_removed_volume;
+        assert!(
+            (removed - predicted).abs() <= 1e-6 * predicted,
+            "r{first} then r{smaller}: removed {removed}, predicted {predicted}"
+        );
+        assert_closed_mesh(&result, &format!("corner r{first} then r{smaller}"));
+    }
+}

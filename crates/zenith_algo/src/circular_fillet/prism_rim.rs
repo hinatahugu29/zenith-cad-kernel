@@ -100,7 +100,10 @@ fn try_blend(
             "Prism-rim blend size must be finite and larger than 1e-6, got {setback}"
         ));
     }
-    if setback >= site.limit() {
+    // 上限が前の丸めの半径そのもの（角に同じ半径で集まる）のとき、上限は丸めの
+    // 誤差で 1 ulp ほど大きく出ることがある。その差で通すと内側の半径が 0 に潰れた
+    // 稜ができるので、上限の相対 1e-9 手前で止める（4-945）。
+    if setback >= site.limit() * (1.0 - 1e-9) {
         return Err(format!(
             "Prism-rim blend size {setback} must be smaller than {:.6} (the smallest arc radius, the height, and half the narrowest width)",
             site.limit()
