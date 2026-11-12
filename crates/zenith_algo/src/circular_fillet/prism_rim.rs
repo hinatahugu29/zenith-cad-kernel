@@ -1093,7 +1093,7 @@ fn rebuild_cap(
 pub(crate) fn raised_side_enabled() -> bool {
     std::env::var("ZENITH_PRISM_RAISED_SIDE")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 pub(crate) fn hole_rim_enabled() -> bool {

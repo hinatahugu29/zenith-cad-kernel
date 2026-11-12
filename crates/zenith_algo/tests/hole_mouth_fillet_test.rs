@@ -202,8 +202,9 @@ fn sectorised_and_stepped_holes_are_not_silently_approximated() {
     }
     // 穴の縁の閉じたループ（4-943）: 上面の座ぐりの縁（R9）・段の面の穴の縁（R5）・
     // 底の穴の縁（R5）の12本は、穴を貫通穴と見なすのではなく、縁ごとに厳密に丸める。
-    // 段の根元（凹の円）は候補に出ない。
-    assert_eq!(curved.len(), 12, "three hole rims of four arcs each");
+    // 段の根元（凹の円）は、側面が上へ立つ縁（4-944）が立っていれば候補に出る（材料を足す）。
+    let expected = if raised_side_on() { 16 } else { 12 };
+    assert_eq!(curved.len(), expected, "hole rims of four arcs each");
     let before = MassCalculator::compute_from_brep(&counterbore, &params()).volume;
     for id in curved {
         let (rounded, report) =
@@ -212,7 +213,7 @@ fn sectorised_and_stepped_holes_are_not_silently_approximated() {
         let removed = before - MassCalculator::compute_from_brep(&rounded, &params()).volume;
         let predicted = report.predicted_removed_volume;
         assert!(
-            (removed - predicted).abs() <= 1e-8 * predicted,
+            (removed - predicted).abs() <= 1e-8 * predicted.abs(),
             "edge {id}: removed {removed}, predicted {predicted}"
         );
     }
@@ -529,4 +530,9 @@ fn one_of_three_external_holes_is_edited_without_rebuilding_the_other_two() {
 /// `ZENITH_PRISM_HOLE_RIM`（4-943）が立っているか（既定オン）
 fn hole_rim_on() -> bool {
     std::env::var("ZENITH_PRISM_HOLE_RIM").map_or(true, |value| value != "0")
+}
+
+/// `ZENITH_PRISM_RAISED_SIDE`（4-944）が立っているか（既定オン）
+fn raised_side_on() -> bool {
+    std::env::var("ZENITH_PRISM_RAISED_SIDE").map_or(true, |value| value != "0")
 }
