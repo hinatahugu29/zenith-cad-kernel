@@ -504,7 +504,7 @@ fn cases() -> Vec<Case> {
         radius: 1.0,
     });
     out.push(Case {
-        name: "box, 3 edges at one corner filleted (r3)",
+        name: "box, corner rounded by two fillets (r3)",
         why: "1つの角に集まる3本の稜をまとめて丸めた直方体（頂点ブレンド、手順3）",
         solid: base.clone().and_then(|solid| {
             let first = vertical_edges(&solid)[0];
@@ -529,7 +529,14 @@ fn cases() -> Vec<Case> {
             if at_corner.len() != 3 {
                 return Err(format!("corner has {} edges", at_corner.len()));
             }
-            EdgeBlender::fillet_edges(&solid, &at_corner)
+            // 1本目を丸め、2本目を丸めると鎖で3本目も丸まる（角は球の面、4-946）。
+            // fillet_edges にまとめて渡すと、鎖で消えた3本目が見つからず断られる。
+            let one = EdgeBlender::fillet_edge(&solid, at_corner[0].0, 3.0)?;
+            let second = edge_ids(&one)
+                .into_iter()
+                .find(|id| *id == at_corner[1].0)
+                .ok_or("second corner edge was rebuilt")?;
+            EdgeBlender::fillet_edge(&one, second, 3.0)
         }),
         radius: 1.5,
     });

@@ -595,8 +595,13 @@ fn a_second_blend_at_a_corner_refuses_the_same_radius_and_takes_a_smaller_one() 
         let rounded = EdgeBlender::fillet_edge(&solid, at_origin(&solid, along_y).expect("y edge"), first)
             .expect("first fillet");
         let second = at_origin(&rounded, along_x).expect("x edge");
-        let error = EdgeBlender::fillet_edge(&rounded, second, first).expect_err("same radius must be refused");
-        assert!(error.contains("must be smaller"), "r{first}: {error}");
+        // 球の角（4-946、`ZENITH_PRISM_SPHERE_CORNER`）が立っていれば同じ半径も通る。
+        // その検証は sphere_corner_blend_test にある。
+        let sphere = std::env::var("ZENITH_PRISM_SPHERE_CORNER").map_or(false, |value| value != "0");
+        if !sphere {
+            let error = EdgeBlender::fillet_edge(&rounded, second, first).expect_err("same radius must be refused");
+            assert!(error.contains("must be smaller"), "r{first}: {error}");
+        }
 
         let smaller = first * 0.5;
         let before = volume(&rounded);

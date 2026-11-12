@@ -103,10 +103,10 @@ fn try_blend(
     // 上限が前の丸めの半径そのもの（角に同じ半径で集まる）のとき、上限は丸めの
     // 誤差で 1 ulp ほど大きく出ることがある。その差で通すと内側の半径が 0 に潰れた
     // 稜ができるので、上限の相対 1e-9 手前で止める（4-945）。
-    if setback >= site.limit() * (1.0 - 1e-9) {
+    if setback >= site.limit_for(setback) * (1.0 - 1e-9) {
         return Err(format!(
             "Prism-rim blend size {setback} must be smaller than {:.6} (the smallest arc radius, the height, and half the narrowest width)",
-            site.limit()
+            site.limit_for(setback)
         ));
     }
     let result = site.apply(solid, blend)?;
@@ -603,12 +603,21 @@ impl PrismRim {
     }
 
     fn limit(&self) -> f64 {
+        self.limit_for(f64::NAN)
+    }
+
+    /// 大きさ `setback` で丸めるときの上限。凸の円弧の半径が `setback` と等しい
+    /// （角に同じ半径で集まる）なら、その円弧は1点に潰れて球の面になるので、
+    /// 上限から外す（4-946、`ZENITH_PRISM_SPHERE_CORNER`）。
+    fn limit_for(&self, setback: f64) -> f64 {
         let smallest_radius = self
             .segments
             .iter()
             .filter_map(|segment| match segment {
                 // 凹の円弧は内側へずらすと半径が増えるので、上限にならない
-                Segment::Arc { radius, concave, .. } => (!concave).then_some(*radius),
+                Segment::Arc { radius, concave, .. } => {
+                    (!concave && !collapses(*radius, setback)).then_some(*radius)
+                }
                 Segment::Line { .. } => None,
             })
             .fold(f64::INFINITY, f64::min);
@@ -688,9 +697,32 @@ impl PrismRim {
             })
             .collect();
 
+        // 1点に潰れる円弧（4-946）: 区間の両端の内側の点は円弧の中心。同じ頂点にする。
+        let collapsed: Vec<bool> = self
+            .segments
+            .iter()
+            .map(|segment| match segment {
+                Segment::Arc { radius, concave: false, .. } => collapses(*radius, r),
+                _ => false,
+            })
+            .collect();
+        let mut pt = pt;
+        for i in 0..count {
+            if collapsed[i] {
+                if let Segment::Arc { center, .. } = &self.segments[i] {
+                    pt[i] = *center;
+                    pt[(i + 1) % nv] = *center;
+                }
+            }
+        }
         let vb: Vec<Vertex> = pb.iter().map(|p| Vertex::from_point(*p)).collect();
         let vc: Vec<Vertex> = pc.iter().map(|p| Vertex::from_point(*p)).collect();
-        let vt: Vec<Vertex> = pt.iter().map(|p| Vertex::from_point(*p)).collect();
+        let mut vt: Vec<Vertex> = pt.iter().map(|p| Vertex::from_point(*p)).collect();
+        for i in 0..count {
+            if collapsed[i] {
+                vt[(i + 1) % nv] = vt[i].clone();
+            }
+        }
 
         let weight_profile = FRAC_1_SQRT_2;
 
@@ -722,7 +754,8 @@ impl PrismRim {
         struct Copy3 {
             bottom: Edge,
             cut: Edge,
-            top: Edge,
+            /// 潰れる円弧では None（4-946）
+            top: Option<Edge>,
         }
         let arc_edge = |from: Point3,
                         to: Point3,
@@ -760,7 +793,7 @@ impl PrismRim {
                 Segment::Line { .. } => Copy3 {
                     bottom: Edge::line_between(vb[i].clone(), vb[next].clone())?,
                     cut: Edge::line_between(vc[i].clone(), vc[next].clone())?,
-                    top: Edge::line_between(vt[i].clone(), vt[next].clone())?,
+                    top: Some(Edge::line_between(vt[i].clone(), vt[next].clone())?),
                 },
                 Segment::Arc {
                     start,
@@ -784,7 +817,11 @@ impl PrismRim {
                             &vb[next],
                         )?,
                         cut: arc_edge(pc[i], pc[next], down(middle, r), weight, &vc[i], &vc[next])?,
-                        top: arc_edge(pt[i], pt[next], inner_middle, weight, &vt[i], &vt[next])?,
+                        top: if collapsed[i] {
+                            None
+                        } else {
+                            Some(arc_edge(pt[i], pt[next], inner_middle, weight, &vt[i], &vt[next])?)
+                        },
                     }
                 }
             };
@@ -871,7 +908,11 @@ impl PrismRim {
                     let weight = (angle * 0.5).cos();
                     let middle = arc_middle(*center, *start, *end, *radius, *angle);
                     let inner_radius = if *concave { radius + r } else { radius - r };
-                    let inner_middle = arc_middle(*center, *start, *end, inner_radius, *angle);
+                    let inner_middle = if collapsed[i] {
+                        *center
+                    } else {
+                        arc_middle(*center, *start, *end, inner_radius, *angle)
+                    };
                     (
                         vec![
                             [pc[i], rim_points[i], pt[i]],
@@ -909,22 +950,33 @@ impl PrismRim {
                 KnotVector::clamped_uniform(degree_u + 1, degree_u),
                 KnotVector::clamped_uniform(degree_v + 1, degree_v),
             )?;
-            let wire = Wire::new(vec![
+            let mut edges = vec![
                 OrientedEdge::forward(copies[i].cut.clone()),
                 OrientedEdge::forward(ev_blend[next].clone()),
-                OrientedEdge::reversed(copies[i].top.clone()),
-                OrientedEdge::reversed(ev_blend[i].clone()),
-            ]);
+            ];
+            // 潰れる円弧の区間は3本で囲む（球の面、4-946）
+            if let Some(top) = &copies[i].top {
+                edges.push(OrientedEdge::reversed(top.clone()));
+            }
+            edges.push(OrientedEdge::reversed(ev_blend[i].clone()));
+            let wire = Wire::new(edges);
             new_faces.push(Face::simple(FaceGeometry::Nurbs(surface), wire));
         }
 
         // 3. 縮めた上面
-        let u_axis = (pt[1] - pt[0]).normalize();
+        // 潰れた円弧の区間は両端が同じ点なので、離れた2点で軸を取る
+        let u_axis = pt
+            .iter()
+            .skip(1)
+            .map(|p| p - pt[0])
+            .find(|d| d.norm() > 1e-9)
+            .ok_or("Failed to find a top-plane axis")?
+            .normalize();
         let v_axis = n.cross(&u_axis);
         let plane = PlaneSurface3::new(pt[0], u_axis, v_axis).ok_or("Failed to create top plane")?;
         let mut top_edges: Vec<OrientedEdge> = copies
             .iter()
-            .map(|copy| OrientedEdge::forward(copy.top.clone()))
+            .filter_map(|copy| copy.top.clone().map(OrientedEdge::forward))
             .collect();
         let mut cap_faces: Vec<(usize, Face)> = Vec::new();
         if let Some(ends) = &self.open {
@@ -1091,6 +1143,18 @@ fn rebuild_cap(
         face.orientation,
         face.tolerance,
     ))
+}
+
+/// 凸の円弧の半径 `radius` が丸めの大きさ `setback` と等しく、内側の円弧が1点に
+/// 潰れるか（4-946）。口が立っていなければ常に false。
+fn collapses(radius: f64, setback: f64) -> bool {
+    sphere_corner_enabled() && (radius - setback).abs() <= 1e-9 * radius
+}
+
+pub(crate) fn sphere_corner_enabled() -> bool {
+    std::env::var("ZENITH_PRISM_SPHERE_CORNER")
+        .map(|value| value != "0")
+        .unwrap_or(false)
 }
 
 pub(crate) fn raised_side_enabled() -> bool {
