@@ -181,10 +181,30 @@ impl EdgeBlender {
     /// 一度だけ集めた ID をそのまま渡せる。頂点を共有する稜同士を同時に
     /// 指定した場合は、2本目で「3枚目の面」の条件が崩れて明示的に失敗する。
     pub fn fillet_edges(solid: &Solid, edges: &[(u64, f64)]) -> Result<Solid, String> {
+        let skip = skip_consumed_enabled();
         let mut current = solid.clone();
+        // 前の丸めの鎖が一緒に丸めて消した稜と、その半径（4-947）
+        let mut consumed: Vec<(u64, f64)> = Vec::new();
         for (index, (edge_id, radius)) in edges.iter().enumerate() {
+            if skip && !edge_ids(&current).contains(edge_id) {
+                if let Some((_, used)) = consumed.iter().find(|(id, _)| id == edge_id) {
+                    if (used - radius).abs() <= 1e-12 * radius.abs().max(1.0) {
+                        continue;
+                    }
+                    return Err(format!(
+                        "fillet {index} (edge {edge_id}): already rounded with radius {used} by an earlier chain, asked for {radius}"
+                    ));
+                }
+            }
+            let before = if skip { edge_ids(&current) } else { Vec::new() };
             current = Self::fillet_edge(&current, *edge_id, *radius)
                 .map_err(|err| format!("fillet {index} (edge {edge_id}): {err}"))?;
+            if skip {
+                let after = edge_ids(&current);
+                consumed.extend(
+                    before.into_iter().filter(|id| !after.contains(id)).map(|id| (id, *radius)),
+                );
+            }
         }
         Ok(current)
     }
@@ -1138,4 +1158,26 @@ fn reflex_end_enabled() -> bool {
     std::env::var("ZENITH_REFLEX_END")
         .map(|value| value != "0")
         .unwrap_or(true)
+}
+
+/// 立体の全ての稜 ID
+fn edge_ids(solid: &Solid) -> Vec<u64> {
+    let mut ids = Vec::new();
+    for face in &solid.outer_shell.faces {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                if !ids.contains(&oriented.edge.id) {
+                    ids.push(oriented.edge.id);
+                }
+            }
+        }
+    }
+    ids
+}
+
+/// `fillet_edges` で、前の鎖が同じ半径で丸めて消した稜を飛ばすか（4-947、既定オフ）
+fn skip_consumed_enabled() -> bool {
+    std::env::var("ZENITH_FILLET_EDGES_SKIP_CONSUMED")
+        .map(|value| value != "0")
+        .unwrap_or(false)
 }
