@@ -213,6 +213,31 @@ fn cases() -> Vec<Case> {
         EdgeBlender::fillet_edge(&solid, id, 2.0)
     });
     out.push(Case {
+        name: "box, 4 vertical edges filleted (r3), rims at r3",
+        why: "角丸の角柱の上下の縁を角の半径と同じ r3 で丸める。円弧4本が全部点に潰れ、角は球の面（4-946）",
+        solid: four.clone(),
+        radius: 3.0,
+    });
+    let rounded_top_same = four.clone().and_then(|solid| {
+        let id = edge_ids(&solid)
+            .into_iter()
+            .find(|id| {
+                solid.outer_shell.faces.iter().flat_map(|face| face.outer_wire.edges.iter()).any(|o| {
+                    o.edge.id == *id
+                        && (o.edge.start_vertex.point.z - 40.0).abs() < 1e-9
+                        && (o.edge.end_vertex.point.z - 40.0).abs() < 1e-9
+                })
+            })
+            .ok_or("no top edge")?;
+        EdgeBlender::fillet_edge(&solid, id, 3.0)
+    });
+    out.push(Case {
+        name: "box, 4 vertical (r3) then top rim (r3) filleted",
+        why: "上の4つの角が球の面で閉じた角丸の箱。残りの稜を丸める",
+        solid: rounded_top_same,
+        radius: 1.5,
+    });
+    out.push(Case {
         name: "box, 4 vertical (r3) then top rim (r2) filleted",
         why: "角丸の角柱の上縁を全周丸めた立体。下の縁や、丸めた面どうしの稜を丸める",
         solid: rounded_top,
