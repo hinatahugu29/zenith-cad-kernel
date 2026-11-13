@@ -1074,6 +1074,28 @@ fn cases() -> Vec<Case> {
         b: shifted(&sphere_of(3.0), 3.0, 3.0, 3.0),
         note: ["未測定だった置き方", "同上", "同上"],
     });
+    // 丸めの円柱面（軸 (3,3)、半径 3）に外から接する（4-949）。接点の外向きの法線は (-1,-1)/√2。
+    let away = std::f64::consts::FRAC_1_SQRT_2;
+    let touch = 3.0 - 3.0 * away;
+    out.push(Case {
+        name: "filleted box x sphere (touching the fillet at one point)",
+        why: "丸めた縦稜の円柱面の高さ 20 の点に、半径 5 の球を外から1点で当てる",
+        a: filleted_corner_box(1),
+        b: shifted(&sphere_of(5.0), touch - 5.0 * away, touch - 5.0 * away, 20.0),
+        note: ["実測: 立体2つ（1点の接触は位相を作らない）。恒等式は閉じる（4-949）", "実測: A がそのまま返る", "実測: 立体0つ"],
+    });
+    out.push(Case {
+        name: "filleted box x cylinder (tangent to the fillet along a line)",
+        why: "丸めた縦稜の円柱面に、半径 2 の平行な円柱を外から母線1本で当てる（円柱は角を落とした所に入る）",
+        a: filleted_corner_box(1),
+        b: shifted(
+            &PrimitiveBuilder::make_cylinder(2.0, 20.0).expect("cylinder"),
+            3.0 - 5.0 * away,
+            3.0 - 5.0 * away,
+            10.0,
+        ),
+        note: ["実測: 場所を名指しして断る（(0.8787,0.8787,15) で材料が2つに割れる）。**規約どおり**（4-949）", "実測: A がそのまま返る", "実測: 立体0つ"],
+    });
 
     out
 }
