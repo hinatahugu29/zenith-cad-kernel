@@ -1118,6 +1118,29 @@ fn cases() -> Vec<Case> {
             note: ["実測: 立体1つ、多様体（4-950）", "実測: A がそのまま返る", "実測: 立体0つ（面の接触は体積を持たない）"],
         });
     }
+    // 丸めの面を貫く・噛む（4-951）。
+    let diagonal = Transform3::from_axis_angle(&Vec3::new(-1.0, 1.0, 0.0), (1.0f64 / 3f64.sqrt()).acos());
+    let back = 10.0 / 3f64.sqrt();
+    out.push(Case {
+        name: "sphere-cornered box x cylinder (along the diagonal through the corner)",
+        why: "角を r3 の球の面で閉じた直方体に、半径 1.5 の円柱を体の対角線の向きに球の中心 (3,3,3) を通して刺す",
+        a: filleted_corner_box(2),
+        b: shifted(
+            &BrepTransform::transform_solid(&PrimitiveBuilder::make_cylinder(1.5, 30.0).expect("cylinder"), &diagonal)
+                .expect("turn"),
+            3.0 - back,
+            3.0 - back,
+            3.0 - back,
+        ),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "rim-rounded prism x sphere (biting a torus corner)",
+        why: "縦稜4本 r3・上縁 r2 の角丸の角柱の、原点側の上の角（トーラス）を半径 4 の球で噛む",
+        a: rim_rounded_prism(2.0),
+        b: shifted(&sphere_of(4.0), 1.0, 1.0, 39.0),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
 
     out
 }
