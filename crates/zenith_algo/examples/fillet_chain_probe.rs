@@ -566,6 +566,39 @@ fn cases() -> Vec<Case> {
         radius: 1.5,
     });
 
+    // ブーリアンで作った立体（4-952）。
+    let union = |a: Result<Solid, String>, b: Result<Solid, String>| -> Result<Solid, String> {
+        let (a, b) = (a?, b?);
+        let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+            &a,
+            &b,
+            zenith_algo::BooleanOpType::Union,
+            &zenith_math::Tolerance::default(),
+        )?;
+        let solid = result.solids.into_iter().next().ok_or("empty union")?;
+        zenith_algo::FaceMerger::merge_coplanar(&solid, &zenith_math::Tolerance::default()).map(|(s, _)| s)
+    };
+    out.push(Case {
+        name: "box with a cylindrical boss on top (union, merged)",
+        why: "直方体の上面に円柱のボスを立てた和。ボスの根元は凹の円、上は凸の円",
+        solid: union(
+            base.clone(),
+            PrimitiveBuilder::make_cylinder(5.0, 10.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(10.0, 15.0, 40.0))),
+        ),
+        radius: 1.0,
+    });
+    out.push(Case {
+        name: "T-shaped prism (union of two boxes, merged)",
+        why: "2つの箱の和で作った T 字の角柱。凹の縦稜2本と、凹凸の混じる上縁",
+        solid: union(
+            PrimitiveBuilder::make_box(30.0, 10.0, 20.0),
+            PrimitiveBuilder::make_box(10.0, 20.0, 20.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(10.0, 10.0, 0.0))),
+        ),
+        radius: 1.5,
+    });
+
     out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
