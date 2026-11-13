@@ -164,7 +164,11 @@ fn a_rim_fillet_at_or_above_the_corner_radius_is_refused() {
     enable();
     let prism = rounded_prism();
     let edge = straight_rim_edge(&prism, 40.0);
-    assert!(EdgeBlender::fillet_edge(&prism, edge, 3.0).is_err());
+    // 角の半径と同じ大きさは、球の角（4-946）が立っていれば球の面で閉じて通る
+    match EdgeBlender::fillet_edge(&prism, edge, 3.0) {
+        Ok(result) if sphere_corner() => assert_closed_mesh(&result, "r = corner radius"),
+        other => assert_eq!(other.is_err(), !sphere_corner(), "r = corner radius"),
+    }
     assert!(EdgeBlender::fillet_edge(&prism, edge, 5.0).is_err());
     // 断っても元の立体は変わらない
     assert!(prism.outer_shell.validate_closed(&Tolerance::default()).is_valid());
@@ -286,7 +290,14 @@ fn an_open_chain_stopping_at_square_corners_fillets_and_chamfers() {
         assert!((removed - expected).abs() < 1e-9 * before, "d={r}: removed {removed}, expected {expected}");
         assert_closed_mesh(&result, &format!("open chamfer d={r}"));
     }
-    assert!(EdgeBlender::fillet_edge(&solid, edge, 3.0).is_err());
+    match EdgeBlender::fillet_edge(&solid, edge, 3.0) {
+        Ok(result) if sphere_corner() => assert_closed_mesh(&result, "open r = corner radius"),
+        other => assert_eq!(other.is_err(), !sphere_corner(), "open r = corner radius"),
+    }
+}
+
+fn sphere_corner() -> bool {
+    std::env::var("ZENITH_PRISM_SPHERE_CORNER").map_or(true, |value| value != "0")
 }
 
 #[test]
@@ -597,7 +608,7 @@ fn a_second_blend_at_a_corner_refuses_the_same_radius_and_takes_a_smaller_one() 
         let second = at_origin(&rounded, along_x).expect("x edge");
         // 球の角（4-946、`ZENITH_PRISM_SPHERE_CORNER`）が立っていれば同じ半径も通る。
         // その検証は sphere_corner_blend_test にある。
-        let sphere = std::env::var("ZENITH_PRISM_SPHERE_CORNER").map_or(false, |value| value != "0");
+        let sphere = std::env::var("ZENITH_PRISM_SPHERE_CORNER").map_or(true, |value| value != "0");
         if !sphere {
             let error = EdgeBlender::fillet_edge(&rounded, second, first).expect_err("same radius must be refused");
             assert!(error.contains("must be smaller"), "r{first}: {error}");

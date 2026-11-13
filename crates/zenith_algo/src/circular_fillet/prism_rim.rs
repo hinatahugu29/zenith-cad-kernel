@@ -1154,7 +1154,7 @@ fn collapses(radius: f64, setback: f64) -> bool {
 pub(crate) fn sphere_corner_enabled() -> bool {
     std::env::var("ZENITH_PRISM_SPHERE_CORNER")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
 
 pub(crate) fn raised_side_enabled() -> bool {
