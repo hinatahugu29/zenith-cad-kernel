@@ -1175,9 +1175,9 @@ fn edge_ids(solid: &Solid) -> Vec<u64> {
     ids
 }
 
-/// `fillet_edges` で、前の鎖が同じ半径で丸めて消した稜を飛ばすか（4-947、既定オフ）
+/// `fillet_edges` で、前の鎖が同じ半径で丸めて消した稜を飛ばすか（4-947、既定オン）
 fn skip_consumed_enabled() -> bool {
     std::env::var("ZENITH_FILLET_EDGES_SKIP_CONSUMED")
         .map(|value| value != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
 }
