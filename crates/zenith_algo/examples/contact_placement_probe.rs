@@ -1051,8 +1051,62 @@ fn cases() -> Vec<Case> {
         note: ["未測定だった置き方", "同上", "同上"],
     });
 
+    // 柱⑦で作った丸めの面（円柱・球の NURBS）を相手にした接触（4-948）。
+    let filleted = filleted_corner_box(1);
+    out.push(Case {
+        name: "filleted box x cylinder (coaxial with the fillet)",
+        why: "直方体の原点の縦稜を r3 で丸め、丸めの円柱面と同じ軸・同じ半径の円柱を通す。曲面どうしが重なる",
+        a: filleted.clone(),
+        b: shifted(&PrimitiveBuilder::make_cylinder(3.0, 60.0).expect("cylinder"), 3.0, 3.0, -10.0),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "filleted box x box (face tangent across the fillet seam)",
+        why: "丸めた直方体の x=0 の面に、丸めとの継ぎ目（y=3）をまたいで箱を面で当てる",
+        a: filleted,
+        b: shifted(&PrimitiveBuilder::make_box(10.0, 15.0, 20.0).expect("box"), -10.0, -5.0, 10.0),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
+    out.push(Case {
+        name: "sphere-cornered box x sphere (concentric with the corner)",
+        why: "原点の角を r3 の2回の丸めで球の面に閉じ、その球と同じ中心・半径の球を当てる。球の 1/8 が重なる",
+        a: filleted_corner_box(2),
+        b: shifted(&sphere_of(3.0), 3.0, 3.0, 3.0),
+        note: ["未測定だった置き方", "同上", "同上"],
+    });
 
     out
+}
+
+/// 20x30x40 の直方体の原点の角を r3 で丸める。`count` = 1 なら縦稜（z 向き）だけ、
+/// 2 なら続けて x 向きの稜も丸め、鎖が y 向きの稜まで回って角が球の面で閉じる。
+fn filleted_corner_box(count: usize) -> Solid {
+    let edge = |solid: &Solid, axis: usize| -> u64 {
+        solid
+            .outer_shell
+            .faces
+            .iter()
+            .flat_map(|face| face.outer_wire.edges.iter())
+            .find(|oriented| {
+                let a = oriented.edge.start_vertex.point;
+                let b = oriented.edge.end_vertex.point;
+                (0..3).all(|k| {
+                    if k == axis {
+                        (b[k] - a[k]).abs() > 1e-9
+                    } else {
+                        a[k].abs() < 1e-9 && b[k].abs() < 1e-9
+                    }
+                })
+            })
+            .map(|oriented| oriented.edge.id)
+            .expect("corner edge")
+    };
+    let solid = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).expect("box");
+    let one = zenith_algo::EdgeBlender::fillet_edge(&solid, edge(&solid, 2), 3.0).expect("fillet");
+    if count == 1 {
+        return one;
+    }
+    zenith_algo::EdgeBlender::fillet_edge(&one, edge(&one, 0), 3.0).expect("second fillet")
 }
 
 /// 半径を指定した球。**`sphere` は半径 10 固定**なので、別の大きさが要る
