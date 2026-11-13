@@ -1096,6 +1096,28 @@ fn cases() -> Vec<Case> {
         ),
         note: ["実測: 場所を名指しして断る（(0.8787,0.8787,15) で材料が2つに割れる）。**規約どおり**（4-949）", "実測: A がそのまま返る", "実測: 立体0つ"],
     });
+    // トーラスの丸め（角丸の角柱の上縁）を相手にした面の接触（4-950）。
+    // 上面 z=40 は丸めで (2..18)x(2..28) に縮んでいる。箱をその継ぎ目をまたいで上に置く。
+    for (name, why, rim) in [
+        (
+            "rim-rounded prism x box (on the top, across the torus seam)",
+            "縦稜4本 r3・上縁 r2 の角丸の角柱の上面に、丸め（円柱・トーラス）との継ぎ目をまたいで箱を面で載せる",
+            2.0,
+        ),
+        (
+            "sphere-cornered prism x box (on the top, across the seam)",
+            "縦稜4本 r3・上縁 r3（上の角が球の面）の角丸の箱の上面に、継ぎ目をまたいで箱を面で載せる",
+            3.0,
+        ),
+    ] {
+        out.push(Case {
+            name,
+            why,
+            a: rim_rounded_prism(rim),
+            b: shifted(&PrimitiveBuilder::make_box(10.0, 10.0, 10.0).expect("box"), -5.0, -5.0, 40.0),
+            note: ["実測: 立体1つ、多様体（4-950）", "実測: A がそのまま返る", "実測: 立体0つ（面の接触は体積を持たない）"],
+        });
+    }
 
     out
 }
@@ -1129,6 +1151,38 @@ fn filleted_corner_box(count: usize) -> Solid {
         return one;
     }
     zenith_algo::EdgeBlender::fillet_edge(&one, edge(&one, 0), 3.0).expect("second fillet")
+}
+
+/// 20x30x40 の直方体の縦稜4本を r3 で丸め、上縁を `rim` で全周丸める。
+fn rim_rounded_prism(rim: f64) -> Solid {
+    let mut solid = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).expect("box");
+    loop {
+        let vertical = solid
+            .outer_shell
+            .faces
+            .iter()
+            .flat_map(|face| face.outer_wire.edges.iter())
+            .find(|o| {
+                let (a, b) = (o.edge.start_vertex.point, o.edge.end_vertex.point);
+                (a.x - b.x).abs() < 1e-9 && (a.y - b.y).abs() < 1e-9 && (a.z - b.z).abs() > 39.0
+                    && [0.0, 20.0].iter().any(|x| (a.x - x).abs() < 1e-9)
+                    && [0.0, 30.0].iter().any(|y| (a.y - y).abs() < 1e-9)
+            })
+            .map(|o| o.edge.id);
+        match vertical {
+            Some(id) => solid = zenith_algo::EdgeBlender::fillet_edge(&solid, id, 3.0).expect("vertical"),
+            None => break,
+        }
+    }
+    let top = solid
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|face| face.outer_wire.edges.iter())
+        .find(|o| (o.edge.start_vertex.point.z - 40.0).abs() < 1e-9 && (o.edge.end_vertex.point.z - 40.0).abs() < 1e-9)
+        .map(|o| o.edge.id)
+        .expect("top edge");
+    zenith_algo::EdgeBlender::fillet_edge(&solid, top, rim).expect("rim")
 }
 
 /// 半径を指定した球。**`sphere` は半径 10 固定**なので、別の大きさが要る
