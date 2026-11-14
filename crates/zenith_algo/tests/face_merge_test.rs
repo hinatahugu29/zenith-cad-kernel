@@ -286,3 +286,25 @@ fn a_planar_face_kept_as_nurbs_is_recognised_without_moving_it() {
         curved_before
     );
 }
+
+/// 止まりのポケットを掘った差は、一直線の継ぎ目が 16 組を超える。以前は
+/// 16 回で打ち切って稜が割れたまま残り（28 本）、丸めが「端の先に面が無い」で
+/// 断っていた（4-953）。
+#[test]
+fn simplify_joins_every_collinear_seam_of_a_pocketed_box() {
+    use zenith_algo::{BooleanEngine, BooleanOpType, BrepTransform};
+    let tol = zenith_math::Tolerance::default();
+    let block = zenith_algo::PrimitiveBuilder::make_box(20.0, 30.0, 40.0).unwrap();
+    let pocket = BrepTransform::translate_solid(
+        &zenith_algo::PrimitiveBuilder::make_box(10.0, 14.0, 20.0).unwrap(),
+        zenith_math::Vec3::new(5.0, 8.0, 32.0),
+    );
+    let raw = BooleanEngine::boolean_solids_exact_result(&block, &pocket, BooleanOpType::Difference, &tol)
+        .unwrap()
+        .solids
+        .remove(0);
+    let (solid, report) = zenith_algo::FaceMerger::simplify_solid(&raw, &tol).unwrap();
+    assert_eq!(solid.outer_shell.faces.len(), 11, "{}", report.summary());
+    assert_eq!(report.edges_after, 24, "{}", report.summary());
+    assert!(solid.outer_shell.validate_closed(&tol).is_valid());
+}

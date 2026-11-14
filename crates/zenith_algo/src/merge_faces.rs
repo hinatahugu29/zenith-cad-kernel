@@ -356,8 +356,10 @@ fn signed_area(wire: &Wire, origin: Point3, u_axis: Vec3, v_axis: Vec3) -> f64 {
 fn merge_collinear_edges(solid: &Solid, tol: &Tolerance) -> Result<(Solid, usize), String> {
     let mut current = solid.clone();
 
-    // 1回の走査では、繋いだ結果さらに繋げる継ぎ目が出ることがある
-    for _ in 0..16 {
+    // 1回の走査で繋ぐのは1組なので、継ぎ目が無くなるまで繰り返す。1組繋ぐと稜が
+    // 1本減るので、稜の本数で必ず止まる（4-953。以前は 16 回で打ち切り、ブーリアンの
+    // 跡が多い立体で一直線の稜が割れたまま残っていた）
+    for _ in 0..distinct_edge_count(&solid.outer_shell.faces) {
         let Some(next) = merge_one_round(&current, tol)? else {
             break;
         };

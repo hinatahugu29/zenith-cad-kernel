@@ -576,10 +576,10 @@ fn cases() -> Vec<Case> {
             &zenith_math::Tolerance::default(),
         )?;
         let solid = result.solids.into_iter().next().ok_or("empty union")?;
-        zenith_algo::FaceMerger::merge_coplanar(&solid, &zenith_math::Tolerance::default()).map(|(s, _)| s)
+        zenith_algo::FaceMerger::simplify_solid(&solid, &zenith_math::Tolerance::default()).map(|(s, _)| s)
     };
     out.push(Case {
-        name: "box with a cylindrical boss on top (union, merged)",
+        name: "box with a cylindrical boss on top (union, simplified)",
         why: "直方体の上面に円柱のボスを立てた和。ボスの根元は凹の円、上は凸の円",
         solid: union(
             base.clone(),
@@ -597,6 +597,38 @@ fn cases() -> Vec<Case> {
                 .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(10.0, 10.0, 0.0))),
         ),
         radius: 1.5,
+    });
+
+    let difference = |a: Result<Solid, String>, b: Result<Solid, String>| -> Result<Solid, String> {
+        let (a, b) = (a?, b?);
+        let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+            &a,
+            &b,
+            zenith_algo::BooleanOpType::Difference,
+            &zenith_math::Tolerance::default(),
+        )?;
+        let solid = result.solids.into_iter().next().ok_or("empty difference")?;
+        zenith_algo::FaceMerger::simplify_solid(&solid, &zenith_math::Tolerance::default()).map(|(s, _)| s)
+    };
+    out.push(Case {
+        name: "box with a rectangular pocket (difference, simplified)",
+        why: "上面に 10x14 深さ 8 の止まりのポケットを掘った差。凹の縦稜4本・底の凹の稜4本・口の凸の稜4本",
+        solid: difference(
+            base.clone(),
+            PrimitiveBuilder::make_box(10.0, 14.0, 20.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(5.0, 8.0, 32.0))),
+        ),
+        radius: 1.0,
+    });
+    out.push(Case {
+        name: "box with a blind round hole (difference, simplified)",
+        why: "上面に r4 深さ 10 の止まり穴を開けた差。口の凸の円と底の凹の円",
+        solid: difference(
+            base.clone(),
+            PrimitiveBuilder::make_cylinder(4.0, 20.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(10.0, 15.0, 30.0))),
+        ),
+        radius: 1.0,
     });
 
     out.push(Case {
