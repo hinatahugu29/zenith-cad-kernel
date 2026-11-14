@@ -632,6 +632,33 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "box with a through slot (difference, simplified)",
+        why: "上面に幅 8 深さ 10 の溝を y 方向に貫通させた差。溝の底の凹の稜2本と口の凸の稜2本が端の面まで届く",
+        solid: difference(
+            base.clone(),
+            PrimitiveBuilder::make_box(8.0, 40.0, 20.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(6.0, -5.0, 30.0))),
+        ),
+        radius: 1.0,
+    });
+    out.push(Case {
+        name: "box with a side hole (difference, simplified)",
+        why: "側面 x=0 から r4 の丸穴を x 方向に貫通させた差。穴の縁が側面の内側ワイヤになる",
+        solid: difference(
+            base.clone(),
+            PrimitiveBuilder::make_cylinder(4.0, 40.0).and_then(|c| {
+                let turn = zenith_math::Transform3::from_axis_angle(
+                    &zenith_math::Vec3::new(0.0, 1.0, 0.0),
+                    std::f64::consts::FRAC_PI_2,
+                );
+                let c = zenith_algo::BrepTransform::transform_solid(&c, &turn)?;
+                Ok(zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(-10.0, 15.0, 20.0)))
+            }),
+        ),
+        radius: 1.0,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,
