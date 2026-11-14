@@ -726,6 +726,17 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "hexagonal prism with a central hole (difference, simplified)",
+        why: "正六角柱（外接半径 10、高さ 25）の中心に r4 の丸穴を貫通させた差。六角の縁と穴の縁",
+        solid: difference(
+            PrimitiveBuilder::make_regular_prism(6, 10.0, 25.0),
+            PrimitiveBuilder::make_cylinder(4.0, 40.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(0.0, 0.0, -5.0))),
+        ),
+        radius: 1.0,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,
