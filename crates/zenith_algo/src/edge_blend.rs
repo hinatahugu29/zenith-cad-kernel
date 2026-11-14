@@ -109,7 +109,7 @@ impl EdgeBlender {
     pub fn blendability(solid: &Solid, edge_id: u64) -> Result<BlendableEdge, String> {
         match BlendSite::locate(solid, edge_id) {
             Ok(site) => {
-                let max_setback = site.max_setback * 0.999;
+                let max_setback = site.max_setback.min(site.hole_clearance(solid)) * 0.999;
                 let half = site.dihedral * 0.5;
                 Ok(BlendableEdge {
                     edge_id,
@@ -361,6 +361,15 @@ impl EdgeBlender {
             ));
         }
 
+        // 両側の面の穴（内側ワイヤ）が、削る帯の幅に入るなら断る。ちょうど接する
+        // （肉厚 = 帯の幅）も、面の縁と穴が1点で触れる形になるので断る（4-954）。
+        let clearance = site.hole_clearance(solid);
+        if setback >= clearance * (1.0 - 1e-9) {
+            return Err(format!(
+                "Blend needs {setback:.6} of setback along each face but a hole in a face beside edge {edge_id} is only {clearance:.6} away"
+            ));
+        }
+
         let report = EdgeBlendReport {
             dihedral_angle_deg: site.dihedral.to_degrees(),
             edge_length: site.length,
@@ -608,6 +617,53 @@ impl BlendSite {
             neighbours,
             max_setback,
         })
+    }
+
+    /// 両側の面の内側ワイヤ（穴）が、稜から面の内側へどれだけ離れているかの最小値
+    /// （4-954）。穴が無ければ無限大。直線と円弧は厳密に測り、ほかの曲線の穴は
+    /// 測れないので 0（断る）とする。
+    fn hole_clearance(&self, solid: &Solid) -> f64 {
+        if !hole_clearance_enabled() {
+            return f64::INFINITY;
+        }
+        let faces = &solid.outer_shell.faces;
+        let mut nearest = f64::INFINITY;
+        for (face_index, inward) in [(self.face_a, self.t_a), (self.face_b, self.t_b)] {
+            for wire in &faces[face_index].inner_wires {
+                // 稜そのものが乗っているワイヤ（ポケットの口など）は穴ではない。
+                // その隣の稜は端の詰め（neighbours）が扱う。
+                if wire.edges.iter().any(|oriented| oriented.edge.id == self.edge_id) {
+                    continue;
+                }
+                for oriented in &wire.edges {
+                    let edge = &oriented.edge;
+                    let along = |point: Point3| (point - self.v_start).dot(&inward);
+                    let (start, end) = (edge.start_vertex.point, edge.end_vertex.point);
+                    let mut here = along(start).min(along(end));
+                    let length = (end - start).norm();
+                    let straight = length > 1e-12
+                        && max_chord_deviation(&edge.curve, start, (end - start) / length, length)
+                            <= 1e-9 * length.max(1.0);
+                    if !straight {
+                        let Some((center, radius, _)) = crate::circular_fillet::circle_from_edge(edge) else {
+                            return 0.0;
+                        };
+                        // 円弧で稜に最も近い点は、中心から -inward の向き。それが弧の上にあれば測る。
+                        let normal = (start - center).cross(&(end - center));
+                        let toward = -inward;
+                        let flat = toward - normal.try_normalize_safe(1e-12).map_or(Vec3::zeros(), |n| n * toward.dot(&n));
+                        if let Some(flat) = flat.try_normalize_safe(1e-12) {
+                            let lowest = center + flat * radius;
+                            if on_arc(edge, center, radius, lowest) {
+                                here = here.min(along(lowest));
+                            }
+                        }
+                    }
+                    nearest = nearest.min(here);
+                }
+            }
+        }
+        nearest
     }
 
     /// 削れる断面の重心を通る、稜に平行な線の、両端の面に挟まれた長さ。
@@ -1178,6 +1234,34 @@ fn edge_ids(solid: &Solid) -> Vec<u64> {
 /// `fillet_edges` で、前の鎖が同じ半径で丸めて消した稜を飛ばすか（4-947、既定オン）
 fn skip_consumed_enabled() -> bool {
     std::env::var("ZENITH_FILLET_EDGES_SKIP_CONSUMED")
+        .map(|value| value != "0")
+        .unwrap_or(true)
+}
+
+/// 点 `point`（円の上）が稜 `edge` の円弧の範囲にあるか。弧の中点を通る向きで、
+/// 始点からの角度を比べる。
+fn on_arc(edge: &Edge, center: Point3, radius: f64, point: Point3) -> bool {
+    let (t0, t1) = edge.curve.param_range();
+    let start = edge.curve.evaluate(t0) - center;
+    let end = edge.curve.evaluate(t1) - center;
+    let middle = edge.curve.evaluate((t0 + t1) * 0.5) - center;
+    let Some(normal) = start.cross(&middle).try_normalize_safe(1e-12) else {
+        return false;
+    };
+    let x = start / radius;
+    let y = normal.cross(&x);
+    let angle = |v: Vec3| {
+        let a = v.dot(&y).atan2(v.dot(&x));
+        if a < 0.0 { a + std::f64::consts::TAU } else { a }
+    };
+    let sweep = angle(end);
+    let sweep = if sweep <= 1e-12 { std::f64::consts::TAU } else { sweep };
+    angle(point - center) <= sweep
+}
+
+/// 平面×平面の丸めで、両側の面の穴との隔たりを上限に入れるか（4-954、`=0` で切れる）
+fn hole_clearance_enabled() -> bool {
+    std::env::var("ZENITH_BLEND_HOLE_CLEARANCE")
         .map(|value| value != "0")
         .unwrap_or(true)
 }

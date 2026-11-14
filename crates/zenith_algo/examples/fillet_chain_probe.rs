@@ -737,6 +737,17 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "box with a hole 1 from the side (wall = blend size)",
+        why: "r4 の貫通穴を x=0 の側面から肉厚 1 の所に開けた差。丸めの大きさ 1 が肉厚とちょうど等しい（境目の判定を試す）",
+        solid: difference(
+            base.clone(),
+            PrimitiveBuilder::make_cylinder(4.0, 60.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(5.0, 15.0, -10.0))),
+        ),
+        radius: 1.0,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,
@@ -789,7 +800,13 @@ fn main() {
                     let predicted = report.predicted_removed_volume;
                     let error = (removed - predicted).abs() / predicted.abs().max(1e-12);
                     // 凹稜（肩の根元など）は材料を足すので、削れ量も予測も負になる。
-                    if removed.abs() > 1e-9 && error <= 1e-6 {
+                    let escaped = hole_outside_face(&result);
+                    if let Some(face) = &escaped {
+                        println!("   WRONG 稜 {id}（{kind}）: {face}");
+                    }
+                    if escaped.is_some() {
+                        wrong += 1;
+                    } else if removed.abs() > 1e-9 && error <= 1e-6 {
                         ok += 1;
                         worst = worst.max(error);
                         *ok_kinds.entry(kind).or_insert(0) += 1;
@@ -838,4 +855,62 @@ fn main() {
         total_smooth += smooth;
     }
     println!("合計: 通った {total_ok}、断り {total_refused}、誤答 {total_wrong}、接していて角の無い稜 {total_smooth}");
+}
+
+/// 平面の面の内側ワイヤ（穴）が、外側ワイヤの内側に収まっていない面を探す（4-954）。
+///
+/// 「B-Rep が閉じている」と「体積が予測と合う」だけでは、穴のワイヤが縮めた面の
+/// 外へはみ出した誤答を見逃す（面の境界の向き付きの面積分は、はみ出しても
+/// 辻褄が合う）。外側ワイヤを各稜 32 点の折れ線にし、穴の各稜の 32 点がその
+/// 内側にあり、境界から 1e-6 より離れているかを見る。折れ線は凸の円弧の内側に
+/// 入るので、円弧から 1e-3 程度の所にある穴は誤って名指しすることがある。
+fn hole_outside_face(solid: &Solid) -> Option<String> {
+    let samples = |wire: &zenith_topo::Wire| -> Vec<zenith_math::Point3> {
+        let mut points = Vec::new();
+        for oriented in &wire.edges {
+            let (t0, t1) = oriented.edge.curve.param_range();
+            for step in 0..32 {
+                let f = step as f64 / 32.0;
+                let t = if oriented.orientation.is_forward() { t0 + (t1 - t0) * f } else { t1 - (t1 - t0) * f };
+                points.push(oriented.edge.curve.evaluate(t));
+            }
+        }
+        points
+    };
+    for (index, face) in solid.outer_shell.faces.iter().enumerate() {
+        let FaceGeometry::Plane(plane) = &face.geometry else { continue };
+        if face.inner_wires.is_empty() {
+            continue;
+        }
+        let n = plane.normal;
+        let u = if n.x.abs() < 0.9 { zenith_math::Vec3::new(1.0, 0.0, 0.0) } else { zenith_math::Vec3::new(0.0, 1.0, 0.0) };
+        let u = (u - n * u.dot(&n)).normalize();
+        let v = n.cross(&u);
+        let flat = |p: zenith_math::Point3| (p.coords.dot(&u), p.coords.dot(&v));
+        let outer: Vec<(f64, f64)> = samples(&face.outer_wire).into_iter().map(flat).collect();
+        for wire in &face.inner_wires {
+            for point in samples(wire) {
+                let (x, y) = flat(point);
+                let mut inside = false;
+                let mut nearest = f64::INFINITY;
+                for i in 0..outer.len() {
+                    let (ax, ay) = outer[i];
+                    let (bx, by) = outer[(i + 1) % outer.len()];
+                    if (ay > y) != (by > y) && x < ax + (bx - ax) * (y - ay) / (by - ay) {
+                        inside = !inside;
+                    }
+                    let (dx, dy) = (bx - ax, by - ay);
+                    let t = (((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy).max(1e-30)).clamp(0.0, 1.0);
+                    nearest = nearest.min(((x - ax - t * dx).powi(2) + (y - ay - t * dy).powi(2)).sqrt());
+                }
+                if !inside || nearest <= 1e-6 {
+                    return Some(format!(
+                        "面 {index} の穴の点 ({:.4},{:.4},{:.4}) が外側ワイヤの内側に無い（境界まで {nearest:.3e}）",
+                        point.x, point.y, point.z
+                    ));
+                }
+            }
+        }
+    }
+    None
 }
