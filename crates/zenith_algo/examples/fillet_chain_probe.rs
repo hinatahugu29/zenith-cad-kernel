@@ -688,6 +688,27 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "D-shaped block (box ∩ cylinder r18, simplified)",
+        why: "直方体と半径 18 の円柱の積。上下の縁は直線と円弧が角で出会い、側面に円柱面が1枚",
+        solid: (|| -> Result<Solid, String> {
+            let a = base.clone()?;
+            let b = zenith_algo::BrepTransform::translate_solid(
+                &PrimitiveBuilder::make_cylinder(18.0, 60.0)?,
+                zenith_math::Vec3::new(0.0, 15.0, -10.0),
+            );
+            let result = zenith_algo::BooleanEngine::boolean_solids_exact_result(
+                &a,
+                &b,
+                zenith_algo::BooleanOpType::Intersection,
+                &zenith_math::Tolerance::default(),
+            )?;
+            let solid = result.solids.into_iter().next().ok_or("empty")?;
+            zenith_algo::FaceMerger::simplify_solid(&solid, &zenith_math::Tolerance::default()).map(|(s, _)| s)
+        })(),
+        radius: 1.0,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,
