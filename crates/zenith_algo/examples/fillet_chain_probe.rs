@@ -659,6 +659,35 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "box with a rounded pocket (pocket verticals r2)",
+        why: "四角いポケットの縦稜4本（凹）を r2 で丸めた箱。ポケットの口は凹の円弧を含む内側ワイヤ、底は凸の円弧を含む",
+        solid: difference(
+            base.clone(),
+            PrimitiveBuilder::make_box(10.0, 14.0, 20.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(5.0, 8.0, 32.0))),
+        )
+        .and_then(|mut solid| {
+            for (x, y) in [(5.0, 8.0), (15.0, 8.0), (15.0, 22.0), (5.0, 22.0)] {
+                let id = solid
+                    .outer_shell
+                    .faces
+                    .iter()
+                    .flat_map(|face| face.outer_wire.edges.iter())
+                    .find(|o| {
+                        let (a, b) = (o.edge.start_vertex.point, o.edge.end_vertex.point);
+                        (a.x - x).abs() < 1e-9 && (b.x - x).abs() < 1e-9 && (a.y - y).abs() < 1e-9
+                            && (b.y - y).abs() < 1e-9 && (a.z - b.z).abs() > 7.0
+                    })
+                    .map(|o| o.edge.id)
+                    .ok_or("pocket vertical")?;
+                solid = EdgeBlender::fillet_edge(&solid, id, 2.0)?;
+            }
+            Ok(solid)
+        }),
+        radius: 1.0,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,
