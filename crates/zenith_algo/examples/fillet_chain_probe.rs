@@ -709,6 +709,23 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "box ∪ box turned 30 deg about z (simplified)",
+        why: "直方体の角に、z まわりに 30 度回した箱を同じ高さで重ねた和。斜めに出会う凹の縦稜と、直角でない上縁の角",
+        solid: union(
+            base.clone(),
+            PrimitiveBuilder::make_box(16.0, 10.0, 40.0).and_then(|c| {
+                let turn = zenith_math::Transform3::from_axis_angle(
+                    &zenith_math::Vec3::new(0.0, 0.0, 1.0),
+                    30f64.to_radians(),
+                );
+                let c = zenith_algo::BrepTransform::transform_solid(&c, &turn)?;
+                Ok(zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(14.0, 24.0, 0.0)))
+            }),
+        ),
+        radius: 1.0,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,
