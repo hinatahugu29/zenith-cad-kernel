@@ -759,6 +759,8 @@ fn cases() -> Vec<Case> {
 fn main() {
     // `ZENITH_FCP_CHAMFER=1` で面取りを当てる（既定はフィレット）。
     let chamfer = std::env::var("ZENITH_FCP_CHAMFER").map_or(false, |v| !v.is_empty() && v != "0");
+    // `ZENITH_FCP_LIMITS=1` で blendability の上限と実際の丸めを突き合わせる（4-956）。
+    let limits = std::env::var("ZENITH_FCP_LIMITS").map_or(false, |v| v == "1");
     let mut total_ok = 0usize;
     let mut total_refused = 0usize;
     let mut total_wrong = 0usize;
@@ -786,6 +788,36 @@ fn main() {
             // 断りとも通ったとも数えず、別に数える。
             if is_smooth(&solid, id) {
                 smooth += 1;
+                continue;
+            }
+            if limits {
+                // 上限を問い合わせ、その 0.95 倍で通るか、1.05 倍で何が返るかを見る（4-956）。
+                match EdgeBlender::blendability(&solid, id) {
+                    Ok(edge) => {
+                        let max = if chamfer { edge.max_chamfer_distance } else { edge.max_fillet_radius };
+                        let try_size = |size: f64| {
+                            let k = if chamfer { BlendKind::Chamfer { distance: size } } else { BlendKind::Fillet { radius: size } };
+                            EdgeBlender::blend_edge(&solid, id, k).map(|(r, rep)| judge(before, &r, rep.predicted_removed_volume))
+                        };
+                        match try_size(max * 0.95) {
+                            Ok(Ok(_)) => { ok += 1; *ok_kinds.entry(kind.clone()).or_insert(0) += 1; }
+                            Ok(Err(why)) => { wrong += 1; println!("   WRONG 稜 {id}（{kind}）上限 {max:.6} の 0.95 倍: {why}"); }
+                            Err(err) => { *reasons.entry((kind.clone(), format!("上限の0.95倍で断る: {}", reason_key(&err)))).or_insert(0) += 1; println!("   食い違い 稜 {id}（{kind}）上限 {max:.6} の 0.95 倍で断る: {err}"); }
+                        }
+                        match try_size(max * 1.05) {
+                            Ok(Err(why)) => { wrong += 1; println!("   WRONG 稜 {id}（{kind}）上限 {max:.6} の 1.05 倍: {why}"); }
+                            Ok(Ok(_)) => { *reasons.entry((kind, "上限の1.05倍でも正しく通る（上限が控えめ）".to_string())).or_insert(0) += 1; }
+                            Err(_) => {}
+                        }
+                    }
+                    Err(err) => {
+                        let k = if chamfer { BlendKind::Chamfer { distance: case.radius } } else { BlendKind::Fillet { radius: case.radius } };
+                        if EdgeBlender::blend_edge(&solid, id, k).is_ok() {
+                            println!("   食い違い 稜 {id}（{kind}）: 上限は断るのに丸めは通る: {err}");
+                            *reasons.entry((kind, "上限は断るが丸めは通る".to_string())).or_insert(0) += 1;
+                        }
+                    }
+                }
                 continue;
             }
             let kind_of_blend = if chamfer {
@@ -917,4 +949,18 @@ fn hole_outside_face(solid: &Solid) -> Option<String> {
         }
     }
     None
+}
+
+/// 丸めた結果を採点する: 穴のはみ出しと、削れた体積の予測との一致（4-956）。
+fn judge(before: f64, result: &Solid, predicted: f64) -> Result<f64, String> {
+    if let Some(face) = hole_outside_face(result) {
+        return Err(face);
+    }
+    let removed = before - volume(result);
+    let error = (removed - predicted).abs() / predicted.abs().max(1e-12);
+    if removed.abs() > 1e-9 && error <= 1e-6 {
+        Ok(error)
+    } else {
+        Err(format!("削れた {removed:.9}、予測 {predicted:.9}（相対差 {error:.3e}）"))
+    }
 }

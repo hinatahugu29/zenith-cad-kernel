@@ -619,47 +619,82 @@ impl BlendSite {
         })
     }
 
-    /// 両側の面の内側ワイヤ（穴）が、稜から面の内側へどれだけ離れているかの最小値
-    /// （4-954）。穴が無ければ無限大。直線と円弧は厳密に測り、ほかの曲線の穴は
-    /// 測れないので 0（断る）とする。
+    /// 削る帯が、稜の乗っていないワイヤ（穴、稜がポケットの口なら外側ワイヤ、端面の穴）に
+    /// 触れずにいられる後退距離の上限（4-954、4-956）。無ければ無限大。
+    ///
+    /// - 両側の面: 帯は稜の真横（稜に沿った座標が稜の範囲、斜めの端の滑りぶん広げる）
+    ///   だけを通るので、その範囲に入る部分の、稜から面の内側への距離の最小。
+    /// - 端面（凸の稜のみ）: 後退距離 s の面取りが端面から削るのは、頂点と2つの後退点の
+    ///   三角形 {u,v ≥ 0, u+v ≤ s}（u, v は2つの後退の向きの斜交座標）。フィレットが
+    ///   削る所はその三角形の中に収まるので、u+v の最小で両方を守る。
+    ///
+    /// どれも1次式の最小を、直線と円弧の上で厳密に取る。ほかの曲線は 0（断る）。
     fn hole_clearance(&self, solid: &Solid) -> f64 {
         if !hole_clearance_enabled() {
             return f64::INFINITY;
         }
         let faces = &solid.outer_shell.faces;
+        let reach = if self.max_setback.is_finite() { self.max_setback } else { self.length };
+        let mut slide = 0.0f64;
+        for dir in [self.t_a, self.t_b] {
+            for cap in [self.cap_start_normal, self.cap_end_normal] {
+                slide = slide.max(retreat_step(dir, self.d, cap).dot(&self.d).abs());
+            }
+        }
+        let eps = 1e-9 * self.length.max(1.0);
+        let margin = slide * reach + eps;
         let mut nearest = f64::INFINITY;
         for (face_index, inward) in [(self.face_a, self.t_a), (self.face_b, self.t_b)] {
-            for wire in &faces[face_index].inner_wires {
-                // 稜そのものが乗っているワイヤ（ポケットの口など）は穴ではない。
-                // その隣の稜は端の詰め（neighbours）が扱う。
+            let face = &faces[face_index];
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                // 稜そのものが乗っているワイヤの隣の稜は、端の詰め（neighbours）が扱う。
                 if wire.edges.iter().any(|oriented| oriented.edge.id == self.edge_id) {
                     continue;
                 }
                 for oriented in &wire.edges {
-                    let edge = &oriented.edge;
-                    let along = |point: Point3| (point - self.v_start).dot(&inward);
-                    let (start, end) = (edge.start_vertex.point, edge.end_vertex.point);
-                    let mut here = along(start).min(along(end));
-                    let length = (end - start).norm();
-                    let straight = length > 1e-12
-                        && max_chord_deviation(&edge.curve, start, (end - start) / length, length)
-                            <= 1e-9 * length.max(1.0);
-                    if !straight {
-                        let Some((center, radius, _)) = crate::circular_fillet::circle_from_edge(edge) else {
-                            return 0.0;
-                        };
-                        // 円弧で稜に最も近い点は、中心から -inward の向き。それが弧の上にあれば測る。
-                        let normal = (start - center).cross(&(end - center));
-                        let toward = -inward;
-                        let flat = toward - normal.try_normalize_safe(1e-12).map_or(Vec3::zeros(), |n| n * toward.dot(&n));
-                        if let Some(flat) = flat.try_normalize_safe(1e-12) {
-                            let lowest = center + flat * radius;
-                            if on_arc(edge, center, radius, lowest) {
-                                here = here.min(along(lowest));
-                            }
+                    let bounds = [
+                        (self.d, -margin, self.length + margin),
+                        (inward, -eps, f64::INFINITY),
+                    ];
+                    match min_linear_on_edge(&oriented.edge, self.v_start, inward, &bounds) {
+                        Ok(Some(found)) => nearest = nearest.min(found.max(0.0)),
+                        Ok(None) => {}
+                        Err(()) => return 0.0,
+                    }
+                }
+            }
+        }
+        if self.dihedral < std::f64::consts::PI {
+            for (cap, vertex, normal) in [
+                (self.cap_start, self.v_start, self.cap_start_normal),
+                (self.cap_end, self.v_end, self.cap_end_normal),
+            ] {
+                let ka = retreat_step(self.t_a, self.d, normal);
+                let kb = retreat_step(self.t_b, self.d, normal);
+                // 斜交座標の双対: du·ka = 1, du·kb = 0, dv·ka = 0, dv·kb = 1
+                let (aa, ab, bb) = (ka.dot(&ka), ka.dot(&kb), kb.dot(&kb));
+                let det = aa * bb - ab * ab;
+                if det.abs() < 1e-15 {
+                    continue;
+                }
+                let du = (ka * bb - kb * ab) / det;
+                let dv = (kb * aa - ka * ab) / det;
+                let face = &faces[cap];
+                let near = |point: Point3| (point - vertex).norm() <= eps;
+                for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                    for oriented in &wire.edges {
+                        let edge = &oriented.edge;
+                        // 頂点に繋がる稜は三角形の辺そのもの（端の詰めが扱う）。
+                        if near(edge.start_vertex.point) || near(edge.end_vertex.point) {
+                            continue;
+                        }
+                        let bounds = [(du, -eps, f64::INFINITY), (dv, -eps, f64::INFINITY)];
+                        match min_linear_on_edge(edge, vertex, du + dv, &bounds) {
+                            Ok(Some(found)) => nearest = nearest.min(found.max(0.0)),
+                            Ok(None) => {}
+                            Err(()) => return 0.0,
                         }
                     }
-                    nearest = nearest.min(here);
                 }
             }
         }
@@ -1257,6 +1292,95 @@ fn on_arc(edge: &Edge, center: Point3, radius: f64, point: Point3) -> bool {
     let sweep = angle(end);
     let sweep = if sweep <= 1e-12 { std::f64::consts::TAU } else { sweep };
     angle(point - center) <= sweep
+}
+
+/// 稜（直線か円弧）の上で、`bounds` の各1次式 g·(p−origin) が [lo, hi] に入る部分の、
+/// 1次式 objective·(p−origin) の最小（4-956）。入る部分が無ければ `Ok(None)`、
+/// 直線でも円弧でもなければ `Err(())`。1次式の最小は、切り詰めた両端か、円弧なら
+/// 目的の向きの極値点と境の線との交点のどれかに在るので、それらを厳密に並べる。
+fn min_linear_on_edge(
+    edge: &Edge,
+    origin: Point3,
+    objective: Vec3,
+    bounds: &[(Vec3, f64, f64)],
+) -> Result<Option<f64>, ()> {
+    let (start, end) = (edge.start_vertex.point, edge.end_vertex.point);
+    let length = (end - start).norm();
+    let value = |g: Vec3, p: Point3| (p - origin).dot(&g);
+    let straight = length > 1e-12
+        && max_chord_deviation(&edge.curve, start, (end - start) / length, length)
+            <= 1e-9 * length.max(1.0);
+    let mut candidates: Vec<Point3> = Vec::new();
+    if straight {
+        let (mut a, mut b) = (0.0f64, 1.0f64);
+        for &(g, lo, hi) in bounds {
+            let (g0, g1) = (value(g, start), value(g, end));
+            if (g1 - g0).abs() > 1e-15 {
+                let (t_lo, t_hi) = ((lo - g0) / (g1 - g0), (hi - g0) / (g1 - g0));
+                a = a.max(t_lo.min(t_hi));
+                b = b.min(t_lo.max(t_hi));
+            } else if g0 < lo || g0 > hi {
+                return Ok(None);
+            }
+        }
+        if a > b {
+            return Ok(None);
+        }
+        candidates.push(start + (end - start) * a);
+        candidates.push(start + (end - start) * b);
+    } else {
+        let Some((center, radius, _)) = crate::circular_fillet::circle_from_edge(edge) else {
+            return Err(());
+        };
+        let (t0, t1) = edge.curve.param_range();
+        let middle = edge.curve.evaluate((t0 + t1) * 0.5);
+        let Some(normal) = (start - center).cross(&(middle - center)).try_normalize_safe(1e-12)
+        else {
+            return Err(());
+        };
+        let x = (start - center) / radius;
+        let y = normal.cross(&x);
+        let at = |phi: f64| center + (x * phi.cos() + y * phi.sin()) * radius;
+        candidates.push(start);
+        candidates.push(end);
+        let flat = objective - normal * objective.dot(&normal);
+        if let Some(flat) = flat.try_normalize_safe(1e-15) {
+            candidates.push(center - flat * radius);
+        }
+        // 境 g·(p−origin) = lo / hi と円の交点: A cos φ + B sin φ = C
+        for &(g, lo, hi) in bounds {
+            let (aa, bb) = (x.dot(&g) * radius, y.dot(&g) * radius);
+            let rho = (aa * aa + bb * bb).sqrt();
+            if rho <= 1e-15 {
+                continue;
+            }
+            for level in [lo, hi] {
+                if !level.is_finite() {
+                    continue;
+                }
+                let c = (level - value(g, center)) / rho;
+                if c.abs() <= 1.0 {
+                    let base = bb.atan2(aa);
+                    let off = c.acos();
+                    candidates.push(at(base + off));
+                    candidates.push(at(base - off));
+                }
+            }
+        }
+        candidates.retain(|&p| on_arc(edge, center, radius, p));
+    }
+    let slack = 1e-9 * length.max(1.0);
+    let best = candidates
+        .into_iter()
+        .filter(|&p| {
+            bounds.iter().all(|&(g, lo, hi)| {
+                let v = value(g, p);
+                v >= lo - slack && v <= hi + slack
+            })
+        })
+        .map(|p| value(objective, p))
+        .fold(f64::INFINITY, f64::min);
+    Ok(best.is_finite().then_some(best))
 }
 
 /// 平面×平面の丸めで、両側の面の穴との隔たりを上限に入れるか（4-954、`=0` で切れる）
