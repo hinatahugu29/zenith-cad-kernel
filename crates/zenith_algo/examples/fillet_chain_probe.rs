@@ -855,6 +855,10 @@ fn main() {
         total_smooth += smooth;
     }
     println!("合計: 通った {total_ok}、断り {total_refused}、誤答 {total_wrong}、接していて角の無い稜 {total_smooth}");
+    if total_wrong > 0 {
+        // 誤答は門として赤にする（4-955）。
+        std::process::exit(1);
+    }
 }
 
 /// 平面の面の内側ワイヤ（穴）が、外側ワイヤの内側に収まっていない面を探す（4-954）。
