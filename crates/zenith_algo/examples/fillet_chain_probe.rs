@@ -747,6 +747,43 @@ fn cases() -> Vec<Case> {
         radius: 1.0,
     });
 
+    let translated = |solid: Result<Solid, String>, x: f64, y: f64, z: f64| {
+        solid.map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(x, y, z)))
+    };
+    out.push(Case {
+        name: "box with two pockets 2 apart (difference, simplified)",
+        why: "上面に 6x14 深さ 8 のポケットを 2 つ、間の壁 2 で並べた差。口の稜の前に、別の内側ワイヤが在る（4-957）",
+        solid: difference(
+            difference(base.clone(), translated(PrimitiveBuilder::make_box(6.0, 14.0, 20.0), 3.0, 8.0, 32.0)),
+            translated(PrimitiveBuilder::make_box(6.0, 14.0, 20.0), 11.0, 8.0, 32.0),
+        ),
+        radius: 1.0,
+    });
+    out.push(Case {
+        name: "box with a pocket 1.5 from the side (difference, simplified)",
+        why: "上面のポケットを x=0 の側面から肉厚 1.5 の所に掘った差。口の稜と外の縁の稜が、互いの帯の上限になる（4-957）",
+        solid: difference(base.clone(), translated(PrimitiveBuilder::make_box(8.0, 14.0, 20.0), 1.5, 8.0, 32.0)),
+        radius: 1.0,
+    });
+    out.push(Case {
+        name: "box with a hole and a pocket side by side (difference, simplified)",
+        why: "上面に r3 の止まり穴と四角いポケットを並べた差。直線のワイヤの前に円のワイヤ、円の前に直線（4-957）",
+        solid: difference(
+            difference(base.clone(), translated(PrimitiveBuilder::make_cylinder(3.0, 20.0), 6.0, 10.0, 30.0)),
+            translated(PrimitiveBuilder::make_box(6.0, 10.0, 20.0), 11.0, 15.0, 32.0),
+        ),
+        radius: 1.0,
+    });
+    out.push(Case {
+        name: "hexagonal prism with an off-centre hole (difference, simplified)",
+        why: "正六角柱（外接半径 10、高さ 25）の中心から 4 ずらした r3 の貫通穴。斜めの縁の前に円（4-957）",
+        solid: difference(
+            PrimitiveBuilder::make_regular_prism(6, 10.0, 25.0),
+            translated(PrimitiveBuilder::make_cylinder(3.0, 40.0), 4.0, 0.0, -5.0),
+        ),
+        radius: 1.0,
+    });
+
     out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
