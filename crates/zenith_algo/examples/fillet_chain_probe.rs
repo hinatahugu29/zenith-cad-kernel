@@ -784,6 +784,38 @@ fn cases() -> Vec<Case> {
         radius: 1.0,
     });
 
+    let turned = |solid: Result<Solid, String>, axis: zenith_math::Vec3, degrees: f64, x: f64, y: f64, z: f64| {
+        solid.and_then(|c| {
+            let turn = zenith_math::Transform3::from_axis_angle(&axis, degrees.to_radians());
+            let c = zenith_algo::BrepTransform::transform_solid(&c, &turn)?;
+            Ok(zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(x, y, z)))
+        })
+    };
+    out.push(Case {
+        name: "box with a sloped top corner and a hole through it (difference, simplified)",
+        why: "上面の x=20 側を y まわりに 30 度傾けた面で削ぎ、その斜めの面を r2 の縦穴が貫く差。縦稜の端面が斜めで、端面に穴（4-957）",
+        solid: difference(
+            difference(
+                base.clone(),
+                turned(PrimitiveBuilder::make_box(20.0, 40.0, 20.0), zenith_math::Vec3::new(0.0, 1.0, 0.0), -30.0, 14.0, -5.0, 36.0),
+            ),
+            translated(PrimitiveBuilder::make_cylinder(2.0, 60.0), 16.0, 15.0, -10.0),
+        ),
+        radius: 1.0,
+    });
+    out.push(Case {
+        name: "box with a corner cut off at 30 deg and a hole near it (difference, simplified)",
+        why: "縦の角を z まわりに 30 度の面で切り落とし、その近くに r2 の貫通穴を開けた差。斜めの側面の上下の稜と、斜めの端面の近くの穴（4-957）",
+        solid: difference(
+            difference(
+                base.clone(),
+                turned(PrimitiveBuilder::make_box(20.0, 20.0, 60.0), zenith_math::Vec3::new(0.0, 0.0, 1.0), 30.0, 16.0, 22.0, -10.0),
+            ),
+            translated(PrimitiveBuilder::make_cylinder(2.0, 60.0), 12.0, 22.0, -10.0),
+        ),
+        radius: 1.0,
+    });
+
     out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
@@ -813,6 +845,7 @@ fn main() {
             }
         };
         let before = volume(&solid);
+        BOUNDS.with(|cell| *cell.borrow_mut() = Some(vertex_box(&solid)));
         let mut ok = 0usize;
         let mut wrong = 0usize;
         let mut reasons: BTreeMap<(String, String), usize> = BTreeMap::new();
@@ -869,7 +902,7 @@ fn main() {
                     let predicted = report.predicted_removed_volume;
                     let error = (removed - predicted).abs() / predicted.abs().max(1e-12);
                     // 凹稜（肩の根元など）は材料を足すので、削れ量も予測も負になる。
-                    let escaped = hole_outside_face(&result);
+                    let escaped = hole_outside_face(&result).or_else(|| if removed > 0.0 { BOUNDS.with(|b| b.borrow().as_ref().and_then(|bounds| vertex_outside(&result, bounds))) } else { None });
                     if let Some(face) = &escaped {
                         println!("   WRONG 稜 {id}（{kind}）: {face}");
                     }
@@ -994,10 +1027,53 @@ fn judge(before: f64, result: &Solid, predicted: f64) -> Result<f64, String> {
         return Err(face);
     }
     let removed = before - volume(result);
+    if removed > 0.0 {
+        if let Some(why) = BOUNDS.with(|b| b.borrow().as_ref().and_then(|bounds| vertex_outside(result, bounds))) {
+            return Err(why);
+        }
+    }
     let error = (removed - predicted).abs() / predicted.abs().max(1e-12);
     if removed.abs() > 1e-9 && error <= 1e-6 {
         Ok(error)
     } else {
         Err(format!("削れた {removed:.9}、予測 {predicted:.9}（相対差 {error:.3e}）"))
     }
+}
+
+thread_local! {
+    /// 丸める前の立体の頂点の外接箱（削るだけの丸めは、ここから出られない。4-958）
+    static BOUNDS: std::cell::RefCell<Option<([f64; 3], [f64; 3])>> = const { std::cell::RefCell::new(None) };
+}
+
+fn vertex_box(solid: &Solid) -> ([f64; 3], [f64; 3]) {
+    let mut low = [f64::INFINITY; 3];
+    let mut high = [f64::NEG_INFINITY; 3];
+    for face in &solid.outer_shell.faces {
+        for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+            for oriented in &wire.edges {
+                for p in [oriented.edge.start_vertex.point, oriented.edge.end_vertex.point] {
+                    for (k, v) in [p.x, p.y, p.z].into_iter().enumerate() {
+                        low[k] = low[k].min(v);
+                        high[k] = high[k].max(v);
+                    }
+                }
+            }
+        }
+    }
+    (low, high)
+}
+
+/// 削るだけの丸めの結果に、元の外接箱の外の頂点が在れば名指す（4-958）。
+fn vertex_outside(result: &Solid, bounds: &([f64; 3], [f64; 3])) -> Option<String> {
+    let (low, high) = vertex_box(result);
+    for k in 0..3 {
+        let span = (bounds.1[k] - bounds.0[k]).abs().max(1.0);
+        if low[k] < bounds.0[k] - 1e-7 * span || high[k] > bounds.1[k] + 1e-7 * span {
+            return Some(format!(
+                "削るだけの丸めなのに、頂点が元の外接箱の外に在る（軸 {k}: [{:.6}, {:.6}] ⊄ [{:.6}, {:.6}]）",
+                low[k], high[k], bounds.0[k], bounds.1[k]
+            ));
+        }
+    }
+    None
 }

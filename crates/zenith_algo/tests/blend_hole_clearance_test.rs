@@ -98,10 +98,12 @@ fn a_pocket_mouth_blend_may_not_reach_the_outer_boundary_of_the_face() {
     let removed = volume(&solid) - volume(&result);
     assert!((removed - report.predicted_removed_volume).abs() < 1e-8 * removed.abs(), "{removed} vs {}", report.predicted_removed_volume);
     for size in [5.0, 6.0, 7.5] {
+        // 4-958 からは、口の端（上面の凹の角）で延ばす壁の上限が先に効くこともある。
+        let reason = |err: &str| err.contains("hole") || err.contains("neighbouring edge");
         let err = EdgeBlender::fillet_edge(&solid, edge, size).expect_err("reaches the outer boundary");
-        assert!(err.contains("hole"), "r{size}: {err}");
+        assert!(reason(&err), "r{size}: {err}");
         let err = EdgeBlender::chamfer_edge(&solid, edge, size).expect_err("reaches the outer boundary");
-        assert!(err.contains("hole"), "c{size}: {err}");
+        assert!(reason(&err), "c{size}: {err}");
     }
     assert!(EdgeBlender::blendability(&solid, edge).unwrap().max_chamfer_distance < 5.0);
 }

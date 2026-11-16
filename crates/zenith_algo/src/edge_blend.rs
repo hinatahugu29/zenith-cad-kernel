@@ -563,7 +563,7 @@ impl BlendSite {
         for (at_start, vertex, cap_normal) in
             [(true, v_start, cap_start_normal), (false, v_end, cap_end_normal)]
         {
-            for (on_face_a, face_index, dir) in [(true, fa, ta), (false, fb, tb)] {
+            for (on_face_a, face_index, dir, normal) in [(true, fa, ta, na), (false, fb, tb, nb)] {
                 // 斜めの端では、面の内側へ退いた点は稜に沿って端の面まで滑る。
                 // 後退距離 1 あたりの移動 k = t + d·λ。
                 let step = retreat_step(dir, d, cap_normal);
@@ -573,6 +573,7 @@ impl BlendSite {
                     edge_id,
                     vertex,
                     step / scale,
+                    normal,
                     at_start,
                     on_face_a,
                     face_index,
@@ -635,14 +636,16 @@ impl BlendSite {
         }
         let faces = &solid.outer_shell.faces;
         let reach = if self.max_setback.is_finite() { self.max_setback } else { self.length };
-        let mut slide = 0.0f64;
-        for dir in [self.t_a, self.t_b] {
-            for cap in [self.cap_start_normal, self.cap_end_normal] {
-                slide = slide.max(retreat_step(dir, self.d, cap).dot(&self.d).abs());
-            }
-        }
+        // 斜めの端では帯の角がその端の先へ滑る。滑りは端ごとに違うので、端ごとに広げる。
+        let slide = |cap: Option<Vec3>| {
+            [self.t_a, self.t_b]
+                .iter()
+                .map(|&dir| retreat_step(dir, self.d, cap).dot(&self.d).abs())
+                .fold(0.0f64, f64::max)
+        };
         let eps = 1e-9 * self.length.max(1.0);
-        let margin = slide * reach + eps;
+        let (margin_start, margin_end) =
+            (slide(self.cap_start_normal) * reach + eps, slide(self.cap_end_normal) * reach + eps);
         let mut nearest = f64::INFINITY;
         for (face_index, inward) in [(self.face_a, self.t_a), (self.face_b, self.t_b)] {
             let face = &faces[face_index];
@@ -653,7 +656,7 @@ impl BlendSite {
                 }
                 for oriented in &wire.edges {
                     let bounds = [
-                        (self.d, -margin, self.length + margin),
+                        (self.d, -margin_start, self.length + margin_end),
                         (inward, -eps, f64::INFINITY),
                     ];
                     match min_linear_on_edge(&oriented.edge, self.v_start, inward, &bounds) {
@@ -1090,6 +1093,7 @@ fn find_neighbour(
     edge_id: u64,
     vertex: Point3,
     dir: Vec3,
+    normal: Vec3,
     at_start_of_target: bool,
     on_face_a: bool,
     face_index: usize,
@@ -1139,10 +1143,18 @@ fn find_neighbour(
                         edge.id
                     ));
                 }
+                // 延びた頂点は、面の中を退く向きへ進む。面の境界（頂点に繋がる稜を
+                // 除く）にぶつかるまでしか延ばせない（4-958。上限が無かったので、
+                // 頂点が面の外、立体の外へ出た形を返していた）。
+                let available = if reflex_reach_enabled() {
+                    ray_exit(face, vertex, dir, normal)?
+                } else {
+                    f64::INFINITY
+                };
                 return Ok(NeighbourTrim {
                     edge_id: edge.id,
                     move_start,
-                    available: f64::INFINITY,
+                    available,
                     at_start_of_target,
                     on_face_a,
                 });
@@ -1381,6 +1393,43 @@ fn min_linear_on_edge(
         .map(|p| value(objective, p))
         .fold(f64::INFINITY, f64::min);
     Ok(best.is_finite().then_some(best))
+}
+
+/// 面の中の点 `vertex` から、面の中の向き `dir` へ進む半直線が、面の境界（`vertex`
+/// に繋がる稜を除く）に最初にぶつかるまでの距離（4-958）。直線と円弧は厳密に
+/// 交わりを取り、ほかの曲線の境界は測れないので断る。ぶつからなければ無限大。
+fn ray_exit(face: &Face, vertex: Point3, dir: Vec3, normal: Vec3) -> Result<f64, String> {
+    let side = normal.cross(&dir);
+    let Some(side) = side.try_normalize_safe(1e-12) else {
+        return Err("The blend retreats out of the plane of its face".to_string());
+    };
+    let mut nearest = f64::INFINITY;
+    for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+        for oriented in &wire.edges {
+            let edge = &oriented.edge;
+            let near = |p: Point3| (p - vertex).norm() <= 1e-9;
+            if near(edge.start_vertex.point) || near(edge.end_vertex.point) {
+                continue;
+            }
+            let bounds = [(side, 0.0, 0.0), (dir, 1e-9, f64::INFINITY)];
+            match min_linear_on_edge(edge, vertex, dir, &bounds) {
+                Ok(Some(hit)) => nearest = nearest.min(hit),
+                Ok(None) => {}
+                Err(()) => {
+                    return Err(format!(
+                        "Edge {} bounds the face the blend extends into, and it is neither straight nor a circular arc",
+                        edge.id
+                    ))
+                }
+            }
+        }
+    }
+    Ok(nearest)
+}
+
+/// 凹の角で延ばす隣の稜に、面の境界までの上限を入れるか（4-958、`=0` で切れる）
+fn reflex_reach_enabled() -> bool {
+    std::env::var("ZENITH_REFLEX_REACH").map(|value| value != "0").unwrap_or(true)
 }
 
 /// 平面×平面の丸めで、両側の面の穴との隔たりを上限に入れるか（4-954、`=0` で切れる）
