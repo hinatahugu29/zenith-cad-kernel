@@ -1142,6 +1142,33 @@ fn cases() -> Vec<Case> {
         note: ["未測定だった置き方", "同上", "同上"],
     });
 
+    // 斜めに削いだ箱の凹の折れ線に、縦の円柱がちょうど接する（4-959）。
+    // 既定では「未実装」で断る（赤）ので、`ZENITH_CONTACT_SLOPE=1` のときだけ足す。
+    // 口 `ZENITH_TANGENT_SLIVER_DROP=1` と一緒に回す。
+    if std::env::var("ZENITH_CONTACT_SLOPE").is_ok_and(|v| v == "1") {
+        let tol = Tolerance::default();
+        let base = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).expect("box");
+        let wedge = PrimitiveBuilder::make_box(20.0, 40.0, 20.0).expect("box");
+        let slope = Transform3::from_axis_angle(&Vec3::new(0.0, 1.0, 0.0), (-30f64).to_radians());
+        let wedge = shifted(&BrepTransform::transform_solid(&wedge, &slope).expect("turn"), 14.0, -5.0, 36.0);
+        let raw = BooleanEngine::boolean_solids_exact_result(&base, &wedge, BooleanOpType::Difference, &tol)
+            .expect("slope")
+            .solids
+            .remove(0);
+        let sloped = zenith_algo::FaceMerger::simplify_solid(&raw, &tol).expect("simplify").0;
+        let drill = PrimitiveBuilder::make_cylinder(2.0, 60.0).expect("cylinder");
+        out.push(Case {
+            name: "sloped box x cylinder (touching the concave crease)",
+            why: "上面を 30 度の斜面で削いだ箱に、縦の円柱 r2 を、斜面と急な面の凹の折れ線（x=14, z=36）にちょうど接する所へ通す",
+            a: sloped,
+            b: shifted(&drill, 16.0, 15.0, -10.0),
+            note: [
+                "4-959: 口なしでは「未実装」（接点のまわりに長さ 4.3e-5 の交線が残り、非多様体の稜になる）",
+                "同上",
+                "同上",
+            ],
+        });
+    }
     out
 }
 

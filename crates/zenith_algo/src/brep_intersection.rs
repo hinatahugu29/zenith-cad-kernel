@@ -11208,6 +11208,87 @@ fn clip_candidate_to_planar_trims(
     face_b: &Face,
     tol: &Tolerance,
 ) -> Option<FaceIntersectionKind> {
+    let clipped = clip_candidate_to_planar_trims_raw(kind, face_a, face_b, tol)?;
+    if !tangent_sliver_drop_enabled() {
+        return Some(clipped);
+    }
+    let hugs = |edge: &Edge| hugs_straight_boundary(edge, face_a, tol) || hugs_straight_boundary(edge, face_b, tol);
+    match clipped {
+        FaceIntersectionKind::Curve { edge } if hugs(&edge) => {
+            if std::env::var_os("ZENITH_TANGENT_SLIVER_WHY").is_some() {
+                eprintln!(
+                    "TANGENTSLIVER 捨てた {:?} -> {:?}",
+                    edge.start_vertex.point, edge.end_vertex.point
+                );
+            }
+            None
+        }
+        FaceIntersectionKind::Curves { edges } => {
+            let kept: Vec<Edge> = edges.into_iter().filter(|edge| !hugs(edge)).collect();
+            match kept.len() {
+                0 => None,
+                1 => Some(FaceIntersectionKind::Curve { edge: kept.into_iter().next().unwrap() }),
+                _ => Some(FaceIntersectionKind::Curves { edges: kept }),
+            }
+        }
+        other => Some(other),
+    }
+}
+
+/// 曲がった交線が、平面の面の直線の縁1本に全長で許容差以内に沿っているか（4-959）。
+/// 曲面が面の縁に1点で接するとき、切り詰めのあとに長さ √(許容差) ほどの交線が
+/// 縁に沿って残り、非多様体の稜になる。制御点がすべて縁から許容差以内なら、
+/// 曲線は凸包の性質でその中に在る（重みが正のとき）。点を並べては測らない。
+fn hugs_straight_boundary(edge: &Edge, face: &Face, tol: &Tolerance) -> bool {
+    if !matches!(face.geometry, FaceGeometry::Plane(_)) {
+        return false;
+    }
+    let points = &edge.curve.control_points;
+    if points.is_empty() || points.iter().any(|p| !(p.weight > 0.0)) {
+        return false;
+    }
+    let band = tol.linear;
+    for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+        for oriented in &wire.edges {
+            let boundary = &oriented.edge;
+            let (a, b) = (boundary.start_vertex.point, boundary.end_vertex.point);
+            let length = (b - a).norm();
+            if length <= band {
+                continue;
+            }
+            let dir = (b - a) / length;
+            // 縁そのものが直線であること（制御点が一直線に乗る）
+            let straight = boundary.curve.control_points.iter().all(|c| {
+                let offset = c.point - a;
+                (offset - dir * offset.dot(&dir)).norm() <= band * 1e-3
+            });
+            if !straight {
+                continue;
+            }
+            let near = |q: Point3| {
+                let offset = q - a;
+                let along = offset.dot(&dir);
+                along >= -band && along <= length + band && (offset - dir * along).norm() <= band
+            };
+            if points.iter().all(|c| near(c.point)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 縁に沿うだけの短い交線を捨てるか（4-959、既定オフ、`ZENITH_TANGENT_SLIVER_DROP=1`）
+fn tangent_sliver_drop_enabled() -> bool {
+    std::env::var("ZENITH_TANGENT_SLIVER_DROP").map_or(false, |v| v == "1")
+}
+
+fn clip_candidate_to_planar_trims_raw(
+    kind: FaceIntersectionKind,
+    face_a: &Face,
+    face_b: &Face,
+    tol: &Tolerance,
+) -> Option<FaceIntersectionKind> {
     match kind {
         FaceIntersectionKind::Line {
             point,
