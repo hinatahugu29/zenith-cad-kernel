@@ -11248,6 +11248,19 @@ fn hugs_straight_boundary(edge: &Edge, face: &Face, tol: &Tolerance) -> bool {
         return false;
     }
     let band = tol.linear;
+    // 交線そのものが直線なら、縁と重なる本物の稜（回転体の継ぎ目など）なので残す。
+    // 捨てるのは、縁に接して曲がる細い曲線だけ。
+    // ただし接点のまわりに残る細片も直線になりうるので、直線のうち残すのは
+    // 端が縁の頂点に乗るもの（縁と頂点から重なる稜）だけ。
+    let (first, last) = (points[0].point, points[points.len() - 1].point);
+    let span = (last - first).norm();
+    let curve_straight = span > band && {
+        let chord = (last - first) / span;
+        points.iter().all(|c| {
+            let offset = c.point - first;
+            (offset - chord * offset.dot(&chord)).norm() <= band * 1e-3
+        })
+    };
     for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
         for oriented in &wire.edges {
             let boundary = &oriented.edge;
@@ -11271,6 +11284,10 @@ fn hugs_straight_boundary(edge: &Edge, face: &Face, tol: &Tolerance) -> bool {
                 along >= -band && along <= length + band && (offset - dir * along).norm() <= band
             };
             if points.iter().all(|c| near(c.point)) {
+                let at_vertex = |q: Point3| (q - a).norm() <= band || (q - b).norm() <= band;
+                if curve_straight && (at_vertex(first) || at_vertex(last)) {
+                    return false;
+                }
                 return true;
             }
         }

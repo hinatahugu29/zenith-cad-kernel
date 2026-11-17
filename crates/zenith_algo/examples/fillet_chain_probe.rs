@@ -844,6 +844,12 @@ fn main() {
                 continue;
             }
         };
+        // 下ごしらえの立体がすでに穴を外側ワイヤに接して持つなら、丸めの結果は全部それを
+        // 引き継ぐので採点できない（4-959: 斜めの面の折れ目に縦穴が接する形）。
+        if let Some(why) = hole_outside_face(&solid) {
+            println!("   下ごしらえの立体が採点の前提を満たさない（丸めの前から）: {why}");
+            continue;
+        }
         let before = volume(&solid);
         BOUNDS.with(|cell| *cell.borrow_mut() = Some(vertex_box(&solid)));
         let mut ok = 0usize;
