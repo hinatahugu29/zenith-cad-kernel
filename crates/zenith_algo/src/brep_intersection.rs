@@ -11295,9 +11295,9 @@ fn hugs_straight_boundary(edge: &Edge, face: &Face, tol: &Tolerance) -> bool {
     false
 }
 
-/// 縁に沿うだけの短い交線を捨てるか（4-959、既定オフ、`ZENITH_TANGENT_SLIVER_DROP=1`）
+/// 縁に沿うだけの短い交線を捨てるか（4-959、既定オン、`ZENITH_TANGENT_SLIVER_DROP=0` で切れる）
 fn tangent_sliver_drop_enabled() -> bool {
-    std::env::var("ZENITH_TANGENT_SLIVER_DROP").map_or(false, |v| v == "1")
+    std::env::var("ZENITH_TANGENT_SLIVER_DROP").map_or(true, |v| v != "0")
 }
 
 fn clip_candidate_to_planar_trims_raw(
