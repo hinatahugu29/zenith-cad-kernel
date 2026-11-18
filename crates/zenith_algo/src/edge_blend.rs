@@ -1243,15 +1243,19 @@ fn find_edge(faces: &[Face], edge_id: u64) -> Option<Edge> {
     None
 }
 
-/// 曲線が始点から `dir` に伸びる弦からどれだけ離れるか
-fn max_chord_deviation(curve: &NurbsCurve3, origin: Point3, dir: Vec3, length: f64) -> f64 {
+/// 曲線が始点から `dir` に伸びる直線からどれだけ離れるかの上限（4-960）。
+///
+/// 重みが全部正の有理曲線は制御点の凸包に入り、直線からの距離は凸な関数なので、
+/// 制御点の距離の最大が曲線全体の距離の上限になる（標本を取らない）。重みに正で
+/// ないものがあれば上限が取れないので無限大（直線と見なさない）。
+fn max_chord_deviation(curve: &NurbsCurve3, origin: Point3, dir: Vec3, _length: f64) -> f64 {
     let mut worst: f64 = 0.0;
-    for step in 0..=16 {
-        let t = step as f64 / 16.0;
-        let point = curve.evaluate(t);
-        let offset = point - origin;
-        let along = offset.dot(&dir).clamp(0.0, length);
-        worst = worst.max((offset - dir * along).norm());
+    for control in &curve.control_points {
+        if !(control.weight > 0.0) {
+            return f64::INFINITY;
+        }
+        let offset = control.point - origin;
+        worst = worst.max((offset - dir * offset.dot(&dir)).norm());
     }
     worst
 }
