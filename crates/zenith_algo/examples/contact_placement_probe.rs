@@ -1143,9 +1143,9 @@ fn cases() -> Vec<Case> {
     });
 
     // 斜めに削いだ箱の凹の折れ線に、縦の円柱がちょうど接する（4-959）。
-    // 既定では「未実装」で断る（赤）ので、`ZENITH_CONTACT_SLOPE=1` のときだけ足す。
-    // 口 `ZENITH_TANGENT_SLIVER_DROP=1` と一緒に回す。
-    if std::env::var("ZENITH_CONTACT_SLOPE").is_ok_and(|v| v == "1") {
+    // 4-959 の口が既定オンになったので常に足す（11月18日）。`ZENITH_CONTACT_SLOPE=0` で外せる
+    // （口を `ZENITH_TANGENT_SLIVER_DROP=0` で切ったときは「未実装」で赤になる）。
+    if std::env::var("ZENITH_CONTACT_SLOPE").map_or(true, |v| v != "0") {
         let tol = Tolerance::default();
         let base = PrimitiveBuilder::make_box(20.0, 30.0, 40.0).expect("box");
         let wedge = PrimitiveBuilder::make_box(20.0, 40.0, 20.0).expect("box");
