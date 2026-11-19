@@ -115,7 +115,8 @@ impl EdgeBlender {
                     edge_id,
                     length: site.length,
                     dihedral_angle_deg: site.dihedral.to_degrees(),
-                    max_fillet_radius: max_setback * half.tan().abs(),
+                    // 円柱に当たる端は面取りだけ（4-962）
+                    max_fillet_radius: if site.cyl_end.is_some() { 0.0 } else { max_setback * half.tan().abs() },
                     max_chamfer_distance: max_setback,
                 })
             }
@@ -347,6 +348,11 @@ impl EdgeBlender {
             }
         }
         let site = BlendSite::locate(solid, edge_id)?;
+        if site.cyl_end.is_some() && matches!(kind, BlendKind::Fillet { .. }) {
+            return Err(format!(
+                "Edge {edge_id} ends on a cylinder; only a chamfer is built there (the fillet end is not a rational curve)"
+            ));
+        }
         let setback = kind.setback(site.dihedral);
 
         if !(setback > 0.0) || !setback.is_finite() {
@@ -375,7 +381,8 @@ impl EdgeBlender {
             edge_length: site.length,
             setback,
             predicted_removed_volume: kind.removed_section_area(site.dihedral)
-                * site.centroid_length(kind),
+                * site.centroid_length(kind)
+                + site.cyl_end.map_or(0.0, |c| c.lambda_moment(setback)),
         };
 
         let solid = site.apply(solid, kind, setback)?;
@@ -412,6 +419,68 @@ struct BlendSite {
     neighbours: Vec<NeighbourTrim>,
     /// 隣接稜が許す後退距離の上限
     max_setback: f64,
+    /// 片端が円柱の側面に当たる（4-962、面取りのみ、`ZENITH_CYL_CAP_CHAMFER=1`）
+    cyl_end: Option<CylEnd>,
+}
+
+/// 稜の片端が当たる円柱。軸は稜に直交し、稜の片側の面（側面）は軸を含み、
+/// もう片側の面（円の面）は軸に直交する（4-962）。二面角は 90 度になる。
+#[derive(Debug, Clone, Copy)]
+struct CylEnd {
+    at_start: bool,
+    /// 軸の上の点（円の面の高さに合わせてある）
+    centre: Point3,
+    axis: Vec3,
+    radius: f64,
+    /// 軸に直交する側の面が a か
+    circle_on_a: bool,
+    /// 円の面の内向き t_q と、側面の内向き t_p
+    t_q: Vec3,
+    t_p: Vec3,
+    /// 端から外へ（終点なら d、始点なら −d）
+    out: Vec3,
+    /// 頂点から見た軸の位置: out 方向 cx、t_q 方向 cy
+    cx: f64,
+    cy: f64,
+    vertex: Point3,
+}
+
+impl CylEnd {
+    /// 円の面で t_q に u 退いた点が、円柱に当たるまで out へ滑る量（u=0 で 0）
+    fn lambda(&self, u: f64) -> Option<f64> {
+        let rest = self.radius * self.radius - (u - self.cy) * (u - self.cy);
+        if rest < 0.0 {
+            return None;
+        }
+        Some(self.cx - self.cx.signum() * rest.sqrt())
+    }
+
+    /// ∫₀ˢ (s−y) λ(y) dy（閉じた式）
+    fn lambda_moment(&self, s: f64) -> f64 {
+        let r = self.radius;
+        let f = |v: f64| {
+            let root = (r * r - v * v).max(0.0).sqrt();
+            0.5 * (v * root + r * r * (v / r).clamp(-1.0, 1.0).asin())
+        };
+        let g = |v: f64| (r * r - v * v).max(0.0).powf(1.5) / 3.0;
+        let at = |v: f64| (s - self.cy) * f(v) + g(v);
+        let j = at(s - self.cy) - at(-self.cy);
+        self.cx * s * s * 0.5 - self.cx.signum() * j
+    }
+
+    /// [0, reach] での |λ| の上限（極値は u = cy）
+    fn lambda_bound(&self, reach: f64) -> f64 {
+        let mut worst = self.lambda(reach).map_or(f64::INFINITY, f64::abs);
+        if self.cy > 0.0 && self.cy < reach {
+            worst = worst.max(self.lambda(self.cy).map_or(f64::INFINITY, f64::abs));
+        }
+        worst
+    }
+}
+
+/// 端が円柱に当たる直線の稜の面取り（4-962）。既定オフ。
+fn cyl_cap_chamfer_enabled() -> bool {
+    std::env::var("ZENITH_CYL_CAP_CHAMFER").map_or(false, |v| v == "1")
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -425,6 +494,8 @@ struct NeighbourTrim {
     at_start_of_target: bool,
     /// 面 a 側か b 側か
     on_face_a: bool,
+    /// 円弧の隣の稜（中心、半径、軸）。詰めたあとも同じ円の弧にする（4-962）
+    arc: Option<(Point3, f64, Vec3)>,
 }
 
 impl BlendSite {
@@ -547,10 +618,27 @@ impl BlendSite {
                 reason
             }
         };
-        let (cap_start, cap_start_normal) =
-            find_cap_face(faces, v_start, fa, fb, d, edge_id, "start").map_err(concave_end)?;
-        let (cap_end, cap_end_normal) =
-            find_cap_face(faces, v_end, fa, fb, d, edge_id, "end").map_err(concave_end)?;
+        // 端が円柱に当たるなら（4-962、凸の 90 度の稜、片端だけ）、その端を円柱で閉じる。
+        let convex = dihedral < std::f64::consts::PI;
+        let mut cyl_end: Option<CylEnd> = None;
+        let mut cap_or_cylinder = |vertex: Point3, at_start: bool, which: &str| {
+            match find_cap_face(faces, vertex, fa, fb, d, edge_id, which) {
+                Ok(found) => Ok(found),
+                Err(reason) => {
+                    if convex && cyl_cap_chamfer_enabled() && cyl_end.is_none() {
+                        if let Some((index, cylinder)) =
+                            find_cylinder_cap(faces, vertex, fa, fb, d, ta, tb, at_start)
+                        {
+                            cyl_end = Some(cylinder);
+                            return Ok((index, None));
+                        }
+                    }
+                    Err(concave_end(reason))
+                }
+            }
+        };
+        let (cap_start, cap_start_normal) = cap_or_cylinder(v_start, true, "start")?;
+        let (cap_end, cap_end_normal) = cap_or_cylinder(v_end, false, "end")?;
 
         if dihedral > std::f64::consts::PI && (cap_start_normal.is_some() || cap_end_normal.is_some()) {
             return Err(format!(
@@ -564,6 +652,11 @@ impl BlendSite {
             [(true, v_start, cap_start_normal), (false, v_end, cap_end_normal)]
         {
             for (on_face_a, face_index, dir, normal) in [(true, fa, ta, na), (false, fb, tb, nb)] {
+                // 円柱の端の、円の面の側: 隣の稜は円柱の上の円弧（4-962）。
+                if let Some(cylinder) = cyl_end.filter(|c| c.at_start == at_start && c.circle_on_a == on_face_a) {
+                    neighbours.push(find_arc_neighbour(&faces[face_index], edge_id, &cylinder, on_face_a)?);
+                    continue;
+                }
                 // 斜めの端では、面の内側へ退いた点は稜に沿って端の面まで滑る。
                 // 後退距離 1 あたりの移動 k = t + d·λ。
                 let step = retreat_step(dir, d, cap_normal);
@@ -617,6 +710,7 @@ impl BlendSite {
             cap_end_normal,
             neighbours,
             max_setback,
+            cyl_end,
         })
     }
 
@@ -644,8 +738,22 @@ impl BlendSite {
                 .fold(0.0f64, f64::max)
         };
         let eps = 1e-9 * self.length.max(1.0);
-        let (margin_start, margin_end) =
+        let (mut margin_start, mut margin_end) =
             (slide(self.cap_start_normal) * reach + eps, slide(self.cap_end_normal) * reach + eps);
+        // 円柱の端では、円の面の側の帯の角が λ だけ外へ出入りする（4-962）。
+        // 円柱の面に穴があれば、三角形の見立てが曲面では厳密でないので断る。
+        if let Some(cylinder) = &self.cyl_end {
+            let bound = cylinder.lambda_bound(reach) + eps;
+            if cylinder.at_start {
+                margin_start = margin_start.max(bound);
+            } else {
+                margin_end = margin_end.max(bound);
+            }
+            let cap = if cylinder.at_start { self.cap_start } else { self.cap_end };
+            if !faces[cap].inner_wires.is_empty() {
+                return 0.0;
+            }
+        }
         let mut nearest = f64::INFINITY;
         for (face_index, inward) in [(self.face_a, self.t_a), (self.face_b, self.t_b)] {
             let face = &faces[face_index];
@@ -740,10 +848,25 @@ impl BlendSite {
 
         // 新しい4頂点。稜の両端が、各面側へ setback だけ退いた点に割れる。
         let (cs, ce) = (self.cap_start_normal, self.cap_end_normal);
-        let a_start = Vertex::from_point(self.v_start + retreat_step(self.t_a, self.d, cs) * setback);
-        let a_end = Vertex::from_point(self.v_end + retreat_step(self.t_a, self.d, ce) * setback);
-        let b_start = Vertex::from_point(self.v_start + retreat_step(self.t_b, self.d, cs) * setback);
-        let b_end = Vertex::from_point(self.v_end + retreat_step(self.t_b, self.d, ce) * setback);
+        let point = |at_start: bool, on_a: bool| -> Result<Point3, String> {
+            let (vertex, cap, dir) = (
+                if at_start { self.v_start } else { self.v_end },
+                if at_start { cs } else { ce },
+                if on_a { self.t_a } else { self.t_b },
+            );
+            // 円柱の端の円の面の側は、退いた点を円柱まで滑らせる（4-962）
+            if let Some(c) = self.cyl_end.filter(|c| c.at_start == at_start && c.circle_on_a == on_a) {
+                let lambda = c
+                    .lambda(setback)
+                    .ok_or("The chamfer is wider than the cylinder it ends on")?;
+                return Ok(vertex + c.t_q * setback + c.out * lambda);
+            }
+            Ok(vertex + retreat_step(dir, self.d, cap) * setback)
+        };
+        let a_start = Vertex::from_point(point(true, true)?);
+        let a_end = Vertex::from_point(point(false, true)?);
+        let b_start = Vertex::from_point(point(true, false)?);
+        let b_end = Vertex::from_point(point(false, false)?);
 
         // 面 a / b に残る、稜を置き換える直線
         let line_a = Edge::line_between(a_start.clone(), a_end.clone())?;
@@ -757,8 +880,33 @@ impl BlendSite {
             a_start.clone(),
             b_start.clone(),
         )?;
-        let corner_end =
+        let mut corner_end =
             self.corner_edge(kind, setback, self.v_end, a_end.clone(), b_end.clone())?;
+        let mut corner_start = corner_start;
+        // 円柱の端（4-962）: 面取りの平面と円柱の交わりの楕円弧を、円柱の面の円の引数で。
+        // p-curve も同じ引数で厳密に作り、面を作り直すときに当てはめと置き換える。
+        let mut cylinder_pcurve: Option<zenith_geom::NurbsCurve2> = None;
+        if let Some(c) = &self.cyl_end {
+            let cap = if c.at_start { self.cap_start } else { self.cap_end };
+            let FaceGeometry::Nurbs(surface) = &faces[cap].geometry else {
+                return Err("The cylinder end face is not a NURBS cylinder".into());
+            };
+            let (on_a, on_b) =
+                if c.at_start { (a_start.clone(), b_start.clone()) } else { (a_end.clone(), b_end.clone()) };
+            let from = if c.circle_on_a { on_a.point } else { on_b.point };
+            let (curve3, curve2) = cylinder_end_curves(surface, c, setback, from)
+                .ok_or("The chamfer end could not be laid on the cylinder's own parameter")?;
+            // 曲線は円の面の側から側面の側へ。辺は on_a → on_b。
+            let (curve3, curve2) =
+                if c.circle_on_a { (curve3, curve2) } else { (curve3.reversed(), reverse_bezier2(&curve2)) };
+            let edge = Edge::new(curve3, on_a, on_b, 1e-6);
+            if c.at_start {
+                corner_start = edge;
+            } else {
+                corner_end = edge;
+            }
+            cylinder_pcurve = Some(curve2);
+        }
 
         // 隣接稜を詰める。同じ稜の両端が動くこともあるので id ごとにまとめる。
         let mut trims: BTreeMap<u64, (Option<Vertex>, Option<Vertex>)> = BTreeMap::new();
@@ -792,7 +940,18 @@ impl BlendSite {
                     "Trimming neighbouring edge {id} would collapse it; the blend is too large here"
                 ));
             }
-            let curve = NurbsCurve3::bspline_from_points(1, vec![start.point, end.point])?;
+            // 円弧の隣の稜は、同じ円の弧のまま詰める（4-962）
+            let arc = self
+                .neighbours
+                .iter()
+                .find(|n| n.edge_id == *id)
+                .and_then(|n| n.arc);
+            let curve = match arc {
+                Some((centre, radius, axis)) => {
+                    arc_on_circle(&original, centre, radius, axis, start.point, end.point)?
+                }
+                None => NurbsCurve3::bspline_from_points(1, vec![start.point, end.point])?,
+            };
             trimmed.insert(
                 *id,
                 Edge {
@@ -842,13 +1001,36 @@ impl BlendSite {
                 inners.push(rebuild(wire)?);
             }
 
-            new_faces.push(Face::new(
+            let mut rebuilt = Face::new(
                 face.geometry.clone(),
                 outer,
                 inners,
                 face.orientation,
                 face.tolerance,
-            ));
+            );
+            // 円柱の端の面: 楕円弧の p-curve を当てはめから厳密なものへ（4-962）
+            if let (Some(c), Some(exact)) = (&self.cyl_end, &cylinder_pcurve) {
+                let cap = if c.at_start { self.cap_start } else { self.cap_end };
+                let corner_id = if c.at_start { corner_start.id } else { corner_end.id };
+                if index == cap {
+                    if let Some(pcurves) = rebuilt.pcurves.as_mut() {
+                        for segment in pcurves.outer_loop.segments.iter_mut() {
+                            if segment.edge_id == corner_id {
+                                // 当てはめと同じ向き（端点が合う向き）で置き換える
+                                let (f0, f1) = segment.curve.param_range();
+                                let (e0, e1) = exact.param_range();
+                                let same = (segment.curve.evaluate(f0) - exact.evaluate(e0)).norm()
+                                    + (segment.curve.evaluate(f1) - exact.evaluate(e1)).norm();
+                                let flipped = (segment.curve.evaluate(f0) - exact.evaluate(e1)).norm()
+                                    + (segment.curve.evaluate(f1) - exact.evaluate(e0)).norm();
+                                segment.curve =
+                                    if same <= flipped { exact.clone() } else { reverse_bezier2(exact) };
+                            }
+                        }
+                    }
+                }
+            }
+            new_faces.push(rebuilt);
         }
 
         // ブレンド面そのもの
@@ -1087,6 +1269,374 @@ fn retreat_step(t: Vec3, d: Vec3, cap_normal: Option<Vec3>) -> Vec3 {
     }
 }
 
+/// 稜の端の頂点に、稜の2面のほかに円柱の面が1枚だけあり、軸が稜に直交し、
+/// 片方の面が軸を含み、もう片方が軸に直交するなら、その円柱（4-962）。
+#[allow(clippy::too_many_arguments)]
+fn find_cylinder_cap(
+    faces: &[Face],
+    vertex: Point3,
+    face_a: usize,
+    face_b: usize,
+    d: Vec3,
+    t_a: Vec3,
+    t_b: Vec3,
+    at_start: bool,
+) -> Option<(usize, CylEnd)> {
+    let tol = Tolerance::default();
+    let mut found = None;
+    for (index, face) in faces.iter().enumerate() {
+        if index == face_a || index == face_b {
+            continue;
+        }
+        let touches = std::iter::once(&face.outer_wire)
+            .chain(face.inner_wires.iter())
+            .any(|wire| wire.edges.iter().any(|o| (o.start_vertex().point - vertex).norm() <= 1e-9));
+        if !touches {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(index);
+    }
+    let index = found?;
+    let FaceGeometry::Nurbs(surface) = &faces[index].geometry else {
+        return None;
+    };
+    let (base, radius, axis, _) = crate::brep_intersection::cylinder_patch_reading(surface, &tol)?;
+    let axis = axis.try_normalize_safe(1e-12)?;
+    if axis.dot(&d).abs() > 1e-9 {
+        return None;
+    }
+    let (circle_on_a, t_q, t_p) =
+        if t_a.dot(&axis).abs() <= 1e-9 && t_b.dot(&axis).abs() >= 1.0 - 1e-9 {
+            (true, t_a, t_b)
+        } else if t_b.dot(&axis).abs() <= 1e-9 && t_a.dot(&axis).abs() >= 1.0 - 1e-9 {
+            (false, t_b, t_a)
+        } else {
+            return None;
+        };
+    let out = if at_start { -d } else { d };
+    let offset = base - vertex;
+    let radial = offset - axis * offset.dot(&axis);
+    if (radial.norm() - radius).abs() > 1e-7 * radius.max(1.0) {
+        return None;
+    }
+    let (cx, cy) = (offset.dot(&out), offset.dot(&t_q));
+    if std::env::var("ZENITH_CYL_CAP_WHY").is_ok_and(|v| v == "1") {
+        eprintln!("CYLCAP 頂点の半径のずれ {:.3e} cx {cx:.12} cy {cy:.12} λ(0) {:.3e}", radial.norm() - radius, cx - cx.signum() * (radius * radius - cy * cy).max(0.0).sqrt());
+    }
+    if cx.abs() <= 1e-9 * radius {
+        return None;
+    }
+    Some((
+        index,
+        CylEnd { at_start, centre: base, axis, radius, circle_on_a, t_q, t_p, out, cx, cy, vertex },
+    ))
+}
+
+/// 円柱の端の、円の面の上で頂点に繋がる円弧の稜。退いた点は円柱に沿って
+/// この弧の上を進む。許す後退距離は、弧のもう一方の端か、円が t_q の向きに
+/// 折り返す点のうち近いほうまで（4-962）。
+fn find_arc_neighbour(
+    face: &Face,
+    edge_id: u64,
+    c: &CylEnd,
+    on_face_a: bool,
+) -> Result<NeighbourTrim, String> {
+    let vertex = c.vertex;
+    let scale = c.radius.max(1.0);
+    for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+        for oriented in &wire.edges {
+            let edge = &oriented.edge;
+            if edge.id == edge_id {
+                continue;
+            }
+            let move_start = if (edge.start_vertex.point - vertex).norm() <= 1e-9 {
+                true
+            } else if (edge.end_vertex.point - vertex).norm() <= 1e-9 {
+                false
+            } else {
+                continue;
+            };
+            let fail = |why: &str| {
+                Err(format!("Neighbouring edge {} at the cylinder end: {why}", edge.id))
+            };
+            let Some((centre, radius, _)) = crate::circular_fillet::circle_from_edge(edge) else {
+                return fail("it is not a circular arc");
+            };
+            let offset = centre - c.centre;
+            if (radius - c.radius).abs() > 1e-7 * scale
+                || (offset - c.axis * offset.dot(&c.axis)).norm() > 1e-7 * scale
+            {
+                return fail("it is not on the cylinder");
+            }
+            let other = if move_start { edge.end_vertex.point } else { edge.start_vertex.point };
+            if (other - vertex).norm() <= 1e-9 {
+                return fail("it is a full circle");
+            }
+            let u_other = (other - vertex).dot(&c.t_q);
+            if u_other <= 0.0 {
+                return fail("it does not run in the direction the blend retreats");
+            }
+            let mut available = u_other;
+            let turn = c.cy + c.radius;
+            let extreme = vertex + c.t_q * turn + c.out * c.cx;
+            if on_arc(edge, centre, radius, extreme) {
+                available = available.min(turn);
+            }
+            // 向きの確かめ: 退く点の通り道が、この弧に乗るか
+            let half = available * 0.5;
+            let Some(lambda) = c.lambda(half) else {
+                return fail("the retreat leaves the cylinder");
+            };
+            if !on_arc(edge, centre, radius, vertex + c.t_q * half + c.out * lambda) {
+                return fail("the retreat leaves the arc");
+            }
+            return Ok(NeighbourTrim {
+                edge_id: edge.id,
+                move_start,
+                available,
+                at_start_of_target: c.at_start,
+                on_face_a,
+                arc: Some((centre, radius, c.axis)),
+            });
+        }
+    }
+    Err(format!("Edge {edge_id} has no arc beside it at the cylinder end"))
+}
+
+
+
+
+/// 1区間の Bézier（節が対称）の p-curve を逆向きに。
+fn reverse_bezier2(curve: &zenith_geom::NurbsCurve2) -> zenith_geom::NurbsCurve2 {
+    let mut points = curve.control_points.clone();
+    points.reverse();
+    zenith_geom::NurbsCurve2 { degree: curve.degree, control_points: points, knots: curve.knots.clone() }
+}
+
+/// 同次座標の Bézier を [lo, hi] に切り詰める（de Casteljau）。
+fn bezier_segment<const N: usize>(cps: &[[f64; N]], lo: f64, hi: f64) -> Vec<[f64; N]> {
+    let split = |cps: &[[f64; N]], t: f64| -> (Vec<[f64; N]>, Vec<[f64; N]>) {
+        let mut levels = vec![cps.to_vec()];
+        while levels.last().map_or(0, |l| l.len()) > 1 {
+            let prev = levels.last().cloned().unwrap_or_default();
+            let next: Vec<[f64; N]> = prev
+                .windows(2)
+                .map(|p| {
+                    let mut out = [0.0; N];
+                    for j in 0..N {
+                        out[j] = p[0][j] * (1.0 - t) + p[1][j] * t;
+                    }
+                    out
+                })
+                .collect();
+            levels.push(next);
+        }
+        let left = levels.iter().map(|l| l[0]).collect();
+        let right = levels.iter().rev().map(|l| l[l.len() - 1]).collect();
+        (left, right)
+    };
+    let left = split(cps, hi).0;
+    if hi <= 1e-15 {
+        return left;
+    }
+    split(&left, lo / hi).1
+}
+
+/// 円柱の端の楕円弧を、円柱の面の円の引数で作る（4-962）。3D の曲線（有理2次）と
+/// p-curve（有理3次）が同じ引数を持つので、検証の「p-curve と3Dの辺が合う」を満たす。
+/// 円の面の側の点 `from`（円柱に乗る）から、頂点を後退距離だけ持ち上げた点へ。
+fn cylinder_end_curves(
+    surface: &NurbsSurface3,
+    c: &CylEnd,
+    setback: f64,
+    from: Point3,
+) -> Option<(NurbsCurve3, zenith_geom::NurbsCurve2)> {
+    use zenith_geom::{ControlPoint2, NurbsCurve2};
+    use zenith_math::Point2;
+    if surface.degree_u != 2 || surface.degree_v != 1 {
+        return None;
+    }
+    let rows = &surface.control_points;
+    if rows.iter().any(|row| row.len() != 2) || surface.knots_v.knots.len() != 4 {
+        return None;
+    }
+    let (v0, v1) = (surface.knots_v.knots[0], surface.knots_v.knots[3]);
+    let knots = &surface.knots_u.knots;
+    let n = rows.len();
+    if n % 2 == 0 || knots.len() != n + 3 {
+        return None;
+    }
+    let spans = (n - 1) / 2;
+    let breaks: Vec<f64> = (0..=spans).map(|k| knots[2 * k + 1]).collect();
+    for k in 0..=spans {
+        let expected = if k == 0 || k == spans { 3 } else { 2 };
+        if knots.iter().filter(|&&x| (x - breaks[k]).abs() <= 1e-15).count() != expected {
+            return None;
+        }
+    }
+    let scale = c.radius.max(1.0);
+    for k in 0..spans {
+        let span: Vec<(Point3, Point3, f64)> = (0..3)
+            .map(|i| (rows[2 * k + i][0].point, rows[2 * k + i][1].point, rows[2 * k + i][0].weight))
+            .collect();
+        if (0..3).any(|i| (rows[2 * k + i][1].weight - span[i].2).abs() > 1e-15) {
+            continue;
+        }
+        let lift = span[0].1 - span[0].0;
+        let height = lift.norm();
+        if height <= 1e-12
+            || (0..3).any(|i| ((span[i].1 - span[i].0) - lift).norm() > 1e-9 * height.max(1.0))
+        {
+            continue;
+        }
+        let e = lift / height;
+        let z_q = (c.vertex - span[0].0).dot(&e);
+        let w: Vec<f64> = span.iter().map(|s| s.2).collect();
+        let on_q: Vec<Point3> = span.iter().map(|s| s.0 + e * z_q).collect();
+        // 円の面の高さの円で、点 x に当たる引数（2次方程式の根のうち、本当に乗るもの）
+        let invert = |x: Point3| -> Option<f64> {
+            let r: Vec<Vec3> = (0..3).map(|i| (on_q[i] - x) * w[i]).collect();
+            let (p0, p1, p2) = (r[0], (r[1] - r[0]) * 2.0, r[0] - r[1] * 2.0 + r[2]);
+            let mut roots = Vec::new();
+            for j in 0..3 {
+                let (qa, qb, qc) = (p2[j], p1[j], p0[j]);
+                if qa.abs() > 1e-14 {
+                    let disc = qb * qb - 4.0 * qa * qc;
+                    if disc >= -1e-12 {
+                        let root = disc.max(0.0).sqrt();
+                        roots.push((-qb + root) / (2.0 * qa));
+                        roots.push((-qb - root) / (2.0 * qa));
+                    }
+                } else if qb.abs() > 1e-14 {
+                    roots.push(-qc / qb);
+                }
+            }
+            roots
+                .into_iter()
+                .filter(|t| *t >= -1e-12 && *t <= 1.0 + 1e-12)
+                .map(|t| t.clamp(0.0, 1.0))
+                .find(|&t| {
+                    let b = [(1.0 - t) * (1.0 - t), 2.0 * t * (1.0 - t), t * t];
+                    let weight: f64 = (0..3).map(|i| b[i] * w[i]).sum();
+                    let point = (0..3).fold(Vec3::zeros(), |acc, i| acc + on_q[i].coords * (b[i] * w[i]));
+                    ((point / weight) - x.coords).norm() <= 1e-9 * scale
+                })
+        };
+        let (Some(s_from), Some(s_vertex)) = (invert(from), invert(c.vertex)) else {
+            continue;
+        };
+        let (lo, hi) = (s_from.min(s_vertex), s_from.max(s_vertex));
+        if hi - lo <= 1e-12 {
+            return None;
+        }
+        // 3D: 円の面の円を p ↦ p + t_p (s − (p−V)·t_q) で写す（制御点を写す）
+        let lifted = |p: Point3| p + c.t_p * (setback - (p - c.vertex).dot(&c.t_q));
+        let hom3: Vec<[f64; 4]> = (0..3)
+            .map(|i| {
+                let p = lifted(on_q[i]);
+                [p.x * w[i], p.y * w[i], p.z * w[i], w[i]]
+            })
+            .collect();
+        // 2D: (u, v)。v·W は2次、u·W は3次、W を3次に上げる
+        let (ka, kb) = (breaks[k], breaks[k + 1]);
+        let delta = kb - ka;
+        let a = (z_q + c.t_p.dot(&e) * setback) / height;
+        let b = -c.t_p.dot(&e) / height;
+        let vq: Vec<f64> = (0..3)
+            .map(|i| w[i] * (v0 + (v1 - v0) * (a + b * (on_q[i] - c.vertex).dot(&c.t_q))))
+            .collect();
+        let elevate = |q: &[f64]| [q[0], (q[0] + 2.0 * q[1]) / 3.0, (2.0 * q[1] + q[2]) / 3.0, q[2]];
+        let (w3, v3) = (elevate(&w), elevate(&vq));
+        let uw = [
+            ka * w3[0],
+            ka * w3[1] + delta * w[0] / 3.0,
+            ka * w3[2] + delta * 2.0 * w[1] / 3.0,
+            ka * w3[3] + delta * w[2],
+        ];
+        let hom2: Vec<[f64; 3]> = (0..4).map(|i| [uw[i], v3[i], w3[i]]).collect();
+        let mut seg3 = bezier_segment(&hom3, lo, hi);
+        let mut seg2 = bezier_segment(&hom2, lo, hi);
+        if s_from > s_vertex {
+            seg3.reverse();
+            seg2.reverse();
+        }
+        if seg3.iter().any(|h| !(h[3] > 0.0)) || seg2.iter().any(|h| !(h[2] > 0.0)) {
+            return None;
+        }
+        let curve3 = NurbsCurve3::new(
+            2,
+            seg3.iter()
+                .map(|h| ControlPoint3::new(Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3]), h[3]))
+                .collect(),
+            KnotVector::clamped_uniform(3, 2),
+        )
+        .ok()?;
+        let curve2 = NurbsCurve2::new(
+            3,
+            seg2.iter()
+                .map(|h| ControlPoint2::new(Point2::new(h[0] / h[2], h[1] / h[2]), h[2]))
+                .collect(),
+            KnotVector::clamped_uniform(4, 3),
+        )
+        .ok()?;
+        return Some((curve3, curve2));
+    }
+    None
+}
+/// 元の円弧の稜と同じ回り方で、同じ円の上の start から end までの弧（四半周ごとに区切る）。
+fn arc_on_circle(
+    original: &Edge,
+    centre: Point3,
+    radius: f64,
+    axis: Vec3,
+    start: Point3,
+    end: Point3,
+) -> Result<NurbsCurve3, String> {
+    let (t0, t1) = original.curve.param_range();
+    let (o0, om, o1) = (
+        original.curve.evaluate(t0) - centre,
+        original.curve.evaluate((t0 + t1) * 0.5) - centre,
+        original.curve.evaluate(t1) - centre,
+    );
+    let angle = |v: Vec3, x: Vec3, y: Vec3| {
+        let a = v.dot(&y).atan2(v.dot(&x));
+        if a < 0.0 { a + std::f64::consts::TAU } else { a }
+    };
+    let x0 = o0 / radius;
+    // 元の弧が start→middle→end と左回りに進む軸の向き
+    let y0 = axis.cross(&x0);
+    let n = if angle(om, x0, y0) <= angle(o1, x0, y0) { axis } else { -axis };
+    let x = (start - centre) / radius;
+    let y = n.cross(&x);
+    let sweep = angle(end - centre, x, y);
+    if sweep <= 1e-12 {
+        return Err("A trimmed arc came out with no length".into());
+    }
+    let spans = (sweep / std::f64::consts::FRAC_PI_2 - 1e-9).ceil().max(1.0) as usize;
+    let step = sweep / spans as f64;
+    let half = step * 0.5;
+    let at = |phi: f64| centre + (x * phi.cos() + y * phi.sin()) * radius;
+    let mut points = vec![ControlPoint3::unweighted(start)];
+    let mut knots = vec![0.0, 0.0, 0.0];
+    for span in 0..spans {
+        let phi = step * span as f64;
+        let mid = centre + (x * (phi + half).cos() + y * (phi + half).sin()) * (radius / half.cos());
+        points.push(ControlPoint3::new(mid, half.cos()));
+        let next = if span + 1 == spans { end } else { at(phi + step) };
+        points.push(ControlPoint3::unweighted(next));
+        if span + 1 == spans {
+            knots.extend([1.0, 1.0, 1.0]);
+        } else {
+            let k = (span + 1) as f64 / spans as f64;
+            knots.extend([k, k]);
+        }
+    }
+    NurbsCurve3::new(2, points, KnotVector::new(knots))
+}
+
 /// ある面のワイヤで、対象の稜と頂点を共有するもう1本の稜を探す
 fn find_neighbour(
     face: &Face,
@@ -1157,6 +1707,7 @@ fn find_neighbour(
                     available,
                     at_start_of_target,
                     on_face_a,
+                    arc: None,
                 });
             }
             if along.dot(&dir) < 1.0 - 1e-7 {
@@ -1184,6 +1735,7 @@ fn find_neighbour(
                 available,
                 at_start_of_target,
                 on_face_a,
+                arc: None,
             });
         }
     }
