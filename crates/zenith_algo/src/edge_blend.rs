@@ -480,7 +480,7 @@ impl CylEnd {
 
 /// 端が円柱に当たる直線の稜の面取り（4-962）。既定オフ。
 fn cyl_cap_chamfer_enabled() -> bool {
-    std::env::var("ZENITH_CYL_CAP_CHAMFER").map_or(false, |v| v == "1")
+    std::env::var("ZENITH_CYL_CAP_CHAMFER").map_or(true, |v| v != "0")
 }
 
 #[derive(Debug, Clone, Copy)]
