@@ -116,8 +116,17 @@ impl EdgeBlender {
                     length: site.length,
                     dihedral_angle_deg: site.dihedral.to_degrees(),
                     // 円柱に当たる端は面取りだけ（4-962）
-                    max_fillet_radius: if site.cyl_end.is_some() { 0.0 } else { max_setback * half.tan().abs() },
-                    max_chamfer_distance: max_setback,
+                    max_fillet_radius: if site.cyl_end.is_some() {
+                        0.0
+                    } else if site.cyl_side.is_some() {
+                        site.cyl_side_max_fillet(max_setback)
+                    } else {
+                        max_setback * half.tan().abs()
+                    },
+                    max_chamfer_distance: match site.cyl_side {
+                        Some(cs) => max_setback.min(cs.chord_limit * 0.999),
+                        None => max_setback,
+                    },
                 })
             }
             Err(general_error) => {
@@ -353,7 +362,11 @@ impl EdgeBlender {
                 "Edge {edge_id} ends on a cylinder; only a chamfer is built there (the fillet end is not a rational curve)"
             ));
         }
-        let setback = kind.setback(site.dihedral);
+        let section = match site.cyl_side {
+            Some(_) => Some(site.cyl_section(kind)?),
+            None => None,
+        };
+        let setback = section.map_or_else(|| kind.setback(site.dihedral), |s| s.s_a);
 
         if !(setback > 0.0) || !setback.is_finite() {
             return Err(format!(
@@ -380,9 +393,13 @@ impl EdgeBlender {
             dihedral_angle_deg: site.dihedral.to_degrees(),
             edge_length: site.length,
             setback,
-            predicted_removed_volume: kind.removed_section_area(site.dihedral)
-                * site.centroid_length(kind)
-                + site.cyl_end.map_or(0.0, |c| c.lambda_moment(setback)),
+            predicted_removed_volume: match section {
+                Some(s) => s.area * site.length,
+                None => {
+                    kind.removed_section_area(site.dihedral) * site.centroid_length(kind)
+                        + site.cyl_end.map_or(0.0, |c| c.lambda_moment(setback))
+                }
+            },
         };
 
         let solid = site.apply(solid, kind, setback)?;
@@ -421,6 +438,198 @@ struct BlendSite {
     max_setback: f64,
     /// 片端が円柱の側面に当たる（4-962、面取りのみ、`ZENITH_CYL_CAP_CHAMFER=1`）
     cyl_end: Option<CylEnd>,
+    /// 片側の面が稜を母線に持つ凸の円柱（4-964、`ZENITH_CYL_SIDE_BLEND=1`）
+    cyl_side: Option<CylSide>,
+}
+
+/// 稜を母線に持つ凸の円柱の面（軸は稜に平行、立体は円柱の内側）。
+#[derive(Debug, Clone, Copy)]
+struct CylSide {
+    /// 円柱が面 a か
+    on_a: bool,
+    centre: Point3,
+    axis: Vec3,
+    radius: f64,
+    /// 両端の円弧の、頂点からもう一方の端までの弦の短いほう
+    chord_limit: f64,
+}
+
+/// 円柱の側の断面。頂点からのずれ（稜に直交する平面の中）。
+#[derive(Debug, Clone, Copy)]
+struct CylSection {
+    /// 平面の側の後退距離
+    s_a: f64,
+    /// 円柱の側の後退点
+    p_b: Vec3,
+    /// フィレットの円弧の中央の制御点と重み
+    mid: Vec3,
+    weight: f64,
+    /// 削れる断面積
+    area: f64,
+}
+
+fn cyl_side_blend_enabled() -> bool {
+    std::env::var("ZENITH_CYL_SIDE_BLEND").is_ok_and(|v| v == "1")
+}
+
+/// 面が、稜（v_start→v_end）を母線に持つ凸の円柱なら (軸の点, 軸, 半径, 頂点での外向き法線)。
+fn cylinder_side_reading(
+    surface: &NurbsSurface3,
+    forward: bool,
+    v_start: Point3,
+    v_end: Point3,
+    d: Vec3,
+) -> Option<(Point3, Vec3, f64, Vec3)> {
+    let tol = Tolerance::default();
+    let (base, radius, axis, _) = crate::brep_intersection::cylinder_patch_reading(surface, &tol)?;
+    let axis = axis.try_normalize_safe(1e-12)?;
+    if axis.dot(&d).abs() < 1.0 - 1e-12 {
+        return None;
+    }
+    let radial = |p: Point3| {
+        let offset = p - base;
+        offset - axis * offset.dot(&axis)
+    };
+    let scale = radius.max(1.0);
+    if (radial(v_start).norm() - radius).abs() > 1e-7 * scale
+        || (radial(v_end).norm() - radius).abs() > 1e-7 * scale
+    {
+        return None;
+    }
+    // 面の向き: 面の中ほどの法線が、軸から外を向くか（外向きなら立体は内側＝凸）
+    let ((u0, u1), (w0, w1)) = surface.param_range();
+    let (um, wm) = ((u0 + u1) * 0.5, (w0 + w1) * 0.5);
+    let normal = surface.normal(um, wm)?;
+    let sign = normal.dot(&radial(surface.evaluate(um, wm))) * if forward { 1.0 } else { -1.0 };
+    if !(sign > 0.0) {
+        return None;
+    }
+    let base_on_v = base + axis * (v_start - base).dot(&axis);
+    Some((base_on_v, axis, radius, radial(v_start) / radius))
+}
+
+/// 断面を解く。平面の側（内向き t_p、外向き法線 n_p）と円柱（中心 cs.centre、半径 R、
+/// 頂点は円の上）。面取りは頂点から弦 s の点、フィレットは直線と円に内接する半径 r の円。
+fn cyl_section_2d(
+    vertex: Point3,
+    d: Vec3,
+    t_p: Vec3,
+    n_p: Vec3,
+    t_q: Vec3,
+    cs: &CylSide,
+    kind: BlendKind,
+) -> Result<CylSection, String> {
+    let big = cs.radius;
+    let raw = cs.centre - vertex;
+    let c = raw - d * raw.dot(&d);
+    let c_hat = c / big;
+    let mut c_perp = d.cross(&c_hat);
+    if c_perp.dot(&t_q) < 0.0 {
+        c_perp = -c_perp;
+    }
+    // 断面の2次元の座標（原点は頂点）
+    let e1 = t_p;
+    let e2 = d.cross(&t_p);
+    let flat = |v: Vec3| (v.dot(&e1), v.dot(&e2));
+    let cross = |p: (f64, f64), q: (f64, f64)| p.0 * q.1 - p.1 * q.0;
+    // 弧 p→q（中心 k、短い向き）の ½∮(x dy − y dx)
+    let arc = |k: Vec3, p: Vec3, q: Vec3, radius: f64| {
+        let (kp, kq) = (flat(p - k), flat(q - k));
+        let delta = cross(kp, kq).atan2(kp.0 * kq.0 + kp.1 * kq.1);
+        0.5 * (cross(flat(k), flat(q - p)) + radius * radius * delta)
+    };
+    let line = |p: Vec3, q: Vec3| 0.5 * cross(flat(p), flat(q));
+    match kind {
+        BlendKind::Chamfer { distance: s } => {
+            if s >= 2.0 * big {
+                return Err("The chamfer is wider than the cylinder beside the edge".into());
+            }
+            let alpha = s * s / (2.0 * big);
+            let beta = (s * s - alpha * alpha).max(0.0).sqrt();
+            let p_b = c_hat * alpha + c_perp * beta;
+            let p_a = t_p * s;
+            let area = line(Vec3::zeros(), p_a) + line(p_a, p_b) + arc(c, p_b, Vec3::zeros(), big);
+            Ok(CylSection { s_a: s, p_b, mid: Vec3::zeros(), weight: 1.0, area: area.abs() })
+        }
+        BlendKind::Fillet { radius: r } => {
+            if r >= big {
+                return Err("The fillet is larger than the cylinder beside the edge".into());
+            }
+            let m = -n_p;
+            let w = m * r - c;
+            let b = t_p.dot(&w);
+            let disc = b * b - w.dot(&w) + (big - r) * (big - r);
+            if disc < 0.0 {
+                return Err("No fillet circle touches both the plane and the cylinder".into());
+            }
+            let x = -b - disc.sqrt();
+            if !(x > 0.0) {
+                return Err("The fillet circle does not sit inside the corner".into());
+            }
+            let o = t_p * x + m * r;
+            let p_a = t_p * x;
+            let p_b = c + (o - c).normalize() * big;
+            let cos_phi = ((p_a - o).dot(&(p_b - o)) / (r * r)).clamp(-1.0, 1.0);
+            let half = 0.5 * cos_phi.acos();
+            let mid = p_a - t_p * (r * half.tan());
+            let area = line(Vec3::zeros(), p_a) + arc(o, p_a, p_b, r) + arc(c, p_b, Vec3::zeros(), big);
+            Ok(CylSection { s_a: x, p_b, mid, weight: half.cos(), area: area.abs() })
+        }
+    }
+}
+
+/// 円柱の側の、端の面の上で頂点に繋がる円弧の稜（4-964）。弦の上限も返す。
+fn find_ruling_arc_neighbour(
+    face: &Face,
+    edge_id: u64,
+    vertex: Point3,
+    cs: &CylSide,
+    at_start: bool,
+    on_face_a: bool,
+) -> Result<(NeighbourTrim, f64), String> {
+    let scale = cs.radius.max(1.0);
+    for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+        for oriented in &wire.edges {
+            let edge = &oriented.edge;
+            if edge.id == edge_id {
+                continue;
+            }
+            let move_start = if (edge.start_vertex.point - vertex).norm() <= 1e-9 {
+                true
+            } else if (edge.end_vertex.point - vertex).norm() <= 1e-9 {
+                false
+            } else {
+                continue;
+            };
+            let fail = |why: &str| Err(format!("Neighbouring edge {} on the cylinder: {why}", edge.id));
+            let Some((centre, radius, _)) = crate::circular_fillet::circle_from_edge(edge) else {
+                return fail("it is not a circular arc");
+            };
+            let offset = centre - cs.centre;
+            if (radius - cs.radius).abs() > 1e-7 * scale
+                || (offset - cs.axis * offset.dot(&cs.axis)).norm() > 1e-7 * scale
+            {
+                return fail("it is not on the cylinder");
+            }
+            let other = if move_start { edge.end_vertex.point } else { edge.start_vertex.point };
+            let chord = (other - vertex).norm();
+            if chord <= 1e-9 {
+                return fail("it is a full circle");
+            }
+            return Ok((
+                NeighbourTrim {
+                    edge_id: edge.id,
+                    move_start,
+                    available: f64::INFINITY,
+                    at_start_of_target: at_start,
+                    on_face_a,
+                    arc: Some((centre, radius, cs.axis)),
+                },
+                chord,
+            ));
+        }
+    }
+    Err(format!("Edge {edge_id} has no arc beside it on the cylinder"))
 }
 
 /// 稜の片端が当たる円柱。軸は稜に直交し、稜の片側の面（側面）は軸を含み、
@@ -546,17 +755,31 @@ impl BlendSite {
 
         // 2. 両面の外向き法線と、稜から面の内側を向く方向
         let mut side = Vec::new();
+        // 片側が、稜を母線に持つ凸の円柱（4-964、`ZENITH_CYL_SIDE_BLEND=1`）
+        let mut cyl_face: Option<(usize, Point3, Vec3, f64)> = None;
         for (face_index, orientation) in &uses {
             let face = &faces[*face_index];
-            let FaceGeometry::Plane(plane) = &face.geometry else {
-                return Err(format!(
+            let not_planar = || {
+                format!(
                     "Face {face_index} beside edge {edge_id} is not planar; only planar pairs are blended"
-                ));
+                )
             };
-            let normal = if face.orientation.is_forward() {
-                plane.normal
-            } else {
-                -plane.normal
+            let normal = match &face.geometry {
+                FaceGeometry::Plane(plane) => {
+                    if face.orientation.is_forward() {
+                        plane.normal
+                    } else {
+                        -plane.normal
+                    }
+                }
+                FaceGeometry::Nurbs(surface) if cyl_side_blend_enabled() && cyl_face.is_none() => {
+                    let (centre, axis, radius, normal) =
+                        cylinder_side_reading(surface, face.orientation.is_forward(), v_start, v_end, d)
+                            .ok_or_else(not_planar)?;
+                    cyl_face = Some((*face_index, centre, axis, radius));
+                    normal
+                }
+                _ => return Err(not_planar()),
             };
             // ワイヤは外向き法線まわりに反時計回りなので、進行方向の左が面の内側
             let travel = if orientation.is_forward() { d } else { -d };
@@ -621,11 +844,23 @@ impl BlendSite {
         // 端が円柱に当たるなら（4-962、凸の 90 度の稜、片端だけ）、その端を円柱で閉じる。
         let convex = dihedral < std::f64::consts::PI;
         let mut cyl_end: Option<CylEnd> = None;
+        let cyl_side = cyl_face.map(|(index, centre, axis, radius)| CylSide {
+            on_a: index == fa,
+            centre,
+            axis,
+            radius,
+            chord_limit: f64::INFINITY,
+        });
+        if cyl_side.is_some() && !convex {
+            return Err(format!(
+                "Edge {edge_id} between a plane and a cylinder is concave; that is not blended yet"
+            ));
+        }
         let mut cap_or_cylinder = |vertex: Point3, at_start: bool, which: &str| {
             match find_cap_face(faces, vertex, fa, fb, d, edge_id, which) {
                 Ok(found) => Ok(found),
                 Err(reason) => {
-                    if convex && cyl_cap_chamfer_enabled() && cyl_end.is_none() {
+                    if convex && cyl_cap_chamfer_enabled() && cyl_end.is_none() && cyl_side.is_none() {
                         if let Some((index, cylinder)) =
                             find_cylinder_cap(faces, vertex, fa, fb, d, ta, tb, at_start)
                         {
@@ -646,12 +881,27 @@ impl BlendSite {
             ));
         }
 
+        if cyl_side.is_some() && (cap_start_normal.is_some() || cap_end_normal.is_some()) {
+            return Err(format!(
+                "Edge {edge_id} between a plane and a cylinder ends on an oblique face; that is not blended yet"
+            ));
+        }
+        let mut cyl_side = cyl_side;
+
         // 5. 端で詰める隣接稜
         let mut neighbours = Vec::new();
         for (at_start, vertex, cap_normal) in
             [(true, v_start, cap_start_normal), (false, v_end, cap_end_normal)]
         {
             for (on_face_a, face_index, dir, normal) in [(true, fa, ta, na), (false, fb, tb, nb)] {
+                // 円柱の側: 隣の稜は端の面の上の円弧（4-964）。許す弦の長さは別に持つ。
+                if let Some(cs) = cyl_side.as_mut().filter(|c| c.on_a == on_face_a) {
+                    let (trim, chord) =
+                        find_ruling_arc_neighbour(&faces[face_index], edge_id, vertex, cs, at_start, on_face_a)?;
+                    cs.chord_limit = cs.chord_limit.min(chord);
+                    neighbours.push(trim);
+                    continue;
+                }
                 // 円柱の端の、円の面の側: 隣の稜は円柱の上の円弧（4-962）。
                 if let Some(cylinder) = cyl_end.filter(|c| c.at_start == at_start && c.circle_on_a == on_face_a) {
                     neighbours.push(find_arc_neighbour(&faces[face_index], edge_id, &cylinder, on_face_a)?);
@@ -711,7 +961,44 @@ impl BlendSite {
             neighbours,
             max_setback,
             cyl_end,
+            cyl_side,
         })
+    }
+
+    /// 円柱の側の断面（4-964）。断面は稜に直交する平面で、角柱なので両端で同じ。
+    fn cyl_section(&self, kind: BlendKind) -> Result<CylSection, String> {
+        let cs = self.cyl_side.ok_or("not a plane-cylinder edge")?;
+        let (t_p, n_p) = if cs.on_a { (self.t_b, self.n_b) } else { (self.t_a, self.n_a) };
+        let t_q = if cs.on_a { self.t_a } else { self.t_b };
+        let section = cyl_section_2d(self.v_start, self.d, t_p, n_p, t_q, &cs, kind)?;
+        if section.p_b.norm() >= cs.chord_limit * (1.0 - 1e-9) {
+            return Err(format!(
+                "The blend reaches {:.6} along the cylinder but the arc beside the edge only allows {:.6}",
+                section.p_b.norm(),
+                cs.chord_limit
+            ));
+        }
+        Ok(section)
+    }
+
+    /// 円柱の側のフィレットの半径の上限（二分法、4-964）。平面の側の後退と円柱の側の弦が
+    /// どちらも許す範囲に収まる最大。
+    fn cyl_side_max_fillet(&self, max_setback: f64) -> f64 {
+        let Some(cs) = self.cyl_side else { return 0.0 };
+        let fits = |r: f64| {
+            self.cyl_section(BlendKind::Fillet { radius: r })
+                .is_ok_and(|s| s.s_a < max_setback && s.p_b.norm() < cs.chord_limit * 0.999)
+        };
+        let (mut lo, mut hi) = (0.0, cs.radius);
+        for _ in 0..100 {
+            let mid = 0.5 * (lo + hi);
+            if fits(mid) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        lo * 0.999
     }
 
     /// 削る帯が、稜の乗っていないワイヤ（穴、稜がポケットの口なら外側ワイヤ、端面の穴）に
@@ -729,6 +1016,13 @@ impl BlendSite {
             return f64::INFINITY;
         }
         let faces = &solid.outer_shell.faces;
+        // 円柱の側（4-964）: 穴の見立ては平面の帯のものなので、穴があれば断る。
+        if self.cyl_side.is_some() {
+            let holed = [self.face_a, self.face_b, self.cap_start, self.cap_end]
+                .iter()
+                .any(|&i| !faces[i].inner_wires.is_empty());
+            return if holed { 0.0 } else { f64::INFINITY };
+        }
         let reach = if self.max_setback.is_finite() { self.max_setback } else { self.length };
         // 斜めの端では帯の角がその端の先へ滑る。滑りは端ごとに違うので、端ごとに広げる。
         let slide = |cap: Option<Vec3>| {
@@ -848,7 +1142,19 @@ impl BlendSite {
 
         // 新しい4頂点。稜の両端が、各面側へ setback だけ退いた点に割れる。
         let (cs, ce) = (self.cap_start_normal, self.cap_end_normal);
+        let section = match self.cyl_side {
+            Some(_) => Some(self.cyl_section(kind)?),
+            None => None,
+        };
         let point = |at_start: bool, on_a: bool| -> Result<Point3, String> {
+            if let (Some(side), Some(sec)) = (self.cyl_side, section) {
+                let vertex = if at_start { self.v_start } else { self.v_end };
+                if side.on_a == on_a {
+                    return Ok(vertex + sec.p_b);
+                }
+                let dir = if on_a { self.t_a } else { self.t_b };
+                return Ok(vertex + dir * sec.s_a);
+            }
             let (vertex, cap, dir) = (
                 if at_start { self.v_start } else { self.v_end },
                 if at_start { cs } else { ce },
@@ -1075,7 +1381,10 @@ impl BlendSite {
                 let _ = setback;
                 // 制御点の中央は2本の接線の交点、つまり元の稜の端点そのもの。
                 // 重みは弧の開き角 (π - θ) の半分の余弦 = sin(θ/2)。
-                let weight = (self.dihedral * 0.5).sin();
+                let (apex, weight) = match self.cyl_side.map(|_| self.cyl_section(kind)).transpose()? {
+                    Some(sec) => (apex + sec.mid, sec.weight),
+                    None => (apex, (self.dihedral * 0.5).sin()),
+                };
                 let curve = NurbsCurve3::new(
                     2,
                     vec![
@@ -1120,15 +1429,18 @@ impl BlendSite {
                 Ok(FaceGeometry::Plane(plane))
             }
             BlendKind::Fillet { .. } => {
-                let weight = (self.dihedral * 0.5).sin();
+                let (mid, weight) = match self.cyl_side.map(|_| self.cyl_section(kind)).transpose()? {
+                    Some(sec) => (sec.mid, sec.weight),
+                    None => (Vec3::zeros(), (self.dihedral * 0.5).sin()),
+                };
                 let rows_b_first = vec![
                     vec![
                         ControlPoint3::unweighted(b_start.point),
                         ControlPoint3::unweighted(b_end.point),
                     ],
                     vec![
-                        ControlPoint3::new(self.v_start, weight),
-                        ControlPoint3::new(self.v_end, weight),
+                        ControlPoint3::new(self.v_start + mid, weight),
+                        ControlPoint3::new(self.v_end + mid, weight),
                     ],
                     vec![
                         ControlPoint3::unweighted(a_start.point),
