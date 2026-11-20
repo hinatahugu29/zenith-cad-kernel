@@ -469,7 +469,7 @@ struct CylSection {
 }
 
 fn cyl_side_blend_enabled() -> bool {
-    std::env::var("ZENITH_CYL_SIDE_BLEND").is_ok_and(|v| v == "1")
+    std::env::var("ZENITH_CYL_SIDE_BLEND").map_or(true, |v| v != "0")
 }
 
 /// 面が、稜（v_start→v_end）を母線に持つ凸の円柱なら (軸の点, 軸, 半径, 頂点での外向き法線)。
