@@ -162,6 +162,7 @@ impl EdgeBlender {
                         .or_else(|| {
                             crate::circular_fillet::prism_rim::prism_rim_blendable(solid, edge_id)
                         })
+                        .or_else(|| arc_rim_blendable(solid, edge_id))
                 {
                     Ok(edge)
                 } else {
@@ -354,6 +355,18 @@ impl EdgeBlender {
                 solid, edge_id, distance,
             )? {
                 return Ok(result);
+            }
+        }
+        if let BlendKind::Chamfer { distance } = kind {
+            if let Some(result) = try_chamfer_arc_rim(solid, edge_id, distance)? {
+                return Ok(result);
+            }
+        }
+        if let BlendKind::Fillet { .. } = kind {
+            if arc_rim_blendable(solid, edge_id).is_some() {
+                return Err(format!(
+                    "Edge {edge_id} is a cylinder rim arc ending on side faces; only a chamfer is built there (the fillet end is not a rational curve)"
+                ));
             }
         }
         let site = BlendSite::locate(solid, edge_id)?;
@@ -2305,4 +2318,760 @@ fn hole_clearance_enabled() -> bool {
     std::env::var("ZENITH_BLEND_HOLE_CLEARANCE")
         .map(|value| value != "0")
         .unwrap_or(true)
+}
+
+/// 円柱の縁の部分円弧の面取り（4-966、`ZENITH_ARC_RIM_CHAMFER=1`）。
+///
+/// 稜は、軸に直交する平面 P と凸の円柱 Q の間の円弧で、両端は軸に平行な平面 E に当たる
+/// （D字ブロックの上下の円弧）。面取りの面は円錐で、端は円錐と E の交わりの双曲線
+/// （有理2次）。P の円弧は半径 R−s、Q の円弧は s だけ下へ、P の直線と Q の母線を詰める。
+/// 削れる体積は ∫_{R−s}^{R} (s−R+r)·r·Θ(r) dr（Θ は半径 r の円が2枚の E に挟まれる角）。
+fn arc_rim_chamfer_enabled() -> bool {
+    std::env::var("ZENITH_ARC_RIM_CHAMFER").is_ok_and(|v| v == "1")
+}
+
+/// 円柱の面の向き: 中ほどの法線が軸から外を向けば true（立体は内側）。
+fn cylinder_faces_out(surface: &NurbsSurface3, forward: bool, base: Point3, axis: Vec3) -> Option<bool> {
+    let ((u0, u1), (w0, w1)) = surface.param_range();
+    let (um, wm) = ((u0 + u1) * 0.5, (w0 + w1) * 0.5);
+    let normal = surface.normal(um, wm)?;
+    let offset = surface.evaluate(um, wm) - base;
+    let radial = offset - axis * offset.dot(&axis);
+    let sign = normal.dot(&radial) * if forward { 1.0 } else { -1.0 };
+    Some(sign > 0.0)
+}
+
+/// 中心 centre・半径 radius、平面の基底 (x, y) の円の角 lo..hi の制御点と節（四半周ごと）。
+fn circle_span(
+    centre: Point3,
+    radius: f64,
+    x: Vec3,
+    y: Vec3,
+    lo: f64,
+    hi: f64,
+) -> (Vec<ControlPoint3>, KnotVector) {
+    let sweep = hi - lo;
+    let spans = (sweep / std::f64::consts::FRAC_PI_2 - 1e-9).ceil().max(1.0) as usize;
+    let step = sweep / spans as f64;
+    let half = step * 0.5;
+    let at = |phi: f64| centre + (x * phi.cos() + y * phi.sin()) * radius;
+    let mut points = vec![ControlPoint3::unweighted(at(lo))];
+    let mut knots = vec![0.0, 0.0, 0.0];
+    for span in 0..spans {
+        let phi = lo + step * span as f64;
+        let mid = centre + (x * (phi + half).cos() + y * (phi + half).sin()) * (radius / half.cos());
+        points.push(ControlPoint3::new(mid, half.cos()));
+        points.push(ControlPoint3::unweighted(at(phi + step)));
+        if span + 1 == spans {
+            knots.extend([1.0, 1.0, 1.0]);
+        } else {
+            let k = (span + 1) as f64 / spans as f64;
+            knots.extend([k, k]);
+        }
+    }
+    (points, KnotVector::new(knots))
+}
+
+/// Gauss–Legendre の節と重み（[-1, 1]、Newton で根を取る）。
+fn gauss_legendre(n: usize) -> Vec<(f64, f64)> {
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut x = (std::f64::consts::PI * (i as f64 + 0.75) / (n as f64 + 0.5)).cos();
+        let mut dp = 1.0;
+        for _ in 0..100 {
+            let (mut p0, mut p1) = (1.0, x);
+            for k in 2..=n {
+                let p2 = ((2 * k - 1) as f64 * x * p1 - (k - 1) as f64 * p0) / k as f64;
+                p0 = p1;
+                p1 = p2;
+            }
+            dp = n as f64 * (x * p1 - p0) / (x * x - 1.0);
+            let dx = p1 / dp;
+            x -= dx;
+            if dx.abs() < 1e-16 {
+                break;
+            }
+        }
+        out.push((x, 2.0 / ((1.0 - x * x) * dp * dp)));
+    }
+    out
+}
+
+struct RimEnd {
+    vertex: Point3,
+    face: usize,
+    p_line: Edge,
+    q_line: Edge,
+    /// P の直線の、頂点から離れる向き（単位）
+    u: Vec3,
+    top: Point3,
+    /// 端の平面の法線
+    normal: Vec3,
+}
+
+/// 面のワイヤで、点に触れる稜（skip の id を除く）。
+fn edges_touching(face: &Face, vertex: Point3, skip: &[u64]) -> Vec<Edge> {
+    std::iter::once(&face.outer_wire)
+        .chain(face.inner_wires.iter())
+        .flat_map(|w| w.edges.iter())
+        .filter(|o| !skip.contains(&o.edge.id))
+        .filter(|o| {
+            (o.edge.start_vertex.point - vertex).norm() <= 1e-9
+                || (o.edge.end_vertex.point - vertex).norm() <= 1e-9
+        })
+        .map(|o| o.edge.clone())
+        .collect()
+}
+
+fn far_end(edge: &Edge, vertex: Point3) -> Point3 {
+    if (edge.start_vertex.point - vertex).norm() <= 1e-9 {
+        edge.end_vertex.point
+    } else {
+        edge.start_vertex.point
+    }
+}
+
+fn try_chamfer_arc_rim(
+    solid: &Solid,
+    edge_id: u64,
+    s: f64,
+) -> Result<Option<(Solid, EdgeBlendReport)>, String> {
+    if !arc_rim_chamfer_enabled() {
+        return Ok(None);
+    }
+    let tol = Tolerance::default();
+    let faces = &solid.outer_shell.faces;
+    let users = |id: u64| -> Vec<(usize, Orientation, Edge)> {
+        let mut out = Vec::new();
+        for (index, face) in faces.iter().enumerate() {
+            for wire in std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()) {
+                for oriented in &wire.edges {
+                    if oriented.edge.id == id {
+                        out.push((index, oriented.orientation, oriented.edge.clone()));
+                    }
+                }
+            }
+        }
+        out
+    };
+    let uses = users(edge_id);
+    if uses.len() != 2 || uses[0].0 == uses[1].0 {
+        return Ok(None);
+    }
+    let edge = uses[0].2.clone();
+    let Some((centre, radius, _)) = crate::circular_fillet::circle_from_edge(&edge) else {
+        return Ok(None);
+    };
+    let (mut pi, mut qi) = (None, None);
+    for (index, _, _) in &uses {
+        match &faces[*index].geometry {
+            FaceGeometry::Plane(_) => pi = Some(*index),
+            FaceGeometry::Nurbs(_) => qi = Some(*index),
+            _ => {}
+        }
+    }
+    let (Some(pi), Some(qi)) = (pi, qi) else { return Ok(None) };
+    let FaceGeometry::Plane(plane) = &faces[pi].geometry else { return Ok(None) };
+    let up = if faces[pi].orientation.is_forward() { plane.normal } else { -plane.normal };
+    let scale = radius.max(1.0);
+    // 円柱の面か（同じ軸・半径、凸）
+    let q_ok = |index: usize| -> bool {
+        let FaceGeometry::Nurbs(surface) = &faces[index].geometry else { return false };
+        let Some((base, big, axis, _)) = crate::brep_intersection::cylinder_patch_reading(surface, &tol)
+        else {
+            return false;
+        };
+        let Some(axis) = axis.try_normalize_safe(1e-12) else { return false };
+        let off = centre - base;
+        axis.dot(&up).abs() >= 1.0 - 1e-12
+            && (big - radius).abs() <= 1e-7 * scale
+            && (off - axis * off.dot(&axis)).norm() <= 1e-7 * scale
+            && cylinder_faces_out(surface, faces[index].orientation.is_forward(), base, axis) == Some(true)
+    };
+    if !q_ok(qi) {
+        return Ok(None);
+    }
+    let same_circle = |e: &Edge| {
+        crate::circular_fillet::circle_from_edge(e).is_some_and(|(c, r, _)| {
+            (c - centre).norm() <= 1e-7 * scale && (r - radius).abs() <= 1e-7 * scale
+        })
+    };
+
+    // 同じ円の上で接して続く円弧を鎖にたどる（円柱の面が継ぎ目で分かれている）
+    let mut chain: Vec<(Edge, usize)> = vec![(edge.clone(), qi)];
+    let (mut v0, mut v1) = (edge.start_vertex.point, edge.end_vertex.point);
+    for forward in [true, false] {
+        loop {
+            let ids: Vec<u64> = chain.iter().map(|c| c.0.id).collect();
+            let x = if forward { v1 } else { v0 };
+            let arcs: Vec<Edge> =
+                edges_touching(&faces[pi], x, &ids).into_iter().filter(|e| same_circle(e)).collect();
+            if arcs.is_empty() {
+                break;
+            }
+            if arcs.len() > 1 || chain.len() >= 16 {
+                return Ok(None);
+            }
+            let next = arcs[0].clone();
+            let next_users = users(next.id);
+            if next_users.len() != 2 {
+                return Ok(None);
+            }
+            let Some(q) = next_users.iter().map(|u| u.0).find(|&i| i != pi) else { return Ok(None) };
+            if !q_ok(q) {
+                return Ok(None);
+            }
+            let other = far_end(&next, x);
+            let closes = if forward { (other - v0).norm() <= 1e-9 } else { (other - v1).norm() <= 1e-9 };
+            if closes {
+                return Ok(None); // 全周（`try_*_cylinder_rim` の領分）
+            }
+            if forward {
+                chain.push((next, q));
+                v1 = other;
+            } else {
+                chain.insert(0, (next, q));
+                v0 = other;
+            }
+        }
+    }
+    let chain_ids: Vec<u64> = chain.iter().map(|c| c.0.id).collect();
+    // 鎖の向きに対する各弧の向きと、内側の頂点
+    let mut flags = Vec::new();
+    let mut joints = Vec::new();
+    let mut cursor = v0;
+    for (arc, _) in &chain {
+        let forward = (arc.start_vertex.point - cursor).norm() <= 1e-9;
+        flags.push(forward);
+        cursor = far_end(arc, cursor);
+        joints.push(cursor);
+    }
+    joints.pop();
+
+    // ここから先はこの形。合わなければ理由を付けて断る。
+    let refuse = |why: &str| -> Result<Option<(Solid, EdgeBlendReport)>, String> {
+        Err(format!("Edge {edge_id} is a cylinder rim arc; {why}"))
+    };
+    if !(s > 0.0) || s >= radius {
+        return refuse("the chamfer is not smaller than the cylinder radius");
+    }
+    let r_top = radius - s;
+    let radial = |p: Point3| {
+        let o = p - centre;
+        o - up * o.dot(&up)
+    };
+    let mut ends: Vec<RimEnd> = Vec::new();
+    for (vertex, q_end) in [(v0, chain[0].1), (v1, chain[chain.len() - 1].1)] {
+        let others: Vec<usize> = (0..faces.len())
+            .filter(|&i| i != pi && i != q_end && !edges_touching(&faces[i], vertex, &chain_ids).is_empty())
+            .collect();
+        if others.len() != 1 {
+            return refuse("an end does not meet exactly one other face");
+        }
+        let ei = others[0];
+        let FaceGeometry::Plane(end_plane) = &faces[ei].geometry else {
+            return refuse("an end face is not planar");
+        };
+        if end_plane.normal.dot(&up).abs() > 1e-9 {
+            return refuse("an end face is not parallel to the cylinder axis");
+        }
+        let (p_lines, q_lines) =
+            (edges_touching(&faces[pi], vertex, &chain_ids), edges_touching(&faces[q_end], vertex, &chain_ids));
+        if p_lines.len() != 1 || q_lines.len() != 1 {
+            return refuse("an end has more than one neighbouring edge");
+        }
+        let (p_line, q_line) = (p_lines[0].clone(), q_lines[0].clone());
+        let (p_far, q_far) = (far_end(&p_line, vertex), far_end(&q_line, vertex));
+        let p_len = (p_far - vertex).norm();
+        let q_len = (q_far - vertex).norm();
+        if p_len <= 1e-12 || q_len <= 1e-12 {
+            return refuse("a neighbouring edge has no length");
+        }
+        let u = (p_far - vertex) / p_len;
+        let w = (q_far - vertex) / q_len;
+        if max_chord_deviation(&p_line.curve, vertex, u, p_len) > 1e-9 * p_len.max(1.0)
+            || max_chord_deviation(&q_line.curve, vertex, w, q_len) > 1e-9 * q_len.max(1.0)
+        {
+            return refuse("a neighbouring edge is not straight");
+        }
+        if w.dot(&-up) < 1.0 - 1e-9 || u.dot(&up).abs() > 1e-9 {
+            return refuse("the neighbouring edges do not run along the axis and across it");
+        }
+        if s >= q_len * (1.0 - 1e-9) {
+            return refuse("the chamfer is longer than the cylinder's ruling");
+        }
+        // P の直線の上で、軸から r_top の点（頂点に近い根）
+        let wv = radial(vertex);
+        let b = wv.dot(&u);
+        let disc = b * b - wv.dot(&wv) + r_top * r_top;
+        if disc < 0.0 {
+            return refuse("the chamfer misses the line on the top face");
+        }
+        let t = -b - disc.sqrt();
+        let t = if t > 1e-12 { t } else { -b + disc.sqrt() };
+        if !(t > 0.0) || t >= p_len * (1.0 - 1e-9) {
+            return refuse("the chamfer is longer than the line on the top face");
+        }
+        ends.push(RimEnd { vertex, face: ei, p_line, q_line, u, top: vertex + u * t, normal: end_plane.normal });
+    }
+    if ends[0].face == ends[1].face {
+        return refuse("both ends meet the same face");
+    }
+    // 継ぎ目の母線（鎖の内側の頂点で、隣り合う円柱の面が共有する直線）
+    let mut seams: Vec<Edge> = Vec::new();
+    for (k, joint) in joints.iter().enumerate() {
+        let here = edges_touching(&faces[chain[k].1], *joint, &chain_ids);
+        let there = edges_touching(&faces[chain[k + 1].1], *joint, &chain_ids);
+        if here.len() != 1 || there.len() != 1 || here[0].id != there[0].id {
+            return refuse("the arcs do not meet at a seam of the cylinder");
+        }
+        let seam = here[0].clone();
+        let far = far_end(&seam, *joint);
+        let len = (far - *joint).norm();
+        if len <= 1e-12
+            || max_chord_deviation(&seam.curve, *joint, (far - *joint) / len, len) > 1e-9 * len.max(1.0)
+            || ((far - *joint) / len).dot(&-up) < 1.0 - 1e-9
+        {
+            return refuse("a seam of the cylinder is not a ruling");
+        }
+        if s >= len * (1.0 - 1e-9) {
+            return refuse("the chamfer is longer than a seam of the cylinder");
+        }
+        seams.push(seam);
+    }
+
+    // 回る向きと角（鎖の向きに左回り）
+    let x = radial(v0).normalize();
+    let first = &chain[0].0;
+    let (t0, t1) = first.curve.param_range();
+    let y0 = up.cross(&x);
+    let ang0 = |v: Vec3| {
+        let a = v.dot(&y0).atan2(v.dot(&x));
+        if a < 0.0 { a + std::f64::consts::TAU } else { a }
+    };
+    let (m, e) = (radial(first.curve.evaluate((t0 + t1) * 0.5)), radial(far_end(first, v0)));
+    let _ = t1;
+    let sense = if ang0(m) <= ang0(e) { up } else { -up };
+    let y = sense.cross(&x);
+    let angle = |p: Point3| {
+        let v = radial(p);
+        v.dot(&y).atan2(v.dot(&x))
+    };
+    let mut angles = vec![0.0];
+    for point in joints.iter().chain(std::iter::once(&v1)) {
+        let last = *angles.last().unwrap_or(&0.0);
+        let mut a = last + (angle(*point) - last).rem_euclid(std::f64::consts::TAU);
+        if a - last <= 1e-12 {
+            a += std::f64::consts::TAU;
+        }
+        angles.push(a);
+    }
+    let sweep = *angles.last().unwrap_or(&0.0);
+    if sweep >= std::f64::consts::TAU - 1e-9 {
+        return refuse("the arcs go all the way round");
+    }
+    let near = |a: f64, target: f64| {
+        a + std::f64::consts::TAU * ((target - a) / std::f64::consts::TAU).round()
+    };
+    let (ts, te) = (near(angle(ends[0].top), 0.0), near(angle(ends[1].top), sweep));
+    if !(te > ts) {
+        return refuse("the chamfer closes the arc on the top face");
+    }
+    let lo = ts.min(0.0);
+    let hi = te.max(sweep);
+    let low = centre - up * s;
+
+    // 頂点とブレンドの辺
+    let vt: Vec<Vertex> = ends.iter().map(|e| Vertex::from_point(e.top)).collect();
+    let vb: Vec<Vertex> = ends.iter().map(|e| Vertex::from_point(e.vertex - up * s)).collect();
+    let vj: Vec<Vertex> = joints.iter().map(|j| Vertex::from_point(*j - up * s)).collect();
+    let arc_curve = |c: Point3, r: f64, a: f64, b: f64| -> Result<NurbsCurve3, String> {
+        let (points, knots) = circle_span(c, r, x, y, a, b);
+        Ok(NurbsCurve3::new(2, points, knots)?)
+    };
+    let top_arc = Edge::new(arc_curve(centre, r_top, ts, te)?, vt[0].clone(), vt[1].clone(), 1e-6);
+    let mut pieces = Vec::new();
+    for k in 0..chain.len() {
+        let a = if k == 0 { vb[0].clone() } else { vj[k - 1].clone() };
+        let b = if k + 1 == chain.len() { vb[1].clone() } else { vj[k].clone() };
+        pieces.push(Edge::new(arc_curve(low, radius, angles[k], angles[k + 1])?, a, b, 1e-6));
+    }
+    // 双曲線: r ↦ (直線の上で軸から r の点, 高さ z0 − s + R − r)。返すのは点と d/dr。
+    let conic_point = |end: &RimEnd, r: f64| -> Option<(Point3, Vec3)> {
+        let wv = radial(end.vertex);
+        let b = wv.dot(&end.u);
+        let disc = b * b - wv.dot(&wv) + r * r;
+        if disc < 0.0 {
+            return None;
+        }
+        let root = disc.sqrt();
+        // 頂点（t=0, r=R）から続く根: r<R では t>0 の小さいほう
+        let (t_minus, t_plus) = (-b - root, -b + root);
+        let t = if (r - radius).abs() <= 1e-12 * scale {
+            0.0
+        } else if t_minus > 0.0 {
+            t_minus
+        } else {
+            t_plus
+        };
+        let rel = wv + end.u * t;
+        let dt = r / rel.dot(&end.u);
+        let point = end.vertex + end.u * t - up * (s - (radius - r));
+        Some((point, end.u * dt - up))
+    };
+    let (top_points, knots) = circle_span(centre, r_top, x, y, lo, hi);
+    let (bottom_points, _) = circle_span(low, radius, x, y, lo, hi);
+    let mut hyperbolas = Vec::new();
+    let mut exact_pcurves = Vec::new();
+    for (k, end) in ends.iter().enumerate() {
+        let Some((curve3, curve2)) = cone_plane_curves(
+            &top_points,
+            &bottom_points,
+            &knots,
+            end.normal,
+            end.normal.dot(&end.vertex.coords),
+            end.top,
+            end.vertex - up * s,
+            scale,
+        ) else {
+            return refuse("the end curve could not be laid on the cone's own parameter");
+        };
+        let edge = Edge::new(curve3, vt[k].clone(), vb[k].clone(), 1e-6);
+        exact_pcurves.push((edge.id, curve2));
+        hyperbolas.push(edge);
+    }
+
+    // 詰めた直線（両端の直線と母線、継ぎ目の母線）
+    let mut trimmed: BTreeMap<u64, Edge> = BTreeMap::new();
+    let mut moves: Vec<(&Edge, Point3, &Vertex)> = Vec::new();
+    for (k, end) in ends.iter().enumerate() {
+        moves.push((&end.p_line, end.vertex, &vt[k]));
+        moves.push((&end.q_line, end.vertex, &vb[k]));
+    }
+    for (k, seam) in seams.iter().enumerate() {
+        moves.push((seam, joints[k], &vj[k]));
+    }
+    for (line, old, vertex) in moves {
+        let at_start = (line.start_vertex.point - old).norm() <= 1e-9;
+        let (a, b) = if at_start {
+            (vertex.clone(), line.end_vertex.clone())
+        } else {
+            (line.start_vertex.clone(), vertex.clone())
+        };
+        let curve = NurbsCurve3::bspline_from_points(1, vec![a.point, b.point])?;
+        trimmed.insert(
+            line.id,
+            Edge { id: line.id, curve, start_vertex: a, end_vertex: b, tolerance: line.tolerance },
+        );
+    }
+
+    let mut top_forward = None;
+    let mut new_faces: Vec<Face> = Vec::with_capacity(faces.len() + 1);
+    for (index, face) in faces.iter().enumerate() {
+        let mut placed_top = false;
+        let mut substitute = |oriented: &OrientedEdge| -> Option<OrientedEdge> {
+            if let Some(k) = chain_ids.iter().position(|&id| id == oriented.edge.id) {
+                let along = if flags[k] { oriented.orientation } else { oriented.orientation.reversed() };
+                if index == pi {
+                    if placed_top {
+                        return None;
+                    }
+                    placed_top = true;
+                    top_forward = Some(along.is_forward());
+                    return Some(OrientedEdge::new(top_arc.clone(), along));
+                }
+                return Some(OrientedEdge::new(pieces[k].clone(), along));
+            }
+            Some(match trimmed.get(&oriented.edge.id) {
+                Some(edge) => OrientedEdge::new(edge.clone(), oriented.orientation),
+                None => oriented.clone(),
+            })
+        };
+        let is_end = ends.iter().any(|e| e.face == index);
+        let mut rebuild = |wire: &Wire| -> Result<Wire, String> {
+            let edges: Vec<OrientedEdge> = wire.edges.iter().filter_map(&mut substitute).collect();
+            if is_end {
+                close_gap(edges, &[&hyperbolas[0], &hyperbolas[1]], &tol)
+            } else {
+                Ok(Wire::new(edges))
+            }
+        };
+        let outer = rebuild(&face.outer_wire)?;
+        let mut inners = Vec::new();
+        for wire in &face.inner_wires {
+            inners.push(rebuild(wire)?);
+        }
+        new_faces.push(Face::new(face.geometry.clone(), outer, inners, face.orientation, face.tolerance));
+    }
+    let top_forward = top_forward.ok_or("the top face lost the arc")?;
+    // 円錐の面の輪: 隣の面と逆向きに使う
+    let mut cone_edges = Vec::new();
+    if top_forward {
+        cone_edges.push(OrientedEdge::reversed(top_arc.clone()));
+        cone_edges.push(OrientedEdge::forward(hyperbolas[0].clone()));
+        cone_edges.extend(pieces.iter().map(|p| OrientedEdge::forward(p.clone())));
+        cone_edges.push(OrientedEdge::reversed(hyperbolas[1].clone()));
+    } else {
+        cone_edges.push(OrientedEdge::forward(top_arc.clone()));
+        cone_edges.push(OrientedEdge::forward(hyperbolas[1].clone()));
+        cone_edges.extend(pieces.iter().rev().map(|p| OrientedEdge::reversed(p.clone())));
+        cone_edges.push(OrientedEdge::reversed(hyperbolas[0].clone()));
+    }
+    let rows: Vec<Vec<ControlPoint3>> = top_points
+        .iter()
+        .zip(bottom_points.iter())
+        .map(|(a, b)| vec![*a, *b])
+        .collect();
+    let cone = NurbsSurface3::new(2, 1, rows, knots, KnotVector::clamped_uniform(2, 1))?;
+    let mid_angle = 0.5 * (lo + hi);
+    let outward = (x * mid_angle.cos() + y * mid_angle.sin()) + up;
+    let ((u0, u1), (w0, w1)) = cone.param_range();
+    let normal = cone
+        .normal((u0 + u1) * 0.5, (w0 + w1) * 0.5)
+        .ok_or("the chamfer cone has no normal")?;
+    let orientation =
+        if normal.dot(&outward) > 0.0 { Orientation::Forward } else { Orientation::Reversed };
+    let mut cone_face =
+        Face::new(FaceGeometry::Nurbs(cone), Wire::new(cone_edges), vec![], orientation, faces[qi].tolerance);
+    // 双曲線の p-curve を当てはめから厳密なものへ（端点の合う向きで）
+    if let Some(pcurves) = cone_face.pcurves.as_mut() {
+        for segment in pcurves.outer_loop.segments.iter_mut() {
+            if let Some((_, exact)) = exact_pcurves.iter().find(|(id, _)| *id == segment.edge_id) {
+                let (f0, f1) = segment.curve.param_range();
+                let (e0, e1) = exact.param_range();
+                let same = (segment.curve.evaluate(f0) - exact.evaluate(e0)).norm()
+                    + (segment.curve.evaluate(f1) - exact.evaluate(e1)).norm();
+                let flipped = (segment.curve.evaluate(f0) - exact.evaluate(e1)).norm()
+                    + (segment.curve.evaluate(f1) - exact.evaluate(e0)).norm();
+                segment.curve = if same <= flipped { exact.clone() } else { reverse_bezier2(exact) };
+            }
+        }
+    }
+    new_faces.push(cone_face);
+    let result = Solid::try_new(Shell::closed(new_faces), solid.inner_shells.clone(), &tol)
+        .map_err(|err| err.to_string())?;
+
+    // 削れる体積
+    let theta = |r: f64| -> Option<f64> {
+        let (a, _) = conic_point(&ends[0], r)?;
+        let (b, _) = conic_point(&ends[1], r)?;
+        Some(near(angle(b), sweep) - near(angle(a), 0.0))
+    };
+    let mut predicted = 0.0;
+    let nodes = gauss_legendre(24);
+    let parts = 4;
+    for part in 0..parts {
+        let a = r_top + s * part as f64 / parts as f64;
+        let b = r_top + s * (part + 1) as f64 / parts as f64;
+        for &(xi, wi) in &nodes {
+            let r = 0.5 * (a + b) + 0.5 * (b - a) * xi;
+            let th = theta(r).ok_or("the removed volume could not be integrated")?;
+            predicted += 0.5 * (b - a) * wi * (s - radius + r) * r * th;
+        }
+    }
+    Ok(Some((
+        result,
+        EdgeBlendReport {
+            dihedral_angle_deg: 90.0,
+            edge_length: radius * sweep,
+            setback: s,
+            predicted_removed_volume: predicted,
+        },
+    )))
+}
+
+/// 円錐（上の円の行と下の円の行の、重みの同じ線織面）と、平面 n·p = h の交わりを、
+/// 円錐の面の u の引数で厳密に（4-966）。v = a/(a−b)（a, b は各行の n·P − h の
+/// 2次式）。p-curve (u, v) は有理3次、3D は S(u, v(u)) で有理4次。
+/// `from`（v=0 の側）から `to`（v=1 の側）へ。1区間に収まらなければ `None`。
+fn cone_plane_curves(
+    top: &[ControlPoint3],
+    bottom: &[ControlPoint3],
+    knots: &KnotVector,
+    normal: Vec3,
+    h: f64,
+    from: Point3,
+    to: Point3,
+    scale: f64,
+) -> Option<(NurbsCurve3, zenith_geom::NurbsCurve2)> {
+    use zenith_geom::{ControlPoint2, NurbsCurve2};
+    use zenith_math::Point2;
+    let n = top.len();
+    if n != bottom.len() || n % 2 == 0 {
+        return None;
+    }
+    let spans = (n - 1) / 2;
+    let k = &knots.knots;
+    for span in 0..spans {
+        let (ka, kb) = (k[2 * span + 2], k[2 * span + 3]);
+        let delta = kb - ka;
+        if !(delta > 0.0) {
+            continue;
+        }
+        let idx = [2 * span, 2 * span + 1, 2 * span + 2];
+        let w: Vec<f64> = idx.iter().map(|&i| top[i].weight).collect();
+        if idx.iter().any(|&i| (bottom[i].weight - top[i].weight).abs() > 1e-15) {
+            return None;
+        }
+        let a: Vec<f64> = idx.iter().map(|&i| top[i].weight * (normal.dot(&top[i].point.coords) - h)).collect();
+        let b: Vec<f64> = idx.iter().map(|&i| bottom[i].weight * (normal.dot(&bottom[i].point.coords) - h)).collect();
+        let d: Vec<f64> = (0..3).map(|i| a[i] - b[i]).collect();
+        // 2次式の [0,1] の根
+        let roots = |c: &[f64]| -> Vec<f64> {
+            let (qa, qb, qc) = (c[0] - 2.0 * c[1] + c[2], 2.0 * (c[1] - c[0]), c[0]);
+            let mut out = Vec::new();
+            if qa.abs() > 1e-14 * (qb.abs() + qc.abs()).max(1e-300) {
+                let disc = qb * qb - 4.0 * qa * qc;
+                if disc >= 0.0 {
+                    let root = disc.sqrt();
+                    out.push((-qb + root) / (2.0 * qa));
+                    out.push((-qb - root) / (2.0 * qa));
+                }
+            } else if qb.abs() > 0.0 {
+                out.push(-qc / qb);
+            }
+            out.into_iter().filter(|s| *s >= -1e-6 && *s <= 1.0 + 1e-6).map(|s| s.clamp(0.0, 1.0)).collect()
+        };
+        // 3D の点（行 v、局所 s）
+        let point_at = |s: f64, v: f64| -> Point3 {
+            let bs = [(1.0 - s) * (1.0 - s), 2.0 * s * (1.0 - s), s * s];
+            let mut num = Vec3::zeros();
+            let mut den = 0.0;
+            for j in 0..3 {
+                let p = top[idx[j]].point.coords * (1.0 - v) + bottom[idx[j]].point.coords * v;
+                num += p * (bs[j] * w[j]);
+                den += bs[j] * w[j];
+            }
+            Point3::from(num / den)
+        };
+        let s_from = roots(&a).into_iter().find(|&s| (point_at(s, 0.0) - from).norm() <= 1e-9 * scale);
+        let s_to = roots(&b).into_iter().find(|&s| (point_at(s, 1.0) - to).norm() <= 1e-9 * scale);
+        if std::env::var("ZENITH_ARC_RIM_WHY").is_ok_and(|v| v == "1") {
+            let ra = roots(&a);
+            let rb = roots(&b);
+            eprintln!(
+                "ARCRIM span {span} a根 {:?} b根 {:?} from {:?} to {:?} a点 {:?} b点 {:?}",
+                ra, rb, from, to,
+                ra.iter().map(|&s| point_at(s, 0.0)).collect::<Vec<_>>(),
+                rb.iter().map(|&s| point_at(s, 1.0)).collect::<Vec<_>>()
+            );
+        }
+        let (Some(s_from), Some(s_to)) = (s_from, s_to) else { continue };
+        let (lo, hi) = (s_from.min(s_to), s_from.max(s_to));
+        if hi - lo <= 1e-12 {
+            return None;
+        }
+        // 2D: (u·D, N, D) を3次に（N = a）
+        let elevate = |q: &[f64]| [q[0], (q[0] + 2.0 * q[1]) / 3.0, (2.0 * q[1] + q[2]) / 3.0, q[2]];
+        let (d3, n3) = (elevate(&d), elevate(&a));
+        let ud = [
+            ka * d3[0],
+            ka * d3[1] + delta * d[0] / 3.0,
+            ka * d3[2] + delta * 2.0 * d[1] / 3.0,
+            ka * d3[3] + delta * d[2],
+        ];
+        let hom2: Vec<[f64; 3]> = (0..4).map(|i| [ud[i], n3[i], d3[i]]).collect();
+        // 3D: (D−N)·Ã + N·B̃（Ã, B̃ は行の同次座標の2次式）、2次×2次 → 4次
+        let product = |f: &[f64], g: &[f64]| -> [f64; 5] {
+            let c2 = [1.0, 2.0, 1.0];
+            let c4 = [1.0, 4.0, 6.0, 4.0, 1.0];
+            let mut out = [0.0; 5];
+            for i in 0..3 {
+                for j in 0..3 {
+                    out[i + j] += c2[i] * c2[j] * f[i] * g[j];
+                }
+            }
+            for (k, value) in out.iter_mut().enumerate() {
+                *value /= c4[k];
+            }
+            out
+        };
+        let dn: Vec<f64> = (0..3).map(|i| d[i] - a[i]).collect();
+        let mut hom3: Vec<[f64; 4]> = vec![[0.0; 4]; 5];
+        for c in 0..4 {
+            let at: Vec<f64> = idx
+                .iter()
+                .map(|&i| {
+                    let p = top[i].point;
+                    let value = if c < 3 { p[c] } else { 1.0 };
+                    value * top[i].weight
+                })
+                .collect();
+            let bt: Vec<f64> = idx
+                .iter()
+                .map(|&i| {
+                    let p = bottom[i].point;
+                    let value = if c < 3 { p[c] } else { 1.0 };
+                    value * bottom[i].weight
+                })
+                .collect();
+            let (x, y) = (product(&dn, &at), product(&a, &bt));
+            for k in 0..5 {
+                hom3[k][c] = x[k] + y[k];
+            }
+        }
+        let mut seg3 = bezier_segment(&hom3, lo, hi);
+        let mut seg2 = bezier_segment(&hom2, lo, hi);
+        if s_from > s_to {
+            seg3.reverse();
+            seg2.reverse();
+        }
+        // 同次の重みの符号をそろえる（D の符号が負でも同じ曲線）
+        let sign3 = if seg3[0][3] < 0.0 { -1.0 } else { 1.0 };
+        let sign2 = if seg2[0][2] < 0.0 { -1.0 } else { 1.0 };
+        if seg3.iter().any(|q| !(q[3] * sign3 > 0.0)) || seg2.iter().any(|q| !(q[2] * sign2 > 0.0)) {
+            return None;
+        }
+        let curve3 = NurbsCurve3::new(
+            4,
+            seg3.iter()
+                .map(|q| ControlPoint3::new(Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]), q[3] * sign3))
+                .collect(),
+            KnotVector::clamped_uniform(5, 4),
+        )
+        .ok()?;
+        let curve2 = NurbsCurve2::new(
+            3,
+            seg2.iter()
+                .map(|q| ControlPoint2::new(Point2::new(q[0] / q[2], q[1] / q[2]), q[2] * sign2))
+                .collect(),
+            KnotVector::clamped_uniform(4, 3),
+        )
+        .ok()?;
+        return Some((curve3, curve2));
+    }
+    None
+}
+
+/// 円柱の縁の部分円弧の上限（4-966）。面取りの距離の条件はどれも上限なので、作れるかで
+/// 二分する。フィレットは端が有理曲線にならないので 0。
+fn arc_rim_blendable(solid: &Solid, edge_id: u64) -> Option<BlendableEdge> {
+    if !arc_rim_chamfer_enabled() {
+        return None;
+    }
+    let edge = find_edge(&solid.outer_shell.faces, edge_id)?;
+    let (_, radius, _) = crate::circular_fillet::circle_from_edge(&edge)?;
+    let builds = |s: f64| matches!(try_chamfer_arc_rim(solid, edge_id, s), Ok(Some(_)));
+    let (mut lo, mut hi) = (0.0, radius);
+    // 形が当てはまらなければ（小さな距離でも Ok(None) か断り）上限は出さない
+    match try_chamfer_arc_rim(solid, edge_id, radius * 1e-6) {
+        Ok(Some(_)) => {}
+        _ => return None,
+    }
+    for _ in 0..50 {
+        let mid = 0.5 * (lo + hi);
+        if builds(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let (_, report) = try_chamfer_arc_rim(solid, edge_id, radius * 1e-6).ok()??;
+    Some(BlendableEdge {
+        edge_id,
+        length: report.edge_length,
+        dihedral_angle_deg: 90.0,
+        max_fillet_radius: 0.0,
+        max_chamfer_distance: lo * 0.999,
+    })
 }
