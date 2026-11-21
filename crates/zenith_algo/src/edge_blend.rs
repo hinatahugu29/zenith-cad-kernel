@@ -465,6 +465,8 @@ struct CylSide {
     radius: f64,
     /// 両端の円弧の、頂点からもう一方の端までの弦の短いほう
     chord_limit: f64,
+    /// 凹の円柱（立体が円の外側、4-968）
+    concave: bool,
 }
 
 /// 円柱の側の断面。頂点からのずれ（稜に直交する平面の中）。
@@ -485,6 +487,11 @@ fn cyl_side_blend_enabled() -> bool {
     std::env::var("ZENITH_CYL_SIDE_BLEND").map_or(true, |v| v != "0")
 }
 
+/// 平面と凹の円柱の母線の凸の稜（4-968、既定オフ `ZENITH_CYL_CONCAVE_SIDE=1`）。
+fn cyl_concave_side_enabled() -> bool {
+    std::env::var("ZENITH_CYL_CONCAVE_SIDE").is_ok_and(|v| v == "1")
+}
+
 /// 面が、稜（v_start→v_end）を母線に持つ凸の円柱なら (軸の点, 軸, 半径, 頂点での外向き法線)。
 fn cylinder_side_reading(
     surface: &NurbsSurface3,
@@ -492,7 +499,7 @@ fn cylinder_side_reading(
     v_start: Point3,
     v_end: Point3,
     d: Vec3,
-) -> Option<(Point3, Vec3, f64, Vec3)> {
+) -> Option<(Point3, Vec3, f64, Vec3, bool)> {
     let tol = Tolerance::default();
     let (base, radius, axis, _) = crate::brep_intersection::cylinder_patch_reading(surface, &tol)?;
     let axis = axis.try_normalize_safe(1e-12)?;
@@ -514,11 +521,13 @@ fn cylinder_side_reading(
     let (um, wm) = ((u0 + u1) * 0.5, (w0 + w1) * 0.5);
     let normal = surface.normal(um, wm)?;
     let sign = normal.dot(&radial(surface.evaluate(um, wm))) * if forward { 1.0 } else { -1.0 };
-    if !(sign > 0.0) {
+    let concave = !(sign > 0.0);
+    if concave && !(sign < 0.0 && cyl_concave_side_enabled()) {
         return None;
     }
     let base_on_v = base + axis * (v_start - base).dot(&axis);
-    Some((base_on_v, axis, radius, radial(v_start) / radius))
+    let outward = radial(v_start) / radius;
+    Some((base_on_v, axis, radius, if concave { -outward } else { outward }, concave))
 }
 
 /// 断面を解く。平面の側（内向き t_p、外向き法線 n_p）と円柱（中心 cs.centre、半径 R、
@@ -565,17 +574,24 @@ fn cyl_section_2d(
             Ok(CylSection { s_a: s, p_b, mid: Vec3::zeros(), weight: 1.0, area: area.abs() })
         }
         BlendKind::Fillet { radius: r } => {
-            if r >= big {
+            if r >= big && !cs.concave {
                 return Err("The fillet is larger than the cylinder beside the edge".into());
             }
             let m = -n_p;
             let w = m * r - c;
             let b = t_p.dot(&w);
-            let disc = b * b - w.dot(&w) + (big - r) * (big - r);
+            // 凸の円柱には内接（中心の距離 R−r）、凹の円柱には外接（R+r、4-968）
+            let reach = if cs.concave { big + r } else { big - r };
+            let disc = b * b - w.dot(&w) + reach * reach;
             if disc < 0.0 {
                 return Err("No fillet circle touches both the plane and the cylinder".into());
             }
-            let x = -b - disc.sqrt();
+            let x = if cs.concave {
+                let (x1, x2) = (-b - disc.sqrt(), -b + disc.sqrt());
+                if x1 > 0.0 { x1 } else { x2 }
+            } else {
+                -b - disc.sqrt()
+            };
             if !(x > 0.0) {
                 return Err("The fillet circle does not sit inside the corner".into());
             }
@@ -769,7 +785,7 @@ impl BlendSite {
         // 2. 両面の外向き法線と、稜から面の内側を向く方向
         let mut side = Vec::new();
         // 片側が、稜を母線に持つ凸の円柱（4-964、`ZENITH_CYL_SIDE_BLEND=1`）
-        let mut cyl_face: Option<(usize, Point3, Vec3, f64)> = None;
+        let mut cyl_face: Option<(usize, Point3, Vec3, f64, bool)> = None;
         for (face_index, orientation) in &uses {
             let face = &faces[*face_index];
             let not_planar = || {
@@ -786,10 +802,10 @@ impl BlendSite {
                     }
                 }
                 FaceGeometry::Nurbs(surface) if cyl_side_blend_enabled() && cyl_face.is_none() => {
-                    let (centre, axis, radius, normal) =
+                    let (centre, axis, radius, normal, concave) =
                         cylinder_side_reading(surface, face.orientation.is_forward(), v_start, v_end, d)
                             .ok_or_else(not_planar)?;
-                    cyl_face = Some((*face_index, centre, axis, radius));
+                    cyl_face = Some((*face_index, centre, axis, radius, concave));
                     normal
                 }
                 _ => return Err(not_planar()),
@@ -857,12 +873,13 @@ impl BlendSite {
         // 端が円柱に当たるなら（4-962、凸の 90 度の稜、片端だけ）、その端を円柱で閉じる。
         let convex = dihedral < std::f64::consts::PI;
         let mut cyl_end: Option<CylEnd> = None;
-        let cyl_side = cyl_face.map(|(index, centre, axis, radius)| CylSide {
+        let cyl_side = cyl_face.map(|(index, centre, axis, radius, concave)| CylSide {
             on_a: index == fa,
             centre,
             axis,
             radius,
             chord_limit: f64::INFINITY,
+            concave,
         });
         if cyl_side.is_some() && !convex {
             return Err(format!(
@@ -1002,7 +1019,7 @@ impl BlendSite {
             self.cyl_section(BlendKind::Fillet { radius: r })
                 .is_ok_and(|s| s.s_a < max_setback && s.p_b.norm() < cs.chord_limit * 0.999)
         };
-        let (mut lo, mut hi) = (0.0, cs.radius);
+        let (mut lo, mut hi) = (0.0, if cs.concave { 10.0 * cs.radius } else { cs.radius });
         for _ in 0..100 {
             let mid = 0.5 * (lo + hi);
             if fits(mid) {

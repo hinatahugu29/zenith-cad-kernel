@@ -817,6 +817,17 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "box with a quarter-round notch at a corner (difference, simplified)",
+        why: "直方体の縦の角 (20,30) を中心に r8 の円柱で抜いた差。凹の円柱面の上下の部分円弧と、平面×凹の円柱の縦稜",
+        solid: difference(
+            base.clone(),
+            PrimitiveBuilder::make_cylinder(8.0, 60.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(20.0, 30.0, -10.0))),
+        ),
+        radius: 1.0,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,
