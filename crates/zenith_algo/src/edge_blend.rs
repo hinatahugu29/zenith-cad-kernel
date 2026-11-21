@@ -2320,14 +2320,14 @@ fn hole_clearance_enabled() -> bool {
         .unwrap_or(true)
 }
 
-/// 円柱の縁の部分円弧の面取り（4-966、`ZENITH_ARC_RIM_CHAMFER=1`）。
+/// 円柱の縁の部分円弧の面取り（4-966、既定オン、`ZENITH_ARC_RIM_CHAMFER=0` で切る）。
 ///
 /// 稜は、軸に直交する平面 P と凸の円柱 Q の間の円弧で、両端は軸に平行な平面 E に当たる
 /// （D字ブロックの上下の円弧）。面取りの面は円錐で、端は円錐と E の交わりの双曲線
 /// （有理2次）。P の円弧は半径 R−s、Q の円弧は s だけ下へ、P の直線と Q の母線を詰める。
 /// 削れる体積は ∫_{R−s}^{R} (s−R+r)·r·Θ(r) dr（Θ は半径 r の円が2枚の E に挟まれる角）。
 fn arc_rim_chamfer_enabled() -> bool {
-    std::env::var("ZENITH_ARC_RIM_CHAMFER").is_ok_and(|v| v == "1")
+    std::env::var("ZENITH_ARC_RIM_CHAMFER").map_or(true, |v| v != "0")
 }
 
 /// 円柱の面の向き: 中ほどの法線が軸から外を向けば true（立体は内側）。
