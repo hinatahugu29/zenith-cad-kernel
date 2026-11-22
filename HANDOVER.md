@@ -68975,3 +68975,8 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 - 測定（口オン、探針のみ）: 新検体はフィレット 11/4/0（残る 4 は円柱に当たる端のフィレット＝意図した断り）、面取り 15/0/0。全体でフィレット 732/42/0、面取り 744/30/0、上限のフィレット 742/12/0、上限の面取り 754/0/0。
 - 口オフの全体検証 `target/both_on/cyl_concave.log`: 836 passed / 0 failed、contact 175/8/0/0、fillet 730/44/0、上限 740/12/0（検体を足したので基準が変わる）、門は緑（contact quick は飛ばし）。ALL_DONE。
 - テスト: `crates/zenith_algo/tests/blend_concave_cylinder_side_test.rs`（面取り 1・フィレット 1・3。予測を独立の閉じた式と 1e-9、B-rep の削れた体積と 1e-7 で照合）。
+
+### 4-969. **4-968 の平面×凹の円柱の母線の稜のブレンドを既定オンに**（2026年11月22日）
+
+- 口オンの全体検証 `target/both_on/cyl_concave_on.log`: 836 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **732/42/0**、上限 **742/12/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
+- `cyl_concave_side_enabled` を `map_or(true, |v| v != "0")` に（`ZENITH_CYL_CONCAVE_SIDE=0` で切る）。以後の基準: fillet 732/42/0、上限 742/12/0。
