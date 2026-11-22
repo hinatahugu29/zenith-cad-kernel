@@ -467,6 +467,8 @@ struct CylSide {
     chord_limit: f64,
     /// 凹の円柱（立体が円の外側、4-968）
     concave: bool,
+    /// 稜が凹（凸の円柱と平面の入隅、材料を足す、4-970）
+    concave_edge: bool,
 }
 
 /// 円柱の側の断面。頂点からのずれ（稜に直交する平面の中）。
@@ -488,6 +490,11 @@ fn cyl_side_blend_enabled() -> bool {
 }
 
 /// 平面と凹の円柱の母線の凸の稜（4-968、既定オン、`ZENITH_CYL_CONCAVE_SIDE=0` で切る）。
+/// 平面と凸の円柱の母線の凹の稜（入隅、4-970、既定オフ `ZENITH_CYL_SIDE_CONCAVE_EDGE=1`）。
+fn cyl_side_concave_edge_enabled() -> bool {
+    std::env::var("ZENITH_CYL_SIDE_CONCAVE_EDGE").is_ok_and(|v| v == "1")
+}
+
 fn cyl_concave_side_enabled() -> bool {
     std::env::var("ZENITH_CYL_CONCAVE_SIDE").map_or(true, |v| v != "0")
 }
@@ -571,22 +578,25 @@ fn cyl_section_2d(
             let p_b = c_hat * alpha + c_perp * beta;
             let p_a = t_p * s;
             let area = line(Vec3::zeros(), p_a) + line(p_a, p_b) + arc(c, p_b, Vec3::zeros(), big);
-            Ok(CylSection { s_a: s, p_b, mid: Vec3::zeros(), weight: 1.0, area: area.abs() })
+            let area = if cs.concave_edge { -area.abs() } else { area.abs() };
+            Ok(CylSection { s_a: s, p_b, mid: Vec3::zeros(), weight: 1.0, area })
         }
         BlendKind::Fillet { radius: r } => {
-            if r >= big && !cs.concave {
+            if r >= big && !cs.concave && !cs.concave_edge {
                 return Err("The fillet is larger than the cylinder beside the edge".into());
             }
-            let m = -n_p;
+            // 入隅（4-970）では円は空いた側（平面の外向き法線の側）に置く
+            let m = if cs.concave_edge { n_p } else { -n_p };
             let w = m * r - c;
             let b = t_p.dot(&w);
-            // 凸の円柱には内接（中心の距離 R−r）、凹の円柱には外接（R+r、4-968）
-            let reach = if cs.concave { big + r } else { big - r };
+            // 凸の円柱には内接（中心の距離 R−r）、凹の円柱・入隅には外接（R+r、4-968、4-970）
+            let outside = cs.concave || cs.concave_edge;
+            let reach = if outside { big + r } else { big - r };
             let disc = b * b - w.dot(&w) + reach * reach;
             if disc < 0.0 {
                 return Err("No fillet circle touches both the plane and the cylinder".into());
             }
-            let x = if cs.concave {
+            let x = if outside {
                 let (x1, x2) = (-b - disc.sqrt(), -b + disc.sqrt());
                 if x1 > 0.0 { x1 } else { x2 }
             } else {
@@ -602,7 +612,8 @@ fn cyl_section_2d(
             let half = 0.5 * cos_phi.acos();
             let mid = p_a - t_p * (r * half.tan());
             let area = line(Vec3::zeros(), p_a) + arc(o, p_a, p_b, r) + arc(c, p_b, Vec3::zeros(), big);
-            Ok(CylSection { s_a: x, p_b, mid, weight: half.cos(), area: area.abs() })
+            let area = if cs.concave_edge { -area.abs() } else { area.abs() };
+            Ok(CylSection { s_a: x, p_b, mid, weight: half.cos(), area })
         }
     }
 }
@@ -880,8 +891,10 @@ impl BlendSite {
             radius,
             chord_limit: f64::INFINITY,
             concave,
+            concave_edge: !convex,
         });
-        if cyl_side.is_some() && !convex {
+        let concave_edge_ok = cyl_side_concave_edge_enabled() && cyl_side.is_some_and(|c| !c.concave);
+        if cyl_side.is_some() && !convex && !concave_edge_ok {
             return Err(format!(
                 "Edge {edge_id} between a plane and a cylinder is concave; that is not blended yet"
             ));
@@ -1019,7 +1032,7 @@ impl BlendSite {
             self.cyl_section(BlendKind::Fillet { radius: r })
                 .is_ok_and(|s| s.s_a < max_setback && s.p_b.norm() < cs.chord_limit * 0.999)
         };
-        let (mut lo, mut hi) = (0.0, if cs.concave { 10.0 * cs.radius } else { cs.radius });
+        let (mut lo, mut hi) = (0.0, if cs.concave || cs.concave_edge { 10.0 * cs.radius } else { cs.radius });
         for _ in 0..100 {
             let mid = 0.5 * (lo + hi);
             if fits(mid) {

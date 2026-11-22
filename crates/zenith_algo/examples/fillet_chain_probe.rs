@@ -828,6 +828,30 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "box with a round groove along a top edge (difference, simplified)",
+        why: "上の稜 (y=30, z=40) に沿って軸 x・r6 の円柱で溝を抜いた差。横向きの凹の円柱と上面・側面の稜、端面の部分円弧",
+        solid: difference(
+            base.clone(),
+            PrimitiveBuilder::make_cylinder(6.0, 40.0).and_then(|c| {
+                let turn = zenith_math::Transform3::from_axis_angle(&zenith_math::Vec3::new(0.0, 1.0, 0.0), 90f64.to_radians());
+                let c = zenith_algo::BrepTransform::transform_solid(&c, &turn)?;
+                Ok(zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(-10.0, 30.0, 40.0)))
+            }),
+        ),
+        radius: 1.0,
+    });
+    out.push(Case {
+        name: "box with a half-sunk cylindrical boss on a side (union, simplified)",
+        why: "側面 x=20 に、軸 z・中心 (20,15)・r6・高さ 40 の円柱を半分埋めた和。平面×凸の円柱の凹の縦稜と、上下の部分円弧",
+        solid: union(
+            base.clone(),
+            PrimitiveBuilder::make_cylinder(6.0, 40.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(20.0, 15.0, 0.0))),
+        ),
+        radius: 1.0,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,
