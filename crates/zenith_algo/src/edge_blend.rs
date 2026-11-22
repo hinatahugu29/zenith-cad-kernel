@@ -490,9 +490,9 @@ fn cyl_side_blend_enabled() -> bool {
 }
 
 /// 平面と凹の円柱の母線の凸の稜（4-968、既定オン、`ZENITH_CYL_CONCAVE_SIDE=0` で切る）。
-/// 平面と凸の円柱の母線の凹の稜（入隅、4-970、既定オフ `ZENITH_CYL_SIDE_CONCAVE_EDGE=1`）。
+/// 平面と凸の円柱の母線の凹の稜（入隅、4-970、既定オン、`ZENITH_CYL_SIDE_CONCAVE_EDGE=0` で切る）。
 fn cyl_side_concave_edge_enabled() -> bool {
-    std::env::var("ZENITH_CYL_SIDE_CONCAVE_EDGE").is_ok_and(|v| v == "1")
+    std::env::var("ZENITH_CYL_SIDE_CONCAVE_EDGE").map_or(true, |v| v != "0")
 }
 
 fn cyl_concave_side_enabled() -> bool {

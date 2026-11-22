@@ -68989,3 +68989,8 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 - 残る 8（同じ検体）: 入隅で終わる円柱の縁の円弧 4、円柱に当たる箱の上下の直線の稜（端が入隅）4。どちらも端の閉じ方が新しく、別の段。
 - 口オフの全体検証 `target/both_on/cyl_cedge.log`: 837 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet 753/56/0、上限 763/18/0（検体を足したので基準が変わる）、門は緑（contact quick は飛ばし）。ALL_DONE。
 - テスト: `crates/zenith_algo/tests/blend_cylinder_concave_edge_test.rs`（面取り 1・フィレット 1・3。予測を独立の閉じた式と 1e-9、B-rep の体積差と 1e-7 で照合）。
+
+### 4-971. **4-970 の平面×凸の円柱の入隅のブレンドを既定オンに**（2026年11月23日）
+
+- 口オンの全体検証 `target/both_on/cyl_cedge_on.log`: 837 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **755/54/0**、上限 **765/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
+- `cyl_side_concave_edge_enabled` を `map_or(true, |v| v != "0")` に（`ZENITH_CYL_SIDE_CONCAVE_EDGE=0` で切る）。以後の基準: fillet 755/54/0、上限 765/18/0。
