@@ -852,6 +852,31 @@ fn cases() -> Vec<Case> {
     });
 
     out.push(Case {
+        name: "box with a countersunk through hole (difference, simplified)",
+        why: "上面に r4 の貫通穴と、口を r8→r4 の円錐で皿もみした差。上面×円錐の円、円錐×円柱の円",
+        solid: difference(
+            difference(
+                base.clone(),
+                PrimitiveBuilder::make_cylinder(4.0, 60.0)
+                    .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(10.0, 15.0, -10.0))),
+            ),
+            PrimitiveBuilder::make_cone(4.0, 8.0, 4.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(10.0, 15.0, 36.0))),
+        ),
+        radius: 1.0,
+    });
+    out.push(Case {
+        name: "box with a spherical dimple on top (difference, simplified)",
+        why: "上面に中心 (10,15,44)・r6 の球で浅いくぼみを抜いた差。上面×凹の球の円",
+        solid: difference(
+            base.clone(),
+            PrimitiveBuilder::make_sphere(6.0)
+                .map(|c| zenith_algo::BrepTransform::translate_solid(&c, zenith_math::Vec3::new(10.0, 15.0, 44.0))),
+        ),
+        radius: 1.0,
+    });
+
+    out.push(Case {
         name: "box (no prior blend)",
         why: "比較用: 何も丸めていない直方体",
         solid: base,

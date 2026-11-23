@@ -68994,3 +68994,9 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 
 - 口オンの全体検証 `target/both_on/cyl_cedge_on.log`: 837 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **755/54/0**、上限 **765/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
 - `cyl_side_concave_edge_enabled` を `map_or(true, |v| v != "0")` に（`ZENITH_CYL_SIDE_CONCAVE_EDGE=0` で切る）。以後の基準: fillet 755/54/0、上限 765/18/0。
+
+### 4-972. **探針に皿もみの貫通穴と球のくぼみの検体を足した（基準の更新）**（2026年11月23日）
+
+- `fillet_chain_probe` に「皿もみの貫通穴（r4、口 r8→r4 の円錐）」「上面の球のくぼみ（r6）」を足した。誤答 0。新しい断り 12 はすべて四分円 4 本に分かれた全周の円（上面×円錐 4、円錐×円柱 4、上面×凹の球 4）で、`hole_mouth` の外。
+- 全体検証 `target/both_on/specimens3.log`: 837 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **783/66/0**、上限 **793/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。以後の基準。
+- 次の手は ROADMAP の「検体の追加（皿もみ穴・球のくぼみ）と見立て」。
