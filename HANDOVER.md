@@ -69013,3 +69013,4 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 
 - 口オンの全体検証 `target/both_on/revmouth_on.log`: 839 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **791/58/0**、上限 **801/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
 - `revolved_mouth_enabled` を `map_or(true, |v| v != "0")` に（`ZENITH_REVOLVED_MOUTH=0` で切る）。以後の基準: fillet 791/58/0、上限 801/18/0。
+- 既定オン後の全体検証（環境変数なし）`target/both_on/revmouth_default.log`: 839 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet 791/58/0、上限 801/18/0、門は緑（contact quick は飛ばし）。ALL_DONE。口オンの測定と一致。
