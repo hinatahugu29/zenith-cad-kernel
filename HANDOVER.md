@@ -69008,3 +69008,8 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 - 測定（口オン、探針のみ）: フィレット 791/58/0、面取り 807/42/0、上限のフィレット 801/18/0、上限の面取り 817/0/0。口の円錐 4・くぼみ 4 が通る。円錐×円柱の段（皿もみの底）4 は平面が無いので断ったまま。
 - 口オフの全体検証 `target/both_on/revmouth.log`: 839 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet 783/66/0、上限 793/18/0（不変）、門は緑（contact quick は飛ばし）。ALL_DONE。
 - テスト: `crates/zenith_algo/tests/blend_revolved_mouth_test.rs`（皿もみ・くぼみに面取り 1・フィレット 1。予測を断面の閉じた式の Pappus と 1e-9、後の体積を厳密値 − 予測と 1e-7 で照合。実測の相対差 5e-12〜7e-11）。
+
+### 4-974. **4-973 の平面×回転面の全周の口のブレンドを既定オンに**（2026年11月24日）
+
+- 口オンの全体検証 `target/both_on/revmouth_on.log`: 839 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **791/58/0**、上限 **801/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
+- `revolved_mouth_enabled` を `map_or(true, |v| v != "0")` に（`ZENITH_REVOLVED_MOUTH=0` で切る）。以後の基準: fillet 791/58/0、上限 801/18/0。

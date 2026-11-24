@@ -16,7 +16,7 @@ use zenith_topo::{Edge, Face, FaceGeometry, OrientedEdge, Shell, Solid, Vertex, 
 use crate::{BlendableEdge, EdgeBlendReport};
 
 pub(crate) fn revolved_mouth_enabled() -> bool {
-    std::env::var("ZENITH_REVOLVED_MOUTH").is_ok_and(|v| v == "1")
+    std::env::var("ZENITH_REVOLVED_MOUTH").map_or(true, |v| v != "0")
 }
 
 type P2 = (f64, f64);
