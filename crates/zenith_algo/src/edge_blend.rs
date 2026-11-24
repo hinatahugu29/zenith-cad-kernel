@@ -166,6 +166,9 @@ impl EdgeBlender {
                         .or_else(|| {
                             crate::circular_fillet::revolved_mouth::revolved_mouth_blendable(solid, edge_id)
                         })
+                        .or_else(|| {
+                            crate::circular_fillet::revolved_corner::revolved_corner_blendable(solid, edge_id)
+                        })
                 {
                     Ok(edge)
                 } else {
@@ -274,6 +277,11 @@ impl EdgeBlender {
                 return Ok(result);
             }
             if let Some(result) =
+                crate::circular_fillet::revolved_corner::try_fillet_revolved_corner(solid, edge_id, radius)?
+            {
+                return Ok(result);
+            }
+            if let Some(result) =
                 crate::circular_fillet::slot_hole_mouth::try_fillet_slot_hole_mouth(
                     solid, edge_id, radius,
                 )?
@@ -324,6 +332,11 @@ impl EdgeBlender {
             }
             if let Some(result) =
                 crate::circular_fillet::revolved_mouth::try_chamfer_revolved_mouth(solid, edge_id, distance)?
+            {
+                return Ok(result);
+            }
+            if let Some(result) =
+                crate::circular_fillet::revolved_corner::try_chamfer_revolved_corner(solid, edge_id, distance)?
             {
                 return Ok(result);
             }
