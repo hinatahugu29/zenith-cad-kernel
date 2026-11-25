@@ -69021,3 +69021,8 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 - 測定（口オン、探針のみ）: フィレット 795/54/0、面取り 811/38/0、上限のフィレット 805/18/0、上限の面取り 821/0/0。皿もみの底 4 が通る。
 - 口オフの全体検証 `target/both_on/revcorner.log`: 840 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet 791/58/0、上限 801/18/0（不変）、門は緑（contact quick は飛ばし）。ALL_DONE。
 - テスト: `crates/zenith_algo/tests/blend_revolved_corner_test.rs`（面取り 0.5・1、フィレット 0.5・1。予測を閉じた式の Pappus と 1e-9、後の体積を厳密値 − 予測と 1e-7 で照合。実測の相対差 1.3e-9〜5.8e-8）。
+
+### 4-976. **4-975 の円錐×円柱の全周の稜のブレンドを既定オンに**（2026年11月25日）
+
+- 口オンの全体検証 `target/both_on/revcorner_on.log`: 840 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **795/54/0**、上限 **805/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
+- `revolved_corner_enabled` を `map_or(true, |v| v != "0")` に（`ZENITH_REVOLVED_CORNER=0` で切る）。以後の基準: fillet 795/54/0、上限 805/18/0。

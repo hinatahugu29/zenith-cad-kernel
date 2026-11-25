@@ -15,7 +15,7 @@ use zenith_topo::{Edge, Face, FaceGeometry, Orientation, OrientedEdge, Shell, So
 use crate::{BlendableEdge, EdgeBlendReport};
 
 pub(crate) fn revolved_corner_enabled() -> bool {
-    std::env::var("ZENITH_REVOLVED_CORNER").is_ok_and(|v| v == "1")
+    std::env::var("ZENITH_REVOLVED_CORNER").map_or(true, |v| v != "0")
 }
 
 type P2 = (f64, f64);
