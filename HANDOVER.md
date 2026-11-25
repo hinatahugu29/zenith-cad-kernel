@@ -69027,3 +69027,11 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 - 口オンの全体検証 `target/both_on/revcorner_on.log`: 840 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **795/54/0**、上限 **805/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
 - `revolved_corner_enabled` を `map_or(true, |v| v != "0")` に（`ZENITH_REVOLVED_CORNER=0` で切る）。以後の基準: fillet 795/54/0、上限 805/18/0。
 - 既定オン後の全体検証（環境変数なし）`target/both_on/revcorner_default.log`: 840 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet 795/54/0、上限 805/18/0、門は緑（contact quick は飛ばし）。ALL_DONE。口オンの測定と一致。
+
+### 4-977. **断られた稜を、同じ平面の面をまとめた立体でもう一度試す**（既定オフ `ZENITH_BLEND_MERGE_RETRY=1`、2026年11月26日）
+
+- `EdgeBlender::blend_edge` と `blendability` が断ったとき、`FaceMerger::merge_coplanar` で面をまとめ（面が減るときだけ）、元の稜と同じ幾何の稜が 1 本に決まればその稜でもう一度試す（`edge_blend.rs` の `merged_twin`）。決まらなければ元の断りのまま。`blendability` は元の稜 ID で返す。
+- きっかけ: 探針の断りを理由で分けると、最大の塊は「drilled box」の 20 本全部。`make_drilled_box` が継ぎ目で割れた同じ平面の面のまま返すためで、まとめた版（drilled box after merge_coplanar）は全部通っていた。
+- 測定（口オン、探針のみ）: フィレット 815/34/0、面取り 831/18/0、上限のフィレット 825/18/0、上限の面取り 841/0/0。drilled box は 20/0/0（予測との相対差の最悪 2.2e-11）。
+- 口オフの全体検証 `target/both_on/mergeretry.log`: 841 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet 795/54/0、上限 805/18/0（不変）、門は緑（contact quick は飛ばし）。ALL_DONE。
+- テスト: `crates/zenith_algo/tests/blend_merge_retry_test.rs`（drilled box の 20 本にフィレット 1.5・面取り 1.5、削れた体積と予測を 1e-6 で照合）。

@@ -107,6 +107,18 @@ impl EdgeBlender {
     /// 基づく理由を返す。UI や外部ツールが、形状を変更せずに対象選択を検証する
     /// ための入口である。
     pub fn blendability(solid: &Solid, edge_id: u64) -> Result<BlendableEdge, String> {
+        match Self::blendability_direct(solid, edge_id) {
+            Ok(edge) => Ok(edge),
+            Err(err) => match merged_twin(solid, edge_id) {
+                Some((merged, twin)) => Self::blendability_direct(&merged, twin)
+                    .map(|edge| BlendableEdge { edge_id, ..edge })
+                    .map_err(|_| err),
+                None => Err(err),
+            },
+        }
+    }
+
+    fn blendability_direct(solid: &Solid, edge_id: u64) -> Result<BlendableEdge, String> {
         match BlendSite::locate(solid, edge_id) {
             Ok(site) => {
                 let max_setback = site.max_setback.min(site.hole_clearance(solid)) * 0.999;
@@ -261,6 +273,20 @@ impl EdgeBlender {
 
     /// フィレットと面取りの共通実装
     pub fn blend_edge(
+        solid: &Solid,
+        edge_id: u64,
+        kind: BlendKind,
+    ) -> Result<(Solid, EdgeBlendReport), String> {
+        match Self::blend_edge_direct(solid, edge_id, kind) {
+            Ok(result) => Ok(result),
+            Err(err) => match merged_twin(solid, edge_id) {
+                Some((merged, twin)) => Self::blend_edge_direct(&merged, twin, kind).map_err(|_| err),
+                None => Err(err),
+            },
+        }
+    }
+
+    fn blend_edge_direct(
         solid: &Solid,
         edge_id: u64,
         kind: BlendKind,
@@ -3130,4 +3156,44 @@ fn arc_rim_blendable(solid: &Solid, edge_id: u64) -> Option<BlendableEdge> {
         max_fillet_radius: 0.0,
         max_chamfer_distance: lo * 0.999,
     })
+}
+
+/// 断られた稜を、同じ平面で割れた面を 1 枚にまとめた立体でもう一度試すか（HANDOVER 4-977、
+/// 既定オフ `ZENITH_BLEND_MERGE_RETRY=1`）。
+fn merge_retry_enabled() -> bool {
+    std::env::var("ZENITH_BLEND_MERGE_RETRY").is_ok_and(|v| v == "1")
+}
+
+/// 同じ平面の面をまとめた立体と、その中で稜 `edge_id` と同じ幾何の稜。面が減らない、
+/// または稜が割れたり消えたりして同じ幾何の稜が 1 本に決まらないなら None。
+fn merged_twin(solid: &Solid, edge_id: u64) -> Option<(Solid, u64)> {
+    if !merge_retry_enabled() {
+        return None;
+    }
+    let edge = solid
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|f| std::iter::once(&f.outer_wire).chain(f.inner_wires.iter()))
+        .flat_map(|w| w.edges.iter())
+        .find(|o| o.edge.id == edge_id)?
+        .edge
+        .clone();
+    let (merged, _) = crate::FaceMerger::merge_coplanar(solid, &zenith_math::Tolerance::default()).ok()?;
+    if merged.outer_shell.faces.len() >= solid.outer_shell.faces.len() {
+        return None;
+    }
+    let mut twins: Vec<u64> = Vec::new();
+    for o in merged
+        .outer_shell
+        .faces
+        .iter()
+        .flat_map(|f| std::iter::once(&f.outer_wire).chain(f.inner_wires.iter()))
+        .flat_map(|w| w.edges.iter())
+    {
+        if crate::circular_fillet::same_edge_geometry(&edge, &o.edge) && !twins.contains(&o.edge.id) {
+            twins.push(o.edge.id);
+        }
+    }
+    (twins.len() == 1).then(|| (merged, twins[0]))
 }
