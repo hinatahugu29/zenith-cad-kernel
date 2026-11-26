@@ -3161,7 +3161,7 @@ fn arc_rim_blendable(solid: &Solid, edge_id: u64) -> Option<BlendableEdge> {
 /// 断られた稜を、同じ平面で割れた面を 1 枚にまとめた立体でもう一度試すか（HANDOVER 4-977、
 /// 既定オフ `ZENITH_BLEND_MERGE_RETRY=1`）。
 fn merge_retry_enabled() -> bool {
-    std::env::var("ZENITH_BLEND_MERGE_RETRY").is_ok_and(|v| v == "1")
+    std::env::var("ZENITH_BLEND_MERGE_RETRY").map_or(true, |v| v != "0")
 }
 
 /// 同じ平面の面をまとめた立体と、その中で稜 `edge_id` と同じ幾何の稜。面が減らない、

@@ -126,10 +126,13 @@ fn a_drilled_box_is_filletable_and_simplifies_to_ten_faces() {
     );
     // 平面として持つだけでは足りない。上下面が扇形に割れたままなので、
     // 稜の端の頂点に3枚目の面が1枚に定まらず、まだ1本も丸められない。
+    // 4-977 の `ZENITH_BLEND_MERGE_RETRY` が効くと、断られた稜は面をまとめてもう一度
+    // 試されるので、箱の 12 本と穴の上下の縁 8 本がそのまま候補に出る。
+    let retry = std::env::var("ZENITH_BLEND_MERGE_RETRY").map_or(true, |v| v != "0");
     assert_eq!(
         EdgeBlender::blendable_edges(&drilled).len(),
-        0,
-        "split up faces still block every edge"
+        if retry { 20 } else { 0 },
+        "split up faces block every edge unless the merge retry is on"
     );
     let before = volume_of(&drilled);
 

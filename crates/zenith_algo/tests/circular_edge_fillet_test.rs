@@ -345,7 +345,34 @@ fn a_circular_hole_edge_is_not_misread_as_a_pure_cylinder_rim() {
         !curved_ids.is_empty(),
         "fixture must contain its circular bore rims"
     );
+    // 4-977 の面のまとめ直し（`ZENITH_BLEND_MERGE_RETRY`）が効くと、割れた面のままの
+    // 穴の縁も穴の口として正しく作り直せる。そのときは「断る」の代わりに、削れた体積が
+    // 穴の口の全周の閉じた式（Pappus）と合うこと（円柱の縁と読み違えていないこと）を見る。
+    let retry = std::env::var("ZENITH_BLEND_MERGE_RETRY").map_or(true, |v| v != "0");
+    let before = MassCalculator::compute_volume_from_brep(&drilled, &params());
+    let (bore, r) = (5.0f64, 1.0f64);
+    let fillet_removed = {
+        let area = r * r * (1.0 - PI / 4.0);
+        let centroid = bore + r * (10.0 - 3.0 * PI) / (12.0 - 3.0 * PI);
+        2.0 * PI * centroid * area
+    };
+    let chamfer_removed = 2.0 * PI * (bore + r / 3.0) * (r * r / 2.0);
     for edge_id in curved_ids {
+        if retry {
+            assert!(listed.iter().any(|edge| edge.edge_id == edge_id), "bore rim {edge_id} should be listed after merging");
+            for (result, expected) in [
+                (EdgeBlender::fillet_edge(&drilled, edge_id, r), fillet_removed),
+                (EdgeBlender::chamfer_edge(&drilled, edge_id, r), chamfer_removed),
+            ] {
+                let after = result.unwrap_or_else(|e| panic!("bore rim {edge_id}: {e}"));
+                let removed = before - MassCalculator::compute_volume_from_brep(&after, &params());
+                assert!(
+                    (removed - expected).abs() <= 1e-6 * expected,
+                    "bore rim {edge_id}: removed {removed}, closed form {expected}"
+                );
+            }
+            continue;
+        }
         assert!(
             !listed.iter().any(|edge| edge.edge_id == edge_id),
             "a bore rim was advertised as the rim of a pure cylinder"

@@ -324,6 +324,17 @@ fn a_concave_edge_is_refused_rather_than_blended_the_wrong_way() {
         "there is one inside upright at the notch"
     );
 
+    // 4-977 の面のまとめ直し（`ZENITH_BLEND_MERGE_RETRY`）が効くと、まとめた L 字では
+    // 凹の縦稜の入隅のブレンドが掛かる。そのときは「断る」の代わりに、材料を足す向き
+    // （逆向きに削っていない）で、足した体積が閉じた式 h·r²(1−π/4) と合うことを見る。
+    if std::env::var("ZENITH_BLEND_MERGE_RETRY").map_or(true, |v| v != "0") {
+        let rounded = EdgeBlender::fillet_edge(&l_shape, concave_ids[0], 2.0).expect("concave fillet after merging");
+        let expected = 40.0 * 40.0 * 20.0 - 20.0 * 20.0 * 20.0 + 20.0 * 4.0 * (1.0 - FRAC_PI_4);
+        let volume = volume_of(&rounded);
+        assert!((volume - expected).abs() / expected < 1e-9, "concave fillet: {volume} against {expected}");
+        assert!(EdgeBlender::blendable_edges(&l_shape).iter().any(|edge| edge.edge_id == concave_ids[0]));
+        return;
+    }
     let error = EdgeBlender::fillet_edge(&l_shape, concave_ids[0], 2.0)
         .expect_err("a concave edge must be refused");
     assert!(

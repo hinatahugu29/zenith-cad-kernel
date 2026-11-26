@@ -69035,3 +69035,10 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 - 測定（口オン、探針のみ）: フィレット 815/34/0、面取り 831/18/0、上限のフィレット 825/18/0、上限の面取り 841/0/0。drilled box は 20/0/0（予測との相対差の最悪 2.2e-11）。
 - 口オフの全体検証 `target/both_on/mergeretry.log`: 841 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet 795/54/0、上限 805/18/0（不変）、門は緑（contact quick は飛ばし）。ALL_DONE。
 - テスト: `crates/zenith_algo/tests/blend_merge_retry_test.rs`（drilled box の 20 本にフィレット 1.5・面取り 1.5、削れた体積と予測を 1e-6 で照合）。
+
+### 4-978. **4-977 の面のまとめ直しを既定オンに（守りのテスト 4 本の書き換えを含む）**（2026年11月27日）
+
+- 口オンの全体検証は 2 回赤だった（`mergeretry_on.log`、`mergeretry_on2.log`）。どちらも「割れた面のままの drilled box は 1 本も丸められない」「凹の稜は断る」と書いた守りのテストが、口で正しく通るようになったために落ちたもの。`--no-fail-fast` で全部を一度に洗い出すと 4 本（`circular_edge_fillet_test::a_circular_hole_edge_is_not_misread_as_a_pure_cylinder_rim`、`edge_blend_test::a_concave_edge_is_refused_rather_than_blended_the_wrong_way`、`face_merge_test::a_drilled_box_is_filletable_and_simplifies_to_ten_faces`、`hole_mouth_fillet_test::sectorised_and_stepped_holes_are_not_silently_approximated`）。
+- 書き換え: 口オフでは元のとおり断ることを見る。口オンでは「断る」の代わりに、結果が正しいこと（穴の縁は削れた体積を全周の口の閉じた式 Pappus と 1e-6、L 字の凹の稜は足した体積を h·r²(1−π/4) と 1e-9）、または候補の数（割れた drilled box は 20 本）を見る。**守りを外したのではなく、「断る、または正しく作る」に変えた。**
+- 口オンの全体検証 `target/both_on/mergeretry_on3.log`: 841 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **815/34/0**、上限 **825/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
+- `merge_retry_enabled` とテストの判定を `map_or(true, |v| v != "0")` に（`ZENITH_BLEND_MERGE_RETRY=0` で切る）。以後の基準: fillet 815/34/0、上限 825/18/0。
