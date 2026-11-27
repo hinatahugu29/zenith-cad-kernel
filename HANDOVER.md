@@ -69042,3 +69042,4 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 - 書き換え: 口オフでは元のとおり断ることを見る。口オンでは「断る」の代わりに、結果が正しいこと（穴の縁は削れた体積を全周の口の閉じた式 Pappus と 1e-6、L 字の凹の稜は足した体積を h·r²(1−π/4) と 1e-9）、または候補の数（割れた drilled box は 20 本）を見る。**守りを外したのではなく、「断る、または正しく作る」に変えた。**
 - 口オンの全体検証 `target/both_on/mergeretry_on3.log`: 841 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **815/34/0**、上限 **825/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
 - `merge_retry_enabled` とテストの判定を `map_or(true, |v| v != "0")` に（`ZENITH_BLEND_MERGE_RETRY=0` で切る）。以後の基準: fillet 815/34/0、上限 825/18/0。
+- 既定オン後の全体検証（環境変数なし）`target/both_on/mergeretry_default.log`: 841 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet 815/34/0、上限 825/18/0、門は緑（contact quick は飛ばし）。ALL_DONE。口オンの測定と一致。
