@@ -3246,9 +3246,9 @@ fn merged_twin(solid: &Solid, edge_id: u64) -> Option<(Solid, u64)> {
 }
 
 /// 端が円柱に当たり、円の面の弧が逆へ走る（円柱の埋もれた側に退く）面取り（HANDOVER 4-979、
-/// 既定オフ `ZENITH_CYL_BURIED_END=1`）。
+/// 既定オン、`ZENITH_CYL_BURIED_END=0` で切る）。
 fn cyl_buried_end_enabled() -> bool {
-    std::env::var("ZENITH_CYL_BURIED_END").is_ok_and(|v| v == "1")
+    std::env::var("ZENITH_CYL_BURIED_END").map_or(true, |v| v != "0")
 }
 
 /// 円の面で頂点に繋がる弧が円柱の上にあり、退く向き（t_q）と逆へ走るか
