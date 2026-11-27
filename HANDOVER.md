@@ -69043,3 +69043,11 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 - 口オンの全体検証 `target/both_on/mergeretry_on3.log`: 841 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet **815/34/0**、上限 **825/18/0**、門は緑（contact quick は飛ばし）。ALL_DONE。
 - `merge_retry_enabled` とテストの判定を `map_or(true, |v| v != "0")` に（`ZENITH_BLEND_MERGE_RETRY=0` で切る）。以後の基準: fillet 815/34/0、上限 825/18/0。
 - 既定オン後の全体検証（環境変数なし）`target/both_on/mergeretry_default.log`: 841 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、contact 175/8/0/0、fillet 815/34/0、上限 825/18/0、門は緑（contact quick は飛ばし）。ALL_DONE。口オンの測定と一致。
+
+### 4-979. **端が円柱の埋もれた側に退く直線の稜の面取り（既定オフ `ZENITH_CYL_BURIED_END=1`）**（2026年11月27日）
+
+- 半分埋めたボス（直方体∪円柱）の側面の上下の稜 4 本は、端で円柱に当たるが、円の面の弧が退く向きと逆へ走るため断っていた。
+- 口オンで: 円の面に埋もれた円の弧、円柱の面に縦の辺、円柱の埋もれた側に新しい四分の一の面（楕円の厳密な p-curve）を足す。退く量は円が折り返す所（cy + r）まで。
+- テスト `blend_cylinder_buried_end_test`: d=0.5,1,2 で予測と閉じた式が約 1e-14、後の体積の相対誤差 ≤ 9.1e-10。最大フィレット 0（面取りのみ）。
+- 口オフの全体検証 `buried`: 842 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、接触 175/8/0/0、fillet 815/34/0、上限 825/18/0、門は緑（contact quick は飛ばし）。
+- 口オンの probe（計測済み）: fillet 815/34/0、chamfer 835/14/0、上限 fillet 825/22/0（面取りのみの 4 本が載る）、上限 chamfer 845/0/0。

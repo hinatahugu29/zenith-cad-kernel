@@ -744,6 +744,9 @@ struct CylEnd {
     cx: f64,
     cy: f64,
     vertex: Point3,
+    /// 円の面の弧が頂点から退く向きと逆へ走り、退いた点が円柱の埋もれた側に乗る（4-979）。
+    /// 円の面には埋もれた円の弧を足し、楕円は円柱の埋もれた側の新しい面に乗る。
+    buried: bool,
 }
 
 impl CylEnd {
@@ -999,7 +1002,18 @@ impl BlendSite {
                 }
                 // 円柱の端の、円の面の側: 隣の稜は円柱の上の円弧（4-962）。
                 if let Some(cylinder) = cyl_end.filter(|c| c.at_start == at_start && c.circle_on_a == on_face_a) {
-                    neighbours.push(find_arc_neighbour(&faces[face_index], edge_id, &cylinder, on_face_a)?);
+                    match find_arc_neighbour(&faces[face_index], edge_id, &cylinder, on_face_a) {
+                        Ok(trim) => neighbours.push(trim),
+                        Err(reason) => {
+                            if cyl_buried_end_enabled() && arc_runs_away(&faces[face_index], edge_id, &cylinder) {
+                                if let Some(c) = cyl_end.as_mut() {
+                                    c.buried = true;
+                                }
+                            } else {
+                                return Err(reason);
+                            }
+                        }
+                    }
                     continue;
                 }
                 // 斜めの端では、面の内側へ退いた点は稜に沿って端の面まで滑る。
@@ -1031,10 +1045,14 @@ impl BlendSite {
                 neighbours.push(trim);
             }
         }
-        let max_setback = neighbours
+        let mut max_setback = neighbours
             .iter()
             .map(|n| n.available)
             .fold(f64::INFINITY, f64::min);
+        // 埋もれた側（4-979）: 退いた点は円が t_q の向きに折り返す所まで
+        if let Some(c) = cyl_end.filter(|c| c.buried) {
+            max_setback = max_setback.min(c.cy + c.radius);
+        }
 
         Ok(Self {
             edge_id,
@@ -1287,6 +1305,8 @@ impl BlendSite {
         // 円柱の端（4-962）: 面取りの平面と円柱の交わりの楕円弧を、円柱の面の円の引数で。
         // p-curve も同じ引数で厳密に作り、面を作り直すときに当てはめと置き換える。
         let mut cylinder_pcurve: Option<zenith_geom::NurbsCurve2> = None;
+        // 埋もれた側の面（4-979）: 円柱の面、円の面に足す弧、円柱の面に足す縦の辺
+        let mut buried: Option<(NurbsSurface3, Edge, Edge)> = None;
         if let Some(c) = &self.cyl_end {
             let cap = if c.at_start { self.cap_start } else { self.cap_end };
             let FaceGeometry::Nurbs(surface) = &faces[cap].geometry else {
@@ -1295,6 +1315,8 @@ impl BlendSite {
             let (on_a, on_b) =
                 if c.at_start { (a_start.clone(), b_start.clone()) } else { (a_end.clone(), b_end.clone()) };
             let from = if c.circle_on_a { on_a.point } else { on_b.point };
+            let patch_surface = if c.buried { Some(buried_cylinder_patch(c, setback)?) } else { None };
+            let surface = patch_surface.as_ref().unwrap_or(surface);
             let (curve3, curve2) = cylinder_end_curves(surface, c, setback, from)
                 .ok_or("The chamfer end could not be laid on the cylinder's own parameter")?;
             // 曲線は円の面の側から側面の側へ。辺は on_a → on_b。
@@ -1307,6 +1329,13 @@ impl BlendSite {
                 corner_end = edge;
             }
             cylinder_pcurve = Some(curve2);
+            if let Some(patch) = patch_surface {
+                let (on_a, on_b) =
+                    if c.at_start { (a_start.clone(), b_start.clone()) } else { (a_end.clone(), b_end.clone()) };
+                let (circle_pt, side_pt) = if c.circle_on_a { (on_a, on_b) } else { (on_b, on_a) };
+                let apex = find_vertex(faces, c.vertex).unwrap_or_else(|| Vertex::from_point(c.vertex));
+                buried = Some((patch, buried_arc(c, apex.clone(), circle_pt)?, Edge::line_between(apex, side_pt)?));
+            }
         }
 
         // 隣接稜を詰める。同じ稜の両端が動くこともあるので id ごとにまとめる。
@@ -1387,8 +1416,20 @@ impl BlendSite {
             let touches_start = index == self.cap_start;
             let touches_end = index == self.cap_end;
 
+            let buried_cap =
+                self.cyl_end.filter(|c| c.buried).map(|c| if c.at_start { self.cap_start } else { self.cap_end });
+            let buried_circle =
+                self.cyl_end.filter(|c| c.buried).map(|c| if c.circle_on_a { self.face_a } else { self.face_b });
             let rebuild = |wire: &Wire| -> Result<Wire, String> {
                 let edges: Vec<OrientedEdge> = wire.edges.iter().map(&substitute).collect();
+                if let Some((_, arc, seam)) = &buried {
+                    if Some(index) == buried_circle {
+                        return close_gap(edges, &[arc], &tol);
+                    }
+                    if Some(index) == buried_cap {
+                        return close_gap(edges, &[seam], &tol);
+                    }
+                }
                 if touches_start || touches_end {
                     close_gap(edges, &[&corner_start, &corner_end], &tol)
                 } else {
@@ -1410,7 +1451,7 @@ impl BlendSite {
                 face.tolerance,
             );
             // 円柱の端の面: 楕円弧の p-curve を当てはめから厳密なものへ（4-962）
-            if let (Some(c), Some(exact)) = (&self.cyl_end, &cylinder_pcurve) {
+            if let (Some(c), Some(exact)) = (&self.cyl_end.filter(|c| !c.buried), &cylinder_pcurve) {
                 let cap = if c.at_start { self.cap_start } else { self.cap_end };
                 let corner_id = if c.at_start { corner_start.id } else { corner_end.id };
                 if index == cap {
@@ -1432,6 +1473,12 @@ impl BlendSite {
                 }
             }
             new_faces.push(rebuilt);
+        }
+
+        // 埋もれた側の新しい面（4-979）
+        if let (Some(c), Some((patch, arc, seam)), Some(exact)) = (&self.cyl_end, &buried, &cylinder_pcurve) {
+            let corner = if c.at_start { &corner_start } else { &corner_end };
+            new_faces.push(buried_patch_face(c, patch.clone(), arc, corner, seam, exact)?);
         }
 
         // ブレンド面そのもの
@@ -1738,7 +1785,7 @@ fn find_cylinder_cap(
     }
     Some((
         index,
-        CylEnd { at_start, centre: base, axis, radius, circle_on_a, t_q, t_p, out, cx, cy, vertex },
+        CylEnd { at_start, centre: base, axis, radius, circle_on_a, t_q, t_p, out, cx, cy, vertex, buried: false },
     ))
 }
 
@@ -3196,4 +3243,145 @@ fn merged_twin(solid: &Solid, edge_id: u64) -> Option<(Solid, u64)> {
         }
     }
     (twins.len() == 1).then(|| (merged, twins[0]))
+}
+
+/// 端が円柱に当たり、円の面の弧が逆へ走る（円柱の埋もれた側に退く）面取り（HANDOVER 4-979、
+/// 既定オフ `ZENITH_CYL_BURIED_END=1`）。
+fn cyl_buried_end_enabled() -> bool {
+    std::env::var("ZENITH_CYL_BURIED_END").is_ok_and(|v| v == "1")
+}
+
+/// 円の面で頂点に繋がる弧が円柱の上にあり、退く向き（t_q）と逆へ走るか
+fn arc_runs_away(face: &Face, edge_id: u64, c: &CylEnd) -> bool {
+    let scale = c.radius.max(1.0);
+    std::iter::once(&face.outer_wire).chain(face.inner_wires.iter()).flat_map(|w| w.edges.iter()).any(|o| {
+        let edge = &o.edge;
+        if edge.id == edge_id {
+            return false;
+        }
+        let other = if (edge.start_vertex.point - c.vertex).norm() <= 1e-9 {
+            edge.end_vertex.point
+        } else if (edge.end_vertex.point - c.vertex).norm() <= 1e-9 {
+            edge.start_vertex.point
+        } else {
+            return false;
+        };
+        let Some((centre, radius, _)) = crate::circular_fillet::circle_from_edge(edge) else { return false };
+        let offset = centre - c.centre;
+        (radius - c.radius).abs() <= 1e-7 * scale
+            && (offset - c.axis * offset.dot(&c.axis)).norm() <= 1e-7 * scale
+            && (other - c.vertex).dot(&c.t_q) < -1e-9 * scale
+    })
+}
+
+fn find_vertex(faces: &[Face], p: Point3) -> Option<Vertex> {
+    faces
+        .iter()
+        .flat_map(|f| std::iter::once(&f.outer_wire).chain(f.inner_wires.iter()))
+        .flat_map(|w| w.edges.iter())
+        .flat_map(|o| [&o.edge.start_vertex, &o.edge.end_vertex])
+        .find(|v| (v.point - p).norm() <= 1e-9)
+        .cloned()
+}
+
+/// 円柱の埋もれた側の四分の一の面: 頂点の半径の向きから t_q の側へ 90 度、高さは円の面から
+/// 側面の向き t_p へ setback。次数 (2, 1)、`cylinder_end_curves` がそのまま読める形。
+fn buried_cylinder_patch(c: &CylEnd, setback: f64) -> Result<NurbsSurface3, String> {
+    let e = c.t_p;
+    let centre = c.centre + e * (c.vertex - c.centre).dot(&e);
+    let r0 = (c.vertex - centre) / c.radius;
+    let mut r1 = e.cross(&r0);
+    if r1.dot(&c.t_q) < 0.0 {
+        r1 = -r1;
+    }
+    let ring = [
+        (centre + r0 * c.radius, 1.0),
+        (centre + (r0 + r1) * c.radius, std::f64::consts::FRAC_1_SQRT_2),
+        (centre + r1 * c.radius, 1.0),
+    ];
+    let rows = ring
+        .iter()
+        .map(|&(p, w)| vec![ControlPoint3::new(p, w), ControlPoint3::new(p + e * setback, w)])
+        .collect();
+    Ok(NurbsSurface3::new(2, 1, rows, KnotVector::clamped_uniform(3, 2), KnotVector::clamped_uniform(2, 1))?)
+}
+
+/// 円の面に足す、頂点から退いた点までの埋もれた円の弧（有理2次）
+fn buried_arc(c: &CylEnd, apex: Vertex, to: Vertex) -> Result<Edge, String> {
+    let e = c.t_p;
+    let centre = c.centre + e * (c.vertex - c.centre).dot(&e);
+    let (p, q) = (apex.point, to.point);
+    let (vp, vq) = ((p - centre) / c.radius, (q - centre) / c.radius);
+    let cos_phi = vp.dot(&vq).clamp(-1.0, 1.0);
+    let half = 0.5 * cos_phi.acos();
+    let bis = (vp + vq).try_normalize_safe(1e-12).ok_or("The buried arc is degenerate")?;
+    let mid = centre + bis * (c.radius / half.cos());
+    let curve = NurbsCurve3::new(
+        2,
+        vec![ControlPoint3::unweighted(p), ControlPoint3::new(mid, half.cos()), ControlPoint3::unweighted(q)],
+        KnotVector::clamped_uniform(3, 2),
+    )?;
+    Ok(Edge::new(curve, apex, to, 1e-6))
+}
+
+/// 埋もれた側の面。外向き法線は円柱の外へ。ワイヤの回り方と面の向きをそれにそろえ、
+/// 楕円の p-curve を厳密なものに置き換える。
+fn buried_patch_face(
+    c: &CylEnd,
+    surface: NurbsSurface3,
+    arc: &Edge,
+    corner: &Edge,
+    seam: &Edge,
+    exact: &zenith_geom::NurbsCurve2,
+) -> Result<Face, String> {
+    // 頂点 → 退いた点（弧）→ 持ち上げた点（楕円）→ 頂点（縦の辺）
+    let orient = |edge: &Edge, from: Point3| {
+        if (edge.start_vertex.point - from).norm() <= 1e-9 {
+            OrientedEdge::forward(edge.clone())
+        } else {
+            OrientedEdge::reversed(edge.clone())
+        }
+    };
+    let a = orient(arc, c.vertex);
+    let b = orient(corner, a.end_vertex().point);
+    let s = orient(seam, b.end_vertex().point);
+    let mut edges = vec![a, b, s];
+    let mut pts = Vec::new();
+    for o in &edges {
+        let (t0, t1) = o.edge.curve.param_range();
+        for k in 0..6 {
+            let f = k as f64 / 6.0;
+            let t = if o.orientation == Orientation::Forward { t0 + (t1 - t0) * f } else { t1 - (t1 - t0) * f };
+            pts.push(o.edge.curve.evaluate(t));
+        }
+    }
+    let mut newell = Vec3::zeros();
+    for k in 0..pts.len() {
+        newell += (pts[k] - Point3::origin()).cross(&(pts[(k + 1) % pts.len()] - Point3::origin()));
+    }
+    let mid = pts[pts.len() / 2];
+    let centre = c.centre + c.axis * (mid - c.centre).dot(&c.axis);
+    let outward = (mid - centre).try_normalize_safe(1e-12).ok_or("degenerate buried patch")?;
+    if newell.dot(&outward) < 0.0 {
+        edges = edges.into_iter().rev().map(|o| OrientedEdge::new(o.edge, o.orientation.reversed())).collect();
+    }
+    let ((u0, u1), (v0, v1)) = surface.param_range();
+    let n = surface.normal(0.5 * (u0 + u1), 0.5 * (v0 + v1)).ok_or("degenerate buried patch")?;
+    let orientation = if n.dot(&outward) < 0.0 { Orientation::Reversed } else { Orientation::Forward };
+    let corner_id = corner.id;
+    let mut face = Face::new(FaceGeometry::Nurbs(surface), Wire::new(edges), Vec::new(), orientation, 1e-6);
+    if let Some(pcurves) = face.pcurves.as_mut() {
+        for segment in pcurves.outer_loop.segments.iter_mut() {
+            if segment.edge_id == corner_id {
+                let (f0, f1) = segment.curve.param_range();
+                let (e0, e1) = exact.param_range();
+                let same = (segment.curve.evaluate(f0) - exact.evaluate(e0)).norm()
+                    + (segment.curve.evaluate(f1) - exact.evaluate(e1)).norm();
+                let flipped = (segment.curve.evaluate(f0) - exact.evaluate(e1)).norm()
+                    + (segment.curve.evaluate(f1) - exact.evaluate(e0)).norm();
+                segment.curve = if same <= flipped { exact.clone() } else { reverse_bezier2(exact) };
+            }
+        }
+    }
+    Ok(face)
 }
