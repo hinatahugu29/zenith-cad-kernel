@@ -69056,3 +69056,4 @@ z まわりに 30 度回した箱との和（斜めの凹の縦稜・直角で�
 
 - 口オンの全体検証 `buried_on`: 842 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、接触 175/8/0/0、fillet 815/34/0、上限 825/22/0（面取りのみの 4 本が上限の断りに数えられる、予測どおり）、門は緑（contact quick は飛ばし）。
 - `cyl_buried_end_enabled` を `map_or(true, |v| v != "0")` に。`ZENITH_CYL_BURIED_END=0` で切れる。
+- 既定オン後の全体検証 `buried_default`（環境変数なし）: 842 passed / 0 failed、H8 1.551149 / 7.805801 / 2.295747、接触 175/8/0/0、fillet 815/34/0、上限 825/22/0、門は緑（contact quick は飛ばし）。新しい基準。
